@@ -255,8 +255,13 @@ suite.define(() => {
       await dropdown.locator('[data-value="back"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
-        .poll(() => dropdown.locator(".oc-menu-item:focus").textContent())
-        .toContain("Skills");
+        .poll(() =>
+          dropdown
+            .locator('.oc-menu-item:visible:not(:disabled):not([aria-disabled="true"])')
+            .first()
+            .evaluate((item) => item === document.activeElement),
+        )
+        .toBe(true);
       await page.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>(".agent-chat__file-input");
         if (!input) {

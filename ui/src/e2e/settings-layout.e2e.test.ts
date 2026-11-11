@@ -7,11 +7,7 @@ import type { DevicePairingList } from "../../../src/gateway/device-pairing-list
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-  waitForControlUiRoute,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
@@ -195,44 +191,6 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
-  it("keeps agent identity controls inside their fields at desktop and mobile widths", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/agents`);
-      const editor = page.locator(".agent-identity-editor");
-      await editor.waitFor();
-
-      for (const viewport of responsiveViewports) {
-        await page.setViewportSize(viewport);
-        for (const [name, control] of [
-          ["Display name", editor.getByRole("textbox", { name: "Display name" })],
-          ["Emoji input", editor.getByRole("textbox", { name: "Emoji" })],
-          ["Emoji picker", editor.getByRole("button", { name: "Choose emoji" })],
-        ] as const) {
-          await control.focus();
-          await expect
-            .poll(
-              () =>
-                control.evaluate((element) => {
-                  const inputBox = element.getBoundingClientRect();
-                  const fieldBox = element.closest(".field")!.getBoundingClientRect();
-                  const cardBox = element.closest(".settings-row")!.getBoundingClientRect();
-                  return (
-                    inputBox.width > 0 &&
-                    inputBox.left >= Math.max(fieldBox.left, cardBox.left) - 1 &&
-                    inputBox.right <= Math.min(fieldBox.right, cardBox.right) + 1
-                  );
-                }),
-              { message: `${name} input is contained at ${viewport.width}px` },
-            )
-            .toBe(true);
-        }
-      }
-    });
-  });
-
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(

@@ -3,7 +3,10 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
@@ -40,6 +43,7 @@ suite.define(() => {
   it("keeps an explicit stopped runtime in warning state when its API probe succeeds", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "channels.status"],
         assistantName: "Main agent",
         defaultAgentId: "main",
         methodResponses: {

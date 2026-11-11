@@ -3,6 +3,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   controlUiBundledGatewayUrl,
+  defaultControlUiFeatureMethods,
   controlUiSessionPath,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
@@ -322,6 +323,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await installNativePluginMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "config.get"],
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
       methodResponses: {
         "config.get": {

@@ -181,20 +181,26 @@ suite.define(() => {
         const sidebar = page.locator("openclaw-app-sidebar");
         const selected = sidebar.locator(`[data-session-key="${key}"]`);
         await roster.getByText("Initial rate proof", { exact: true }).first().waitFor();
-        // Rows can render before the owner-filtered and child startup reads finish.
+        // Rows can render before the All owners startup read finishes.
+        const readStatus = (request: (typeof lists)[number] | undefined) => ({
+          present: request !== undefined,
+          acknowledged: request !== undefined && responses.has(request.id),
+        });
         await expect
-          .poll(() =>
-            [
-              lists.find(
-                ({ params }) => params.source === "sidebar" && params.ownerId === viewerId,
-              ),
+          .poll(() => ({
+            allOwners: readStatus(
               lists.find(
                 ({ params }) =>
-                  params.source === "sidebar" && params.spawnedBy === "agent:main:main",
+                  params.source === "sidebar" &&
+                  params.ownerId === undefined &&
+                  params.involvingMe === undefined &&
+                  params.spawnedBy === undefined,
               ),
-            ].every((request) => request !== undefined && responses.has(request.id)),
-          )
-          .toBe(true);
+            ),
+          }))
+          .toEqual({
+            allOwners: { present: true, acknowledged: true },
+          });
         await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         expect(

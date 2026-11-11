@@ -43,6 +43,8 @@ suite.define(() => {
           sessionKey: source,
           featureMethods: [
             ...defaultControlUiFeatureMethods,
+            "agents.list",
+            "config.get",
             "desktop.observe",
             "environments.status",
             "portal.list",

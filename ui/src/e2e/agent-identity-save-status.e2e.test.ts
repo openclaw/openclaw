@@ -28,7 +28,12 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantName: "Main agent",
         defaultAgentId: "main",
-        featureMethods: [...defaultControlUiFeatureMethods, "agents.update"],
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.update",
+          "agents.list",
+          "config.get",
+        ],
         methodResponses: {
           "agents.list": {
             defaultId: "main",
