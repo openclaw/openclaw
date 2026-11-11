@@ -789,6 +789,12 @@ Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
 
+The process keeps one identity descriptor open per admitted database file, because
+closing it can release SQLite's POSIX locks. An owner that deletes a private database
+file it created calls `retireSqliteDatabaseAdmissionForPath(path)` from
+`sqlite-runtime` first, after every connection and worker using that file has closed.
+Otherwise the deleted file keeps its disk space until the process exits.
+
 `readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
 write revision without SQL. PostgreSQL owners retaining a snapshot across their own
 commit capture this revision under the writer lock and accept only that commit's
