@@ -213,7 +213,10 @@ describe("candidate-owned publish consumer chain", () => {
       f.parent.conclusion = parentConclusion;
       const client = {
         ...f.client,
-        getRunView: (id: string) => ({ ...f.client.getRunView(id), conclusion: parentConclusion }),
+        getRunView: async (id: string) => ({
+          ...(await f.client.getRunView(id)),
+          conclusion: parentConclusion,
+        }),
         getRun: async (id: string) => {
           const run = await f.client.getRun(id);
           return id === planned.runId ? { ...run, conclusion: "failure" } : run;

@@ -90,7 +90,7 @@ def validate_skill(skill_path):
 
     try:
         content = skill_md.read_text(encoding="utf-8-sig")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         return False, f"Could not read SKILL.md: {e}"
 
     frontmatter_text = _extract_frontmatter(content)

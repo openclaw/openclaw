@@ -40,7 +40,7 @@
   gap: 5px;
   padding: 3px 9px;
   border-radius: 999px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   color: var(--muted);
   background: color-mix(in oklab, var(--panel) 80%, transparent);
   white-space: nowrap;
@@ -109,7 +109,7 @@
 
 .logbook__empty-sub {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .logbook-card {
@@ -139,7 +139,7 @@
 
 .logbook-card__time {
   font-variant-numeric: tabular-nums;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -173,7 +173,7 @@
 
 .logbook-card__summary {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -191,7 +191,7 @@
 }
 
 .logbook-card__category {
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -202,12 +202,12 @@
 }
 
 .logbook-card__app {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   color: var(--muted);
 }
 
 .logbook-card__duration {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -231,12 +231,12 @@
   justify-content: center;
   height: 120px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .logbook-card__detail {
   margin: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
 }
@@ -249,7 +249,7 @@
 }
 
 .logbook-card__distractions-label {
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -257,7 +257,7 @@
 }
 
 .logbook-card__distraction {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
   color: var(--muted);
@@ -315,7 +315,7 @@
 .logbook-stats__focus-legend {
   display: flex;
   justify-content: space-between;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   color: var(--muted);
   margin-top: 4px;
 }
@@ -331,7 +331,7 @@
   grid-template-columns: 72px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .logbook-stats__category-name {
@@ -366,7 +366,7 @@
 }
 
 .logbook-stats__app {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
   color: var(--muted);
@@ -374,7 +374,7 @@
 }
 
 .logbook-standup__body {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .logbook-ask__form {
@@ -393,7 +393,7 @@
 
 .logbook-ask__answer {
   margin: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   padding: 10px;
   border-radius: var(--radius-md);

@@ -9,6 +9,7 @@ import {
   downloadActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
   readBoundedRegularFile,
+  readBoundedResponseBody,
   validateActionsArtifactBinding,
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
@@ -20,6 +21,7 @@ import {
   NpmRegistryUnavailableError,
   resolveNpmPublishPlan,
 } from "./lib/npm-publish-plan.mjs";
+import { accountGithubRequest, withGithubRequestBudget } from "./lib/plain-gh.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { isPluginPublicationEnabled } from "./lib/plugin-publication-target.mjs";
 import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
@@ -188,11 +190,33 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     "Prepared npm adoption requires the exact FRV run and attempt.",
   );
   const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
-  const { authenticateFullReleaseValidationEvidence } =
+  const { authenticateFullReleaseValidationEvidence, revalidateCandidateArtifactAuthority } =
     await import("./validate-full-release-validation-evidence.mjs");
   const client =
     params.evidenceClient ??
     createReleaseEvidenceClient(repository, { immutableReads: params.immutableReads });
+  // Only the private CLI path may consume the carrier-authenticated projection.
+  // Exported helpers must not accept a caller-forged transport property as proof.
+  const prepared = !revalidateOnReturn && params.immutableReads?.authenticatedPreparedEvidence;
+  if (prepared) {
+    const descriptor = validatePreparedNpmArtifactDescriptor(prepared.artifact, {
+      repository,
+      sourceSha,
+      workflowSha: prepared.workflowSha,
+    });
+    requireValue(
+      !artifact || isDeepStrictEqual(artifact, descriptor),
+      "Prepared npm artifact differs from the authenticated preview descriptor.",
+    );
+    const revalidateAuthority = async () => {
+      await params.immutableReads.revalidate(client);
+      revalidateCandidateArtifactAuthority(prepared.publicationAuthority, client);
+    };
+    if (revalidateOnReturn) {
+      await revalidateAuthority();
+    }
+    return { ...prepared, artifact: descriptor, evidenceClient: client, revalidateAuthority };
+  }
   const runId = String(params.fullReleaseValidationRunId);
   const runAttempt = Number(params.fullReleaseValidationRunAttempt);
   const { manifest } = await client.loadManifest(runId, runAttempt);
@@ -309,6 +333,7 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     publisherPolicySha256,
     publicationSelection: selected,
     publicationOperation: operation,
+    publicationAuthority: authenticated.publicationAuthority,
     evidenceClient: params.immutableReads ? client : undefined,
     revalidateAuthority,
   };
@@ -611,6 +636,7 @@ export async function consumePreparedNpmPackage(params) {
     expected: { ...entry.artifact, runStatePolicy: "completed-success" },
     archivePath,
   });
+  params.immutableReads?.observeArchive(entry.artifact.artifactId, downloaded.artifactMetadata);
   const metadataPath = join(cacheDir, `${entry.artifact.artifactId}.metadata.json`);
   const runPath = join(cacheDir, `${entry.artifact.artifactId}.run.json`);
   writeFileSync(metadataPath, JSON.stringify(downloaded.artifactMetadata));
@@ -828,7 +854,76 @@ function outputValues(file, values) {
   );
 }
 
+// Each package can run consume and authorize independently. These are enforced
+// transport ceilings, including retries, not the happy-path fixture counts.
+const PACKAGE_COMMAND_REQUEST_LIMIT = 256;
+const PREVIEW_REQUEST_LIMIT = 1024;
+const PUBLICATION_REQUEST_HEADROOM = 1024;
+
+async function requireFanoutCapacity(packages, params) {
+  if (packages === 0) {
+    return;
+  }
+  accountGithubRequest();
+  const response = await (params.fetchImpl ?? fetch)("https://api.github.com/rate_limit", {
+    headers: { Authorization: `Bearer ${params.token}`, Accept: "application/vnd.github+json" },
+    signal: AbortSignal.timeout(60_000),
+  });
+  requireValue(response.ok, "GitHub publication request budget could not read current quota.");
+  const bytes = await readBoundedResponseBody(response, {
+    label: "GitHub rate limit",
+    maxBytes: 64 * 1024,
+  });
+  const { remaining, reset } = JSON.parse(bytes.toString("utf8")).resources?.core ?? {};
+  requireValue(
+    Number.isSafeInteger(remaining) &&
+      remaining >= 0 &&
+      Number.isSafeInteger(reset) &&
+      reset * 1000 > Date.now(),
+    "GitHub publication request budget received invalid or stale quota.",
+  );
+  const perPackage = 2 * PACKAGE_COMMAND_REQUEST_LIMIT;
+  const required = packages * perPackage + PUBLICATION_REQUEST_HEADROOM;
+  const maximum = Math.max(0, Math.floor((remaining - PUBLICATION_REQUEST_HEADROOM) / perPackage));
+  console.error(
+    JSON.stringify({
+      githubPublicationBudget: {
+        packages,
+        perPackage,
+        headroom: PUBLICATION_REQUEST_HEADROOM,
+        required,
+        remaining,
+        reset,
+      },
+    }),
+  );
+  requireValue(
+    required <= remaining,
+    `GitHub publication request budget requires ${required} requests for ${packages} packages; ${remaining} remain. Select at most ${maximum} packages or resume after ${new Date(reset * 1000).toISOString()} with fresh parent authorization.`,
+  );
+}
+
 export async function main(argv) {
+  if (!["load", "consume", "authorize"].includes(argv[0])) {
+    return runPreparedNpmCommand(argv);
+  }
+  return withGithubRequestBudget(
+    argv[0] === "load" ? PREVIEW_REQUEST_LIMIT : PACKAGE_COMMAND_REQUEST_LIMIT,
+    async (budget) => {
+      try {
+        return await runPreparedNpmCommand(argv);
+      } finally {
+        console.error(
+          JSON.stringify({
+            githubRequestAccounting: { scope: "prepared-npm-command", command: argv[0], ...budget },
+          }),
+        );
+      }
+    },
+  );
+}
+
+async function runPreparedNpmCommand(argv) {
   const [command, ...args] = argv;
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -876,7 +971,7 @@ export async function main(argv) {
       const binding = npmEvidenceBinding(adoptionParams);
       const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
       adoptionParams.immutableReads = options["--evidence-output"]
-        ? createReleaseEvidenceReplay(binding)
+        ? createReleaseEvidenceReplay(binding, undefined, { shareAcquisitionReads: true })
         : await loadNpmEvidenceReplay({
             binding,
             artifactId: process.env.PREPARED_NPM_EVIDENCE_ID,
@@ -884,21 +979,30 @@ export async function main(argv) {
             token: common.token,
             archivePath: process.env.RUNNER_TEMP + "/plugin-npm-evidence.zip",
             client: createReleaseEvidenceClient(common.repository),
+            shareAcquisitionReads: true,
           });
     }
     adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
     if (options["--evidence-output"]) {
       requireValue(command === "load", "Only trusted preview load can write an evidence handoff");
-      writeEvidenceOutput = () =>
+      writeEvidenceOutput = () => {
+        const {
+          evidenceClient: _client,
+          revalidateAuthority: _authority,
+          ...preparedEvidence
+        } = adoption;
+        adoptionParams.immutableReads.setPreparedEvidence(preparedEvidence);
         writeFileSync(options["--evidence-output"], adoptionParams.immutableReads.serialize(), {
           flag: "wx",
         });
+      };
     }
     Object.assign(common, {
       workflowSha: adoption.workflowSha,
       publisherPolicySha256: adoption.publisherPolicySha256,
       selectionMode: adoptionParams.selectionMode,
       plugins: adoptionParams.plugins,
+      immutableReads: adoptionParams.immutableReads,
     });
     if (command !== "authorize" || options["--package"]) {
       prepared = await downloadPreparedNpmRelease({
@@ -975,6 +1079,7 @@ export async function main(argv) {
             requirePublished,
           })
         : selectedPackages;
+    await requireFanoutCapacity(matrix.length, common);
     await adoption.revalidateAuthority?.();
     capacity?.report(selectedPackages.length);
     writeEvidenceOutput?.();
