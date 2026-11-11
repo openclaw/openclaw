@@ -24,7 +24,7 @@ import {
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import { createStartupTestState, gatewayStartupOptions } from "./server-startup.test-support.js";
@@ -84,7 +84,7 @@ describe("Gateway startup lifetime", () => {
       await using state = await createStartupTestState(`gateway-idle-donor-${entry}`);
       startupTraceEventLoopDelay.instances.length = 0;
       state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
-      const port = await getFreePort();
+      const port = await getDeterministicFreePortBlock({ offsets: [0] });
       await configureStartup(state, port);
       const previous = captureActivePluginRegistrySnapshot();
       const bootstrapModule = await import("./server-startup-bootstrap.js");
@@ -307,7 +307,7 @@ describe("Gateway startup lifetime", () => {
 
   it("stops TLS renewal when the started Gateway closes", async () => {
     await using state = await createStartupTestState("gateway-tls-renewal-close");
-    const port = await getFreePort();
+    const port = await getDeterministicFreePortBlock({ offsets: [0] });
     const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
     const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
     await configureStartup(
@@ -356,7 +356,7 @@ describe("Gateway startup lifetime", () => {
   it.for(["clean", "failed"] as const)(
     "joins deferred startup failure while reporting %s cleanup independently",
     async (cleanup) => {
-      const port = await getFreePort();
+      const port = await getDeterministicFreePortBlock({ offsets: [0] });
       await using state = await createStartupTestState(`gateway-deferred-startup-${cleanup}`);
       const startupError = new Error("deferred startup failed");
       const cleanupError = new Error("deferred startup cleanup failed");
@@ -439,7 +439,7 @@ describe("Gateway startup lifetime", () => {
   it.each(["clean", "failed", "held-process", "held-embedded"] as const)(
     "releases post-ready work and joins required startup rollback (%s)",
     async (mode) => {
-      const port = await getFreePort();
+      const port = await getDeterministicFreePortBlock({ offsets: [0] });
       await using state = await createStartupTestState("gateway-post-ready-startup-failure");
       const startupError = new Error("startup failed after post-attach installation");
       const cleanupError = new Error("startup cleanup failed");
