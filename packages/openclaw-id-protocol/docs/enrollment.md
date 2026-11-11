@@ -314,7 +314,9 @@ both, disconnects both and invalidates both keys' tokens. W_op is listed in `nod
 for relay admission only; the Gateway, not Discovery, decides each key's role. It admits W_op as
 an accountless operator member (account `node:<W>`) under the member operator ceiling: chat,
 sessions, approvals, questions and talk, never configuration, administration or access
-management. W_op cannot also be an owner, member or another node's key.
+management. W_op cannot also be an owner, member or another node's key. Reapproving a node that drops or replaces its operator key disconnects the old key and
+invalidates its tokens. `node_peer_keys` stays within its 256-entry bound: a claw lists at most
+`MAX_NODES` node and operator keys together, so a claw whose nodes all have chat holds 128 of them.
 
 `MAX_NODES` is 256. Reapproving a still-listed node through a fresh pending invitation
 preserves its listing seq and inactivity clock. `isAdmitted` includes node keys; `isNode`

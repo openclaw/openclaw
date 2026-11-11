@@ -455,6 +455,29 @@ describe("node authority boundary", () => {
     }
   });
 
+  it("revokes an operator key that a reapproval drops, and bounds the listed node keys", async () => {
+    const operator = (await worldKey("mac-operator-2")).peer;
+    const id = "e1".repeat(16);
+    let state = stateOf(
+      await registerNodeInvite(world.state, await nodeCap(id), proofKey, context),
+    );
+    state = stateOf(
+      await submitNodeRedemption(state, await nodeRedemption(id, peer, operator), WORLD_NOW),
+    );
+    state = stateOf(await approve(state, id, peer, operator));
+    const again = "e2".repeat(16);
+    state = stateOf(await registerNodeInvite(state, await nodeCap(again), proofKey, context));
+    state = stateOf(await submitNodeRedemption(state, await nodeRedemption(again), WORLD_NOW));
+    const reapproved = await approve(state, again);
+    expect(isAdmitted(stateOf(reapproved), operator, WORLD_NOW)).toBe(false);
+    expect(reapproved.events).toEqual(
+      expect.arrayContaining([
+        { type: "disconnect", peer_keys: [operator] },
+        { type: "invalidate_tokens", peer_keys: [operator] },
+      ]),
+    );
+  });
+
   it("removes node pairings and refuses revocation replay after fresh approval", async () => {
     const revoke = await signRevocation(
       admitted,

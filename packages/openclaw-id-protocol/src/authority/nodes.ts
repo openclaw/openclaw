@@ -185,6 +185,18 @@ export async function addNode(
   if (!existing && Object.keys(state.nodes).length >= MAX_NODES) {
     return refuse(state, "limit_reached", `a claw has at most ${MAX_NODES} nodes`);
   }
+  // The snapshot lists every node and operator key; keep that list within its signed bound.
+  const listedKeys =
+    nodeEnrollmentKeys(state).length -
+    (existing ? nodeEnrollmentKeys(state, [target.peer_key]).length : 0);
+  if (listedKeys + keys.length > MAX_NODES) {
+    return refuse(state, "limit_reached", `a claw lists at most ${MAX_NODES} node keys`);
+  }
+  // Reapproval may replace or drop the operator key; the dropped key loses its tokens too.
+  const dropped =
+    existing?.operator_peer_key && existing.operator_peer_key !== target.operator_peer_key
+      ? [existing.operator_peer_key]
+      : [];
   return applied(
     {
       ...state,
@@ -206,6 +218,12 @@ export async function addNode(
       },
     },
     [
+      ...(dropped.length
+        ? [
+            { type: "disconnect" as const, peer_keys: dropped },
+            { type: "invalidate_tokens" as const, peer_keys: dropped },
+          ]
+        : []),
       { type: "notify_owners", event: "redemption_resolved", ref: target.invite_id },
       { type: "publish_snapshot" },
     ],
