@@ -40,14 +40,19 @@ async function createPlanSource(): Promise<{ source: TemplateSourceIdentity; wor
   };
 }
 
-const extension = {
-  id: "market-data",
-  kind: "plugin",
-  format: "claude",
-  source: "clawhub",
-  ref: "@acme/market-data",
-  version: "2.0.1",
-} as const;
+const extension = { ref: "@acme/market-data", version: "2.0.1" } as const;
+
+async function planApplication(
+  manifest: Record<string, unknown>,
+  packagePreflight?: () => Promise<TemplatePackagePreflightResult>,
+) {
+  const { source, workspace } = await createPlanSource();
+  return buildTemplateAddPlan({
+    manifest: requireManifest({ schemaVersion: 1, agent: { id: "analyst" }, ...manifest }),
+    source,
+    context: { workspace, ...(packagePreflight ? { packagePreflight } : {}) },
+  });
+}
 
 function extensionPreflight(
   overrides: Partial<TemplatePackagePreflightResult> = {},
@@ -99,14 +104,8 @@ describe("Template application schema v1", () => {
 
 describe("Template application planning v1", () => {
   it("allows ordinary sessions_spawn authority without model or named delegates", async () => {
-    const { source, workspace } = await createPlanSource();
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({
-        schemaVersion: 1,
-        agent: { id: "analyst", tools: { allow: ["sessions_spawn"] } },
-      }),
-      source,
-      context: { workspace },
+    const plan = await planApplication({
+      agent: { id: "analyst", tools: { allow: ["sessions_spawn"] } },
     });
     expect(plan.agent.config).not.toHaveProperty("model");
     expect(plan.agent.config).not.toHaveProperty("subagents");
@@ -116,23 +115,15 @@ describe("Template application planning v1", () => {
     expect(plan.blockers).toEqual([]);
   });
   it("plans an inspected plugin and an ordinary managed schema asset", async () => {
-    const { source, workspace } = await createPlanSource();
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({
-        schemaVersion: 1,
-        agent: { id: "analyst" },
+    const plan = await planApplication(
+      {
         plugins: [{ ref: extension.ref, version: extension.version }],
         workspace: {
           files: [{ source: "workspace/schemas/market.json", path: "schemas/market.json" }],
         },
-      }),
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () =>
-          extensionPreflight({ mapped: ["commands", "skills"], unavailable: ["agents"] }),
       },
-    });
+      async () => extensionPreflight({ mapped: ["commands", "skills"], unavailable: ["agents"] }),
+    );
     expect(plan.blockers).toEqual([]);
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
@@ -154,7 +145,6 @@ describe("Template application planning v1", () => {
     );
   });
   it("reports a reused plugin with remaining local setup as setup-required", async () => {
-    const { source, workspace } = await createPlanSource();
     const prerequisite = {
       kind: "plugin-setup" as const,
       plugin: "market-data",
@@ -162,19 +152,10 @@ describe("Template application planning v1", () => {
       envVars: ["MARKET_DATA_TOKEN"],
       authMethods: [],
     };
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({
-        schemaVersion: 1,
-        agent: { id: "analyst" },
-        plugins: [{ ref: extension.ref, version: extension.version }],
-      }),
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () =>
-          extensionPreflight({ action: "reuse", requirements: [prerequisite] }),
-      },
-    });
+    const plan = await planApplication(
+      { plugins: [{ ref: extension.ref, version: extension.version }] },
+      async () => extensionPreflight({ action: "reuse", requirements: [prerequisite] }),
+    );
     expect(plan.actions).toContainEqual(
       expect.objectContaining({
         kind: "package",
@@ -185,19 +166,10 @@ describe("Template application planning v1", () => {
     expect(plan.readiness).toEqual({ ready: false, requirements: [prerequisite] });
   });
   it("blocks incomplete plugin adapter provenance", async () => {
-    const { source, workspace } = await createPlanSource();
-    const plan = await buildTemplateAddPlan({
-      manifest: requireManifest({
-        schemaVersion: 1,
-        agent: { id: "analyst" },
-        plugins: [{ ref: extension.ref, version: extension.version }],
-      }),
-      source,
-      context: {
-        workspace,
-        packagePreflight: async () => extensionPreflight({ adapterIdentity: undefined }),
-      },
-    });
+    const plan = await planApplication(
+      { plugins: [{ ref: extension.ref, version: extension.version }] },
+      async () => extensionPreflight({ adapterIdentity: undefined }),
+    );
     expect(plan.blockers).toContainEqual(
       expect.objectContaining({ code: "plugin_capability_provenance_incomplete" }),
     );
