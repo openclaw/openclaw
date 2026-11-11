@@ -126,10 +126,10 @@ delivery behavior across channels.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
 - **Signal:** `[label](url)` -> `label (url)` unless the label already
   matches the URL.
-- **Google Chat:** `[label](url)` -> `<url|label>`. A styled label, a label
-  with Google Chat markup characters, or a URL with `<`, `>` or `|` renders as
-  `label (url)` instead, or as the label alone when it already matches the URL
-  or the address of a `mailto:` link.
+- **Google Chat:** `[label](url)` -> `<url|label>`. A styled label renders as
+  `label (url)` instead. A label that matches the URL, or the address of a
+  `mailto:` link, is not repeated: when it is styled or holds Google Chat
+  markup characters, it renders once as plain text.
 
 ## Spoilers
 
