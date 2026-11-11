@@ -121,6 +121,10 @@ imports only the new Git objects, and checks out the source delta before reinsta
 into its retained dependencies.
 Repeat installation still runs repository lifecycle scripts when manifests and
 lockfiles are unchanged.
+Preparation logs distinguish native snapshot cloning (`templateClone`), installer
+shutdown (`templateRetire`), and publication validation (`templateValidateOutput`).
+The `snapshot` phase measures the content manifest, not the native filesystem clone.
+Nested phase durations are inclusive; do not add them to their parent duration.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes
 build a fresh template. Refresh never changes the source generation, including while
 another session is cloning it. Each

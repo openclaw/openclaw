@@ -456,6 +456,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/scripts/ci-changed-build-selection.test.ts",
         "test/scripts/ci-changed-node-test-plan.integration.test.ts",
         "test/scripts/test-projects.test.ts",
+        "test/scripts/check-database-worker-ratchet.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+        "test/scripts/database-worker-compat.test.ts",
+        "test/scripts/personal-credential-writer-guard.test.ts",
       ],
       preset: "tooling",
     },
@@ -614,7 +619,17 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       ],
       preset: "runtime",
     },
-    { targets: ["test/scripts/run-vitest.test.ts"], preset: "tooling" },
+    {
+      targets: [
+        "test/scripts/run-vitest.test.ts",
+        "test/scripts/check-database-worker-ratchet.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+        "test/scripts/database-worker-compat.test.ts",
+        "test/scripts/personal-credential-writer-guard.test.ts",
+      ],
+      preset: "tooling",
+    },
     { extra: [nodeTarget], preset: "full" },
     { extra: [], args: ["--root", "custom-root"], preset: "full" },
     { extra: [], args: ["--root", "custom-root"], jobArgs: [], preset: "full" },
@@ -1029,17 +1044,24 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       concurrency: 0,
       error: "Shard plan concurrency must be a positive integer",
     },
-  ])("rejects invalid $name before scheduling any child", async ({ env, concurrency, error }) => {
-    const runChild = vi.fn(async () => 0);
-    await expect(
-      runPlans([group("one", [bunConfig])], {
-        env: env ?? {},
-        concurrency,
-        runChild,
-      }),
-    ).rejects.toThrow(error);
-    expect(runChild).not.toHaveBeenCalled();
-  });
+  ])(
+    "rejects invalid $name before preparing builds or scheduling children",
+    async ({ env, concurrency, error }) => {
+      const prepare = vi
+        .spyOn(buildPrerequisites, "prepareE2eVitestRuntime")
+        .mockRejectedValue(new Error("Invalid shard settings reached expensive build preparation"));
+      const runChild = vi.fn(async () => 0);
+      await expect(
+        runPlans([group("one", ["test/vitest/vitest.e2e.config.ts"])], {
+          env: env ?? {},
+          concurrency,
+          runChild,
+        }),
+      ).rejects.toThrow(error);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(runChild).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps exact native admission and Vitest-only arguments separate", () => {
     const selection = { targets: [nativeBunTarget] };

@@ -18,8 +18,9 @@ node --import ./scripts/tsx.mjs scripts/perf/sandbox-template-commit-measure.ts 
 ```
 
 Use an exact-parent checkout and candidate checkout with isolated dependencies.
-The older `--baseline-dir` hook freezes only three caller modules; it is not a
-valid comparison when template-cache or registry owners change. Run at least two
+The `--baseline-dir` hook freezes the two local-workspace caller modules,
+`dependency-template.ts`, and `template-cache.ts`. It is not a valid comparison
+when other owners, such as the registry, change. Run at least two
 controls of each variant in serial, interleaved order (for example B/C/C/B).
 Extend the series if the A/A spread obscures the result. Seed costs are separate
 from measured waves. Record ambient host load and preserve failed samples.
@@ -45,3 +46,24 @@ independent output-block counters. btrfs referenced, exclusive, and set-shared
 extent observations describe sharing; overlapping subtree totals must not be
 summed or presented as unique newly allocated disk space. Sync and extent
 inspection belong outside timing intervals. No global cache flush is needed.
+
+## Divergent source refresh attribution
+
+Use `--fixture --divergent` to generate sibling commits with 22-path and
+6,002-path changes and an unchanged lockfile. Later `--divergent` runs reuse that
+fixture, measure both refreshes, and finish with same-commit reuse. Every clone
+checks the selected source and source-dependent installed outputs. The `phases`
+field records diagnostic owner spans; parent and child durations are inclusive
+and must not be summed together.
+
+For attribution-only changes, compare at least five serial, counterbalanced
+baseline/candidate pairs on the same host. Report cold creation, small and large
+refreshes, and same-commit reuse separately. Acceptance is unchanged source and
+installed outputs and paired owner medians within ±10%. Record p95, process and
+main-thread CPU, main-isolate allocated bytes, and host load alongside the medians;
+retain failures and investigate tail regressions separately. Profile outside the
+timing series with `--profile`.
+
+The fixture uses a small real local dependency; its installation time does not
+represent a large production dependency graph. APFS changes clone inode identities
+and may make Git rehash unchanged files; do not project that cost onto Btrfs.

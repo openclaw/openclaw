@@ -60,6 +60,7 @@ function fixture() {
         id: identity(previous),
         key,
         agentId: previous.agentId,
+        storePath: previous.storeTarget.storePath,
         row: undefined,
       });
       rows.delete(key);
@@ -95,6 +96,7 @@ function fixture() {
       id: identity(row),
       key,
       agentId,
+      storePath: row.storeTarget.storePath,
       row: selectionRow(row),
       scope: "session-entry",
     });

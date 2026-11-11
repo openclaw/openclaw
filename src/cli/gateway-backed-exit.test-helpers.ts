@@ -128,6 +128,14 @@ export async function startCliReadGateway(token?: string): Promise<{ url: string
       if (frame.method === "cron.status") {
         sendMinimalGatewayResponse(ws, frame.id, { enabled: true, jobs: 0 });
       }
+      if (
+        frame.method === "diagnostics.cpuProfile" ||
+        frame.method === "diagnostics.heapSnapshot"
+      ) {
+        sendMinimalGatewayResponse(ws, frame.id, {
+          captured: frame.method === "diagnostics.cpuProfile" ? "cpu" : "heap",
+        });
+      }
       if (frame.method === "message.action") {
         expect(frame.params).toMatchObject({
           channel: "discord",
@@ -138,7 +146,13 @@ export async function startCliReadGateway(token?: string): Promise<{ url: string
         sendMinimalGatewayResponse(ws, frame.id, { messages: [] });
       }
     },
-    authenticate(token, ["cron.list", "cron.status", "message.action"]),
+    authenticate(token, [
+      "cron.list",
+      "cron.status",
+      "message.action",
+      "diagnostics.cpuProfile",
+      "diagnostics.heapSnapshot",
+    ]),
   );
 }
 
