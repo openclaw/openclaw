@@ -379,7 +379,7 @@ it.each([false, true])(
             await verifyAgentDatabaseStartupIntegrity(input);
           },
         });
-        await admission.waitForAgentPreparation("main", { env, forWrite: true });
+        await admission.waitForAgentPreparation("main", { env });
         expect(() => assertAgentDatabaseAdmitted("main", { env })).not.toThrow();
         expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
         await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 2 });
