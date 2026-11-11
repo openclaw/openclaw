@@ -73,17 +73,22 @@ it.each([
   ["cancel", "in_progress", false],
 ] as const)("bounds canary %s from %s (completes=%s)", async (phase, status, completes) => {
   const cleanup = nightly.jobs.cleanup_boat_nightly_runner;
-  const step = cleanup.steps.find((step) =>
+  const cleanupSteps: workflow.WorkflowStep[] = cleanup.steps;
+  const step = cleanupSteps.find((candidate) =>
     phase === "watch"
-      ? step.id === "canary_wait"
-      : step.name === "Cancel an unfinished canary before cleanup",
+      ? candidate.id === "canary_wait"
+      : candidate.name === "Cancel an unfinished canary before cleanup",
   )!;
   const outputs = new Map<string, unknown>();
   const failures: string[] = [];
   let now = 0;
   let calls = 0;
   let cancelled = false;
-  const execution = runInNewContext(`(async () => { ${step.with!.script} })()`, {
+  const script = step.with?.script;
+  if (typeof script !== "string") {
+    throw new Error("Missing canary script");
+  }
+  const execution = runInNewContext(`(async () => { ${script} })()`, {
     context: { repo: { owner: "openclaw", repo: "openclaw" }, runId: 123, sha: "source" },
     process: { env: { GITHUB_RUN_ATTEMPT: "2", CANARY_LABEL: "owned-label" } },
     Date: { now: () => now },
@@ -141,12 +146,12 @@ it.each([
   expect(cancelled).toBe(phase === "cancel");
   expect(now).toBe(completes ? 5_000 : 300_000);
   expect(cleanup.needs).not.toContain("runner_canary");
-  const cancel = cleanup.steps.findIndex(
-    (step) => step.name === "Cancel an unfinished canary before cleanup",
+  const cancel = cleanupSteps.findIndex(
+    (candidate) => candidate.name === "Cancel an unfinished canary before cleanup",
   );
-  expect(cancel).toBeLessThan(cleanup.steps.findIndex((step) => step.id === "nightly"));
-  expect(cleanup.steps[cancel].if).toContain("always()");
-  expect(cleanup.steps.find((step) => step.id === "nightly")!.if).toBe("always()");
+  expect(cancel).toBeLessThan(cleanupSteps.findIndex((candidate) => candidate.id === "nightly"));
+  expect(cleanupSteps[cancel]?.if).toContain("always()");
+  expect(cleanupSteps.find((candidate) => candidate.id === "nightly")!.if).toBe("always()");
 });
 
 it.each(["schedule", "workflow_dispatch"] as const)("restricts %s to main", (eventName) => {
