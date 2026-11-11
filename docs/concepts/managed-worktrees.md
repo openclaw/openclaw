@@ -90,6 +90,23 @@ Sandboxed project sessions use a private Git checkout for execution,
 while the managed worktree remains the source of truth for accepted changes.
 Docker and Podman support this local projection. The host repository's shared Git
 metadata and ignored-file provisioning are not mounted or copied into it.
+
+Changed local checkpoints report `Local workspace checkpoint capture` in the
+`agents/worktrees` log, with the worktree ID and selected `path=snapshot` or `path=paused`.
+The rendered `reason` distinguishes adaptive direct capture, a non-subvolume root,
+an unavailable Btrfs clone backend, clone failure, and a nested-subvolume fallback.
+`attemptedSnapshot=true` also identifies a snapshot attempt that fell back to
+paused capture; `cloneError` names an expected clone failure code.
+`preCopyMs` measures from completed pause preparation to the copy attempt,
+including settlement of an earlier checkpoint. `copyMs` covers the complete
+native copy helper, and `postCopyBeforeResumeMs` covers the interval from its
+completion to the resume call. `resumeMs` sums resume calls, including container
+inspection, unpause, and receipt persistence. Missing measurements appear as `-`.
+These are owner-operation timings, not syscall or writeback timings, and their
+sum is not the container's frozen duration. The record follows finalization
+attempts, including failures that retain a pause. `accepted=true` means
+synchronization returned successfully; it does not certify that resume succeeded.
+
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the
@@ -286,6 +303,9 @@ Lease acquisition appears separately as `allocationWait` for global slot admissi
 These durations also appear in slow-chat diagnostics under `worktree.<kind>`.
 `reservation` measures the protected allocation work after acquisition. Phases
 can overlap, so their sum is not the total preparation duration.
+
+`provisionEstimate` measures included-file discovery and byte estimation before checkout;
+`provisionInspect` measures fresh selection before copying, after source custody is reacquired.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 

@@ -1,0 +1,3 @@
+# Native Git regression for pinned authoritative fetches in shared partial clones.
+# Covers omitted blobs, preserved source/config/checkpoints, and no history walk.
+45

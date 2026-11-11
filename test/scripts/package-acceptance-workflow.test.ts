@@ -2161,6 +2161,7 @@ describe("frozen admission workflow barriers", () => {
       "release_execution_plan",
       "release_decision",
       "diagnostic_drain",
+      "cleanup_boat_release_runners",
     ]);
     const outputs = new Proxy(
       {
@@ -2206,6 +2207,7 @@ describe("frozen admission workflow barriers", () => {
               runInNewContext(expression, {
                 inputs: { ...inputs, shared_image_policy: policy },
                 github: { ref: "refs/heads/main", run_attempt: 1 },
+                vars: { OPENCLAW_CI_RUNNER_BACKEND: "boat" },
                 needs: Object.fromEntries(
                   Object.keys(jobs).map((key) => [
                     key,
@@ -9235,6 +9237,53 @@ test "$package_manager" = "pnpm@12.1.0"
     },
   );
 
+  it("requires successful request validation before every npm preflight consumer", () => {
+    const control = workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "validate_npm_request");
+    expect(control["runs-on"]).toBe("ubuntu-24.04");
+    expect(control["timeout-minutes"]).toBe(5);
+    expect(control.steps?.map((step) => step.name)).toEqual([
+      "Validate canonical preflight caller and phase",
+      "Validate release ref input format",
+      "Forbid preflight artifact promotion on validation-only runs",
+    ]);
+    const consumers = [
+      "check_openclaw_npm",
+      "prepare_openclaw_npm",
+      "check_sdk_npm",
+      "check_dependencies_npm",
+      "check_contents_npm",
+      "verify_openclaw_npm",
+    ];
+    const phases: [string, string, string[]][] = [
+      ["source", "", ["check_openclaw_npm"]],
+      ["prepare", "", ["prepare_openclaw_npm"]],
+      ["all", "", consumers],
+      ["verify", "", consumers.filter((job) => job !== "prepare_openclaw_npm")],
+      ["verify", "sealed", consumers.slice(2)],
+    ];
+    for (const [phase, sourceEvidence, scheduled] of phases) {
+      for (const admission of ["success", "failure", "skipped", "cancelled"] as const) {
+        const jobResults: Record<string, string> = { validate_npm_request: admission };
+        for (const name of consumers) {
+          jobResults[name] = scheduled.includes(name) ? "success" : "skipped";
+        }
+        for (const jobName of consumers) {
+          const job = workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, jobName);
+          expect(jobNeeds(job)).toContain("validate_npm_request");
+          expect(
+            evaluateWorkflowExpression(job.if, {
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              inputs: { preflight_phase: phase, source_check_json: sourceEvidence },
+              jobResults,
+            }),
+          ).toBe(admission === "success" && scheduled.includes(jobName));
+        }
+      }
+    }
+  });
+
   it.each(["true", "false"])(
     "routes npm preflight runners per dispatch (hosted=%s) through declared artifact inputs",
     (hosted) => {
@@ -9260,6 +9309,41 @@ test "$package_manager" = "pnpm@12.1.0"
         NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS:
           "${{ inputs.npm_preflight_use_github_hosted_runners }}",
       });
+      for (const runnerBackend of [
+        "",
+        "blacksmith",
+        "github",
+        "hybrid",
+        "runson",
+        "boat",
+      ] as const) {
+        for (const releaseRunnerGroup of ["", "release-runners"]) {
+          const label =
+            hosted === "true" || runnerBackend === "github"
+              ? "ubuntu-24.04"
+              : runnerBackend === "boat"
+                ? "boat-xlarge"
+                : "blacksmith-8vcpu-ubuntu-2404";
+          for (const jobName of [
+            "check_openclaw_npm",
+            "prepare_openclaw_npm",
+            "check_sdk_npm",
+            "check_dependencies_npm",
+            "check_contents_npm",
+          ]) {
+            expect(
+              evaluateWorkflowRunner(
+                workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, jobName)["runs-on"],
+                {
+                  runnerBackend,
+                  releaseRunnerGroup,
+                  useGithubHostedRunners: hosted === "true",
+                },
+              ),
+            ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: label } : label);
+          }
+        }
+      }
     },
   );
 
@@ -9322,6 +9406,7 @@ test "$package_manager" = "pnpm@12.1.0"
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
     const terminalNeeds = [
+      "boat_release_runners",
       "resolve_target",
       "prepare_npm_package",
       "qualify_npm_package",
@@ -9331,8 +9416,10 @@ test "$package_manager" = "pnpm@12.1.0"
     ];
     expect(decision.needs).toEqual(terminalNeeds);
     expect(drain.needs).toEqual(terminalNeeds);
-    expect(decision.if).toBe("always()");
-    expect(drain.if).toBe("always()");
+    const waiterCondition =
+      "always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')";
+    expect(decision.if).toBe(waiterCondition);
+    expect(drain.if).toBe(waiterCondition);
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
       FAIL_FAST: "${{ inputs.fail_fast }}",
@@ -10693,26 +10780,74 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain('bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"');
     expect(workflow).toContain("use_github_hosted_runners:");
-    for (const [jobName, runner] of [
-      ["validate_special_e2e", "blacksmith-8vcpu-ubuntu-2404"],
-      ["validate_live_provider_suites", "blacksmith-2vcpu-ubuntu-2404"],
-    ] as const) {
-      expect(evaluateWorkflowRunner(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"])).toBe(
-        runner,
+    const expectRuntimeRunner = (
+      selector: unknown,
+      legacy: string,
+      boat: string,
+      githubHosted = false,
+    ) => {
+      for (const runnerBackend of [
+        "",
+        "blacksmith",
+        "github",
+        "hybrid",
+        "runson",
+        "boat",
+      ] as const) {
+        for (const runnerGroup of ["", "release-runners"]) {
+          for (const useGithubHostedRunners of [false, true]) {
+            const label =
+              useGithubHostedRunners || (githubHosted && runnerBackend === "github")
+                ? "ubuntu-24.04"
+                : runnerBackend === "boat"
+                  ? boat
+                  : legacy;
+            expect(
+              evaluateWorkflowRunner(selector, {
+                runnerBackend,
+                runnerGroup,
+                useGithubHostedRunners,
+              }),
+            ).toEqual(runnerGroup ? { group: runnerGroup, labels: label } : label);
+          }
+        }
+      }
+    };
+    for (const jobName of [
+      "validate_release_live_cache",
+      "plan_docker_lane_groups",
+      "validate_live_provider_suites",
+      "validate_live_media_provider_suites",
+    ]) {
+      expectRuntimeRunner(
+        workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
+        "blacksmith-2vcpu-ubuntu-2404",
+        "boat",
       );
-      expect(
-        evaluateWorkflowRunner(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"], {
-          useGithubHostedRunners: true,
-        }),
-      ).toBe("ubuntu-24.04");
+    }
+    for (const jobName of [
+      "validate_special_e2e",
+      "validate_docker_e2e",
+      "validate_docker_lanes",
+      "prepare_docker_e2e_image",
+      "prepare_live_test_image",
+      "validate_live_models_docker",
+      "validate_live_models_docker_targeted",
+      "validate_live_docker_provider_suites",
+      "validate_docker_openwebui",
+    ]) {
+      expectRuntimeRunner(
+        workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"],
+        "blacksmith-8vcpu-ubuntu-2404",
+        "boat-xlarge",
+        jobName === "validate_docker_openwebui",
+      );
     }
     for (const jobName of ["build", "test"]) {
-      const selector = workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)[
-        "runs-on"
-      ];
-      expect(evaluateWorkflowRunner(selector)).toBe("blacksmith-8vcpu-ubuntu-2404");
-      expect(evaluateWorkflowRunner(selector, { useGithubHostedRunners: true })).toBe(
-        "ubuntu-24.04",
+      expectRuntimeRunner(
+        workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)["runs-on"],
+        "blacksmith-8vcpu-ubuntu-2404",
+        "boat-xlarge",
       );
     }
     const repoE2eHarnessCheckout = workflowStep(
@@ -10796,6 +10931,11 @@ describe("package artifact reuse", () => {
     const imageDockerfile = readFileSync(LIVE_MEDIA_RUNNER_DOCKERFILE, "utf8");
     const imageWorkflow = readFileSync(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "utf8");
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
+    for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson", "boat"] as const) {
+      expect(evaluateWorkflowRunner(buildJob["runs-on"], { runnerBackend })).toBe(
+        runnerBackend === "boat" ? "ubuntu-24.04" : "blacksmith-2vcpu-ubuntu-2404",
+      );
+    }
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
     expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
     expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
@@ -11453,6 +11593,31 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(workflow).toContain("provider_mode must be mock-openai or live-frontier");
     expect(workflow).toContain("run_package_telegram_e2e:");
     const telegramJob = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
+    for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson", "boat"] as const) {
+      for (const [eventName, dispatchId, runnerGroup, expectedGroup] of [
+        ["schedule", "", "explicit-group", "explicit-group"],
+        ["schedule", "full-release-validation-1", "", ""],
+        ["workflow_dispatch", "manual-1", "", ""],
+        ["workflow_dispatch", "full-release-validation-1", "", "release-runners"],
+        ["workflow_dispatch", "full-release-validation-1", "explicit-group", "explicit-group"],
+      ] as const) {
+        const label =
+          runnerBackend === "github"
+            ? "ubuntu-24.04"
+            : runnerBackend === "boat"
+              ? "boat-large"
+              : "blacksmith-8vcpu-ubuntu-2404";
+        expect(
+          evaluateWorkflowRunner(telegramJob["runs-on"], {
+            runnerBackend,
+            eventName,
+            runnerGroup,
+            releaseRunnerGroup: "release-runners",
+            inputs: { dispatch_id: dispatchId },
+          }),
+        ).toEqual(expectedGroup ? { group: expectedGroup, labels: label } : label);
+      }
+    }
     expect(workflowStep(telegramJob, "Set up Docker Buildx")).toEqual({
       name: "Set up Docker Buildx",
       uses: "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
@@ -13149,6 +13314,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "qa_lab_runtime_parity_release_checks",
     );
 
+    for (const runnerBackend of ["", "blacksmith", "github", "hybrid", "runson", "boat"] as const) {
+      for (const releaseRunnerGroup of ["", "release-runners"]) {
+        const label = runnerBackend === "boat" ? "boat" : "blacksmith-2vcpu-ubuntu-2404";
+        expect(
+          evaluateWorkflowRunner(laneJob["runs-on"], { runnerBackend, releaseRunnerGroup }),
+        ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels: label } : label);
+      }
+    }
     expect(laneJob.strategy?.["fail-fast"]).toBe(false);
     expect(laneJob.strategy?.matrix?.lane).toContain('["core","soak"]');
     expect(laneJob.strategy?.matrix?.lane).toContain('["core"]');
