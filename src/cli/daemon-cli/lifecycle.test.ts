@@ -1005,10 +1005,9 @@ describe("runDaemonRestart health checks", () => {
       const refusal = run();
       await expect(refusal).rejects.toThrow("managed by an external supervisor");
       if (action !== "preserved restart") {
-        await expect(refusal).rejects.toHaveProperty(
-          "humanOutput",
-          expect.stringMatching(`^Gateway ${action} blocked: OpenClaw gateway lifecycle`),
-        );
+        await expect(refusal).rejects.toMatchObject({
+          humanOutput: expect.stringMatching(`^Gateway ${action} blocked: OpenClaw gateway`),
+        });
       }
 
       expectNoCalls(
