@@ -538,7 +538,10 @@ export function createAgentQuestionAnswerAuthority(params: {
 }): PreparedQuestionAnswerAuthority {
   return Object.freeze({
     sessionKey: params.sessionKey.trim(),
-    sourceQuestionInput: params.sourceQuestionInput,
+    get sourceQuestionInput() {
+      params.assertActive();
+      return params.sourceQuestionInput;
+    },
     requesterProfileId: params.requesterProfileId,
     assertActive: params.assertActive,
     admitTranscriptAnswer: params.admitTranscriptAnswer,

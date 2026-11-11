@@ -1,0 +1,2 @@
+# Extend the existing V8 run-authority retention fixture to verify source observers remain available through awaited active work, are released at settlement with retained question/receipt/watchdog authorities, and cannot be read through closed authority.
+27
