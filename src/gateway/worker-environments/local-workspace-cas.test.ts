@@ -273,7 +273,7 @@ it.each(["canonical", "projection"] as const)(
     const accepted = decodeLocalWorkspaceTree(
       readLocalWorkspaceTree(database, localWorkspaceDigestBytes(checkpoint.treeRoot!)),
     );
-    expect([...accepted.keys()].sort()).toEqual([
+    expect([...accepted.keys()].toSorted()).toEqual([
       "",
       "added.txt",
       "entry.txt",
