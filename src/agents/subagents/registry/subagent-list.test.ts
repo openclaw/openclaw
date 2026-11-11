@@ -14,7 +14,10 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { buildSubagentListForTests as buildSubagentList } from "./subagent-list.test-support.js";
+import {
+  buildSubagentListForTests as buildSubagentList,
+  expectedSharedCwdPath,
+} from "./subagent-list.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -576,7 +579,7 @@ describe("buildSubagentList", () => {
       expect(list.sharedCwdGroups).toEqual([
         {
           id: 1,
-          path: path.resolve(sharedDir),
+          path: expectedSharedCwdPath(sharedDir),
           runCount: 2,
           runIds: [runA.runId, runB.runId],
         },
@@ -584,7 +587,7 @@ describe("buildSubagentList", () => {
       expect(byRunId.get(runA.runId)?.sharedCwdGroupId).toBe(1);
       expect(byRunId.get(runB.runId)?.sharedCwdGroupId).toBe(1);
       expect(byRunId.get(runA.runId)?.line).toContain("[shared cwd group 1]");
-      expect(list.text.split(path.resolve(sharedDir))).toHaveLength(2);
+      expect(list.text.split(expectedSharedCwdPath(sharedDir))).toHaveLength(2);
     });
 
     it("stays silent for live runs that inherited the parent workspace", async () => {
@@ -665,7 +668,7 @@ describe("buildSubagentList", () => {
       expect(list.sharedCwdGroups).toEqual([
         {
           id: 1,
-          path: canonical,
+          path: expectedSharedCwdPath(canonical),
           // The sample is ordered by run id, not by which alias was seen first.
           runIds: [runA.runId, runB.runId].toSorted(),
           runCount: 2,
@@ -697,7 +700,7 @@ describe("buildSubagentList", () => {
       expect(list.sharedCwdGroups).toEqual([
         {
           id: 1,
-          path: path.resolve(missingDir),
+          path: expectedSharedCwdPath(missingDir),
           runCount: 2,
           runIds: [runA.runId, runB.runId],
         },
@@ -758,7 +761,7 @@ describe("buildSubagentList", () => {
       expect(list.sharedCwdGroups).toEqual([
         {
           id: 1,
-          path: path.resolve(sharedDir),
+          path: expectedSharedCwdPath(sharedDir),
           runCount: 20,
           runIds: runs.slice(0, 3).map((run) => run.runId),
         },
@@ -772,7 +775,7 @@ describe("buildSubagentList", () => {
           expect(item.line).not.toContain("shared cwd");
         }
       }
-      expect(list.text.split(path.resolve(sharedDir))).toHaveLength(2);
+      expect(list.text.split(expectedSharedCwdPath(sharedDir))).toHaveLength(2);
     });
 
     it("caps the reported directory while grouping on the full path", async () => {
@@ -860,10 +863,10 @@ describe("buildSubagentList", () => {
       expect(list.active.filter((item) => item.sharedCwdGroupId !== undefined)).toHaveLength(16);
       expect(list.text).toContain("shared working directories (8/25 shown):");
       for (const group of groups.slice(0, 8)) {
-        expect(list.text.split(path.resolve(group.dir))).toHaveLength(2);
+        expect(list.text.split(expectedSharedCwdPath(group.dir))).toHaveLength(2);
       }
       for (const group of groups.slice(8)) {
-        expect(list.text).not.toContain(path.resolve(group.dir));
+        expect(list.text).not.toContain(expectedSharedCwdPath(group.dir));
       }
     });
 
@@ -922,21 +925,21 @@ describe("buildSubagentList", () => {
       expect(inOrder.total).toBe(10);
       expect(inOrder.groups[0]).toEqual({
         id: 1,
-        path: path.resolve(dirForTag("zz")),
+        path: expectedSharedCwdPath(dirForTag("zz")),
         runCount: 3,
         runIds: ["run-perm-zz-0", "run-perm-zz-1", "run-perm-zz-2"],
       });
       expect(inOrder.groups.map((group) => group.path)).toEqual([
-        path.resolve(dirForTag("zz")),
+        expectedSharedCwdPath(dirForTag("zz")),
         ...Array.from({ length: 7 }, (_unused, groupIndex) =>
-          path.resolve(dirForTag(String(groupIndex).padStart(2, "0"))),
+          expectedSharedCwdPath(dirForTag(String(groupIndex).padStart(2, "0"))),
         ),
       ]);
       // The two lowest-ranked groups stay unreported under every permutation.
       for (const tag of ["07", "08"]) {
-        expect(inOrder.groups.some((group) => group.path === path.resolve(dirForTag(tag)))).toBe(
-          false,
-        );
+        expect(
+          inOrder.groups.some((group) => group.path === expectedSharedCwdPath(dirForTag(tag))),
+        ).toBe(false);
       }
       expect(inOrder.assignments.filter((entry) => entry.endsWith("=none"))).toHaveLength(4);
     });
@@ -1016,7 +1019,7 @@ describe("buildSubagentList", () => {
         expect(collided.sharedCwdGroups).toEqual([
           {
             id: 1,
-            path: path.resolve(sharedDir),
+            path: expectedSharedCwdPath(sharedDir),
             runCount: 2,
             runIds: runs.map((run) => run.runId).toSorted(),
           },

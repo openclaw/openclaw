@@ -14,7 +14,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../c
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
-import { buildSubagentListForTests } from "./subagent-list.test-support.js";
+import { buildSubagentListForTests, expectedSharedCwdPath } from "./subagent-list.test-support.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -133,7 +133,7 @@ describe("shared cwd advisory: policy-inherited roots", () => {
     expect(list.sharedCwdGroups).toEqual([
       {
         id: 1,
-        path: path.resolve(requesterRoot),
+        path: expectedSharedCwdPath(requesterRoot),
         runCount: 2,
         runIds: [runA.runId, runB.runId],
       },
@@ -169,7 +169,7 @@ describe("shared cwd advisory: policy-inherited roots", () => {
     expect(list.sharedCwdGroups).toEqual([
       {
         id: 1,
-        path: path.resolve(sharedDir),
+        path: expectedSharedCwdPath(sharedDir),
         runCount: 2,
         runIds: [ordinary.runId, ordinaryPeer.runId].toSorted(),
       },
