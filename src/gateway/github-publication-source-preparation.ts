@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
@@ -6,8 +9,15 @@ import {
   readGitHubPublicationBaseSha,
   requireGitHubPublicationCommit,
 } from "./github-publication-git-transport.js";
+import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
+import type { projectionOperations } from "./worker-environments/local-workspace-state.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
+import { prepareWorkspaceBaseRefresh } from "./worker-environments/workspace-manifest-worker.js";
+import {
+  deleteStagedWorkerWorkspaceResult,
+  workerWorkspaceResultStaging,
+} from "./worker-environments/workspace-result-staging.js";
 
 export type VerifiedWorkspaceSource = {
   repository: string;
@@ -38,6 +48,8 @@ export async function prepareManagedWorkspaceSource(params: {
   baseCommit?: string;
   assertCurrent: () => void;
   pristineError: string;
+  stagedRef: string;
+  signal?: AbortSignal;
 }) {
   const { owner, identity, target, assertCurrent, pristineError } = params;
   const integrationSource = params.source ?? params.verifiedBase;
@@ -218,6 +230,25 @@ export async function prepareManagedWorkspaceSource(params: {
               }
             }
           }
+          let staged: Awaited<ReturnType<typeof stageManagedWorkspaceSource>> | undefined;
+          if (initialImport && !recoveredImport && initialHead !== baseCommit) {
+            await deleteStagedWorkerWorkspaceResult({
+              root: cwd,
+              stagedResultRef: params.stagedRef,
+              assertCurrent: check,
+            });
+            staged = await stageManagedWorkspaceSource({
+              root: cwd,
+              beforeCommit: initialHead,
+              afterCommit: baseCommit,
+              baseCommit,
+              stagedRef: params.stagedRef,
+              state,
+              action,
+              signal: params.signal,
+              assertCurrent: check,
+            });
+          }
           check();
           return {
             baseCommit,
@@ -225,9 +256,71 @@ export async function prepareManagedWorkspaceSource(params: {
             continuingIntegration,
             recoveredImport,
             previousBase: state.current().base_commit,
+            staged,
           };
         },
       );
     },
   );
+}
+/** The source commits are immutable; only applying their admitted result needs a frozen guest. */
+export async function stageManagedWorkspaceSource(params: {
+  root: string;
+  beforeCommit: string;
+  afterCommit: string;
+  baseCommit: string;
+  stagedRef: string;
+  state: Pick<
+    ReturnType<typeof projectionOperations>,
+    "current" | "buildCacheInputs" | "baselineDocument"
+  >;
+  action: "prepare_pr" | "refresh_base";
+  signal?: AbortSignal;
+  assertCurrent: () => void;
+}) {
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-base-refresh-"));
+  try {
+    for (const [name, commit] of [
+      ["before", params.beforeCommit],
+      ["after", params.afterCommit],
+    ]) {
+      await prepareLocalWorkspaceCheckout({
+        source: params.root,
+        destination: path.join(temporary, name!),
+        temporaryRoot: temporary,
+        baseCommit: commit!,
+        branch: "refresh",
+        signal: new AbortController().signal,
+        assertCurrent: params.assertCurrent,
+      });
+    }
+    const buildCacheInputs = await params.state.buildCacheInputs();
+    const baseline = await params.state.baselineDocument();
+    const current = await prepareWorkspaceBaseRefresh(
+      {
+        beforeRoot: path.join(temporary, "before"),
+        afterRoot: path.join(temporary, "after"),
+        baseCommit: params.baseCommit,
+        baseRaw: baseline.rawManifest,
+        baseRef: baseline.manifestRef,
+        buildCacheInputs,
+        action: params.action,
+      },
+      params.signal,
+    );
+    const objectId = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+      root: params.root,
+      stagingRoot: path.join(temporary, "after"),
+      stagedResultRef: params.stagedRef,
+      baseManifestRef: baseline.manifestRef,
+      baseManifestRaw: baseline.rawManifest,
+      currentManifestRef: current.manifestRef,
+      currentManifestRaw: current.rawManifest,
+      buildCacheInputs: current.buildCacheInputs,
+      assertCurrent: params.assertCurrent,
+    });
+    return { objectId, baselineRef: params.state.current().baseline_ref };
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
 }

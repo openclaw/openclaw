@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 import { writeTextAtomic } from "@openclaw/fs-safe/atomic";
 import type { SessionGitHubBaseRefreshResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attribution.js";
@@ -19,6 +17,7 @@ import {
 } from "./github-publication-git-transport.js";
 import {
   prepareManagedWorkspaceSource,
+  stageManagedWorkspaceSource,
   type VerifiedWorkspacePullRequestSource,
   type VerifiedWorkspaceSource,
 } from "./github-publication-source-preparation.js";
@@ -27,19 +26,14 @@ import {
   prepareManagedWorkspaceReviewBase,
   readManagedSandboxGitState,
 } from "./github-publication-workspace-review.js";
-import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
 import {
   captureWorkspaceManifestDocument,
-  prepareWorkspaceBaseRefresh,
   workspaceSnapshotsEqual,
 } from "./worker-environments/workspace-manifest-worker.js";
 import { localWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
-import {
-  deleteStagedWorkerWorkspaceResult,
-  workerWorkspaceResultStaging,
-} from "./worker-environments/workspace-result-staging.js";
+import { deleteStagedWorkerWorkspaceResult } from "./worker-environments/workspace-result-staging.js";
 
 /** The host owns merge ancestry; the projection owns only admitted source bytes. */
 type ManagedWorkspaceIntegrationParams = {
@@ -113,9 +107,18 @@ export async function integrateManagedWorkspaceSource(
   const initialImport = params.source?.initial === true;
   const pristineError =
     "This workspace has existing dirty, untracked, or unpublished work. Keep or finish that work separately before preparing this PR; no PR source was applied.";
+  const stagedRef = localWorkspaceBaseRefreshRef(
+    createHash("sha256").update(owner.worktree.id).digest("hex"),
+  );
   const prepared = params.source?.reviewOnly
     ? undefined
-    : await prepareManagedWorkspaceSource({ ...params, target, assertCurrent, pristineError });
+    : await prepareManagedWorkspaceSource({
+        ...params,
+        target,
+        assertCurrent,
+        pristineError,
+        stagedRef,
+      });
   let guestHead: string | undefined;
   let guestDirty = false;
   let pendingStaged: { path: string; indexEntry?: string }[] = [];
@@ -190,9 +193,6 @@ export async function integrateManagedWorkspaceSource(
           ) {
             throw new Error("The managed workspace branch changed; existing work was preserved.");
           }
-          const stagedRef = localWorkspaceBaseRefreshRef(
-            createHash("sha256").update(owner.worktree.id).digest("hex"),
-          );
           const { baseCommit, initialHead, continuingIntegration, recoveredImport } = prepared!;
           const pending = await probe(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
           if (
@@ -200,7 +200,10 @@ export async function integrateManagedWorkspaceSource(
             state.current().base_commit !== prepared!.previousBase ||
             (continuingIntegration
               ? pending.code !== 0 || pending.stdout.trim() !== baseCommit
-              : pending.code !== 1)
+              : pending.code !== 1) ||
+            (prepared!.staged &&
+              (await probe(["rev-parse", "--verify", "--quiet", stagedRef])).stdout.trim() !==
+                prepared!.staged.objectId)
           ) {
             throw new Error(
               `The workspace changed during source preparation; retry ${action}. Saved work was preserved.`,
@@ -208,11 +211,13 @@ export async function integrateManagedWorkspaceSource(
           }
           // Settlement above finishes reserved transfers. The lease owns this one
           // remaining, unreserved slot; its payload must use the current baseline.
-          await deleteStagedWorkerWorkspaceResult({
-            root: cwd,
-            stagedResultRef: stagedRef,
-            assertCurrent: check,
-          });
+          if (!prepared!.staged) {
+            await deleteStagedWorkerWorkspaceResult({
+              root: cwd,
+              stagedResultRef: stagedRef,
+              assertCurrent: check,
+            });
+          }
           // A refresh rewrites working files before the guest index is restaged, so a refreshed file
           // stays staged at its pre-refresh entry, which ORIG_HEAD records until the next source is
           // admitted. Any other staged-only entry is guest work that completion would replace.
@@ -300,25 +305,24 @@ export async function integrateManagedWorkspaceSource(
             if (ancestor.code !== 0 && ancestor.code !== 1) {
               throw new Error("The selected base ancestry could not be verified.");
             }
-            const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
-              { cwd, assertCurrent: check },
-              policy,
-              await state.canonicalPaths(),
-            );
-            if (
-              !initialImport &&
-              snapshot.workspaceTree !== (await git(["rev-parse", "HEAD^{tree}"]))
-            ) {
-              // Index-only installation preserves every working byte, including accepted ignored data.
-              await git(["read-tree", snapshot.workspaceTree]);
-              await git([
-                "-c",
-                "core.hooksPath=" + os.devNull,
-                "commit",
-                "--no-gpg-sign",
-                "-m",
-                message("Save workspace before refreshing its selected base"),
-              ]);
+            if (!initialImport) {
+              const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
+                { cwd, assertCurrent: check },
+                policy,
+                await state.canonicalPaths(),
+              );
+              if (snapshot.workspaceTree !== (await git(["rev-parse", "HEAD^{tree}"]))) {
+                // Index-only installation preserves every working byte, including accepted ignored data.
+                await git(["read-tree", snapshot.workspaceTree]);
+                await git([
+                  "-c",
+                  "core.hooksPath=" + os.devNull,
+                  "commit",
+                  "--no-gpg-sign",
+                  "-m",
+                  message("Save workspace before refreshing its selected base"),
+                ]);
+              }
             }
           }
           const integrated = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
@@ -373,54 +377,28 @@ export async function integrateManagedWorkspaceSource(
             .split("\0")
             .filter(Boolean);
           if (state.current().base_commit !== baseCommit) {
-            const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-base-refresh-"));
-            try {
+            if (prepared!.staged) {
+              if (state.current().baseline_ref !== prepared!.staged.baselineRef) {
+                throw new Error(
+                  `The workspace changed during source preparation; retry ${action}. Saved work was preserved.`,
+                );
+              }
+            } else {
               const mergedCommit = await git(
                 ["commit-tree", "--no-gpg-sign", tree, "-p", sourceHead],
                 "Prepare selected base integration\n",
               );
-              for (const [name, commit] of [
-                ["before", sourceHead],
-                ["after", mergedCommit],
-              ]) {
-                const destination = path.join(temporary, name!);
-                await prepareLocalWorkspaceCheckout({
-                  source: cwd,
-                  destination,
-                  temporaryRoot: temporary,
-                  baseCommit: commit!,
-                  branch: "refresh",
-                  signal: new AbortController().signal,
-                  assertCurrent: check,
-                });
-              }
-              const buildCacheInputs = await state.buildCacheInputs();
-              const baseline = await state.baselineDocument();
-              const current = await prepareWorkspaceBaseRefresh(
-                {
-                  beforeRoot: path.join(temporary, "before"),
-                  afterRoot: path.join(temporary, "after"),
-                  baseCommit,
-                  baseRaw: baseline.rawManifest,
-                  baseRef: baseline.manifestRef,
-                  buildCacheInputs,
-                  action,
-                },
-                params.signal,
-              );
-              await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+              await stageManagedWorkspaceSource({
                 root: cwd,
-                stagingRoot: path.join(temporary, "after"),
-                stagedResultRef: stagedRef,
-                baseManifestRef: baseline.manifestRef,
-                baseManifestRaw: baseline.rawManifest,
-                currentManifestRef: current.manifestRef,
-                currentManifestRaw: current.rawManifest,
-                buildCacheInputs: current.buildCacheInputs,
+                beforeCommit: sourceHead,
+                afterCommit: mergedCommit,
+                baseCommit,
+                stagedRef,
+                state,
+                action,
+                signal: params.signal,
                 assertCurrent: check,
               });
-            } finally {
-              await fs.rm(temporary, { recursive: true, force: true });
             }
             // Reserve only an admitted payload. A rejected source must not pin retries
             // to its old PR head after the author removes generated output.

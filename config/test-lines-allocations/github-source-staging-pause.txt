@@ -1,0 +1,2 @@
+48
+# Preserve guest index edits during initial-source staging and reject replacement of its shared staged payload across the custody gap.

@@ -12,6 +12,7 @@ import {
   commandResult,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
+import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 
 describe("PR source acquisition", () => {
   installGitHubPublicationTestHarness({
@@ -91,7 +92,7 @@ describe("PR source acquisition", () => {
     },
   );
 
-  it.each(["download", "verification"])(
+  it.each(["download", "staging", "verification"])(
     "preserves guest index edits made during PR source %s",
     async (phase) => {
       const f = await fixture({ empty: true, fork: true });
@@ -115,6 +116,15 @@ describe("PR source acquisition", () => {
           await edit();
         }
         return await transport(argv, options);
+      });
+      const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
+      using staging = vi.spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult");
+      staging.mockImplementation(async (params) => {
+        const result = await stage(params);
+        if (phase === "staging") {
+          await edit();
+        }
+        return result;
       });
       const integrate = sourceIntegration.integrateManagedWorkspaceSource;
       using integration = vi.spyOn(sourceIntegration, "integrateManagedWorkspaceSource");
@@ -144,6 +154,44 @@ describe("PR source acquisition", () => {
       expect(f.externalWrites).toEqual([]);
     },
   );
+
+  it("rejects a prepared source replaced before integration reacquires custody", async () => {
+    const f = await fixture({ empty: true, fork: true });
+    const runtime = await bindFixtureRuntime(f);
+    using _ = runtime.projection;
+    const head = await f.git("rev-parse", "HEAD");
+    const stage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
+    let stagedRef = "";
+    using staging = vi.spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult");
+    staging.mockImplementation(async (params) => {
+      stagedRef = params.stagedResultRef;
+      return await stage(params);
+    });
+    const integrate = sourceIntegration.integrateManagedWorkspaceSource;
+    using integration = vi.spyOn(sourceIntegration, "integrateManagedWorkspaceSource");
+    integration.mockImplementation((params) => {
+      const source = params.source!;
+      return integrate({
+        ...params,
+        source: {
+          ...source,
+          verify: async () => {
+            await source.verify();
+            await f.git("update-ref", stagedRef, head);
+          },
+        },
+      });
+    });
+    await expect(f.invoke()).rejects.toThrow("workspace changed during source preparation");
+    expect(runtime.isPaused()).toBe(false);
+    expect(await f.git("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git("write-tree")).toBe(await f.git("rev-parse", `${head}^{tree}`));
+    for (const root of [f.cwd, f.projection]) {
+      await expect(fs.stat(path.join(root, "pr.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(f.readSession().worktree?.githubPullRequest).toBeUndefined();
+    expect(f.externalWrites).toEqual([]);
+  });
 
   it.each(["known", "retained", "unrelated", "inaccessible"] as const)(
     "avoids a cold fork fetch only for an accessible matching project (%s)",

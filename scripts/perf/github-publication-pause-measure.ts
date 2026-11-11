@@ -8,6 +8,8 @@
  *   --fixture <seed-directory> --output <new-result-directory>
  * Add --native-image <installed-image-id> for a real Docker guest and heartbeat;
  * use --temporary-root <short-existing-directory> to place fixtures off the OS disk.
+ * Add --fingerprint-import when freezing to reuse the checkpoint harness's hash/read
+ * counters. Phase spans are inclusive wall time; worker/child CPU is not attributed.
  *
  * Run two baseline controls, then five interleaved A/B pairs. Allocation profiling
  * is a separate pass (--allocation), never mixed with unprofiled timing samples.
@@ -47,6 +49,7 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "17742" },
     "history-mib": { type: "string", default: "512" },
     allocation: { type: "boolean", default: false },
+    "fingerprint-import": { type: "boolean", default: false },
     "native-image": { type: "string" },
   },
 });
@@ -104,8 +107,16 @@ import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { Session } from "node:inspector/promises";
-import { it, expect, onTestFinished } from "vitest";
+import { it, expect, onTestFinished, vi } from "vitest";
 import * as engine from "../agents/sandbox/docker.js";
+import * as quiescence from "../agents/sandbox/local-workspace-quiescence.js";
+import { withWorktreePreparationTiming } from "../agents/worktrees/preparation-timing.js";
+import * as gitWorker from "../infra/git-worker.js";
+import { withDiagnosticsTimelineObserver } from "../infra/diagnostics-timeline.js";
+import * as checkout from "./worker-environments/local-workspace-checkout.js";
+import * as transportOwner from "./github-publication-git-transport.js";
+import * as applyOwner from "./worker-environments/workspace-reconcile-apply.js";
+import { workerWorkspaceResultStaging } from "./worker-environments/workspace-result-staging.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 
 installGitHubPublicationTestHarness({ creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true });
@@ -114,6 +125,8 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const output = process.env.OPENCLAW_PUBLICATION_PAUSE_OUTPUT!;
   const fixtureRoot = process.env.OPENCLAW_PUBLICATION_PAUSE_FIXTURE!;
   const seed = JSON.parse(await fs.readFile(path.join(fixtureRoot, "seed.json"), "utf8"));
+  const source = JSON.parse(await fs.readFile(path.join(output, "source.json"), "utf8"));
+  const fingerprintObserversInstalled = source.source.fingerprintObservers === true;
   console.log("publication-pause: preparing workspace");
   const f = await fixture({ fork: true });
   console.log("publication-pause: workspace ready");
@@ -154,6 +167,56 @@ it("measures immutable object acquisition beside a live guest", async () => {
   await upstream("commit", "-m", "Keep small current files");
   const head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
   console.log("publication-pause: upstream history ready");
+  const spans: { name: string; start: number; end?: number }[] = [];
+  const recordedDurations: { name: string; durationMs: number }[] = [];
+  const phaseTransitions: { name: string; at: number }[] = [];
+  const fingerprintMetrics: unknown[] = [];
+  let measuring = false;
+  const span = (name: string) => {
+    if (!measuring) { return () => {}; }
+    const entry = { name, start: performance.now(), end: undefined as number | undefined };
+    spans.push(entry);
+    return () => { entry.end = performance.now(); };
+  };
+  const observe = async <T,>(name: string, run: () => Promise<T>): Promise<T> => {
+    const finish = span(name);
+    try { return await run(); } finally { finish(); }
+  };
+  const mark = (name: string) => { if (measuring) { phaseTransitions.push({ name, at: performance.now() }); } };
+  const originalQuiesce = quiescence.quiesceLocalWorkspace;
+  using _quiesce = vi.spyOn(quiescence, "quiesceLocalWorkspace").mockImplementation(async (...args) => {
+    mark("pause");
+    const held = await originalQuiesce(...args);
+    mark("operation");
+    const originalMark = held.markPhase;
+    held.markPhase = (phase) => { mark(phase); originalMark(phase); };
+    const originalResume = held.resume;
+    held.resume = () => { mark("resume"); return originalResume(); };
+    return held;
+  });
+  const originalWorker = gitWorker.runGitWorkerOperation;
+  using _worker = vi.spyOn(gitWorker, "runGitWorkerOperation").mockImplementation((...args) =>
+    observe("worker." + args[0].type, () => originalWorker(...args)));
+  const originalCheckout = checkout.prepareLocalWorkspaceCheckout;
+  using _checkout = vi.spyOn(checkout, "prepareLocalWorkspaceCheckout").mockImplementation((params) =>
+    observe("checkout." + path.basename(params.destination), () => originalCheckout(params)));
+  const originalSnapshot = transportOwner.captureSettledGitHubPublicationWorkspaceSnapshot;
+  using _snapshot = vi.spyOn(transportOwner, "captureSettledGitHubPublicationWorkspaceSnapshot").mockImplementation((...args) =>
+    observe("host.index-snapshot", () => originalSnapshot(...args)));
+  const originalStage = workerWorkspaceResultStaging.stageWorkerWorkspaceResult;
+  using _stage = vi.spyOn(workerWorkspaceResultStaging, "stageWorkerWorkspaceResult").mockImplementation((...args) =>
+    observe("result.stage", () => originalStage(...args)));
+  const originalApply = applyOwner.applyStagedWorkerWorkspace;
+  using _apply = vi.spyOn(applyOwner, "applyStagedWorkerWorkspace").mockImplementation((params) =>
+    observe(params.root === f.projection ? "apply.projection" : "apply.canonical", () => originalApply(params)));
+  const originalShell = f.sandbox.backend!.runShellCommand;
+  f.sandbox.backend!.runShellCommand = (params) => observe(
+    params.script.includes("index-pack") ? "guest.review-import-index-stage" : "guest.probe",
+    () => originalShell(params));
+  Reflect.set(globalThis, "__recordWorkspaceFingerprintMetrics", (metrics: unknown) => {
+    if (measuring) { fingerprintMetrics.push({ at: performance.now(), metrics }); }
+  });
+  onTestFinished(() => { Reflect.deleteProperty(globalThis, "__recordWorkspaceFingerprintMetrics"); });
   const fetched: { durationMs: number; pausedAtStart: boolean; pausedAtEnd: boolean }[] = [];
   const pauses: { start: number; end?: number }[] = [];
   let currentPause: { start: number; end?: number } | undefined;
@@ -214,10 +277,21 @@ it("measures immutable object acquisition beside a live guest", async () => {
   console.log("publication-pause: measured owner starts");
   let outcome: unknown;
   let failure: string | undefined;
+  measuring = true;
   try {
-    outcome = await f.invoke();
+    outcome = await withDiagnosticsTimelineObserver(
+      (name, _attributes, durationMs) => {
+        if (durationMs !== undefined) {
+          if (measuring) { recordedDurations.push({ name, durationMs }); }
+          return undefined;
+        }
+        return span(name);
+      },
+      () => withWorktreePreparationTiming("managed", () => f.invoke()));
   } catch (error) {
     failure = String(error);
+  } finally {
+    measuring = false;
   }
   const ownerMs = performance.now() - started;
   const processCpu = process.cpuUsage(cpu);
@@ -243,7 +317,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     ? (await fs.readFile(path.join(f.projection, ".git/pause-proof-heartbeat.jsonl"), "utf8")).trim().split("\n").slice(Math.max(0, heartbeatStart - 1)).map(Number)
     : [];
   const report = {
-    fixture: seed,
+    fixture: seed, scenario: "initial prepare_pr import into an existing clean managed project",
     qualification: nativeImage
       ? "Registered action with synthetic GitHub; native Docker guest, Git fetch and workspace owners on macOS bind mount; no btrfs or production database claim"
       : "Registered action with synthetic GitHub and simulated container engine; real Git fetch and workspace owners; local filesystem, no native guest or btrfs claim",
@@ -253,6 +327,8 @@ it("measures immutable object acquisition beside a live guest", async () => {
     ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
     heapBefore, heapAfter, sampledAllocationBytes, fetched, pauseMs,
+    ownerStartedAt: started, pauseIntervals: pauses, phaseTransitions, spans, recordedDurations, fingerprintObserversInstalled, fingerprintMetrics,
+    observerScope: "Inclusive wall spans and existing worker hash/read counters when frozen with --fingerprint-import; no per-worker CPU/allocation or host Git child CPU; guest index import and staging are one span",
     objectBytesBefore, objectBytesAfter, objectByteGrowth: objectBytesAfter - objectBytesBefore,
     totalPauseMs: pauseMs.reduce((sum, value) => sum + value, 0), maxPauseMs: Math.max(0, ...pauseMs),
     pausedAtReturn: runtime.isPaused(), outcome, failure, verified: false,
@@ -261,6 +337,10 @@ it("measures immutable object acquisition beside a live guest", async () => {
   expect(failure).toBeUndefined();
   expect(outcome).toMatchObject({ status: "prepared", headCommit: head });
   expect(runtime.isPaused()).toBe(false);
+  expect(spans.some(({ name }) => name === "worker.workspace.manifest.base-refresh")).toBe(true);
+  expect(spans.some(({ name }) => name === "checkout.before")).toBe(true);
+  expect(spans.some(({ name }) => name === "result.stage")).toBe(true);
+  if (fingerprintObserversInstalled) { expect(fingerprintMetrics.length).toBeGreaterThan(0); }
   expect(await f.git("write-tree")).toBe(await upstream("rev-parse", head + "^{tree}"));
   for (const root of [f.cwd, f.projection]) {
     for (let index = 0; index < seed.files; index++) {
@@ -291,6 +371,7 @@ if (values["freeze-source"] || values["refresh-harness"]) {
         "--freeze-source",
         destination,
         ...(values.revision ? ["--revision", values.revision] : []),
+        ...(values["fingerprint-import"] ? ["--fingerprint-import"] : []),
       ],
       { cwd: sourceRoot, stdio: "inherit" },
     );
@@ -299,6 +380,13 @@ if (values["freeze-source"] || values["refresh-harness"]) {
     destination !== sourceRoot && fs.existsSync(path.join(destination, "checkpoint-source.json")),
     "Harness installation requires an owned frozen source capsule",
   );
+  if (values["fingerprint-import"]) {
+    assert(
+      JSON.parse(fs.readFileSync(path.join(destination, "checkpoint-source.json"), "utf8"))
+        .fingerprintObservers,
+      "Hash/read observers require a source frozen with --fingerprint-import",
+    );
+  }
   for (const relative of values["source-overlay"] ?? []) {
     assert(!path.isAbsolute(relative) && !relative.split(path.sep).includes(".."));
     fs.mkdirSync(path.dirname(path.join(destination, relative)), { recursive: true });
