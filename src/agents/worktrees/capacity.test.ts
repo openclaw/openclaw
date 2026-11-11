@@ -11,6 +11,7 @@ import { resolveWorktreeBase as resolveBase } from "./base-ref.js";
 import { estimateWorktreeCheckoutTransitionBytes, estimateWorktreeGitBytes } from "./capacity.js";
 import { git, initializeGitFixture } from "./git-fixture.test-support.js";
 import { runGit } from "./git.js";
+import { hydrateCommitObjects } from "./object-hydration.js";
 
 describe("worktree Git size estimates", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -205,6 +206,10 @@ describe("worktree Git size estimates", () => {
       commandSpy.mockClear();
       await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);
+      // Another preparation can finish after this caller captured its missing-object inventory.
+      await fs.writeFile(packetTrace, "");
+      await hydrateCommitObjects(clone, commit, missing);
+      expect(await fs.readFile(packetTrace, "utf8")).not.toMatch(/>\s+want [0-9a-f]{40}/u);
     },
   );
 
