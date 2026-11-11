@@ -8,7 +8,6 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { prepareSqliteReadOnlyLocationAwaited } from "../../infra/sqlite-snapshot-source.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertExistingDatabaseIdentity,
@@ -53,18 +52,15 @@ import {
 } from "./session-canonical-key.js";
 import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import { readSessionCreationReceipt } from "./session-creation-receipts.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
+import { prepareSessionEntryInspectionSnapshot } from "./session-entry-inspection-snapshot.worker.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
-  SessionEntryReadWorkerInput,
-  SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerInput,
   SessionExactEntriesWorkerResult,
-  SessionRuntimeTargetWorkerInput,
-  SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { readSessionSourceChecks } from "./session-source-predicate.worker.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
@@ -117,18 +113,6 @@ export function readSessionStoreProjection(
   return { kind: "session-store-projection", ...(result.found ? result.value : { entries: [] }) };
 }
 
-/** Private entry and transcript-target reads share the same admitted reader and error codec. */
-export async function readSessionEntryWorkerRequest(
-  request: SessionEntryReadWorkerInput | SessionRuntimeTargetWorkerInput,
-): Promise<SessionEntryReadWorkerResult | SessionRuntimeTargetWorkerResult> {
-  if (request.kind === "session-runtime-target") {
-    return readSessionRuntimeTargetWorkerRequest(request);
-  }
-  // Keep the exact-read owner off the lazy reader import graph.
-  const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
-  return readSessionEntryResult(request);
-}
-
 function selectsChildEntries(
   request: SessionExactEntriesWorkerInput,
 ): request is Extract<SessionExactEntriesWorkerInput, { selection: { kind: "children" } }> {
@@ -146,6 +130,7 @@ export async function readExactSessionEntriesWithLifecycleAsync(
       preserveSourceArtifacts: _,
       expectedIdentity: admittedIdentity,
       inspectionSourcePath,
+      inspectionSnapshot,
       ...selection
     } = request;
     // Cold sources are identified here, without opening or initializing the original database.
@@ -181,15 +166,13 @@ export async function readExactSessionEntriesWithLifecycleAsync(
       }
     };
     assertOriginal();
-    const snapshot = await prepareSqliteReadOnlyLocationAwaited(request.database.path, {
-      signal,
-      expectedSourceIdentity: expectedIdentity,
-    });
+    const snapshot = await prepareSessionEntryInspectionSnapshot(request, signal, expectedIdentity);
     let result: SessionExactEntriesWorkerResult;
     let cleaned: boolean;
     try {
       signal.throwIfAborted();
       assertOriginal();
+      snapshot.assertCurrent?.();
       const read = withArtifactPreservingStateReads(() =>
         withFreshOpenClawAgentDatabaseReadOnly(
           (database) => {
@@ -198,7 +181,7 @@ export async function readExactSessionEntriesWithLifecycleAsync(
               {
                 ...selection,
                 database: { agentId: database.agentId, path: database.path },
-                expectedIdentity: readDatabasePathIdentitySync(database.path),
+                expectedIdentity: inspectionSnapshot ?? readDatabasePathIdentitySync(database.path),
               },
               database,
             );
@@ -415,6 +398,17 @@ export function readExactSessionEntriesWithLifecycle(
         : withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
             snapshot(database, () => {
               assertCanonicalRead(database, request.expectedIdentity);
+              if (request.projection === "creation-receipt") {
+                if (!request.creationDigest) {
+                  throw new Error("Creation receipt lookup requires its digest");
+                }
+                return {
+                  kind: "session-exact-entries" as const,
+                  entries: [],
+                  lifecycleTimestamps: {},
+                  creationReceipt: readSessionCreationReceipt(database, request.creationDigest),
+                };
+              }
               if (request.projection === "creation") {
                 const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];

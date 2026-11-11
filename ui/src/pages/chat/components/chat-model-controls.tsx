@@ -252,6 +252,9 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
               : "",
         ),
       };
+      if (catalogEntry?.providerName || catalogEntry?.providerIcon) {
+        pickerOption.presentation = catalogEntry;
+      }
       if (agentRuntimeId) {
         pickerOption.agentRuntimeId = agentRuntimeId;
       }

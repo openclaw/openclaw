@@ -11,6 +11,7 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
+  type NodeRunnerInventoryDeclaration,
   type NodeWorkerHostDeclaration,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
@@ -64,6 +65,24 @@ export type NodeRunnerInventoryRecord = Omit<
   protocolFeatures: readonly string[];
   workerHost?: NodeWorkerHostDeclaration;
 };
+
+export function createNodeRunnerInventoryRecord(
+  node: NodeRunnerRegistrySession & { pairingIdentity: string },
+  clientId: NodeWorkerHostClientId,
+  declaration: NodeRunnerInventoryDeclaration,
+): NodeRunnerInventoryRecord {
+  const workerHost = "workerHost" in declaration ? declaration.workerHost : undefined;
+  return {
+    nodeId: node.nodeId,
+    connId: node.connId,
+    pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
+    clientId,
+    clientMode: "node",
+    protocolFeatures: [...declaration.protocolFeatures],
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
+  };
+}
 
 export type NodeRunnerStateChange = {
   inventoryChanged: boolean;

@@ -355,8 +355,9 @@ plugin resolution and compatibility planning. It also tests migrations and
 boots a test Gateway with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
 copied agent databases. Installed plugin payloads and their dependencies are also
-copied; the copied install records point to those copies, and their OpenClaw
-host links target the staged installation. Literal imports, `require()` calls, and
+copied, including plugins discovered in the global `extensions` directory without
+install records or explicit load paths. The copied install records point to those
+copies, and their OpenClaw host links target the staged installation. Literal imports, `require()` calls, and
 literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.

@@ -126,11 +126,11 @@ function primeVerification(overrides: Record<string, unknown> = {}) {
     },
   });
 }
-function run(input: string | string[]) {
+async function run(input: string | string[]) {
   const argv = typeof input === "string" ? input.split(" ") : input;
   const program = new Command().exitOverride();
-  registerSkillsCli(program);
-  return program.parseAsync(["skills", ...argv], { from: "user" });
+  await registerSkillsCli(program);
+  return await program.parseAsync(["skills", ...argv], { from: "user" });
 }
 
 async function expectFailure(argv: string | string[], message?: string) {

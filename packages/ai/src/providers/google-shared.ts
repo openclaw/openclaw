@@ -49,6 +49,7 @@ type GoogleThinkingOptions = {
 
 export type GoogleProviderOptions = StreamOptions & {
   topP?: number;
+  seed?: number;
   toolChoice?: "auto" | "none" | "any";
   thinking?: GoogleThinkingOptions;
 };
@@ -67,6 +68,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   stream: AssistantMessageEventStream;
   model: Model<T>;
   output: AssistantMessage;
+  tools?: Context["tools"];
   options?: Pick<StreamOptions, "signal" | "onPayload">;
   createClient: () => GoogleGenerateContentClient;
   buildParams: () => GenerateContentParameters;
@@ -96,6 +98,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,
       output,
+      tools: params.tools,
       stream,
       signal: options?.signal,
       nextToolCallId: params.nextToolCallId,
@@ -116,6 +119,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
     messages: transformMessages(context.messages, model, (id) =>
       requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
     ),
+    tools: context.tools,
     replay: "signed-parts",
     requiresToolCallSignature:
       model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
@@ -124,6 +128,7 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   const config: GenerateContentConfig = {
     ...(options.temperature !== undefined && { temperature: options.temperature }),
     ...(options.topP !== undefined && { topP: options.topP }),
+    ...(options.seed !== undefined && { seed: options.seed }),
     ...buildGoogleGenerationConfig(model, options.thinking, options.maxTokens),
     ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
     ...(context.systemPrompt && {

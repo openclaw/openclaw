@@ -15,6 +15,24 @@ function storeWithSnapshots(...snapshots: unknown[][]) {
 }
 
 describe("secrets store state", () => {
+  it("separates the saved count from the failure detail after a partial bulk save", async () => {
+    const { state, request } = storeWithSnapshots([]);
+    request
+      .mockResolvedValueOnce({ ok: true, reloaded: false })
+      .mockRejectedValueOnce(new Error("Store unavailable"))
+      .mockResolvedValueOnce({ entries: [] });
+    expect(
+      await bulkSetSecretsStoreEntries(state, [
+        { name: "FIRST", value: "one", kind: "env" },
+        { name: "SECOND", value: "two", kind: "env" },
+      ]),
+    ).toBeNull();
+    expect(state.error).toBe(
+      "Saved 1 of 2 entries. Couldn’t finish the import. Reload the list to check what was saved.\nStore unavailable",
+    );
+    expect(state.busy).toBe(false);
+  });
+
   it("parses quoted multiline dotenv values and classifies sensitive names", () => {
     const parsed = parseSecretsStoreBulkInput(
       'SERVICE_URL="https://service.test?a=b"\nSERVICE_API_KEY="line one\nline two"\nPLAIN=value',

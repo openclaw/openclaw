@@ -28,7 +28,6 @@ import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
-import { SETUP_INFERENCE_TEST_MAX_TOKENS } from "./setup-inference-probe-work.js";
 import {
   loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
@@ -107,7 +106,7 @@ function revalidateOwner(
 }
 
 describe("setup inference plugin ownership", () => {
-  it("runs a bounded read-only probe with a detached transcript", async () => {
+  it("runs an uncapped read-only probe with a detached transcript", async () => {
     const route = embeddedRoute("openclaw");
     vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => {
       expect(params).toMatchObject({
@@ -117,8 +116,9 @@ describe("setup inference plugin ownership", () => {
         allowAuthProfileFallback: false,
         disableTools: true,
         thinkLevel: "off",
-        streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS },
       });
+      // Reasoning models spend a small cap on thinking; the check sends chat's limits.
+      expect(params.streamParams?.maxTokens).toBeUndefined();
       return probeReply(route);
     });
     const result = await runProbe(route);

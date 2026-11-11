@@ -1,0 +1,2 @@
+# Existing workspace GC regression also bounds redundant digest bytes returned by traversal.
+9

@@ -29,7 +29,7 @@ const inventory: SystemAgentSetupDetectResult = {
 const manualInput = ".model-setup__manual input";
 const scanButton = (page: ParentNode) =>
   [...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro button")].find(
-    (button) => button.textContent?.trim() === "Check again",
+    (button) => (button.getAttribute("aria-label") ?? button.textContent?.trim()) === "Check again",
   )!;
 const nativeOption = '[role="option"][data-value="acp-opencode/fixture-model"]';
 const catalogScope = { view: "all" as const, agentId: "main" };
@@ -196,7 +196,7 @@ describe("Model setup refresh continuity", () => {
           expect(callsFor(request, "models.list")).toHaveLength(2);
           expect(alert()).toBeNull();
           if (!warm) {
-            expect(status()?.textContent).toContain("Checking installed agents");
+            expect(status()?.textContent).toContain("Loading installed agents");
           }
         });
         retry.resolve({ models: warm ? [{ ...model, name: "Refreshed fixture model" }] : [] });
@@ -206,9 +206,7 @@ describe("Model setup refresh continuity", () => {
           expect(status()).toBeNull();
         } else {
           await waitForFast(() =>
-            expect(status()?.textContent).toContain(
-              "No models are available from installed agents",
-            ),
+            expect(status()?.textContent).toContain("No models from installed agents yet"),
           );
         }
         expect(alert()).toBeNull();

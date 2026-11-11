@@ -306,12 +306,22 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it("writes a piped append warning before process exit", () => {
+it("shares exit cleanup while flushing queued warnings and later logs", () => {
   fs.mkdirSync(logPath);
+  const exitLogPath = logPathTracker.nextPath();
   const loaderPath = fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url));
   const loggerUrl = new URL("./logger.ts", import.meta.url).href;
+  const cleanupUrl = new URL("../infra/process-exit-cleanup.ts", import.meta.url).href;
   const script = `
+      import assert from "node:assert/strict";
       import { getLogger, setLoggerOverride } from ${JSON.stringify(loggerUrl)};
+      import { registerProcessExitCleanup } from ${JSON.stringify(cleanupUrl)};
+      const exitListeners = process.listenerCount("exit");
+      registerProcessExitCleanup(() => {
+        setLoggerOverride({ level: "info", file: ${JSON.stringify(exitLogPath)} });
+        getLogger().info("exit-owner-record");
+      });
+      assert.equal(process.listenerCount("exit"), exitListeners, "adjacent exit cleanup must share logger listener");
       const writeStderr = process.stderr.write.bind(process.stderr);
       process.stderr.write = (chunk, ...args) => {
         setImmediate(() => writeStderr(chunk, ...args));
@@ -329,8 +339,9 @@ it("writes a piped append warning before process exit", () => {
   });
 
   expect(result.error).toBeUndefined();
-  expect(result.status).toBe(0);
+  expect(result.status, result.stderr).toBe(0);
   expect(result.stderr).toContain("log file append failed; records dropped");
+  expect(records(exitLogPath).map((record) => record.message)).toEqual(["exit-owner-record"]);
 });
 
 it("retries the warning after stderr rejects it", async () => {

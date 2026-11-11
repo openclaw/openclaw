@@ -92,7 +92,7 @@ export function createDiscordAvatarResolver() {
       .then((guild) => {
         const hash = guild.icon ?? null;
         setBoundedEntry(guildIcons, guildId, {
-          expiresAt: Date.now() + DISCORD_GUILD_ICON_TTL_MS,
+          expiresAt: performance.now() + DISCORD_GUILD_ICON_TTL_MS,
           hash,
         });
         if (hash) {
@@ -130,7 +130,7 @@ export function createDiscordAvatarResolver() {
           : undefined;
       }
       const guildIcon = guildIcons.get(params.guildId);
-      if (!guildIcon || guildIcon.expiresAt <= Date.now()) {
+      if (!guildIcon || guildIcon.expiresAt <= performance.now()) {
         refreshGuildIcon(params.client, params.guildId, params.conversationId, endpointRuntime);
       }
       return guildIcon?.hash

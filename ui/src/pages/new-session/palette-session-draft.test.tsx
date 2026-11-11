@@ -304,7 +304,7 @@ describe("PaletteSessionDraft", () => {
     await firstSubmission;
     const notice = showToast.mock.calls.at(-1)?.[0];
     expect(notice).toMatchObject({
-      message: "Session didn't start: Gateway refused the session",
+      message: "Couldn’t start the session. Try again. Gateway refused the session",
       actionLabel: "Try again",
     });
     create.mockResolvedValueOnce({
@@ -325,6 +325,28 @@ describe("PaletteSessionDraft", () => {
     await secondSubmission;
     expect(create).toHaveBeenCalledTimes(3);
     expect(host.draft.message).toBe("");
+  });
+
+  it.each([
+    { status: "started", message: "Session started" },
+    { status: "idle", message: "Session created" },
+  ] as const)("confirms $status session creation", async ({ status, message }) => {
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    const { host, create } = await mount();
+    create.mockResolvedValue({
+      key: "agent:main:dashboard:created",
+      initialRun: { status },
+    });
+    host.draft.setMessage("Start a new session");
+    await vi.waitFor(() => expect(host.draft.canSubmit).toBe(true));
+    await host.draft.submit();
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message,
+      dedupeKey: "session-create:main:agent:main:dashboard:created",
+      severity: "success",
+      actionLabel: "Open session",
+      onAction: expect.any(Function),
+    });
   });
 
   it.each(["unchanged", "connection", "account"] as const)(
@@ -387,7 +409,11 @@ describe("PaletteSessionDraft", () => {
       // The destination session owns the rejected prompt and its retry.
       expect(host.draft.message).toBe("");
       const notice = showToast.mock.calls.at(-1)?.[0];
-      expect(notice?.message).toContain("Initial turn rejected");
+      expect(notice).toMatchObject({
+        message: "Session created, but couldn't start: Initial turn rejected",
+        dedupeKey: "session-create:main:agent:main:dashboard:rejected",
+        severity: "error",
+      });
       context.gateway.snapshot.phase = "reconnecting";
       publish();
       context.gateway.snapshot.client = createDraftFixture().context.gateway.snapshot.client;

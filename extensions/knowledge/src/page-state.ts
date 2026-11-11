@@ -1,10 +1,10 @@
 import type { ControlUiViewContext } from "openclaw/plugin-sdk/control-ui";
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import type { loadVocabulary } from "./inspection-client.js";
 import { locationKey, type KnowledgeLocation } from "./page-location.js";
 
-type StoresSnapshot = FeatureOutput<typeof contract, "stores_snapshot">;
+type StoresSnapshot = FeatureOutput<FullOutputContract, "stores_snapshot">;
 export type RecentCursor = { upperSequence: number; beforeSequence: number } | undefined;
 
 /** Mutable state of one mounted Knowledge page, shared by its view modules. */
@@ -18,7 +18,7 @@ export type PageState = {
   routeKey: string;
   scopeChecked: boolean;
   scopeMismatch: boolean;
-  storeState: FeatureOutput<typeof contract, "status">["store"];
+  storeState: FeatureOutput<FullOutputContract, "status">["store"];
   storeMessage: string | undefined;
   tab: KnowledgeLocation["tab"];
   selectedId: string;

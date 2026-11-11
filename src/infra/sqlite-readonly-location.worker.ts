@@ -15,6 +15,7 @@ import { useConnectionScopedSqliteDatabaseAdmissionFacts } from "./sqlite-databa
 import {
   formatSqliteReadOnlyInspectionFailure,
   isSqliteLockError,
+  sqliteExtendedResultCode,
 } from "./sqlite-error-diagnostics.js";
 import { hasVerifiedLiveSqliteOwner } from "./sqlite-live-owner.js";
 import {
@@ -42,9 +43,11 @@ import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   SQLITE_INSPECTION_CONTENTION_PREFIX,
   SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
+  SQLITE_SNAPSHOT_CAPACITY_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
+import { isSqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingTokenSync,
@@ -77,7 +80,11 @@ async function inspect(
       mode !== "staged-sync" &&
       mode !== "staged-async" &&
       mode !== "metadata" &&
+      mode !== "backup-engine" &&
+      mode !== "backup-engine-preserving" &&
+      mode !== "state-sqlite-populated" &&
       mode !== "consolidated" &&
+      mode !== "task-delivery-recovery" &&
       !isSqliteSnapshotStagingMode(mode)) ||
     !pathname
   ) {
@@ -87,6 +94,49 @@ async function inspect(
     };
   }
   try {
+    if (mode === "state-sqlite-populated") {
+      const [{ inspectPhysicalStoreInProcess }, { inspectStateSqlite }] = await Promise.all([
+        import("./database-engine/physical-store.js"),
+        import("../state/openclaw-state-db-engine.js"),
+      ]);
+      return {
+        ok: true,
+        hasExistingData: await inspectPhysicalStoreInProcess(pathname, true, (db) => {
+          const facts = inspectStateSqlite(db);
+          return !facts.hasEngineAnchor && facts.hasExistingData;
+        }),
+      };
+    }
+    if (mode === "backup-engine" || mode === "backup-engine-preserving") {
+      const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
+      return {
+        ok: true,
+        engine: await readBackupEngineInProcess(pathname, mode === "backup-engine-preserving"),
+      };
+    }
+    if (mode === "staging-sweep") {
+      const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
+      return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
+    }
+    if (mode === "task-delivery-recovery") {
+      const recoveryDirectory = args[2];
+      const sourcePath = args[3];
+      if (args.length !== 4 || !recoveryDirectory || !sourcePath) {
+        throw new Error(
+          "Task delivery recovery requires its private snapshot, recovery directory, and source path",
+        );
+      }
+      const { preserveOrphanTaskDeliveryRecoveryInProcess } =
+        await import("../state/openclaw-state-db-task-delivery-recovery-preservation.js");
+      return {
+        ok: true,
+        taskDeliveryRecovery: preserveOrphanTaskDeliveryRecoveryInProcess(
+          pathname,
+          sourcePath,
+          recoveryDirectory,
+        ),
+      };
+    }
     if (
       args.length > 4 ||
       (args[3] !== undefined &&
@@ -204,11 +254,21 @@ async function inspect(
       (mode === "staging-create" || mode === "staging-create-legacy") &&
       isPrivateDirectoryCreationRefused(error);
     const prefix =
+      (isSqliteSnapshotCapacityError(error) ? SQLITE_SNAPSHOT_CAPACITY_PREFIX : "") +
       (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
+    // Engine probes moved native reads into this child; callers still classify corruption.
+    // Released snapshot modes retain their exact { ok, message } response shape.
+    const errcode =
+      mode === "backup-engine" ||
+      mode === "backup-engine-preserving" ||
+      mode === "state-sqlite-populated"
+        ? sqliteExtendedResultCode(error)
+        : undefined;
     return {
       ok: false,
       message: `${prefix}${formatSqliteReadOnlyInspectionFailure(error)}`,
+      ...(errcode === undefined ? {} : { errcode }),
     };
   }
 }
@@ -376,10 +436,19 @@ function runSession(): void {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const value = sqliteReadOnlyOperations.execute(request, {
+          const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
+            assertCurrent: () => {
+              if (stopping) {
+                throw new Error("SQLite read-only worker is stopping");
+              }
+              assertExistingDatabaseIdentity(pathname, expectedIdentity);
+            },
           });
+          if (stopping) {
+            return;
+          }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
           const handle = transfers.start(
             [{ kind: "result", value: { operation: request.type, value } }].values(),

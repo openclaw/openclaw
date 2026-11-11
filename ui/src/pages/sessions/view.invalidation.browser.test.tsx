@@ -87,7 +87,7 @@ it.each([1280, 390])(
     const onSelectPage = vi.fn();
     const [current, setCurrent] = createSignal({
       ...buildProps(result),
-      pageSize: 100,
+      pageSize: 25,
       onSelectPage,
     });
     const view = mountSolid(() => (
@@ -100,10 +100,14 @@ it.each([1280, 390])(
     const rows = () => [
       ...view.container.querySelectorAll<HTMLTableRowElement>(".session-data-row"),
     ];
-    await expect.poll(() => rows().length).toBeLessThan(25);
-    expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("101");
+    await expect.poll(() => rows().length).toBe(25);
     // The phone list has no header row; select-all lives in the bulk bar.
     const phone = width === 390;
+    const scroller = rows()[0]!.closest<HTMLElement>(phone ? ".content" : ".data-table-container")!;
+    setCurrent((previous) => ({ ...previous, pageSize: 100 }));
+    flush();
+    await expect.poll(() => rows().length).toBeLessThan(25);
+    expect(view.container.querySelector("table")?.getAttribute("aria-rowcount")).toBe("101");
     if (phone) {
       expect(view.container.querySelector("thead input")).toBeNull();
       setCurrent((previous) => ({
@@ -132,19 +136,36 @@ it.each([1280, 390])(
     setCurrent((previous) => ({ ...previous, expandedSessionKey: result.sessions[0]!.key }));
     flush();
     const draft = view.container.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
-    const scroller = view.container.querySelector<HTMLElement>(
-      phone ? ".content" : ".data-table-container",
-    )!;
     scroller.style.height = "200px";
     draft.value = "Retained draft";
+    await vi.waitFor(async () => {
+      const field = draft.getBoundingClientRect();
+      const scroll = [scroller.scrollTop, scroller.scrollHeight];
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      expect([scroller.scrollTop, scroller.scrollHeight]).toEqual(scroll);
+      expect(draft.getBoundingClientRect().top).toBe(field.top);
+    });
     draft.focus();
-    await expect
-      .poll(() => {
-        const field = draft.getBoundingClientRect();
-        const viewport = scroller.getBoundingClientRect();
-        return field.top >= viewport.top && field.bottom <= viewport.bottom;
-      })
-      .toBe(true);
+    await vi.waitFor(() => {
+      const field = draft.getBoundingClientRect();
+      const viewport = scroller.getBoundingClientRect();
+      expect(field.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(field.bottom).toBeLessThanOrEqual(viewport.bottom);
+    });
+    draft.blur();
+    // After expansion settles, force the native fractional-scroll edge.
+    const clippedTop = scroller.getBoundingClientRect().top - 0.28125;
+    draft.style.translate = `0 ${clippedTop - draft.getBoundingClientRect().top}px`;
+    expect(draft.getBoundingClientRect().top).toBe(clippedTop);
+    draft.focus({ preventScroll: true });
+    await vi.waitFor(() => {
+      const field = draft.getBoundingClientRect();
+      const viewport = scroller.getBoundingClientRect();
+      expect(field.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(field.bottom).toBeLessThanOrEqual(viewport.bottom);
+    });
     scroller.scrollTop = scroller.scrollHeight / 2;
     await expect
       .poll(() =>
@@ -178,7 +199,7 @@ it.each([1280, 390])(
     expect(rows().length).toBeLessThan(25);
     const groupEnd = () => rows().find((row) => row.textContent?.includes("window-49"));
     await expect.poll(() => Boolean(groupEnd())).toBe(true);
-    const groupButton = groupEnd()!.querySelector<HTMLButtonElement>(".icon-btn")!;
+    const groupButton = groupEnd()!.querySelector<HTMLButtonElement>(".session-row-menu-trigger")!;
     groupButton.focus();
     expect(document.activeElement).toBe(groupButton);
     setCurrent((previous) => ({ ...previous, expandedSessionKey: null }));

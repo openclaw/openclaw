@@ -8,7 +8,7 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { finalizePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   createPluginManifestRecordFixture,
@@ -23,13 +23,12 @@ import { resolveOAuthApiKeyMarker } from "./model-auth-markers.js";
 import { modelDefinition as configuredModel } from "./model-auth.fixtures.test-support.js";
 import { enrichHarnessRows, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { row } from "./model-catalog-fixtures.test-support.js";
+import { findModelCatalogEntry, modelSupportsVision } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   buildPreparedModelCatalogSnapshot,
   type BuildPreparedModelCatalogParams,
-  findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsVision,
   overlayConfiguredModelCatalog,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -153,6 +152,23 @@ it("keeps replace publication closed to a warm refreshable inventory", async () 
   });
   expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
   expect(mocks.augmentModelCatalogWithProviderPlugins).not.toHaveBeenCalled();
+});
+
+it("uses captured suppression rules without resolving ambient plugin metadata", async () => {
+  const supplied = createManifestSnapshot("demo", {
+    suppressions: [{ provider: "demo", model: "hidden" }],
+  });
+  using ambient = vi
+    .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
+    .mockReturnValue(metadataSnapshot);
+  const snapshot = await build({
+    metadataSnapshot: supplied,
+    entries: [row("demo", "hidden"), row("demo", "visible")],
+  });
+
+  expect(snapshot.entries.map(({ id }) => id)).toEqual(["visible"]);
+  expect(snapshot.routeVariants.map(({ id }) => id)).toEqual(["visible"]);
+  expect(ambient).not.toHaveBeenCalled();
 });
 
 it("preserves ready provider membership without replenishing it from metadata", async () => {
@@ -701,7 +717,7 @@ describe("catalog declaration planning", () => {
   const normalize = vi.mocked(normalizeModelCatalogProviderRows);
   let config: OpenClawConfig;
   function catalog(discovery: "static" | "runtime", ...modelIds: string[]) {
-    const planningMetadata = finalizePluginMetadataSnapshot(
+    const planningMetadata = pluginMetadata.finalizePluginMetadataSnapshot(
       providerManifestSnapshot("catalog-fixture", discovery, modelIds),
     );
     const params = { config, metadataSnapshot: planningMetadata };

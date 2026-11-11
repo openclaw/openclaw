@@ -135,6 +135,7 @@ const advisor = (value: Record<string, unknown>) => ({ plugins: { entries: { adv
 const hostDesktop = (value: Record<string, unknown>) => ({ desktop: { host: value } });
 const workerDesktop = (desktop: boolean) => ({ cloudWorkers: { desktop } });
 const hostEnabled = (enabled: boolean) => hostDesktop({ enabled });
+const openclawId = (value: Record<string, unknown>) => ({ gateway: { openclawId: value } });
 
 async function startSave(title = "Code Mode", config?: Record<string, unknown>) {
   const mounted = await mountPage(config ?? codeMode({ enabled: false }));
@@ -214,7 +215,7 @@ describe("LabsPage", () => {
       experimental({ templates: null }),
     ],
     [
-      "Host Desktop",
+      "Desktop on the computer running OpenClaw",
       "hostDesktop",
       false,
       hostDesktop({ enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" }),
@@ -232,8 +233,22 @@ describe("LabsPage", () => {
     ["Code Mode", "codeMode", true, codeMode(false), codeMode(null)],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
     ["Templates", "templates", true, {}, experimental({ templates: true })],
-    ["Host Desktop", "hostDesktop", true, hostEnabled(false), hostEnabled(true)],
-    ["Cloud Worker Desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
+    [
+      "Desktop on the computer running OpenClaw",
+      "hostDesktop",
+      true,
+      hostEnabled(false),
+      hostEnabled(true),
+    ],
+    ["Cloud device desktop", "workerDesktop", true, workerDesktop(false), workerDesktop(true)],
+    ["OpenClaw ID remote access", "openclawId", true, {}, openclawId({ enabled: true })],
+    [
+      "OpenClaw ID remote access",
+      "openclawId",
+      false,
+      openclawId({ enabled: true, relayUrl: "https://relay.example.test/" }),
+      openclawId({ enabled: false }),
+    ],
     ["Advisor", "advisor", true, {}, advisor({ enabled: true })],
     ["Code Mode", "codeMode", false, {}, codeMode({ enabled: false })],
     [
@@ -254,6 +269,15 @@ describe("LabsPage", () => {
       expect(runtimeConfig.refresh).not.toHaveBeenCalled();
     },
   );
+
+  it("shows OpenClaw ID as a flag only, pointing to the account menu", async () => {
+    const { page } = await mountPage(openclawId({ enabled: true }));
+    const toggle = labToggle(page, "OpenClaw ID remote access");
+    expect(toggle.checked).toBe(true);
+    expect(page.textContent).toContain("from the account menu");
+    expect(page.textContent).not.toContain("Make reachable");
+    expect(page.textContent).not.toContain("Invite someone");
+  });
 
   it("does not publish a retired save failure after a same-client reconnect", async () => {
     const { gateway, page, runtimeConfig, pendingPatch, toggle } = await startSave();
@@ -317,15 +341,11 @@ describe("LabsPage", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
-  it("shows default provenance", async () => {
-    const inherited = await mountPage({});
-    expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
-    inherited.unmount();
-
+  it("does not narrate the default in the row", async () => {
     const overridden = await mountPage({
       tools: { codeMode: { enabled: "auto" }, swarm: { enabled: false } },
     });
-    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
+    expect(labRow(overridden.page, "Code Mode").textContent).not.toContain("Default:");
   });
 });
 
@@ -352,7 +372,7 @@ describe("LabsPage tool search enablement", () => {
     ["option-bearing override", { tools: { toolSearch: { enabled: true, maxSearchLimit: 3 } } }],
   ])("disables %s without replacing authored modes or options", async (_label, config) => {
     const { page, runtimeConfig } = await mountPage(config);
-    const toggle = labToggle(page, "Tool Search for all models");
+    const toggle = labToggle(page, "Tool search for all models");
 
     expect(toggle.checked).toBe(true);
     changeToggle(toggle, false);

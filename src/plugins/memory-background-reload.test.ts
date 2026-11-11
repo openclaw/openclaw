@@ -263,7 +263,7 @@ it("retires live watchers and starts successor indexing without a search or turn
     );
     assert(registration, "Memory Core must start its index through the Gateway service lifecycle");
     const service = registration.service;
-    assert(service.apiVersion !== 2);
+    assert(service.apiVersion !== 2 && service.apiVersion !== 3);
     const context = { config, stateDir: state.stateDir, logger };
     const successorWatching = nextSubscription();
     await service.start(context);

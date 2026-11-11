@@ -15,7 +15,6 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
-import { describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { MissingProviderAuthError } from "../model-auth.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
@@ -32,7 +31,7 @@ import { resolveSandboxContext } from "../sandbox/context.js";
 import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
-import { classifyCompactionReason } from "./compact-reasons.js";
+import { classifyCompactionReason, describeCompactionFailure } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
@@ -114,7 +113,7 @@ export async function prepareDirectCompactionAttempt(
     explicitReasonClass?: "compaction_model_unresolved",
   ): EmbeddedAgentCompactResult => {
     const failureReason = explicitReasonClass ?? classifyCompactionReason(reason);
-    const failure = err ? describeFailoverError(err) : undefined;
+    const failure = err ? describeCompactionFailure(err) : undefined;
     log.warn(
       `[compaction-diag] end runId=${runId} sessionKey=${params.sessionKey ?? params.sessionId} ` +
         `diagId=${diagId} trigger=${trigger} provider=${provider}/${modelId} ` +

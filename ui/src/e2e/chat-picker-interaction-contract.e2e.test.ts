@@ -100,7 +100,7 @@ suite.define(() => {
         await page.emulateMedia({ reducedMotion: "reduce" });
         await browserExpect(popup).toHaveCSS("animation-name", "none");
         await page.setViewportSize({ height: 320, width: 1280 });
-        await placeControl("24px");
+        await placeControl("48px"); // Keep the fixture below the pane header.
         await expect.poll(() => panelFits(false)).toBe(true);
         await trigger.click();
       }

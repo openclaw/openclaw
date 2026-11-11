@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
@@ -20,6 +21,7 @@ import {
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createLeaseHeartbeatState } from "../state/openclaw-state-lease-heartbeat-shared.js";
 import * as leaseHeartbeat from "../state/openclaw-state-lease-heartbeat.js";
 import { renewOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -30,7 +32,7 @@ import {
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
 import { parseShippedStateLeaseProcessOwner } from "./gateway-lock-rollback.test-support.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
+import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
 import {
   acquireGatewayOwnerLease,
   readGatewayOwnerLease,
@@ -192,6 +194,62 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
+  it.each([
+    { state: "dead", pid: 2_147_483_647, startedAt: 1 },
+    { state: "unknown", host: "synthetic-other-host", startedAt: null },
+  ] as const)("reads a $state owner without copying shared state", async ({ state, ...owner }) => {
+    const env = await seedClosedOwner(owner);
+    const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    const asyncCopy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationAwaited");
+    expect(readGatewayOwnerLease({ env, current: true })).toMatchObject({
+      owner: "previous-generation",
+      state,
+    });
+    await expect(readGatewayOwnerLeaseAsync({ env })).resolves.toMatchObject({
+      owner: "previous-generation",
+      state,
+    });
+    expect(copy).not.toHaveBeenCalled();
+    expect(asyncCopy).not.toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reads the committed current lease after a crash without recovering the source journal",
+    async () => {
+      const env = await seedClosedOwner({ pid: 2_147_483_647, startedAt: 1 });
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      createHotSqliteRollbackJournal({
+        path: databasePath,
+        mutationSql: "UPDATE state_leases SET owner = 'uncommitted' WHERE scope = 'gateway-owner'",
+      });
+      const paths = [databasePath, `${databasePath}-journal`];
+      const before = paths.map((file) => fs.readFileSync(file));
+      const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+      try {
+        expect(readGatewayOwnerLease({ env, current: true })).toMatchObject({
+          owner: "previous-generation",
+          state: "dead",
+        });
+        expect(copy).toHaveBeenCalledExactlyOnceWith(databasePath, undefined, { reuse: true });
+        const prepared = copy.mock.results[0];
+        if (prepared?.type !== "return") {
+          throw new Error("Expected one recovered private lease snapshot");
+        }
+        expect(
+          existsSync(prepared.value.cleanupRoot ?? path.dirname(prepared.value.location)),
+        ).toBe(false);
+        await expect(readGatewayOwnerLeaseAsync({ env })).resolves.toMatchObject({
+          owner: "previous-generation",
+          state: "dead",
+        });
+      } finally {
+        paths.forEach((file, index) =>
+          expectBytesEqual(fs.readFileSync(file), before[index]!, file),
+        );
+      }
+    },
+  );
+
   it("admits Gateway credential maintenance without copying stopped state", async () => {
     const env = await seedClosedOwner({ pid: 2_147_483_647, startedAt: 1 });
     const copy = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
@@ -256,6 +314,31 @@ describe("Gateway owner lease", () => {
     expect(oldReader?.processNamespace).toEqual(lease?.processNamespace);
     expect(oldReader?.pid).toBe(process.pid);
     expect(oldReader).not.toHaveProperty("machineIdentity");
+  });
+
+  it("starts a stopped service past the lock a killed Doctor left behind", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-gateway-owner-") };
+    withOpenClawStateStartupMigrationCheckpointDatabase(() => {}, { env });
+    const stateLockPath = resolveGatewayLockPaths(env).stateLockPath;
+    fs.mkdirSync(path.dirname(stateLockPath), { recursive: true });
+    const lock = {
+      pid: 2 ** 30,
+      ownerId: "killed-doctor",
+      createdAt: new Date().toISOString(),
+      configPath: "unused",
+      stateDir: env.OPENCLAW_STATE_DIR,
+    };
+    const start = (role?: string) => {
+      fs.writeFileSync(stateLockPath, JSON.stringify({ ...lock, ...(role ? { role } : {}) }));
+      return writeGatewayServiceRestartIntentSync({
+        env,
+        service: { kind: "systemd", name: "openclaw-gateway.service" },
+        nativeStopped: true,
+        assertCurrent: () => undefined,
+      });
+    };
+    expect(start("agent-embedded")).toBe(false);
+    expect(() => start()).toThrow("Cannot verify a live serving Gateway owner");
   });
 
   it.runIf(process.platform === "darwin")(
@@ -634,9 +717,10 @@ describe("Gateway owner lease", () => {
     await using owner = fixture();
     const { env } = owner;
     const startHeartbeat = leaseHeartbeat.startOpenClawStateLeaseHeartbeat;
-    vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation((params) =>
-      startHeartbeat({ ...params, heartbeatMs: 100 }),
-    );
+    vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation((params) => {
+      expect(params.heartbeatMs).toBe(100_000);
+      return startHeartbeat({ ...params, heartbeatMs: 100 });
+    });
     const lookup = vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(null);
     const lease = owner.acquire();
     expect(readGatewayOwnerLease({ env })).toMatchObject({ startedAt: null, state: "unknown" });
@@ -741,6 +825,7 @@ describe("Gateway owner lease", () => {
     const coordinator = captureCoordinator();
     vi.spyOn(leaseHeartbeat, "startOpenClawStateLeaseHeartbeat").mockImplementation(() => ({
       ready: Promise.reject(new Error("heartbeat startup failed")),
+      expiryObservation: createLeaseHeartbeatState(),
       assertRunning() {
         throw new Error("heartbeat startup failed");
       },

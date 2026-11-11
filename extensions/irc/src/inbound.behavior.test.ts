@@ -377,13 +377,7 @@ describe("irc inbound behavior", () => {
     setIrcRuntime(coreRuntime as never);
 
     await receive({
-      message: createMessage({
-        target: "alice",
-        senderNick: "alice",
-        senderUser: "ident",
-        senderHost: "attacker.example",
-        text: "hello",
-      }),
+      message: createMessage({ senderHost: "attacker.example" }),
       account: createAccount({
         config: {
           dmPolicy: "allowlist",
@@ -413,13 +407,7 @@ describe("irc inbound behavior", () => {
       setIrcRuntime(coreRuntime as never);
 
       await receive({
-        message: createMessage({
-          target: "alice",
-          senderNick: "alice",
-          senderUser: "ident",
-          senderHost: "example.com",
-          text: "hello",
-        }),
+        message: createMessage({ senderHost: "example.com" }),
         account: createAccount({
           config: {
             dmPolicy: "allowlist",

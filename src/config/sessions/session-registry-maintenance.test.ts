@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
 import { loadSessionEntry, loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry-replace.js";
@@ -261,7 +261,7 @@ it("archives the transcript when pruning stale cron-run sessions", async () => {
   expect(read()).toBeUndefined();
   const files = await archives();
   expect(files).toHaveLength(1);
-  expect(readSessionArchiveContentSync(files[0] ?? "")).toContain(event.data);
+  expect(readSessionArchiveText(files[0] ?? "")).toContain(event.data);
   await expect(transcripts()).resolves.toEqual([]);
 });
 

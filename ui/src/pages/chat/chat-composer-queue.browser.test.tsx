@@ -1,52 +1,32 @@
-import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSignal, type ComponentProps } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { buildPendingInputQueueItems } from "./chat-pending-inputs.ts";
 import { renderChatQueueSolid as ChatQueue } from "./components/chat-composer-queue.tsx";
-import baseStyles from "../../styles/base.css?inline";
-import queueContentStyles from "../../styles/chat/composer-queue-content.css?inline";
-import queueStyles from "../../styles/chat/composer-queue.css?inline";
-import componentStyles from "../../styles/components.css?inline";
+import "../../test-helpers/load-styles.ts";
 
-let container: HTMLDivElement;
-let styles: HTMLStyleElement;
-
-beforeEach(async () => {
-  await page.viewport(960, 700);
-  styles = document.createElement("style");
-  styles.textContent = baseStyles + componentStyles + queueStyles + queueContentStyles;
-  document.head.append(styles);
-  container = document.createElement("div");
-  container.className = "agent-chat__composer-shell";
-  container.style.cssText = "position:fixed;bottom:24px;left:24px;width:760px";
-  document.body.append(container);
-});
-
-afterEach(() => {
-  cleanupSolid();
-  container.remove();
-  styles.remove();
-});
-
-function drawQueue(editingId: string | null = null) {
+function drawQueue(
+  editingId: string | null = null,
+  overrides: Partial<ComponentProps<typeof ChatQueue>> = {},
+) {
   const [editing, setEditing] = createSignal(editingId);
   const onEdit = vi.fn((id: string) => setEditing(id));
-  mountSolid(
-    () => (
-      <ChatQueue
-        queue={[
-          { id: "first", text: "First queued prompt", createdAt: 1, sendState: "waiting-idle" },
-          { id: "second", text: "Second queued prompt", createdAt: 2, sendState: "waiting-idle" },
-        ]}
-        queuedEdit={{ editingId: editing(), onEdit, onCancel: () => setEditing(null) }}
-        onQueueRemove={vi.fn()}
-      />
-    ),
-    { container },
-  );
+  const { container } = mountSolid(() => (
+    <ChatQueue
+      queue={[
+        { id: "first", text: "First queued prompt", createdAt: 1, sendState: "waiting-idle" },
+        { id: "second", text: "Second queued prompt", createdAt: 2, sendState: "waiting-idle" },
+      ]}
+      {...overrides}
+      queuedEdit={{ editingId: editing(), onEdit, onCancel: () => setEditing(null) }}
+      onQueueRemove={vi.fn()}
+    />
+  ));
   flush();
   return {
+    container,
     onEdit,
     row: container.querySelector<HTMLElement>('[data-chat-queue-item="first"]')!,
     trigger: container.querySelector<HTMLButtonElement>(".chat-queue__more")!,
@@ -64,7 +44,7 @@ describe("queued message action menu", () => {
         trigger.focus();
         await userEvent.keyboard("{ArrowDown}");
       }
-      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+      await expect.element(page.elementLocator(trigger)).toHaveAttribute("aria-expanded", "true");
       const edit = row.querySelector<HTMLElement>('[role="menuitem"][data-value="edit"]')!;
       if (input === "pointer") {
         await page.elementLocator(edit).click();
@@ -72,36 +52,58 @@ describe("queued message action menu", () => {
         expect(document.activeElement).toBe(edit);
         await userEvent.keyboard("{Enter}");
       }
-      await waitForSolid(() => {
-        expect(onEdit).toHaveBeenCalledExactlyOnceWith("first");
-        const textarea = row.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
-        expect(textarea.value).toBe("First queued prompt");
-        expect(document.activeElement).toBe(textarea);
-        expect(row.hasAttribute("data-edit-keyboard-focus")).toBe(input === "keyboard");
-      });
+      await expect.element(page.getByRole("textbox")).toHaveValue("First queued prompt");
+      await expect.element(page.getByRole("textbox")).toHaveFocus();
+      expect(onEdit).toHaveBeenCalledExactlyOnceWith("first");
+      expect(row.hasAttribute("data-edit-keyboard-focus")).toBe(input === "keyboard");
     },
   );
 
   it("cannot open or activate another row's menu while editing", async () => {
-    const { row, trigger, onEdit } = drawQueue("second");
-    await waitForSolid(() => expect(trigger.disabled).toBe(true));
+    const { container, trigger, onEdit } = drawQueue("second");
+    await expect.element(page.elementLocator(trigger)).toBeDisabled();
     trigger.click();
-    await waitForSolid(() => {
-      expect(trigger.getAttribute("aria-expanded")).toBe("false");
-      expect(row.querySelector(":popover-open")).toBeNull();
-      expect(onEdit).not.toHaveBeenCalled();
-      expect(
-        container.querySelector(".chat-queue__item--editing")?.getAttribute("data-chat-queue-item"),
-      ).toBe("second");
-    });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-queue__item--editing")).toHaveAttribute(
+      "data-chat-queue-item",
+      "second",
+    );
   });
 
   it("does not treat a double-click on the menu trigger as a row edit", async () => {
-    const { trigger, onEdit } = drawQueue();
+    const { container, trigger, onEdit } = drawQueue();
     await userEvent.dblClick(trigger);
-    await waitForSolid(() => {
-      expect(onEdit).not.toHaveBeenCalled();
-      expect(container.querySelector(".chat-queue__edit-input")).toBeNull();
-    });
+    expect(onEdit).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-queue__edit-input")).toBeNull();
   });
 });
+
+it.each([1, 2].flatMap((count) => [false, true].map((server) => ({ count, server }))))(
+  "shows $count annotations (server=$server)",
+  ({ count, server }) => {
+    const attachments = Array.from({ length: count }, (_, id) => ({
+      id: String(id),
+      fileName: "selection-comment.txt",
+      mimeType: "text/plain",
+      selectionAnnotation: { text: "x", comment: "Note", sessionKey: "main", start: 0, end: 1 },
+    }));
+    // Display projection can retain labels without fetchable URLs.
+    const media = attachments.map(({ fileName }) => ({ fileName }));
+    const message = { role: "user", content: " \n\t", __openclaw: { media } };
+    const { container } = drawQueue(null, {
+      queue: [{ id: "annotations", text: " \n\t", createdAt: 1, attachments }],
+      displayQueue: server
+        ? buildPendingInputQueueItems([
+            { id: "input", runId: "run", state: "queued", queued: true, acceptedAt: 1, message },
+          ])
+        : undefined,
+    });
+    expect(container.querySelector(".chat-queue__text")?.textContent).toBe(
+      count === 1 ? "1 annotation" : "2 annotations",
+    );
+    expect(container.querySelector(".chat-queue__state")?.textContent ?? null).toBe(
+      server ? "Queued" : null,
+    );
+  },
+);

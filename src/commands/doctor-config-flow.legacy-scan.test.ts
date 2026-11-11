@@ -43,7 +43,7 @@ module.exports = { stateMigrations: [{
       },
       async () => {
         const configPath = await writeOpenClawConfig(home, {
-          meta: { migrations: { webhookListeners: true } },
+          meta: { migrations: { webhookListeners: true, skillWorkshopPlugin: true } },
           messages: { queue: { allowCollaborativeSteering: false } },
           gateway: { mode: "local" },
           agents: { entries: { main: { workspace: path.join(home, "workspace") } } },

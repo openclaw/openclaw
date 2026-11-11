@@ -12,7 +12,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
       {
         path: ["plugins"],
         message:
-          'skill-workshop plugin policy written while Skill Workshop was built in is ignored. Run "openclaw doctor --fix".',
+          'Plugin policy written while Skill Workshop was built in needs migration so Skill Workshop keeps running. Run "openclaw doctor --fix".',
         match: (_value, root) =>
           materializeSkillWorkshopPlugin(structuredClone(root)).changes.length > 0,
       },

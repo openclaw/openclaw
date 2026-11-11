@@ -189,16 +189,16 @@ suite.define(() => {
       await alert.waitFor();
       const summary = alert.locator("summary");
       const copy = alert.getByRole("button", { name: "Copy error", exact: true });
-      expect(await copy.isVisible()).toBe(label === "desktop");
+      expect(await copy.isVisible()).toBe(false);
       await summary.press("Enter");
-      await alert.locator("pre").waitFor();
+      await alert.locator(".lazy-view-error__detail").waitFor();
       await summary.press("Space");
-      await alert.locator("pre").waitFor({ state: "hidden" });
+      await alert.locator(".lazy-view-error__detail").waitFor({ state: "hidden" });
       if (label === "mobile") {
-        await summary.locator(".chat-error__mobile-title").tap();
-        await alert.locator("pre").waitFor();
-        await summary.locator(".chat-error__mobile-title").tap();
-        await alert.locator("pre").waitFor({ state: "hidden" });
+        await summary.tap();
+        await alert.locator(".lazy-view-error__detail").waitFor();
+        await summary.tap();
+        await alert.locator(".lazy-view-error__detail").waitFor({ state: "hidden" });
       }
       const [alertBox, composerBox] = await Promise.all([
         alert.boundingBox(),
@@ -215,7 +215,7 @@ suite.define(() => {
       );
       expect(await chatTranscript(page).getByText(partialText, { exact: true }).count()).toBe(1);
       expect(await chatTranscript(page).getByText(`Error: ${gatewayErrorText}`).count()).toBe(0);
-      expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(0);
+      expect(await alert.getByRole("button", { name: "Dismiss error" }).count()).toBe(1);
       expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
       await expectRequestCountStable(gateway, "chat.send", 1);
       await sendMessage(page, "retry after error");

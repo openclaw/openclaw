@@ -38,6 +38,11 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "sidebarRoot",
   "label",
   "displayName",
+  "category",
+  "icon",
+  "color",
+  "boardFace",
+  "boardPresentation",
 ] as const satisfies readonly (keyof SessionEntry)[];
 
 const AMBIENT_SESSION_CONTEXT_FIELDS = [

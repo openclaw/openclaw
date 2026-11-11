@@ -22,6 +22,8 @@ export type CompactionRequestBudget = Readonly<{
 /** Input preservation exists before the foreground prompt can supply a token budget. */
 export type CompactionRequestConstraints = Readonly<{
   requestBudget?: CompactionRequestBudget;
+  /** Source of the active run, including after its input has been processed. */
+  requestFromEntryId?: string;
   pendingUserEntryId?: string;
 }>;
 
@@ -102,6 +104,15 @@ export function createCompactionRequestBudget(params: {
   };
 }
 
+/** Legacy standalone compaction relies on its fixed ceiling; opt-in growth needs a window budget. */
+export function createStandaloneCompactionRequestBudget(
+  params: Parameters<typeof createCompactionRequestBudget>[0] & { maxSummaryChars?: number },
+): CompactionRequestBudget | undefined {
+  return (params.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) > MAX_COMPACTION_SUMMARY_CHARS
+    ? createCompactionRequestBudget(params)
+    : undefined;
+}
+
 /** Reconcile only queued context; prepared user, image, and transient costs stay owned upstream. */
 export function withCompactionQueuedContext(
   budget: CompactionRequestBudget,
@@ -176,6 +187,7 @@ export function assertCompactionRequestCanFit(
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
   messages: AgentMessage[],
+  maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
     budget.contextWindow - budget.reserveTokens - budget.fixedTokens - budget.pendingTokens;
@@ -186,13 +198,18 @@ export function resolveCompactionRetentionBudget(
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",
-      summary: "x".repeat(MAX_COMPACTION_SUMMARY_CHARS),
+      summary: "x".repeat(maxSummaryChars),
       tokensBefore: 0,
       timestamp: 0,
     },
   ]);
   return {
-    maxTokens,
+    // The legacy fallback can prefer useful reduction over fitting in one pass.
+    // A raised artifact ceiling must not use that fallback to exceed the window.
+    maxTokens:
+      maxSummaryChars > MAX_COMPACTION_SUMMARY_CHARS
+        ? Math.min(maxTokens, budget.contextWindow - budget.fixedTokens - budget.pendingTokens)
+        : maxTokens,
     reserveTokens: summaryTokens,
   };
 }

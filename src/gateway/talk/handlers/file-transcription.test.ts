@@ -9,9 +9,9 @@ import type {
 import * as providerExecution from "../../../media-understanding/provider-execution.js";
 import type {
   AudioTranscriptionConfigContext,
-  AudioTranscriptionRequest,
   MediaUnderstandingProvider,
-} from "../../../media-understanding/types.js";
+} from "../../../media-understanding/provider-types.js";
+import type { AudioTranscriptionRequest } from "../../../media-understanding/types.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../../plugins/capability-provider.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";

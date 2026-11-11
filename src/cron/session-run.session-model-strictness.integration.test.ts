@@ -9,12 +9,14 @@ import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-m
 import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
@@ -37,6 +39,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
+import { createCronAgentWatchdog } from "./service/agent-watchdog.js";
 import { runCronSessionTurn } from "./session-run.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -183,6 +186,8 @@ describe("stored session model selections in scheduled session turns", () => {
   const policyCases = [
     ["unrelated", "ok", 1, 1, 0],
     ["logging-only", "ok", 1, 1, 0],
+    ["unrelated-mcp", "ok", 1, 1, 0],
+    ["unrelated-mcp-hook", "ok", 1, 1, 1],
     ["unrelated-model-provider", "ok", 1, 1, 0],
     ["provider-setup-sequence", "ok", 1, 1, 0],
     ["selected-model-denied", "error", 0, 1, 0],
@@ -206,6 +211,7 @@ describe("stored session model selections in scheduled session turns", () => {
   ] as const;
   async function runWithFailingPinnedModel(params: {
     reload?: (typeof policyCases)[number][0];
+    preflightCompactionWatchdog?: true;
     storedSelection?: Pick<SessionEntry, "modelOverrideSource">;
     target?: "main" | "session";
     payload?: { model?: string; fallbacks?: string[] };
@@ -220,6 +226,18 @@ describe("stored session model selections in scheduled session turns", () => {
       installPrivateUpdateHandoffStore(state.root);
       const requests: string[] = [];
       const controller = new AbortController();
+      const timeouts: string[] = [];
+      let summaryRequests = 0;
+      const watchdog = params.preflightCompactionWatchdog
+        ? createCronAgentWatchdog({
+            deferUntilRunner: true,
+            jobTimeoutMs: 180_000,
+            triggerTimeout: (reason) => {
+              timeouts.push(reason);
+              controller.abort(new Error(reason));
+            },
+          })
+        : undefined;
       let revoked = false;
       let preparations = 0;
       let publications = 0;
@@ -243,7 +261,7 @@ describe("stored session model selections in scheduled session turns", () => {
           vi.spyOn(hooks, "runBeforeAgentReply").mockImplementation(effect);
         }
       }
-      if (params.reload === "bootstrap-effect" || params.reload?.endsWith("auth-hook")) {
+      if (params.reload === "bootstrap-effect" || params.reload?.endsWith("-hook")) {
         registerInternalHook("agent:bootstrap", effect);
       }
       admission.beforeTargetPreparation = async (assertCurrent) => {
@@ -316,7 +334,12 @@ describe("stored session model selections in scheduled session turns", () => {
         if (request.method !== "POST" || !request.url.endsWith("/responses")) {
           throw new Error(`Unexpected external I/O in scheduled session fixture: ${request.url}`);
         }
-        const body = (await request.json()) as { model?: string };
+        const raw = await request.text();
+        const body = JSON.parse(raw) as { model?: string };
+        if (params.preflightCompactionWatchdog && raw.includes("context summarization assistant")) {
+          summaryRequests++;
+          await vi.advanceTimersByTimeAsync(60_001);
+        }
         const route = Object.entries(providerUrls).find(([, url]) =>
           request.url.startsWith(url),
         )?.[0];
@@ -360,6 +383,9 @@ describe("stored session model selections in scheduled session turns", () => {
               fallbacks: ["fallback/model-b"],
             },
             ...(modelAllow ? { modelPolicy: { allow: modelAllow } } : {}),
+            ...(params.preflightCompactionWatchdog
+              ? { compaction: { keepRecentTokens: 2_000, memoryFlush: { enabled: false } } }
+              : {}),
             models: Object.fromEntries(
               ["pinned/model-x", "primary/model-a", "fallback/model-b", "jobfallback/model-c"].map(
                 (ref) => [ref, routeParams],
@@ -389,6 +415,11 @@ describe("stored session model selections in scheduled session turns", () => {
       const hotReloadConfigs: OpenClawConfig[] = [];
       if (params.reload === "logging-only") {
         hotReloadConfigs.push({ ...cfg, logging: { level: "debug" } });
+      } else if (params.reload?.startsWith("unrelated-mcp")) {
+        hotReloadConfigs.push({
+          ...cfg,
+          mcp: { servers: { sentry: { command: "unused-synthetic-server", enabled: false } } },
+        });
       } else if (params.reload === "unrelated-model-provider") {
         hotReloadConfigs.push({
           ...cfg,
@@ -478,6 +509,13 @@ describe("stored session model selections in scheduled session turns", () => {
         sessionId: "pinned-conversation",
         updatedAt: Date.now(),
         sessionStartedAt: Date.now(),
+        ...(params.preflightCompactionWatchdog
+          ? {
+              totalTokens: 125_000,
+              totalTokensFresh: true,
+              totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+            }
+          : {}),
       };
       const entryFor = (
         pin: { provider: string; model: string } | null,
@@ -493,6 +531,34 @@ describe("stored session model selections in scheduled session turns", () => {
           params.storedSelection,
         ),
       );
+      if (params.preflightCompactionWatchdog) {
+        const seed = await SessionManager.openAsync(
+          {
+            agentId: "main",
+            sessionKey,
+            sessionId: conversation.sessionId,
+            storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+          },
+          state.workspaceDir,
+        );
+        for (let turn = 0; turn < 12; turn++) {
+          await seed.appendMessageAsync({
+            role: "user",
+            content: `Earlier question ${turn}. ${"Background detail. ".repeat(250)}`,
+            timestamp: turn + 1,
+          });
+          await seed.appendMessageAsync(
+            makeAssistantMessageFixture({
+              provider: "primary",
+              api: "openai-responses",
+              model: "model-a",
+              content: [{ type: "text", text: `Earlier answer ${turn}.` }],
+            }),
+          );
+        }
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+        expectDefined(watchdog, "scheduled setup watchdog").start();
+      }
       const activeJob: CronStoredJob = { ...stored, id: "active-turn", name: "Active turn" };
       const runTurn = (scheduled: CronStoredJob) =>
         runCronSessionTurn({
@@ -505,6 +571,10 @@ describe("stored session model selections in scheduled session turns", () => {
           admissionSource: "operator-schedule",
           deliveryAttemptFence: null,
           abortSignal: controller.signal,
+          onExecutionStarted: watchdog?.noteRunnerStarted,
+          onExecutionPhase: watchdog?.notePhase,
+          onLaneWait: (info) =>
+            info?.waiting === false ? watchdog?.noteLaneAdmitted() : watchdog?.noteLaneWait(),
           assertCurrent() {
             if (revoked) {
               throw new Error("Scheduled source revoked");
@@ -513,7 +583,14 @@ describe("stored session model selections in scheduled session turns", () => {
         });
       if (!activeTurn) {
         return {
-          result: await runTurn(stored),
+          result: await runTurn(stored).finally(() => {
+            watchdog?.dispose();
+            if (params.preflightCompactionWatchdog) {
+              vi.useRealTimers();
+            }
+          }),
+          timeouts,
+          summaryRequests,
           requests,
           preparations,
           publications,
@@ -564,9 +641,20 @@ describe("stored session model selections in scheduled session turns", () => {
       }
       expect((await activeResult).status).toBe("ok");
       const result = await pending;
-      return { result, requests };
+      return { result, requests, summaryRequests, timeouts };
     });
   }
+
+  it("lets scheduled preflight compaction finish beyond the setup watchdog", async () => {
+    const { result, summaryRequests, timeouts, requests } = await runWithFailingPinnedModel({
+      storedPin: null,
+      preflightCompactionWatchdog: true,
+    });
+    expect(summaryRequests).toBe(1);
+    expect(requests).toEqual(["primary/model-a", "primary/model-a"]);
+    expect(timeouts).toEqual([]);
+    expect(result).toMatchObject({ status: "ok", executionStarted: true });
+  });
 
   it.each([
     ["user", "session", undefined, userSelection],
@@ -642,7 +730,11 @@ describe("stored session model selections in scheduled session turns", () => {
       expect(hookEffects).toBe(effects ? "effect\n" : undefined);
       if (reload === "provider-setup-sequence" || reload === "selected-model-denied") {
         expect(publications).toBe(4);
-      } else if (reload === "logging-only" || reload === "unrelated-model-provider") {
+      } else if (
+        reload === "logging-only" ||
+        reload === "unrelated-model-provider" ||
+        reload.startsWith("unrelated-mcp")
+      ) {
         expect(publications).toBe(1);
       }
       expect(recoveryRequests).toBe(0);

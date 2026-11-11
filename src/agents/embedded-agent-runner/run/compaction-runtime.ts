@@ -1,3 +1,4 @@
+import { parseCompactionDetails } from "../../../../packages/agent-core/src/harness/compaction/compaction-details.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
@@ -100,14 +101,13 @@ export async function compactEmbeddedRunForRecovery(
   recovery: RecoveryCompactionRequest,
 ) {
   const owner = input.prepareRecoveryOwner();
-  const emitProgress = (phase: "start" | "end", completed?: boolean) => {
+  const emitProgress = (
+    phase: "start" | "end",
+    end?: { completed: boolean; qualityDegraded?: true; summaryRefused?: true },
+  ) => {
     const event = {
       stream: "compaction" as const,
-      data: {
-        phase,
-        itemId: recovery.diagId,
-        ...(completed === undefined ? {} : { completed }),
-      },
+      data: { phase, itemId: recovery.diagId, ...end },
       ...(input.runParams.sessionKey ? { sessionKey: input.runParams.sessionKey } : {}),
     };
     emitAgentEvent({ runId: input.runParams.runId, ...event });
@@ -117,7 +117,7 @@ export async function compactEmbeddedRunForRecovery(
       callback: () => input.runParams.onAgentEvent?.(event),
     });
   };
-  let completed = false;
+  let end: Parameters<typeof emitProgress>[1] = { completed: false };
   emitProgress("start");
   try {
     if (recovery.trigger === "overflow") {
@@ -143,10 +143,18 @@ export async function compactEmbeddedRunForRecovery(
       log.info(`[memory-flush] overflow checkpoint ${outcome}`);
     }
     const result = await executeRecoveryCompaction(input, recovery, owner);
-    completed = result.result.ok && result.result.compacted;
+    if (result.result.ok && result.result.compacted) {
+      // Channel notices read the degraded/refused facts from this end event alone.
+      const details = parseCompactionDetails(result.result.result?.details);
+      end = {
+        completed: true,
+        ...(details?.qualityDegraded ? { qualityDegraded: true } : {}),
+        ...(details?.summaryRefused ? { summaryRefused: true } : {}),
+      };
+    }
     return result;
   } finally {
-    emitProgress("end", completed);
+    emitProgress("end", end);
   }
 }
 
@@ -158,6 +166,13 @@ async function executeRecoveryCompaction(
 ) {
   const { runParams } = input;
   const activeSession = owner.session;
+  const requestAdmission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  const requestFromEntryId =
+    requestAdmission?.agentId === input.sessionAgentId &&
+    requestAdmission.sessionKey === input.resolvedSessionKey &&
+    sameSessionTranscriptStorePath(requestAdmission.storePath, activeSession.target?.storePath)
+      ? requestAdmission.entryId
+      : undefined;
   const promptCacheIdentity = {
     ...runParams,
     sessionId: activeSession.id,
@@ -248,6 +263,7 @@ async function executeRecoveryCompaction(
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
+                requestFromEntryId,
                 pendingRequestState:
                   recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
                 memoryTranscript: owner.sessionManager

@@ -15,6 +15,8 @@ import {
   captureSqliteDatabaseAdmissions,
   hasSqliteDatabaseSchemaAdmissionForPath,
 } from "./sqlite-database-admission.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
   adoptPreparedLocation,
   registerRetainedSnapshotTempDirectory,
@@ -22,7 +24,7 @@ import {
   cleanupSnapshotOperations,
   removeTempDirectory,
   removeTempDirectoryAsync,
-  SqliteSnapshotCleanupError,
+  withPreparedSqliteSnapshot,
 } from "./sqlite-readonly-location-cleanup.js";
 import * as readOnlyWorker from "./sqlite-readonly-worker.js";
 import { createReadBarrier, observeSettlement } from "./sqlite-readonly.test-support.js";
@@ -153,7 +155,7 @@ it("shares one awaited image across original-path inspection readers and drains 
     { agentDatabases: true },
   );
   expect(fs.readFileSync(source)).toEqual(original);
-  expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 
 it("keeps mutable inspection copies exclusive while preparation overlaps a shared read", async () => {
@@ -312,6 +314,30 @@ it.each([false, true])(
     expect(fs.readFileSync(sibling, "utf8")).toBe("not owned by snapshot");
   },
 );
+it.each(["rmdir", "lstat"])(
+  "defers only retired directory removal when busy cleanup reports %s",
+  async (syscall) => {
+    const report = vi.fn();
+    const { ownedRoot, prepared } = fixture(false, report);
+    {
+      using _ = vi
+        .spyOn(fs.promises, "rm")
+        .mockRejectedValue(Object.assign(busyError(), { syscall }));
+      const read = withPreparedSqliteSnapshot(prepared, (location) =>
+        fs.readFileSync(location, "utf8"),
+      );
+      await (syscall === "rmdir"
+        ? expect(read).resolves.toBe("private synthetic snapshot")
+        : expect(read).rejects.toThrow(`SQLite snapshot cleanup failed: ${ownedRoot}`));
+      // Either way the failure is reported once and the copy waits for a later sweep.
+      expect(report).toHaveBeenCalledOnce();
+      expect(fs.existsSync(prepared.location)).toBe(true);
+    }
+    await cleanupSnapshotOperations();
+    expect(fs.existsSync(ownedRoot)).toBe(false);
+  },
+);
+
 it("keeps a best-effort lease read successful when shared removal stays busy", async () => {
   const report = vi.fn();
   const { ownedRoot, prepared } = fixture(false, report);
