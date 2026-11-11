@@ -30,7 +30,7 @@ import {
   signEd25519Payload,
 } from "../../src/infra/ed25519-signature.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { readProcessTreeCpuMs } from "../lib/gateway-bench-probes.ts";
+import { readGatewayBenchHostCounters, readProcessTreeCpuMs } from "../lib/gateway-bench-probes.ts";
 import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
@@ -64,6 +64,7 @@ const { values } = parseArgs({
     "fs-census": { type: "boolean", default: false },
     "compile-cache": { type: "boolean", default: false },
     "write-interval-ms": { type: "string" },
+    "host-samples": { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
@@ -220,6 +221,8 @@ process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
 const wait = (ms: number) => delay(ms, undefined, { signal: abort.signal });
 const samples: unknown[] = [];
+const hostSamples: ReturnType<typeof readGatewayBenchHostCounters>[] = [];
+let hostTimer: ReturnType<typeof setInterval> | undefined;
 async function watcherCommand(action: "watcher-fail" | "watcher-count") {
   const id = randomUUID();
   const reply = Promise.withResolvers<{ watchNotifications?: number; error?: string }>();
@@ -478,9 +481,19 @@ try {
   const cpuBefore = await readGatewayCpuUsage(child);
   const start = Date.now();
   const compileLogStart = values["compile-cache"] ? statSync(logPath).size : 0;
-  const writeLatencies: number[] = [];
+  const writeRequests: Array<{
+    scheduledAtEpochMs: number;
+    startedAtEpochMs: number;
+    endedAtEpochMs: number;
+    elapsedMs: number;
+  }> = [];
   let lastTrigger: string | undefined;
   let nextWrite = start;
+  if (values["host-samples"]) {
+    hostSamples.push(readGatewayBenchHostCounters());
+    hostTimer = setInterval(() => hostSamples.push(readGatewayBenchHostCounters()), 1000);
+    hostTimer.unref();
+  }
   console.log(JSON.stringify({ ready: true, pid: child.pid, start, minutes, output }));
   for (let minute = 1; minute <= minutes; minute++) {
     sqlPhase(`steady-${minute}`);
@@ -491,7 +504,7 @@ try {
         if (Date.now() >= until) {
           break;
         }
-        const trigger = `synthetic-wake-${writeLatencies.length % 2}`;
+        const trigger = `synthetic-wake-${writeRequests.length % 2}`;
         const began = performance.now();
         const reply = await client.request("voicewake.set", { triggers: [trigger] });
         if (
@@ -503,7 +516,13 @@ try {
         ) {
           throw new Error(`Shared-state write failed: ${JSON.stringify(reply)}`);
         }
-        writeLatencies.push(performance.now() - began);
+        const ended = performance.now();
+        writeRequests.push({
+          scheduledAtEpochMs: nextWrite,
+          startedAtEpochMs: performance.timeOrigin + began,
+          endedAtEpochMs: performance.timeOrigin + ended,
+          elapsedMs: ended - began,
+        });
         lastTrigger = trigger;
         nextWrite = Math.max(nextWrite + writeIntervalMs, Date.now());
       }
@@ -518,6 +537,10 @@ try {
     );
   }
   const endedAt = Date.now();
+  clearInterval(hostTimer);
+  if (values["host-samples"]) {
+    hostSamples.push(readGatewayBenchHostCounters());
+  }
   const compileLogEnd = values["compile-cache"] ? statSync(logPath).size : 0;
   const cpuAfter = await readGatewayCpuUsage(child);
   if (values.allocations) {
@@ -556,6 +579,7 @@ try {
       throw new Error("Shared-state write readback did not match the final acknowledged trigger");
     }
   }
+  const writeLatencies = writeRequests.map((request) => request.elapsedMs);
   const sortedWriteLatencies = writeLatencies.toSorted((a, b) => a - b);
   writeFileSync(
     path.join(output, "result.json"),
@@ -586,6 +610,7 @@ try {
               count: writeLatencies.length,
               readbackVerified: lastTrigger !== undefined,
               latenciesMs: writeLatencies,
+              requests: writeRequests,
               medianMs: sortedWriteLatencies[Math.floor(sortedWriteLatencies.length / 2)],
               p95Ms: sortedWriteLatencies[Math.ceil(sortedWriteLatencies.length * 0.95) - 1],
             }
@@ -617,6 +642,7 @@ try {
             }
           : undefined,
         samples,
+        hostSamples: values["host-samples"] ? hostSamples : undefined,
       },
       null,
       2,
@@ -625,6 +651,7 @@ try {
 } catch (error) {
   failure = error instanceof Error ? error : new Error(String(error));
 } finally {
+  clearInterval(hostTimer);
   sqlPhase("shutdown");
   closing = true;
   client?.close();
