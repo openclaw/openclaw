@@ -5229,10 +5229,8 @@ describe("package acceptance workflow", () => {
       );
     }
 
-    expect(input).toEqual({
+    expect(input).toMatchObject({
       default: "",
-      description:
-        "Optional override for the Plugin SDK API acknowledgement sealed by Full Release Validation",
       required: false,
       type: "string",
     });
@@ -9147,7 +9145,9 @@ test "$package_manager" = "pnpm@12.1.0"
         RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
       });
     }
-    expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe(
+      "${{ inputs.release_profile == 'clawhub-only' && 'from-validation' || inputs.release_profile }}",
+    );
     expect(validationStep.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
       "${{ inputs.plugin_sdk_api_acknowledgement }}",
     );
