@@ -791,23 +791,22 @@ async function prepareCliRunContextWithinReadFence(
         })
       : undefined;
   params.assertCurrent?.();
-  const mcpProjection = mcpContextBase
-    ? await mcp.prepareCliMcpToolProjection(params, {
-        agentId: workspaceResolution.agentId,
-        context: mcpContextBase,
-        runtimeToolsAllowPolicy,
-        defaultMediatedToolNames: hostOwnedTools,
-        scope: {
-          cfg: runConfig,
-          ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
-          ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
-          ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
-          ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
-        },
-        resolvePolicyTools: resolveMcpLoopbackPolicyTools,
-        resolveScopedTools: resolveMcpLoopbackScopedTools,
-      })
-    : { params, tools: [] };
+  const mcpProjection = await mcp.prepareCliMcpToolProjection(params, {
+    agentId: workspaceResolution.agentId,
+    context: mcpContextBase,
+    runtimeToolsAllowPolicy,
+    defaultMediatedToolNames: hostOwnedTools,
+    scope: {
+      cfg: runConfig,
+      ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
+      ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
+      ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
+      ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
+    },
+    memoryAudience: { agentId: sessionAgentId, resources: callerToolAuthorityResources },
+    resolvePolicyTools: resolveMcpLoopbackPolicyTools,
+    resolveScopedTools: resolveMcpLoopbackScopedTools,
+  });
   params = mcpProjection.params;
   params.assertCurrent?.();
   const hookFilteredProjectedTools = applyEmbeddedAttemptToolsAllow(
@@ -966,8 +965,9 @@ async function prepareCliRunContextWithinReadFence(
   try {
     const mcpClient =
       mcpLoopbackRuntime && mcpGrant
-        ? await mintCliMcpClientGrant({ ...params, config: runConfig }, sessionAgentId, {
+        ? mintCliMcpClientGrant({
             ...mcpGrant,
+            ...mcpProjection.grantAudience,
             sessionEventSourcePolicy,
             runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
             bindQuestionAnswerAuthority: (assertActive) =>
@@ -978,8 +978,7 @@ async function prepareCliRunContextWithinReadFence(
           })
         : undefined;
     const mcpClientGrant = mcpClient?.grant;
-    // The grant's cleanup also releases the memory audience leased for this turn.
-    // Configured MCP tools close only after their grant can no longer reach them.
+    // Revoke the grant before configured tools close and caller resources release its audience.
     const cleanupMcpClientGrant = sequenceCliCleanups(
       mcpClient?.cleanup,
       loopbackBundleMcp?.takeCleanup(),

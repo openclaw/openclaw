@@ -45,7 +45,7 @@ export function createCliMcpTool(name: string, label: string, description: strin
 
 export function mockCliMcpPreparation(overrides: Record<string, unknown> = {}) {
   const mint = vi.fn(createTestMcpLoopbackClientGrant);
-  const revoke = vi.fn(() => true);
+  const revoke = vi.fn((_token: string) => true);
   setCliRunnerPrepareTestDeps({
     isWorkspaceBootstrapPending: async () => false,
     makeBootstrapWarn: () => () => undefined,
@@ -55,6 +55,9 @@ export function mockCliMcpPreparation(overrides: Record<string, unknown> = {}) {
     mintMcpLoopbackClientGrant: mint,
     bindMcpLoopbackClientGrantAdmission: () => true,
     revokeMcpLoopbackClientGrant: revoke,
+    revokeMintedMcpLoopbackClientGrant: (
+      grant: ReturnType<typeof createTestMcpLoopbackClientGrant>,
+    ) => revoke(grant.token),
     resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
     prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
     getCliLiveSessionGeneration: () => undefined,

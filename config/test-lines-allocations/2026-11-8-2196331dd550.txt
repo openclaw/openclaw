@@ -1,0 +1,5 @@
+117
+# LOCAL 2026.11.8: row 37; source 2196331dd5504718f1f4467f742db89fffe42cd3.
+# Share one admitted memory audience between CLI tool projection and grant; preserve sessionless resolution and revoke-before-release.
+# Original projection regression106 LF; row172 lifetime adaptation7 LF and shared fixture support4 LF; total 117 LF.
+# Full intake baseline: a28e4379464c4fc22b3b085cd1f8e7c709be9888; no scalar baseline change.

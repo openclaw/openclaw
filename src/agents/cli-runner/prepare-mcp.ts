@@ -6,6 +6,7 @@ import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveSandboxRuntimeStatusAsync } from "../sandbox/runtime-status.js";
 import { normalizeToolPolicyName } from "../tool-policy.js";
 import { finalizeCliMcpGrant } from "./mcp-grant-context.js";
+import { resolveCliMcpMemoryAudience } from "./mcp-memory-audience.js";
 import { projectNativeMcpRunContext } from "./native-mcp-context.js";
 import { admitCliRunParams } from "./run-admission.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -62,7 +63,7 @@ export async function prepareCliMcpToolProjection(
   params: RunCliAgentParams,
   options: {
     agentId: string;
-    context: McpScope["context"];
+    context: McpScope["context"] | undefined;
     runtimeToolsAllowPolicy?: string[];
     defaultMediatedToolNames?: readonly string[];
     scope: Pick<
@@ -73,10 +74,14 @@ export async function prepareCliMcpToolProjection(
       | "authProfileStore"
       | "authProfileStoreAgentDir"
     >;
+    memoryAudience: { agentId: string; resources: Pick<DisposableStack, "defer"> };
     resolvePolicyTools: ResolveMcpTools;
     resolveScopedTools: ResolveMcpTools;
   },
 ) {
+  if (!options.context) {
+    return { params, tools: [], grantAudience: undefined };
+  }
   const requestedToolsAllow =
     options.runtimeToolsAllowPolicy ?? params.cliToolAvailability?.openClaw;
   const context =
@@ -88,14 +93,22 @@ export async function prepareCliMcpToolProjection(
       ? options.resolvePolicyTools
       : options.resolveScopedTools;
   const admittedParams = await admitCliRunParams(params, options.agentId);
+  // Project names with the same admitted audience the loopback grant will carry.
+  const { memoryAudience, release } = await resolveCliMcpMemoryAudience(
+    { ...admittedParams, config: options.scope.cfg },
+    { agentId: options.memoryAudience.agentId, sessionKey: context.sessionKey },
+  );
+  options.memoryAudience.resources.defer(release);
+  const grantAudience = memoryAudience ? { memoryAudience } : {};
   const { tools } = await resolveTools({
     ...options.scope,
+    ...grantAudience,
     defaultMediatedToolNames: options.defaultMediatedToolNames,
     signal: admittedParams.abortSignal,
     context,
     admittedRunContext: admittedParams.admittedRunContext,
   });
-  return { params: admittedParams, tools };
+  return { params: admittedParams, tools, grantAudience };
 }
 
 /** Resolve native-tool and configured-MCP ownership for this CLI run. */
