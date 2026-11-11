@@ -250,7 +250,10 @@ export async function runTemplatesAddCommand(
     method: "templates.add",
     params: {},
     target: "Template configuration and provenance",
-    onForeignOwner: "refuse",
+    onForeignOwner: async ({ requestOwner }) => {
+      const { runTemplatesAddThroughOwner } = await import("./templates-cli.gateway-add.js");
+      await runTemplatesAddThroughOwner(sourcePath, opts, requestOwner);
+    },
     runLocal: async ({ assertCurrent, signal }) => run({ mode: "apply", assertCurrent, signal }),
   });
 }
