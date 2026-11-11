@@ -1,6 +1,5 @@
 import type {
   TemplateDraftReviewItem,
-  TemplateDraftReviewChoices,
   TemplatesDraftsPublishResult,
   TemplatesDraftsReviewResult,
 } from "@openclaw/gateway-protocol";
@@ -15,14 +14,10 @@ export type TemplatePackagePreview = { description?: string | null; content?: st
 export interface TemplateCreator {
   busy: "starting" | "reviewing" | "publishing" | null;
   review: TemplatesDraftsReviewResult | null;
-  reviewRead: { result: Promise<void> } | null;
   reviewCurrent: boolean;
-  choices: TemplateDraftReviewChoices | null;
-  modalOpen: boolean;
   publication: TemplatesDraftsPublishResult | null;
   publicationIssue: "failed" | "unconfirmed" | null;
   error: string | null;
-  presentationLifetime: PromiseWithResolvers<void>;
   readonly hasActiveDraft: boolean;
   readonly subscribe: (listener: () => void) => () => void;
   readonly sessionKey: string | undefined;
@@ -32,11 +27,8 @@ export interface TemplateCreator {
   retirePresentation(): void;
   start(agentId: string): Promise<void>;
   open(agentId: string, draftId: string, sessionKey?: string): void;
-  updateChoices(next: TemplateDraftReviewChoices): void;
   publish(): Promise<void>;
   checkPublication(): Promise<void>;
-  close(): void;
-  reopen(): void;
   retryReview(): void;
   readPackagePreview(item: TemplateDraftReviewItem): Promise<TemplatePackagePreview | null>;
 }

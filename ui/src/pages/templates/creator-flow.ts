@@ -63,23 +63,19 @@ export class TemplateCreatorFlow implements TemplateCreator {
   private readonly listeners = createChangeListeners();
   private target: Target | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
-  private editTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private reviewRequest = 0;
   private seenRevision: string | null = null;
   busy: "starting" | "reviewing" | "publishing" | null = null;
   review: TemplatesDraftsReviewResult | null = null;
-  reviewRead: { result: Promise<void> } | null = null;
   reviewCurrent = false;
-  choices: TemplateDraftReviewChoices | null = null;
-  modalOpen = false;
+  private choices: TemplateDraftReviewChoices | null = null;
   inlineReview = false;
   publication: TemplatesDraftsPublishResult | null = null;
   publicationIssue: "failed" | "unconfirmed" | null = null;
   private publicationAttemptId: string | undefined;
   private publicationReviewToken: string | undefined;
   error: string | null = null;
-  presentationLifetime = Promise.withResolvers<void>();
 
   get hasActiveDraft() {
     return this.target !== null;
@@ -115,8 +111,6 @@ export class TemplateCreatorFlow implements TemplateCreator {
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
-    this.presentationLifetime.resolve();
-    this.presentationLifetime = Promise.withResolvers<void>();
   }
 
   private mainSessionKey(agentId: string) {
@@ -156,16 +150,11 @@ export class TemplateCreatorFlow implements TemplateCreator {
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
-    if (this.editTimer) {
-      clearTimeout(this.editTimer);
-    }
     this.target = target;
     this.seenRevision = null;
     this.review = null;
-    this.reviewRead = null;
     this.reviewCurrent = false;
     this.choices = null;
-    this.modalOpen = false;
     this.publication = null;
     this.inlineReview = false;
     this.publicationIssue = null;
@@ -352,7 +341,8 @@ export class TemplateCreatorFlow implements TemplateCreator {
     }
     this.busy = "reviewing";
     const request = ++this.reviewRequest;
-    const pending = (async () => {
+    this.changed();
+    try {
       const result = await target.client.request<TemplatesDraftsReviewResult>(
         "templates.drafts.review",
         {
@@ -372,13 +362,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         description: result.description,
         excluded: result.items.filter((item) => !item.included).map((item) => item.id),
       };
-      this.modalOpen = true;
       this.error = null;
-    })();
-    this.reviewRead = { result: pending };
-    this.changed();
-    try {
-      await pending;
     } catch (error) {
       if (this.current(target, generation) && request === this.reviewRequest) {
         this.error = formatUiError(error);
@@ -389,21 +373,6 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.changed();
       }
     }
-  }
-
-  updateChoices(next: TemplateDraftReviewChoices) {
-    const target = this.target;
-    if (!target || !this.choices) {
-      return;
-    }
-    this.choices = next;
-    this.reviewCurrent = false;
-    this.changed();
-    if (this.editTimer) {
-      clearTimeout(this.editTimer);
-    }
-    const generation = this.generation;
-    this.editTimer = setTimeout(() => void this.refreshReview(target, generation), 350);
   }
 
   async publish() {
@@ -448,7 +417,6 @@ export class TemplateCreatorFlow implements TemplateCreator {
       if (this.current(target, generation)) {
         this.publication = result;
         this.publicationAttemptId = result.attemptId;
-        this.modalOpen = false;
         this.error = null;
       }
     } catch (error) {
@@ -521,19 +489,6 @@ export class TemplateCreatorFlow implements TemplateCreator {
           this.schedulePoll(target, generation, 5000);
         }
       }
-    }
-  }
-
-  close() {
-    this.retirePresentation();
-    this.modalOpen = false;
-    this.changed();
-  }
-
-  reopen() {
-    if (this.review) {
-      this.modalOpen = true;
-      this.changed();
     }
   }
 
