@@ -1,7 +1,9 @@
 name: Retained runtime alias proof
 
-# Diagnostic dispatch only. Never changes a release candidate or qualification ref.
+# Diagnostic branch only. Never changes a release candidate or qualification ref.
 on:
+  push:
+    branches: [diagnostic/release-2026.11.4-cleanup-alias-20261111]
   workflow_dispatch:
 
 permissions:
