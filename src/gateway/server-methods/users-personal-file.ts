@@ -36,7 +36,11 @@ import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
 
 class PersonalFileAccessError extends Error {}
 
-function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAgentId: string) {
+function preparePersonalFile(
+  options: GatewayRequestHandlerOptions,
+  requestedAgentId: string,
+  write: boolean,
+) {
   const { client, context } = options;
   if (!listAgentIds(context.getRuntimeConfig()).includes(requestedAgentId)) {
     throw new PersonalFileAccessError(
@@ -169,15 +173,17 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         "Personal instructions editing requires a local agent workspace.",
       );
     }
-    try {
-      assertNoUnmigratedWorkspaceState({ workspaceDir });
-    } catch (error) {
-      if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
-        throw error;
+    if (write) {
+      try {
+        assertNoUnmigratedWorkspaceState({ workspaceDir });
+      } catch (error) {
+        if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
+          throw error;
+        }
+        throw new PersonalFileAccessError(
+          "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
+        );
       }
-      throw new PersonalFileAccessError(
-        "This agent's workspace needs migration. Ask the gateway operator to run `openclaw doctor --fix`.",
-      );
     }
   };
   assertCurrent();
@@ -190,7 +196,7 @@ async function runPersonalFile(
   write?: UsersPersonalFileSetParams,
 ) {
   try {
-    const target = preparePersonalFile(options, params.agentId);
+    const target = preparePersonalFile(options, params.agentId, Boolean(write));
     const identity = { agentId: target.agentId, profileId: target.profileId };
     const fsRoot = await root(target.workspaceDir, {
       symlinks: "reject",

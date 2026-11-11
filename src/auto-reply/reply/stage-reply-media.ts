@@ -1,4 +1,5 @@
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../../agents/workspace-state-dirs.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeMsgContext, TemplateContext } from "../templating.js";
@@ -31,6 +32,7 @@ export async function stageReplyMedia(params: {
       workspaceDir: sessionEntry?.spawnedWorkspaceDir,
       cwd: sessionEntry?.spawnedCwd,
     }) ?? workspaceDir;
+  assertManagedWorkspaceStateReadyForCwd(cfg, stagingWorkspaceDir);
   // Private selections affect sandbox identity; a stale snapshot must not select another runtime.
   const selectedSkills =
     sessionEntry?.skillLibrarySelections ?? sessionEntry?.skillsSnapshot?.librarySelections;

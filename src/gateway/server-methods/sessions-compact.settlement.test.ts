@@ -30,28 +30,36 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./type
 
 afterEach(() => vi.restoreAllMocks());
 
-it("refuses model compaction while its workspace needs repair", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await fs.mkdir(state.workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(state.workspaceDir, "openclaw-workspace-state.json"), "retained");
-    const failure = await runGatewaySessionCompaction(
-      {
-        cfg: { agents: { defaults: { workspace: state.workspaceDir } } },
-        entry: { sessionId: "repair-pending", updatedAt: Date.now() },
-        agentId: "main",
-        sessionId: "repair-pending",
-        sessionKey: "agent:main:main",
-        sessionStoreKey: "agent:main:main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      },
-      { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
-    ).catch((error: unknown) => error);
-    expect(failure).toMatchObject({
-      kind: "legacy-workspace",
-      message: expect.stringContaining("openclaw doctor --fix"),
-    });
-    expect(String(failure)).not.toContain(state.workspaceDir);
-  }));
+it.each([false, true])(
+  "refuses model compaction while its workspace needs repair (nested=%s)",
+  (nested) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await fs.mkdir(state.workspaceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(state.workspaceDir, "openclaw-workspace-state.json"),
+        "retained",
+      );
+      const workspaceDir = nested ? path.join(state.workspaceDir, "child") : state.workspaceDir;
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const failure = await runGatewaySessionCompaction(
+        {
+          cfg: { agents: { defaults: { workspace: state.workspaceDir } } },
+          entry: { sessionId: "repair-pending", updatedAt: Date.now(), spawnedCwd: workspaceDir },
+          agentId: "main",
+          sessionId: "repair-pending",
+          sessionKey: "agent:main:main",
+          sessionStoreKey: "agent:main:main",
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        },
+        { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+      ).catch((error: unknown) => error);
+      expect(failure).toMatchObject({
+        kind: "legacy-workspace",
+        message: expect.stringContaining("openclaw doctor --fix"),
+      });
+      expect(String(failure)).not.toContain(state.workspaceDir);
+    }),
+);
 
 async function prepareTranscript(state: OpenClawTestState, sessionId: string) {
   const cfg = { agents: { entries: { main: {} } } };

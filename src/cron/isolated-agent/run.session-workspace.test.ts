@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -55,11 +56,21 @@ function bindSession(managed = true, workspaceDir = tempDirs.make("cron-workspac
   return { entry, record, session };
 }
 
-function run(sessionTarget = `session:${sessionKey}`, key = sessionKey) {
+function run(
+  sessionTarget = `session:${sessionKey}`,
+  key = sessionKey,
+  otherWorkspaceDir?: string,
+) {
   return runCronIsolatedAgentTurn(
     makeIsolatedAgentParamsFixture({
       sessionKey: key,
-      cfg: { tools: { fs: { workspaceOnly: true } }, plugins: { enabled: false } },
+      cfg: {
+        tools: { fs: { workspaceOnly: true } },
+        plugins: { enabled: false },
+        ...(otherWorkspaceDir
+          ? { agents: { entries: { default: {}, other: { workspace: otherWorkspaceDir } } } }
+          : {}),
+      },
       job: makeIsolatedAgentJobFixture({
         sessionTarget,
         delivery: { mode: "none" },
@@ -110,6 +121,19 @@ it("defers an unstarted run while workspace repair is pending", async () => {
     new StartupMaintenanceRequiredError("legacy-workspace", "repair required"),
   );
   await expect(run()).resolves.toMatchObject({
+    status: "skipped",
+    admissionDeferred: true,
+    admissionDeferredReason: "workspace-maintenance",
+    executionStarted: false,
+  });
+  expect(harness.runEmbeddedAgentMock).not.toHaveBeenCalled();
+});
+
+it("defers an isolated run bound to another configured workspace awaiting repair", async () => {
+  const other = tempDirs.make("cron-override-repair-");
+  fs.writeFileSync(path.join(other, "openclaw-workspace-state.json"), "retained");
+  bindSession(false, other);
+  await expect(run(undefined, undefined, other)).resolves.toMatchObject({
     status: "skipped",
     admissionDeferred: true,
     admissionDeferredReason: "workspace-maintenance",

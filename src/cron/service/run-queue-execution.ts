@@ -208,7 +208,9 @@ export async function launchCronRun(
   }
   options.onTriggerDisposition?.(
     result.triggerEval?.busy ||
-      (hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy")
+      (hasUnstartedCronAdmission(result) &&
+        (result.admissionDeferredReason === "busy" ||
+          result.admissionDeferredReason === "workspace-maintenance"))
       ? "busy"
       : result.status === "error"
         ? "error"

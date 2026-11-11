@@ -8,6 +8,7 @@ import {
 } from "../../agents/model-selection.js";
 import { readPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../../agents/workspace-state-dirs.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -152,6 +153,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   );
   if (command.isAuthorizedSender) {
     assertNoUnmigratedWorkspaceState({ workspaceDir: params.workspaceDir });
+    assertManagedWorkspaceStateReadyForCwd(params.cfg, params.workspaceDir);
   }
   if (params.commandAuthorized) {
     const creatingSession = sessionState.initialSessionEntry === undefined;

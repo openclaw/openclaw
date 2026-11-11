@@ -415,6 +415,25 @@ describe("cron stream trigger composition", () => {
       },
     );
   });
+
+  it("keeps a batch pending when workspace repair defers admission", async () => {
+    const onTriggerDisposition = vi.fn();
+    await withStream(
+      {},
+      {
+        runIsolatedAgentJob: vi.fn(async () => ({
+          status: "skipped" as const,
+          executionStarted: false,
+          admissionDeferred: true,
+          admissionDeferredReason: "workspace-maintenance" as const,
+        })),
+      },
+      async (cron, job) => {
+        await runBatch(cron, job, "pending batch", onTriggerDisposition);
+        expect(onTriggerDisposition).toHaveBeenCalledExactlyOnceWith("busy");
+      },
+    );
+  });
 });
 
 it("skips invalid main jobs with command payloads loaded from disk", async () => {

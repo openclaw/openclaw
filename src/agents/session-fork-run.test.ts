@@ -65,23 +65,28 @@ it("applies wildcard sender restrictions although a fork has no sender", async (
   ).resolves.toBeUndefined();
 });
 
-it("refuses a fork from an existing session while its workspace needs repair", async () => {
-  const source = await groupSession();
-  await fs.mkdir(state.workspaceDir, { recursive: true });
-  await fs.writeFile(path.join(state.workspaceDir, "openclaw-workspace-state.json"), "retained");
-  const failure = await prepareSessionFork({
-    config: groupTools([]),
-    source,
-    tools,
-    model,
-    workspaceDir: state.workspaceDir,
-  }).catch((error: unknown) => error);
-  expect(failure).toMatchObject({
-    kind: "legacy-workspace",
-    message: expect.stringContaining("openclaw doctor --fix"),
-  });
-  expect(String(failure)).not.toContain(state.workspaceDir);
-});
+it.each([false, true])(
+  "refuses a fork while its workspace needs repair (nested=%s)",
+  async (nested) => {
+    const source = await groupSession();
+    await fs.mkdir(state.workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(state.workspaceDir, "openclaw-workspace-state.json"), "retained");
+    const workspaceDir = nested ? path.join(state.workspaceDir, "child") : state.workspaceDir;
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const failure = await prepareSessionFork({
+      config: { ...groupTools([]), agents: { defaults: { workspace: state.workspaceDir } } },
+      source,
+      tools,
+      model,
+      workspaceDir,
+    }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      kind: "legacy-workspace",
+      message: expect.stringContaining("openclaw doctor --fix"),
+    });
+    expect(String(failure)).not.toContain(state.workspaceDir);
+  },
+);
 
 describe("assertSessionForkRunSucceeded", () => {
   type Result = Parameters<typeof assertSessionForkRunSucceeded>[0];

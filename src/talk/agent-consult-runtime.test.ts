@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -145,6 +147,19 @@ function expectForkTarget(call: RunEmbeddedAgentParams, sessionId = call.session
 }
 
 describe("realtime voice agent consult runtime", () => {
+  it("refuses a saved consult cwd beneath a workspace awaiting repair", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    const workspaceDir = state.statePath("workspace");
+    const cwd = path.join(workspaceDir, "child");
+    await fs.mkdir(cwd, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "openclaw-workspace-state.json"), "retained");
+    sessionStore["voice:consult"] = { sessionId: "voice-consult", updatedAt: 1, spawnedCwd: cwd };
+    await expect(
+      runConsult(runtime, { cfg: { agents: { defaults: { workspace: workspaceDir } } } }),
+    ).rejects.toMatchObject({ kind: "legacy-workspace" });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   beforeEach(async () => {
     const actual = await vi.importActual<typeof import("../auto-reply/reply/session-fork.js")>(
       "../auto-reply/reply/session-fork.js",

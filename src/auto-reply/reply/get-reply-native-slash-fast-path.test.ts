@@ -110,30 +110,36 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     buildStatusReplyMock.mockResolvedValue({ text: "selected model status" });
   });
 
-  it("refuses a retained workspace before a native command can write", async () => {
-    const workspaceDir = tempDirs.make("openclaw-native-workspace-");
-    const source = path.join(workspaceDir, "openclaw-workspace-state.json");
-    const output = path.join(workspaceDir, "session.html");
-    await fs.writeFile(source, "not-json");
-    handleCommandsMock.mockImplementation(async () => {
-      await fs.writeFile(output, "exported");
-      return { shouldContinue: false, reply: { text: "Exported" } };
-    });
-    await expect(
-      runTestNativeSlashFastReply({
-        ctx: buildNativeCommandCtx("/export-session session.html", {
-          SessionKey: "telegram:slash:123",
-          CommandTargetSessionKey: "agent:main:telegram:123",
+  it.each([false, true])(
+    "refuses a retained workspace before a native command can write (nested=%s)",
+    async (nested) => {
+      const rootDir = tempDirs.make("openclaw-native-workspace-");
+      const workspaceDir = nested ? path.join(rootDir, "child") : rootDir;
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const source = path.join(rootDir, "openclaw-workspace-state.json");
+      const output = path.join(workspaceDir, "session.html");
+      await fs.writeFile(source, "not-json");
+      handleCommandsMock.mockImplementation(async () => {
+        await fs.writeFile(output, "exported");
+        return { shouldContinue: false, reply: { text: "Exported" } };
+      });
+      await expect(
+        runTestNativeSlashFastReply({
+          ctx: buildNativeCommandCtx("/export-session session.html", {
+            SessionKey: "telegram:slash:123",
+            CommandTargetSessionKey: "agent:main:telegram:123",
+          }),
+          cfg: markCompleteReplyConfig({
+            session: { store: path.join(workspaceDir, "sessions.json") },
+            agents: { defaults: { workspace: rootDir } },
+          }),
+          workspaceDir,
         }),
-        cfg: markCompleteReplyConfig({
-          session: { store: path.join(workspaceDir, "sessions.json") },
-        }),
-        workspaceDir,
-      }),
-    ).rejects.toMatchObject({ kind: "legacy-workspace" });
-    await expect(fs.access(output)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await fs.readFile(source, "utf8")).toBe("not-json");
-  });
+      ).rejects.toMatchObject({ kind: "legacy-workspace" });
+      await expect(fs.access(output)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(source, "utf8")).toBe("not-json");
+    },
+  );
 
   async function resolveNativeDirectiveCommand(
     body: string,

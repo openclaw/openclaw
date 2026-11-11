@@ -558,6 +558,16 @@ describe("personal USER.md self-service", () => {
     await expect(fs.readFile(personalPath(), "utf8")).rejects.toThrow();
   });
 
+  it("keeps existing personal instructions readable while workspace repair is pending", async () => {
+    await fs.mkdir(path.dirname(personalPath()), { recursive: true });
+    await fs.writeFile(personalPath(), "Existing instructions");
+    await fs.writeFile(path.join(workspace, "openclaw-workspace-state.json"), "retained");
+    expect(await rpc("get")).toMatchObject({
+      ok: true,
+      result: { content: "Existing instructions" },
+    });
+  });
+
   it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node", "no-scope"])(
     "rejects personal-file requests for %s before touching files",
     async (kind) => {

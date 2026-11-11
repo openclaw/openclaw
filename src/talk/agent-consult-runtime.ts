@@ -10,6 +10,7 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../agents/workspace-state-dirs.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveLoadedSessionThreadInfo } from "../channels/plugins/session-thread-info-loaded.js";
 import { buildSpawnAuthorityReceipt } from "../config/sessions/session-entry-lineage.js";
@@ -394,6 +395,9 @@ export async function consultRealtimeVoiceAgent(params: {
           },
         },
       });
+      if (cwd) {
+        assertManagedWorkspaceStateReadyForCwd(params.cfg, cwd);
+      }
 
       // The consult session stores normal session metadata so subsequent voice turns can keep
       // routing and, in fork mode, recover useful conversation context from the requester.

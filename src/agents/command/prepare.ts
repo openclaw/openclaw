@@ -58,6 +58,7 @@ import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../workspace-state-dirs.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
@@ -302,6 +303,10 @@ export async function prepareAgentCommandExecution(
     normalizeOptionalString(opts.cwd) ??
     normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
     (isAcpPlacedSession ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
+  assertManagedWorkspaceStateReadyForCwd(cfg, workspaceDir);
+  if (cwd && cwd !== workspaceDir) {
+    assertManagedWorkspaceStateReadyForCwd(cfg, cwd);
+  }
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;

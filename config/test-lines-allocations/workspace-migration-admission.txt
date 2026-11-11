@@ -1,3 +1,4 @@
 # Regression coverage for owned sandbox copies, persisted workspace overrides,
-# and scheduled-run retry after a workspace requires repair.
-180
+# and scheduled-run retry, stream retention, media staging, and tool invocation
+# when a workspace requires repair.
+360

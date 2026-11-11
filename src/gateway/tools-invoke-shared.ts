@@ -1,4 +1,4 @@
-import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 // Gateway tool invocation engine.
 // Shared implementation behind HTTP and RPC tool invocation adapters.
 import {
@@ -22,6 +22,7 @@ import {
   isAutomationsToolName,
 } from "../agents/tools/automations-tool-name.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../agents/workspace-state-dirs.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -33,6 +34,7 @@ import { captureSessionEntryMetadataRead } from "../config/sessions/session-entr
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -76,25 +78,8 @@ import {
   areGatewayUploadsEnabled,
   assertGatewayUploadsEnabled,
   GATEWAY_UPLOADS_DISABLED_MESSAGE,
-  isGatewayUploadRequest,
+  isToolUploadRequest,
 } from "./upload-policy.js";
-
-/** New client bytes, not a request to deliver a file already owned by the Gateway. */
-function isToolUploadRequest(toolName: string, args: unknown): boolean {
-  if (!isRecord(args)) {
-    return false;
-  }
-  switch (toolName) {
-    case "file_write":
-      return typeof args.contentBase64 === "string";
-    case "workboard_attachment_add":
-      return true;
-    case "message":
-      return isGatewayUploadRequest("message.action", { params: args });
-    default:
-      return false;
-  }
-}
 
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
@@ -497,6 +482,17 @@ async function invokeGatewayToolWithSignal(
       workspaceDir: sessionEntry?.spawnedWorkspaceDir,
       cwd: sessionEntry?.spawnedCwd,
     }) ?? resolveAgentWorkspaceDir(params.cfg, selectedAgentId);
+  try {
+    assertManagedWorkspaceStateReadyForCwd(params.cfg, sessionWorkspace);
+    if (sessionEntry?.spawnedCwd && sessionEntry.spawnedCwd !== sessionWorkspace) {
+      assertManagedWorkspaceStateReadyForCwd(params.cfg, sessionEntry.spawnedCwd);
+    }
+  } catch (error) {
+    if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
+      throw error;
+    }
+    return failure(403, "tool_call_blocked", "Run `openclaw doctor --fix` first.");
+  }
   const sessionPermissionPolicy = resolveStoredSessionPermissionPolicy(
     sessionEntry,
     sessionWorkspace,

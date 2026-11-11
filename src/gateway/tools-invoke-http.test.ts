@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -381,6 +383,36 @@ const sharedSession = async (sessionKey: string, sessionId: string, ownerId: str
 };
 
 describe("POST /tools/invoke", () => {
+  it.each([false, true])(
+    "refuses invocation into a saved configured workspace awaiting repair (separate cwd=%s)",
+    async (separateCwd) => {
+      await withToolsInvokeTestState({ label: "tools-invoke-workspace-repair" }, async (state) => {
+        const own = state.workspaceDir;
+        const other = state.statePath("other-workspace");
+        await fs.mkdir(other);
+        await fs.writeFile(path.join(other, "openclaw-workspace-state.json"), "retained");
+        cfg = {
+          agents: {
+            entries: {
+              main: { workspace: own, tools: { allow: ["agents_list"] } },
+              other: { workspace: other },
+            },
+          },
+        };
+        const sessionKey = "agent:main:workspace-repair";
+        sessionEntries.set(sessionKey, {
+          sessionId: "workspace-repair",
+          updatedAt: 1,
+          ...(separateCwd ? { spawnedBy: "agent:main:main", spawnedWorkspaceDir: own } : {}),
+          spawnedCwd: other,
+        });
+        const response = await invokeAgentsListAuthed({ sessionKey });
+        expect(response.status).toBe(403);
+        expect(await response.text()).toContain("openclaw doctor --fix");
+      });
+    },
+  );
+
   registerToolsInvokeSpawnWorkspaceTests({
     sessionEntries,
     setConfig: (config) => {

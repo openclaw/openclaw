@@ -52,6 +52,7 @@ import {
 import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { assertNoUnmigratedWorkspaceState } from "./workspace-legacy-state.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "./workspace-state-dirs.js";
 
 /**
  * A background agent run over a bounded copy of one session's conversation, through one
@@ -177,6 +178,7 @@ export async function prepareSessionFork(params: {
   const workspaceDir = entry?.worktree?.canonicalWorkspaceDir ?? params.workspaceDir;
   try {
     assertNoUnmigratedWorkspaceState({ workspaceDir });
+    assertManagedWorkspaceStateReadyForCwd(params.config, workspaceDir);
   } catch (error) {
     if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
       throw error;

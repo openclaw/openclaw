@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../../agents/workspace-state-dirs.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -59,6 +60,12 @@ export async function prepareCronSessionWorkspace(params: {
     assertCurrent,
   });
   try {
+    assertManagedWorkspaceStateReadyForCwd(params.cfg, selected.workspaceDir, [
+      params.defaultWorkspaceDir,
+    ]);
+    if (selected.cwd && selected.cwd !== selected.workspaceDir) {
+      assertManagedWorkspaceStateReadyForCwd(params.cfg, selected.cwd);
+    }
     const provisioning = await (
       await import("../../agents/acp-workspace-provisioning.js")
     ).resolveAcpAgentWorkspaceProvisioningForTurn({

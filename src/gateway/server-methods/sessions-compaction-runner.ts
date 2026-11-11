@@ -10,6 +10,7 @@ import { sessionManagerOpenCompaction } from "../../agents/sessions/session-mana
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { assertNoUnmigratedWorkspaceState } from "../../agents/workspace-legacy-state.js";
+import { assertManagedWorkspaceStateReadyForCwd } from "../../agents/workspace-state-dirs.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -131,6 +132,7 @@ export async function runGatewaySessionCompaction(
     }) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
   try {
     assertNoUnmigratedWorkspaceState({ workspaceDir });
+    assertManagedWorkspaceStateReadyForCwd(params.cfg, workspaceDir);
   } catch (error) {
     if (findStartupMaintenanceRequiredError(error)?.kind !== "legacy-workspace") {
       throw error;

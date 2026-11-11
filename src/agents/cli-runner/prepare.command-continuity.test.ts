@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createThrowingTestRuntime } from "../../commands/test-runtime-config-helpers.js";
@@ -61,6 +62,36 @@ describe("direct CLI command continuity", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     vi.restoreAllMocks();
+  });
+
+  it("refuses an inherited configured workspace awaiting repair before agent preparation", async () => {
+    const { dir } = cli.session;
+    const other = path.join(dir, "other");
+    await fs.mkdir(other);
+    await fs.writeFile(path.join(other, "openclaw-workspace-state.json"), "retained");
+    vi.spyOn(runtimeConfig, "resolveAgentRuntimeConfig").mockResolvedValue({
+      session: { store: path.join(dir, "sessions.sqlite") },
+      agents: {
+        defaults: { workspace: dir, model: { primary: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: {}, other: { workspace: other } },
+      },
+      plugins: { enabled: false },
+    });
+    await expect(
+      prepareAgentCommandExecution(
+        {
+          message: "Read the report",
+          sessionKey: "agent:main:workspace-proof",
+          agentId: "main",
+          workspaceDir: other,
+          cwd: other,
+        },
+        createThrowingTestRuntime(),
+      ).then(async (prepared) => {
+        await prepared.runLease?.release();
+        return prepared;
+      }),
+    ).rejects.toThrow(/doctor --fix/);
   });
 
   it.each([
