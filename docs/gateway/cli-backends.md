@@ -211,8 +211,7 @@ opt in per agent, or for every agent, through the Anthropic plugin config:
 Only `Agent`, `Workflow`, and `WebSearch` are accepted in this opt-in. `Agent` and
 `Workflow` add orchestration without granting file, shell, or network authority, so
 descendants act through the same policy-filtered OpenClaw tools as the parent.
-`WebSearch` is Claude Code's subscription-backed search, which runs on Anthropic's
-servers; it gives the agent the `web_search` capability without an OpenClaw search
+`WebSearch` is Claude Code's server-side search, billed to the Claude login; it gives the agent the `web_search` capability without an OpenClaw search
 provider. File and shell tools stay with OpenClaw. `WebFetch` is not offered: it
 fetches URLs from the Gateway host, outside `web_fetch`'s network guards. `Skill` is
 not offered because managed turns load no Claude skills.

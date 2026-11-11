@@ -251,11 +251,15 @@ export async function retainPolicyAllowedManagedNativeTools(
   }
   const nativeWebSearchEnabled = resolveCliNativeWebSearchEnabled(params, backend);
   const resolved = await resolveCapabilityProfile();
-  // Like the MCP catalog, a completion omits its requester cap here so it launches the
-  // ordinary list; isCliNativeToolCallable refuses these calls on completions.
+  // A completion checks its session's own inherited policy, not the requester cap, so it
+  // launches the ordinary list; isCliNativeToolCallable refuses these calls on completions.
+  const { policy } = resolved;
   const profile =
-    resolved.policy.requesterPolicySource === "completion-handoff"
-      ? { ...resolved, policy: { ...resolved.policy, inheritedToolPolicy: undefined } }
+    policy.requesterPolicySource === "completion-handoff"
+      ? {
+          ...resolved,
+          policy: { ...policy, inheritedToolPolicy: policy.sessionInheritedToolPolicy },
+        }
       : resolved;
   const refused = conferred
     .filter(
