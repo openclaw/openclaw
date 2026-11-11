@@ -26,6 +26,7 @@ import { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
   hasBundledMatrixReplacementRelation,
   markTrackedRoomIfFirst,
+  resolveMatrixCurrentContent,
   shouldDeferMatrixAudioPreflightForRoomIngress,
 } from "./handler-helpers.js";
 import {
@@ -142,7 +143,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         if (senderId === selfUserId) {
           return undefined;
         }
-        const content = locationContent;
+        const content = resolveMatrixCurrentContent(locationContent);
 
         if (
           eventType === EventType.RoomMessage &&
