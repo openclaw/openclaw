@@ -106,13 +106,14 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   json(sdkConfig, {
     extends: "../../tsconfig.json",
     include: ["../../src/**/*.ts"],
-    exclude: ["../../src/shared/deferred.ts"],
+    exclude: ["../../src/shared/deferred.ts", "../../src/process/process-memory.ts"],
   });
   write(sdkCore, 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
   copyFixtureFiles(root, [
     // Selected-consumer fixtures install their extra src/ tools with a narrowed SDK config.
     ...resolvePreparationSources().filter((file) => !file.startsWith("src/")),
+    "src/process/process-memory.ts",
     "src/shared/deferred.ts",
     "packages/normalization-core/package.json",
   ]);

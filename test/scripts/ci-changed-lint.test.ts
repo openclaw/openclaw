@@ -222,6 +222,7 @@ describe("CI changed lint", () => {
           paths: { "@fixture/work": ["./src/barrel.ts"] },
         },
         include: ["src/**/*.ts"],
+        exclude: ["src/process/process-memory.ts"],
       }),
     );
     mkdirSync(path.join(cwd, "config/tsconfig"), { recursive: true });
@@ -231,14 +232,17 @@ describe("CI changed lint", () => {
     mkdirSync(path.join(cwd, "scripts"), { recursive: true });
     symlinkSync(path.resolve("scripts/lib"), path.join(cwd, "scripts/lib"), "junction");
     for (const file of [
-      "run-oxlint.mjs",
-      "run-oxlint.mts",
-      "run-oxlint-shards.mts",
-      "generate-kysely-types.mts",
-      "tsx.mjs",
-      "windows-cmd-helpers.mjs",
+      "scripts/run-oxlint.mjs",
+      "scripts/run-oxlint.mts",
+      "scripts/run-oxlint-shards.mts",
+      "scripts/generate-kysely-types.mts",
+      "scripts/tsx.mjs",
+      "scripts/windows-cmd-helpers.mjs",
+      "src/process/process-memory.ts",
+      "packages/normalization-core/src/mountinfo-path.ts",
     ]) {
-      copyFileSync(path.join("scripts", file), path.join(cwd, "scripts", file));
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      copyFileSync(file, path.join(cwd, file));
     }
     write("src/contract.ts", "export type Work = () => number;\n");
     write("src/contract.js", "export const compiled = true;\n");
@@ -249,7 +253,7 @@ describe("CI changed lint", () => {
     );
     write("src/changed.ts", "export const changed = 1;\n");
     mkdirSync(path.join(cwd, "ui"));
-    mkdirSync(path.join(cwd, "packages"));
+    mkdirSync(path.join(cwd, "packages"), { recursive: true });
     // This preexisting violation belongs to the full lane, outside the changed dependency graph.
     write("src/unrelated.ts", "Promise.resolve(1);\n");
     const sourceUrl = (file: string) => JSON.stringify(pathToFileURL(path.resolve(file)).href);
