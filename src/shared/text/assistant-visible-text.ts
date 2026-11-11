@@ -30,6 +30,7 @@ import {
   leadingEmptyLinesTextFilter,
   trimTextFilter,
   type TextFilter,
+  type TextProjector,
 } from "./text-projection.js";
 import { toolCallXmlTextFilter } from "./tool-call-xml.js";
 
@@ -73,17 +74,102 @@ const invisibleTextFilter: TextFilter = {
 
 const profileFilters = new Map<string, readonly TextFilter[]>();
 
-// Activation latches only on the real ``<relevant-memories>`` tag shape (not a bare
-// ``relevant-memories`` mention) so ordinary replies never pay the whole-reply re-scan
-// on every delta; ``createActivatedProjector`` keeps the probe tail bounded.
+// The canonical memory parser (``MEMORY_TAG_RE`` / ``MEMORY_TAG_QUICK_RE``) accepts
+// whitespace after ``<`` and around ``/`` (``< / relevant_memories>``), so activation
+// mirrors that grammar with a bounded incremental probe: a bare ``relevant-memories``
+// mention never latches the whole-reply re-scan on every delta, while any tag shape the
+// canonical quick regex accepts does.
+const memoriesTagWords = ["relevant-memories", "relevant_memories"] as const;
+
+function createMemoriesTextProjector(): TextProjector {
+  // Probe state for ``<\s*\/?\s*relevant[-_]memories\b``: ``bracket`` means a ``<`` was
+  // seen and only whitespace plus at most one ``/`` followed (the whitespace run is
+  // unbounded, so a fixed tail window cannot represent it); ``candidates`` track the
+  // contiguous tag word across delta splits; ``boundaryPending`` holds a completed word
+  // until the next char confirms the ``\b`` boundary.
+  let bracket = false;
+  let slash = false;
+  let boundaryPending = false;
+  let candidates: Array<{ word: (typeof memoriesTagWords)[number]; offset: number }> = [];
+  let active = false;
+  const scan = (char: string): void => {
+    if (active) {
+      return;
+    }
+    const lower = char.toLowerCase();
+    if (boundaryPending) {
+      boundaryPending = false;
+      candidates = [];
+      if (!/[a-z0-9_]/.test(lower)) {
+        active = true;
+        return;
+      }
+      bracket = false;
+    }
+    if (!bracket) {
+      bracket = char === "<";
+      slash = false;
+      candidates = [];
+      return;
+    }
+    if (/\s/.test(lower)) {
+      if (candidates.length) {
+        // Whitespace cannot appear inside the contiguous tag word.
+        candidates = [];
+        bracket = false;
+      }
+      return;
+    }
+    if (char === "/") {
+      if (slash || candidates.length) {
+        bracket = false;
+        candidates = [];
+      } else {
+        slash = true;
+      }
+      return;
+    }
+    if (!candidates.length) {
+      if (lower === "r") {
+        candidates = memoriesTagWords.map((word) => ({ word, offset: 1 }));
+      } else {
+        bracket = char === "<";
+        slash = false;
+      }
+      return;
+    }
+    candidates = candidates.filter((candidate) => {
+      if (candidate.word[candidate.offset]!.toLowerCase() !== lower) {
+        return false;
+      }
+      candidate.offset++;
+      if (candidate.offset === candidate.word.length) {
+        boundaryPending = true;
+        return false;
+      }
+      return true;
+    });
+    if (boundaryPending) {
+      candidates = [];
+    }
+  };
+  return createConditionalTextProjector(stripRelevantMemoriesTags, (input) => {
+    if (!active) {
+      const appended = input.delta ?? input.text;
+      for (let at = 0; at < appended.length; at++) {
+        scan(appended.charAt(at));
+        if (active) {
+          break;
+        }
+      }
+    }
+    return active;
+  });
+}
+
 const memoriesTextFilter: TextFilter = {
   transform: stripRelevantMemoriesTags,
-  activationTokens: [
-    "<relevant-memories",
-    "<relevant_memories",
-    "</relevant-memories",
-    "</relevant_memories",
-  ],
+  create: createMemoriesTextProjector,
 };
 
 export function assistantVisibleTextFilters(

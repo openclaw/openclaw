@@ -60,6 +60,40 @@ it("strips a real relevant-memories tag when it appears", () => {
   expect(stream.text).toContain("After.");
 });
 
+// The canonical memory parser accepts whitespace after ``<`` and around ``/``, so the
+// delivery probe must accept the same grammar — including when the tag word is split
+// across deltas — or streamed whitespace-bearing tags would stay visible while the
+// batch transform removes them.
+it("strips whitespace-tolerant relevant-memories tags split across deltas", () => {
+  const source = "Before.\n\n< relevant-memories>\nsecret\n< / relevant_memories>\n\nAfter.\n";
+  const stream = createAssistantVisibleStreamText("final_answer");
+  streamChunks(source, 3, stream);
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toContain("Before.");
+  expect(stream.text).toContain("After.");
+});
+
+// The probe mirrors the unbounded ``\s*`` of the canonical grammar: a whitespace run of
+// any length between ``<`` and the tag word still gates the stage on. The opener uses
+// the whitespace-bearing open form (``< relevant-memories>``) because the canonical
+// regex reads ``< / word>`` shapes as closers, and the closer is a split
+// whitespace-bearing ``</ relevant_memories>``.
+it("strips a relevant-memories tag behind an unbounded whitespace gap", () => {
+  const chunks = [
+    "Before.\n\n<",
+    " ".repeat(4096),
+    "relevant-",
+    "memories>\nsecret\n</",
+    " ".repeat(2048),
+    "relevant_memories>\n\nAfter.\n",
+  ];
+  const stream = createAssistantVisibleStreamText("final_answer");
+  chunks.forEach((chunk) => stream.append(chunk));
+  expect(stream.text).not.toContain("secret");
+  expect(stream.text).toContain("Before.");
+  expect(stream.text).toContain("After.");
+});
+
 // Same gate for the minimax stage: a bare ``minimax:tool_call`` mention must not latch
 // the whole-reply re-scan either.
 it("keeps a bare minimax:tool_call mention off the whole-reply re-scan", () => {
