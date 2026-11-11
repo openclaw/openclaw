@@ -16,6 +16,7 @@ import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
@@ -44,7 +45,7 @@ type SqliteFollowState = {
   selection: TailSelection;
 };
 
-type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM" | "ABORTED";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -145,6 +146,7 @@ async function selectSessionsToTail(
   selections: TailSelection[],
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ): Promise<TailSelection[]> {
   if (opts.sessionKey || selections.length === 0) {
     return selections.filter((selection) => selection.key === opts.sessionKey);
@@ -157,6 +159,7 @@ async function selectSessionsToTail(
   } else {
     try {
       const cfg = await captureRuntimeConfigAsyncReader()();
+      signal?.throwIfAborted();
       const { sessions } = await callGatewayFromCliWithTransport<{
         sessions: Pick<GatewaySessionRow, "key" | "sessionId" | "hasActiveRun" | "status">[];
       }>(
@@ -169,7 +172,7 @@ async function selectSessionsToTail(
           includeGlobal: true,
           includeUnknown: true,
         },
-        { progress: false },
+        { progress: false, signal },
       );
       const running = new Map(
         sessions
@@ -190,6 +193,7 @@ async function selectSessionsToTail(
         return active;
       }
     } catch (error) {
+      signal?.throwIfAborted();
       if (!isGatewayRpcUnavailableError(error)) {
         throw error;
       }
@@ -216,6 +220,7 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
 function followSelections(
   states: SqliteFollowState[],
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ): Promise<FollowOutcome> {
   return new Promise((resolve) => {
     let finished = false;
@@ -240,13 +245,19 @@ function followSelections(
         clearInterval(interval);
         process.off("SIGINT", stopSigint);
         process.off("SIGTERM", stopSigterm);
+        signal?.removeEventListener("abort", stopAbort);
         resolve(outcome);
       }
     };
     const stopSigint = () => finish("SIGINT");
     const stopSigterm = () => finish("SIGTERM");
+    const stopAbort = () => finish("ABORTED");
     process.once("SIGINT", stopSigint);
     process.once("SIGTERM", stopSigterm);
+    signal?.addEventListener("abort", stopAbort, { once: true });
+    if (signal?.aborted) {
+      stopAbort();
+    }
   });
 }
 
@@ -266,6 +277,8 @@ export async function sessionsTailCommand(
   opts: SessionsTailOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const tailCount =
     opts.tail === undefined ? DEFAULT_TAIL_COUNT : parseStrictNonNegativeInteger(opts.tail);
   if (tailCount == null) {
@@ -281,6 +294,7 @@ export async function sessionsTailCommand(
   }
 
   const cfg = await captureRuntimeConfigAsyncReader()();
+  signal?.throwIfAborted();
   const targets = resolveCommandSessionStoreTargets({
     cfg,
     opts: {
@@ -307,7 +321,9 @@ export async function sessionsTailCommand(
     selections,
     { ...opts, sessionKey: requestedKey },
     runtime,
+    signal,
   );
+  signal?.throwIfAborted();
   if (selected.length === 0) {
     if (requestedKey) {
       runtime.error(
@@ -333,7 +349,9 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(followStates, runtime);
-    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    const outcome = await followSelections(followStates, runtime, signal);
+    if (outcome !== "ABORTED") {
+      runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    }
   }
 }

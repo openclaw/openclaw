@@ -9,6 +9,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
@@ -276,7 +277,10 @@ describe("sessionsTailCommand", () => {
     ["explicit key", ["older"]],
     ["different session id", ["latest"]],
     ["rejected", []],
+    ["cancelled", []],
   ])("selects trajectory sessions with a %s Gateway source", async (mode, expected, notice) => {
+    const work = new AsyncWorkScope();
+    const cancellation = new Error("output consumer closed");
     storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
     const entries = ["older", "concurrent", "latest", "queued"].map((label, index) => ({
       label,
@@ -311,6 +315,11 @@ describe("sessionsTailCommand", () => {
       );
     } else if (mode === "rejected") {
       mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error("missing scope"));
+    } else if (mode === "cancelled") {
+      mocks.callGatewayFromCliWithTransport.mockImplementation(() => {
+        work.beginClose(cancellation);
+        throw new Error("gateway closed (1006): connection refused");
+      });
     }
 
     const auditProjection = ["reachable", "explicit store", "explicit key"].includes(mode);
@@ -337,13 +346,17 @@ describe("sessionsTailCommand", () => {
     const parse = vi.spyOn(JSON, "parse");
     onTestFinished(() => parse.mockRestore());
 
-    const selection = tail({
-      agent: "main",
-      store: mode === "explicit store" ? storePath : undefined,
-      sessionKey: mode === "explicit key" ? sessionKey : undefined,
-    });
+    const selection = work.run(() =>
+      tail({
+        agent: "main",
+        store: mode === "explicit store" ? storePath : undefined,
+        sessionKey: mode === "explicit key" ? sessionKey : undefined,
+      }),
+    );
     if (mode === "rejected") {
       await expect(selection).rejects.toThrow("missing scope");
+    } else if (mode === "cancelled") {
+      await expect(selection).rejects.toBe(cancellation);
     } else {
       await selection;
     }
@@ -390,8 +403,10 @@ describe("sessionsTailCommand", () => {
   it.each([
     { signal: "SIGINT" as const, exitCode: 130 },
     { signal: "SIGTERM" as const, exitCode: 143 },
+    { signal: "abort" as const, exitCode: undefined },
   ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
+    const work = new AsyncWorkScope();
     const initialListeners = listeners();
     await writeSessionEntry();
     await appendEvents([
@@ -409,18 +424,34 @@ describe("sessionsTailCommand", () => {
       }
     });
 
-    const run = explicitTail({ tail: "1", follow: true });
+    const run = work.run(() => explicitTail({ tail: "1", follow: true }));
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
-      process.emit(signal, signal);
+      if (signal === "abort") {
+        work.beginClose();
+      } else {
+        process.emit(signal, signal);
+      }
       await run;
     }
 
     expectOutput(["tool.result", "sqlite ok"]);
-    expect(runtime.exit).toHaveBeenCalledOnce();
-    expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual(exitCode === undefined ? [] : [[exitCode]]);
     expect(listeners()).toEqual(initialListeners);
+    const stoppedOutput = getMockCallOutput(runtime.log);
+    await appendEvents([toolResult("after-stop", { sourceSeq: 3 })]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(getMockCallOutput(runtime.log)).toBe(stoppedOutput);
+  });
+
+  it("rejects already cancelled work before reading or following sessions", async () => {
+    const work = new AsyncWorkScope();
+    const cancellation = new Error("command stopped");
+    work.beginClose(cancellation);
+    await expect(work.run(() => tail({ agent: "main", follow: true }))).rejects.toBe(cancellation);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
