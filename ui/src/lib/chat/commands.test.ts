@@ -45,8 +45,11 @@ describe("findInlineSlashCompletion", () => {
   it.each([
     ["/thi", undefined, { query: "thi", start: 0, end: 4, inline: false }],
     ["Please use /wea", undefined, { query: "wea", start: 11, end: 15, inline: true }],
-    ["Use /weather tomorrow", 8, { query: "wea", start: 4, end: 12, inline: true }],
-    ["/thinking please", 4, { query: "thi", start: 0, end: 9, inline: true }],
+    ["Use /status tomorrow", 8, { query: "sta", start: 4, end: 11, inline: true }],
+    ["/thinking please", 4, { query: "thi", start: 0, end: 9, inline: false }],
+    [" /thinking please", 5, { query: "thi", start: 1, end: 10, inline: false }],
+    ["/thiApply the prompt", 4, { query: "thi", start: 0, end: 4, inline: false }],
+    ["Use /weaX tomorrow", 8, { query: "wea", start: 4, end: 8, inline: true }],
     [
       "Please use /weather:",
       undefined,

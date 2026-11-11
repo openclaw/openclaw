@@ -249,6 +249,7 @@ extension SettingsProTab {
     func syncAfterOnboardingReset() {
         self.invalidateGatewaySetupAttempt()
         self.setupStatusText = nil
+        self.setupCode = ""
         self.stagedGatewaySetupLink = nil
         self.gatewayAuthFields.pendingOverride = nil
         self.syncSettingsState()

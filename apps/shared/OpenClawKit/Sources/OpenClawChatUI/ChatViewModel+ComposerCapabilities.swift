@@ -283,6 +283,16 @@ extension OpenClawChatViewModel {
         }
     }
 
+    /// Health recovery retries a snapshot that never loaded on a healthy route: one loaded before the
+    /// operator connected has no scopes, and its owner ID need not change on connect. A loaded snapshot
+    /// stays; replacement sockets invalidate it through the reconnect events.
+    func reloadUnsettledComposerCapabilities() {
+        guard self.supportsComposerCapabilities,
+              !self.composerCapabilityOwnerMatches || self.composerCapabilityState.phase != .loaded
+        else { return }
+        Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
+    }
+
     func invalidateComposerCapabilities() {
         self.capabilityPatchFailureRevisionsByTarget.removeAll()
         self.capabilityPatchFailureMessagesByTarget.removeAll()

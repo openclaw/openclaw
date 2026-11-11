@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -516,8 +518,12 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     return cached;
   }
   const generation = transformCacheBustVersion;
+  // Native ESM jobs never unload; unchanged code must retain its module identity across reloads.
+  const revision = createHash("sha256")
+    .update(await readFile(transform.modulePath))
+    .digest("hex");
   const mod: Record<string, unknown> = await import(
-    `${pathToFileURL(transform.modulePath).href}?t=${generation}`
+    `${pathToFileURL(transform.modulePath).href}?v=${revision}`
   );
   const fn = resolveFunctionModuleExport<HookTransformFn>({
     mod,

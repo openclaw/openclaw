@@ -225,9 +225,16 @@ function isSupportedTelegramHtmlTag(closing: boolean, name: string, attrs: strin
   return pattern !== undefined && (closing ? attrs.trim() === "" : pattern.test(attrs));
 }
 
+type AuthoredTelegramTags = {
+  open: Array<{ name: string; ordinal: number }>;
+  nextOrdinal: number;
+  /** Start tags, by source ordinal, that an earlier pass left without an end tag. */
+  unmatched?: ReadonlySet<number>;
+};
+
 function preserveTelegramHtmlTag(
   rawTag: string,
-  openTags: string[],
+  tags: AuthoredTelegramTags,
   escapeTag: (rawTag: string) => string,
 ): string {
   const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
@@ -237,18 +244,38 @@ function preserveTelegramHtmlTag(
   const closing = match[1] === "/";
   const tagName = normalizeLowercaseStringOrEmpty(match[2]);
   const attrs = match[3] ?? "";
-  if (!closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
-    openTags.push(tagName);
-    return openTags.includes("pre") ? rawTag : "<code>";
-  }
-  if (!isSupportedTelegramHtmlTag(closing, tagName, attrs)) {
+  const languageCode =
+    !closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs);
+  if (!languageCode && !isSupportedTelegramHtmlTag(closing, tagName, attrs)) {
     return escapeTag(rawTag);
   }
   if (closing) {
-    return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
+    const index = tags.open.findLastIndex((tag) => tag.name === tagName);
+    if (index < 0) {
+      return escapeTag(rawTag);
+    }
+    tags.open.splice(index, 1);
+    return rawTag;
   }
-  openTags.push(tagName);
-  return rawTag;
+  const ordinal = tags.nextOrdinal++;
+  if (tags.unmatched?.has(ordinal)) {
+    return escapeTag(rawTag);
+  }
+  tags.open.push({ name: tagName, ordinal });
+  return languageCode && !tags.open.some((tag) => tag.name === "pre") ? "<code>" : rawTag;
+}
+
+// Telegram rejects a start tag without an end tag, like an unmatched end tag, and the plain
+// fallback then drops the tag text. Escape those start tags so they display literally.
+// Escaping one cannot change which start tag a later end tag closes, so a second pass is final.
+function balanceAuthoredTelegramTags(render: (tags: AuthoredTelegramTags) => string): string {
+  const tags: AuthoredTelegramTags = { open: [], nextOrdinal: 0 };
+  const html = render(tags);
+  if (tags.open.length === 0) {
+    return html;
+  }
+  const unmatched = new Set(tags.open.map((tag) => tag.ordinal));
+  return render({ open: [], nextOrdinal: 0, unmatched });
 }
 
 // A `<` followed by another `<` before any `>` is text (`a < b <i>c</i>`): the
@@ -266,25 +293,26 @@ function findTelegramHtmlTagEnd(text: string, start: number): number {
 }
 
 function escapeUnsupportedTelegramHtml(text: string): string {
-  let result = "";
-  const openTags: string[] = [];
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index]!;
-    const end =
-      char === "&"
-        ? findTelegramHtmlEntityEnd(text, index)
-        : char === "<"
-          ? findTelegramHtmlTagEnd(text, index)
-          : -1;
-    if (end === -1) {
-      result += char === "&" || char === "<" || char === ">" ? escapeTelegramHtml(char) : char;
-      continue;
+  return balanceAuthoredTelegramTags((tags) => {
+    let result = "";
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index]!;
+      const end =
+        char === "&"
+          ? findTelegramHtmlEntityEnd(text, index)
+          : char === "<"
+            ? findTelegramHtmlTagEnd(text, index)
+            : -1;
+      if (end === -1) {
+        result += char === "&" || char === "<" || char === ">" ? escapeTelegramHtml(char) : char;
+        continue;
+      }
+      const raw = text.slice(index, end + 1);
+      result += char === "&" ? raw : preserveTelegramHtmlTag(raw, tags, escapeTelegramHtml);
+      index = end;
     }
-    const raw = text.slice(index, end + 1);
-    result += char === "&" ? raw : preserveTelegramHtmlTag(raw, openTags, escapeTelegramHtml);
-    index = end;
-  }
-  return result;
+    return result;
+  });
 }
 
 export function resolveTelegramHtmlVisibleText(html: string): string {
@@ -326,20 +354,21 @@ export function telegramHtmlToPlainTextFallback(html: string): string {
   return resolveTelegramHtmlVisibleText(withPlainLinks);
 }
 
-function promoteEscapedSupportedTelegramTags(text: string, openTags: string[]): string {
+function promoteEscapedSupportedTelegramTags(text: string, tags: AuthoredTelegramTags): string {
   ESCAPED_HTML_TAG_PATTERN.lastIndex = 0;
   return text.replace(
     ESCAPED_HTML_TAG_PATTERN,
     (match, closing: string, name: string, attrs: string) =>
-      preserveTelegramHtmlTag(`<${closing}${name}${attrs}>`, openTags, () => match),
+      preserveTelegramHtmlTag(`<${closing}${name}${attrs}>`, tags, () => match),
   );
 }
 
 function renderSupportedTelegramHtml(html: string): string {
-  const openEscapedTags: string[] = [];
   const promoted = html.includes("&lt;")
-    ? transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
-        promoteEscapedSupportedTelegramTags(text, openEscapedTags),
+    ? balanceAuthoredTelegramTags((tags) =>
+        transformUnprotectedTelegramHtmlText(html, ["code", "pre"], (text) =>
+          promoteEscapedSupportedTelegramTags(text, tags),
+        ),
       )
     : html;
   return protectTelegramAssistantTranscriptRoleHeaders(promoted);

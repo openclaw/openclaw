@@ -3,7 +3,11 @@ import {
   isAgentEventLifecycleGenerationCurrent,
   onAgentEvent,
 } from "../../../infra/agent-events.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
+import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
@@ -14,13 +18,16 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { prepareSubagentTerminalObservation } from "./subagent-registry-completion-runtime.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
+import { getSubagentRunsForRequesterSession } from "./subagent-registry-memory.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
+import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export function createSubagentRegistryListener(config: {
@@ -46,7 +53,27 @@ export function createSubagentRegistryListener(config: {
     if (listenerStop) {
       return;
     }
-    listenerStop = onAgentEvent((evt) => {
+    const stopSession = sessionChanges.subscribe((evt) => {
+      if ("all" in evt || evt.scope !== "runtime" || isGatewayRestartDraining()) {
+        return;
+      }
+      // Runtime row changes follow terminal persistence. Raw model end events
+      // also describe pause notices and unfinished tool handoffs.
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
+        for (const child of getSubagentRunsForRequesterSession(evt.sessionKey)) {
+          if (child.waitForMessage && isYieldedSubagentRun(child)) {
+            await settleUnreachableYieldedSubagentRun({
+              runId: child.runId,
+              entry: child,
+              complete: completeSubagentRunWithRecovery,
+            });
+          }
+        }
+      }, "subagents:requester-settlement").catch((err: unknown) => {
+        subagentRegistryLog.warn("requester settlement handler failed", { err });
+      });
+    });
+    const stopAgent = onAgentEvent((evt) => {
       if (!evt || evt.stream !== "lifecycle") {
         return;
       }
@@ -202,6 +229,10 @@ export function createSubagentRegistryListener(config: {
         subagentRegistryLog.warn("lifecycle event handler failed", { err, runId: evt.runId });
       });
     });
+    listenerStop = () => {
+      stopAgent();
+      stopSession();
+    };
   }
 
   return {
