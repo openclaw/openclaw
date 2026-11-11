@@ -15,6 +15,7 @@ import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugin
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withAuthorizedPromptBuildTurn } from "../authorized-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "../plugin-turn-context.js";
 import { awaitAgentHarnessAgentEndHook } from "./lifecycle-hook-helpers.js";
 import { resolveAgentHarnessBeforePromptBuildResult as buildBase } from "./prompt-compaction-hook-helpers.js";
@@ -182,6 +183,31 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
     expect((await build()).prompt).toBe("contribution\n\nhello");
     expect(retained[0]).not.toBe(retained[1]);
     expect(messages[0]!.content[0]!.arguments.nested.value).toBe("original");
+  });
+  it("reports continuity once per logical turn across fallback candidates", async () => {
+    const seen: unknown[] = [];
+    installHooks(
+      promptHook(
+        (event) => {
+          seen.push((event as { continuity?: unknown }).continuity);
+          return { prependContext: `restored ${seen.length}` };
+        },
+        { requiresToolAuthority: true },
+      ),
+    );
+    const build = (state: "resumed" | "invalidated") =>
+      buildPrompt({
+        toolAuthority: toolAuthority(),
+        continuity: { state, history: "none" },
+      });
+    const prompts = await withAuthorizedPromptBuildTurn(async () => [
+      (await build("invalidated")).prompt,
+      (await build("invalidated")).prompt,
+    ]);
+    expect(prompts).toEqual(["restored 1\n\nhello", "restored 1\n\nhello"]);
+    expect(seen).toEqual([{ state: "invalidated", history: "none" }]);
+    expect((await build("resumed")).prompt).toBe("restored 2\n\nhello");
+    expect(seen[1]).toEqual({ state: "resumed", history: "none" });
   });
   it("preserves registration chaining while isolating prepare and authorized dispatches", async () => {
     const messages = [{ role: "user", content: [{ type: "text", text: "original" }] }];

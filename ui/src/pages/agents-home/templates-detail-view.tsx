@@ -151,6 +151,13 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         contents().skills.map((item) => ({
           name: item.name,
           description: item.excerpt,
+          trailing: (
+            <span class="muted">
+              {item.source === "bundled"
+                ? t("templatesCatalog.dependencyBundled")
+                : t("templatesCatalog.dependencyClawHub", { version: item.version })}
+            </span>
+          ),
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
         () => (
@@ -163,10 +170,14 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           name: item.name,
           description:
             item.kind === "plugin"
-              ? t("templatesCatalog.version", { version: item.version ?? "" })
+              ? item.source === "bundled"
+                ? t("templatesCatalog.dependencyBundled")
+                : t("templatesCatalog.dependencyClawHub", { version: item.version })
               : t("tabs.mcp"),
           trailing:
-            item.kind === "plugin" && props.view.installedPluginPackages.has(item.name) ? (
+            item.kind === "plugin" &&
+            item.source === "clawhub" &&
+            props.view.installedPluginPackages.has(`${item.ref}@${item.version}`) ? (
               <span class="plugin-connection-status" role="status">
                 <Icon name="check" /> {t("templatesCatalog.installed")}
               </span>
@@ -174,7 +185,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
           details: (
             <p>
               {item.kind === "plugin" ? t("tabs.plugin") : t("tabs.mcp")}
-              {item.version ? ` · ${item.version}` : ""}
+              {item.kind === "plugin" && item.source === "clawhub" ? ` · ${item.version}` : ""}
             </p>
           ),
         })),
@@ -186,10 +197,16 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone}`,
+          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")}`,
           details: (
             <p>
               {item.schedule} · {item.timezone}
+              {" · "}
+              {t(
+                item.enabled
+                  ? "templatesCatalog.automationEnabled"
+                  : "templatesCatalog.automationPaused",
+              )}
             </p>
           ),
         })),
@@ -214,8 +231,12 @@ function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
         >
           {(item) => (
             <div class="templates-add-consent__item">
-              <strong>{item.ref}</strong>
-              <span>{t("templatesCatalog.version", { version: item.version })}</span>
+              <strong>{item.source === "bundled" ? item.pluginId : item.ref}</strong>
+              <span>
+                {item.source === "bundled"
+                  ? `${t("templatesCatalog.dependencyBundled")} · ${item.path}`
+                  : t("templatesCatalog.version", { version: item.version })}
+              </span>
               <strong>{t("pluginConsent.grantsTitle")}</strong>
               <ul>
                 <For each={grantSummary(item.capabilityGrants)}>{(grant) => <li>{grant}</li>}</For>
@@ -241,8 +262,12 @@ function ReviewWarning(props: { view: TemplatesCatalogViewProps }) {
         <For each={props.view.reviewPlan?.skillReviews}>
           {(item) => (
             <div class="templates-add-consent__item">
-              <strong>{item.ref}</strong>
-              <span>{t("templatesCatalog.version", { version: item.version })}</span>
+              <strong>{"path" in item ? item.name : item.ref}</strong>
+              <span>
+                {"path" in item
+                  ? `${t("templatesCatalog.dependencyBundled")} · ${item.path}`
+                  : t("templatesCatalog.version", { version: item.version })}
+              </span>
               {renderTemplateTrustWarning(item.riskWarning)}
             </div>
           )}
