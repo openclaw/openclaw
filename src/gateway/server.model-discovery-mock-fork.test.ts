@@ -13,9 +13,9 @@ const agentDir = path.join(os.tmpdir(), "openclaw-model-discovery-mock-fork");
 
 // The stand-in replaces the module, so resolve it after this file's mock wiring loads.
 async function createStandInRegistry() {
-  const { discoverModels } = await import("../agents/agent-model-discovery.js");
+  const { discoverModelsAsync } = await import("../agents/agent-model-discovery.js");
   const { AuthStorage } = await import("../agents/sessions/auth-storage.js");
-  const registry = discoverModels(AuthStorage.inMemory(), agentDir);
+  const registry = await discoverModelsAsync(AuthStorage.inMemory(), agentDir);
   expect(Object.getPrototypeOf(registry)?.constructor?.name).toBe("MockModelRegistry");
   return { registry, AuthStorage };
 }
@@ -26,6 +26,7 @@ test("gateway model discovery stand-in forks a registry the prepared runtime can
 
   expect(Object.getPrototypeOf(forked)?.constructor?.name).toBe("MockModelRegistry");
   expect(forked.getAll()).toEqual([]);
+  expect(() => forked.getProviderMetadataOwners()).not.toThrow();
 });
 
 test("gateway model discovery stand-in keeps forked registries routed through the harness", async () => {

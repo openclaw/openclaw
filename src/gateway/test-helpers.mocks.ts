@@ -127,6 +127,7 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
     getAll: () => Array<{ provider?: string; id?: string }>;
     getAvailable: () => Array<{ provider?: string; id?: string }>;
     find: (provider: string, modelId: string) => unknown;
+    getProviderMetadataOwners: () => unknown;
     fork: (authStorage: never, published?: unknown) => ActualRegistry;
   };
 
@@ -166,6 +167,12 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
         this.modelsFile,
         this.actualRegistry?.fork(authStorage as never, published),
       );
+    }
+
+    // resolveExplicitModelWithRegistry reads the metadata owners unconditionally, so a
+    // forked stand-in must answer even when discovery is routed through the harness.
+    getProviderMetadataOwners() {
+      return this.actualRegistry?.getProviderMetadataOwners();
     }
 
     getAll() {
