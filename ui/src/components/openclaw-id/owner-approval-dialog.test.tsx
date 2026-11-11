@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { showOwnerApprovalDialog } from "./owner-approval-dialog.tsx";
+import { showOwnerDevicesDialog } from "./owner-devices-dialog.tsx";
 
 // Dialogs open only while the enabled feature's lifetime runs.
 let endFeature = () => {};
@@ -60,7 +61,10 @@ afterEach(async () => {
 
 describe("local owner matching-number dialog", () => {
   it("updates without refresh and defaults to no expiry before explicit approval", async () => {
-    const done = showOwnerApprovalDialog({ client: {} as GatewayBrowserClient });
+    const done = showOwnerApprovalDialog({
+      client: {} as GatewayBrowserClient,
+      onDevices: vi.fn(),
+    });
     await vi.waitFor(() => expect(document.body.textContent).toContain("Firefox on Linux"));
     const approve = () =>
       [...document.querySelectorAll("button")].find((button) =>
@@ -90,8 +94,10 @@ describe("local owner matching-number dialog", () => {
         : { channel: "local_operator" },
     );
     // SAFETY: these dialogs consume only request from the Gateway client.
+    const client = { request } as unknown as GatewayBrowserClient;
     const done = showOwnerApprovalDialog({
-      client: { request } as unknown as GatewayBrowserClient,
+      client,
+      onDevices: () => void showOwnerDevicesDialog({ client }),
     });
     await vi.waitFor(() => expect(document.body.textContent).toContain("482 917"));
     fixture.expired = true;

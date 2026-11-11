@@ -336,7 +336,10 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                     class="btn primary"
                     onClick={() => {
                       modal.finish(undefined);
-                      void showOwnerApprovalDialog({ client: params.client });
+                      void showOwnerApprovalDialog({
+                        client: params.client,
+                        onDevices: () => void showOwnerDevicesDialog(params),
+                      });
                     }}
                   >
                     {t("openclawId.approveNewDevice")}

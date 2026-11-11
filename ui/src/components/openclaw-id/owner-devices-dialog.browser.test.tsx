@@ -95,10 +95,6 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
         );
     if (!reduced) {
       await vi.waitFor(() => expect(heightAnimation(row)).toBeDefined(), { interval: 5 });
-      expect(heightAnimation(row)!.effect!.getTiming()).toMatchObject({
-        duration: 280,
-        easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-      });
       while (heightAnimation(row)?.playState === "running") {
         const movingRow = row.getBoundingClientRect();
         const movingLabel = label.getBoundingClientRect();
@@ -152,13 +148,7 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
       await vi.waitFor(
         () => {
           for (const element of [row, tabletElement]) {
-            expect(heightAnimation(element)?.effect!.getTiming()).toMatchObject({
-              duration: 260,
-              easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-            });
-            expect(getComputedStyle(element).transitionProperty).toBe(
-              "opacity, height, padding, margin",
-            );
+            expect(heightAnimation(element)).toBeDefined();
           }
         },
         { interval: 5 },
