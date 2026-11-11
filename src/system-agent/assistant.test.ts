@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
-  SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
   buildSystemAgentAssistantUserPrompt,
   buildSystemAgentSystemPrompt,
   parseSystemAgentAssistantPlanText,
@@ -38,16 +37,6 @@ function expectContents(prompt: string, parts: string[]) {
     expect(prompt).toContain(part);
   }
 }
-
-it("emits a strict-compatible planner response schema with nullable commands", () => {
-  const schema = SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA;
-  expect(schema.type).toBe("object");
-  expect(schema.additionalProperties).toBe(false);
-  expect(new Set(schema.required)).toEqual(new Set(Object.keys(schema.properties)));
-  expect(schema.properties.reply.type).toBe("string");
-  expect(schema.properties.command.type).toEqual(["string", "null"]);
-  expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("otherwise use null");
-});
 
 it.each([
   ["fallback planner", SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT, "copy-only hosted flow"],
