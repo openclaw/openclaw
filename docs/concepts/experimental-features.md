@@ -260,17 +260,18 @@ you set the options below. Or use config:
     entries: {
       advisor: {
         enabled: true,
-        config: { everyToolCalls: 10, everyMinutes: 20 },
+        config: { everyMinutes: 20, everyToolCalls: 0 },
       },
     },
   },
 }
 ```
 
-- `everyToolCalls` (default `10`, range `0`–`1000`): review after this many tool
-  calls in a conversation.
 - `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
-  of work in a run, checked when a tool starts.
+  of work in a run, checked when a tool starts. Runs shorter than this are not
+  reviewed.
+- `everyToolCalls` (default `0`, off; range `0`–`1000`): also review after this
+  many tool calls in a conversation.
 - `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
   definition of "off course". Changes apply to the next review.
 
@@ -278,8 +279,12 @@ Set both triggers to `0` to turn reviews off.
 
 Behavior and limits:
 
-- Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
-  runs are not.
+- Only the main agent's user-triggered runs are reviewed. Heartbeat, cron and
+  other automatic runs are not, and neither are subagent sessions: the main
+  agent sees what its subagents report, so Advisor corrects the main agent,
+  which can redirect the subagent.
+- After a correction steers a run, later reviews in that run are told what was
+  already said and stay quiet unless they find a different problem.
 - A due review waits until every running tool call has its result, so the fork
   never sees a missing or synthetic tool outcome. A stalled call delays the
   review rather than forcing it.
