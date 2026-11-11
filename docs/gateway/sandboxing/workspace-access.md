@@ -342,7 +342,14 @@ Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
-cancellation and authority checks. OpenClaw records pending results and
+cancellation and authority checks. Reuse waits for reconciliation before returning
+the workspace, so the next command sees imported host edits and unresolved
+conflicts cannot be bypassed. The `managed worktree preparation` log records
+exclusive `reuse.*` entries in `phaseDurationsMs` and `reuseDominantPhase`, covering
+both unchanged probes, capture preparation, and reconciliation phases. Custody
+waits remain in the existing `workspaceWait` field. These timings include work
+performed while guests run;
+they are not pause durations. OpenClaw records pending results and
 rollback journals in SQLite. Imports into the private checkout keep runtimes paused
 through settlement. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
@@ -438,7 +445,8 @@ Generated skill copies carry their own Git ignore rule, so ordinary Git discover
 omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
-Unchanged skill snapshots reuse their mirrored copies. When supporting files
+Unchanged skill snapshots reuse their mirrored copies. Docker and Podman retain
+this reuse after large bursts of different sandbox preparations. When supporting files
 change, the Gateway reconciles regular skill trees incrementally: changed files
 are replaced, removed files are pruned, and unchanged copies are retained.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy

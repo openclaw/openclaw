@@ -140,7 +140,7 @@ persistent child's background work does not put a ring on its idle parent.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
-without a saved choice starts with **My sessions**, except guests: a role that can
+without a saved choice starts with **All owners**, except guests: a role that can
 only view other people's sessions and has no general read access (the role
 [Visitor Access](/start/multiplayer#invite-guests) requires) starts with **Involving me**.
 A saved choice wins unless a newly authenticated connection restricts access to

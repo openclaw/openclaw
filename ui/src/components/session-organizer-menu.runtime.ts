@@ -76,7 +76,10 @@ export async function runSessionAction(
 ): Promise<unknown> {
   switch (action.kind) {
     case "rename":
-      return organizer.renameSession(session);
+      return organizer.runOperation(
+        (operations, scope) => operations.renameSession(organizer.deps, session, scope),
+        true,
+      );
     case "toggle-pin":
       return organizer.setPersonalSessionPin(
         session.key,

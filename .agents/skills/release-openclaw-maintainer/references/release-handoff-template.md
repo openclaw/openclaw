@@ -18,6 +18,8 @@ operator steering. Do not preserve superseded scope.
 - version decision: `<explicit version | approved resolved version>`
 - preparation/backport authority: `<instruction and approved set or selection scope>`
 - publication authority: `<held | beta management default | explicit approval; source and scope>`
+- channel/contact restrictions: `<none | exact operator restriction and affected operations>`
+- approved gate exceptions: `<none | pinned P policy grant, version/job/attempt scope; failed or not-run disposition>`
 - intake: `<open | frozen; pending approved changes or next-release queue>`
 - handoff: `<predecessor stopped writing; successor acknowledgement or pending>`
 - next checkpoint: `<candidate approval | publication | recovery | closeout>`

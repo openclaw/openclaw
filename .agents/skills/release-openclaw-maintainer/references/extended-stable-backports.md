@@ -31,7 +31,10 @@ extended-stable package and publication constraints.
 - Review the complete mainline delta using the shared evidence-driven audit.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
-- Present the full proposed release set before changing release refs.
+- Present the full proposed release set before changing release refs, or obtain
+  explicit approval for dependency-closed groups under the
+  [shared intake procedure](backport-discovery.md#decide-and-present-the-set).
+  Progressive integration does not shorten the complete mainline audit.
 - Discovery is read-only. After set approval, push individual backports directly
   to the canonical branch. Preparation does not authorize release tags, package
   publication, or npm dist-tag mutation.
@@ -299,20 +302,23 @@ overlapping or dependent commits to the smallest final fix before proposing it.
 
 ## Present the Full Release Set
 
-Before mutation, report:
+Before each approved integration, report the proposed set or exact group:
 
 | Source commit | Decision | Published impact | Dependencies | Adaptation | Proof |
 | ------------- | -------- | ---------------- | ------------ | ---------- | ----- |
 
 Include the published npm selector/version, canonical branch, intended patch,
 protected `main` version, scan bounds, total commits, batch count, dependency
-order, complete proposed set, blocked/high-risk decisions, carry-forward items,
+order, proposed set or exact group, current inventory coverage, unfinished audit
+scope, blocked/high-risk decisions, carry-forward items,
 affected core/plugin packages, out-of-scope publication surfaces, and
 confidential security status.
 
 Use PR links when they exist, but retain source commit identities in internal
 evidence. Obtain explicit maintainer approval for the complete categorized
-ledger and release set before changing branches.
+ledger and release set, or for exact dependency-closed groups under the shared
+intake procedure. Keep the remaining inventory open until fully accounted for;
+complete the inventory and final selection before freezing the candidate.
 
 ## Prepare the Approved Patch Set
 
