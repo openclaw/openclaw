@@ -14,8 +14,13 @@ const mocks = vi.hoisted(() => ({
   listDevicePairing: vi.fn(),
   approveDevicePairing: vi.fn(),
   summarizeDeviceTokens: vi.fn(),
+  signal: undefined as AbortSignal | undefined,
 }));
 const { runtime, callGateway, listDevicePairing, approveDevicePairing } = mocks;
+vi.mock("../shared/async-work-scope.js", async (importActual) => ({
+  ...(await importActual<typeof import("../shared/async-work-scope.js")>()),
+  getAsyncWorkSignal: () => mocks.signal,
+}));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
   formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
@@ -52,6 +57,7 @@ afterAll(() => roots.cleanup());
 beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", await roots.make());
   vi.clearAllMocks();
+  mocks.signal = undefined;
   runtime.exit.mockImplementation(() => {});
   mocks.formatGatewayTransportErrorJson.mockReturnValue(null);
   listDevicePairing.mockResolvedValue({ pending: [], paired: [] });
@@ -445,6 +451,14 @@ describe("mutations", () => {
       ],
       ["opaque"],
     );
+  });
+  it("prints no join reply that lands after Ctrl+C", async () => {
+    callGateway.mockResolvedValueOnce({ joinUrl, setupCode: "opaque", ...joinCommands });
+    mocks.signal = AbortSignal.abort();
+    await run("join-code");
+    expect(callGateway).toHaveBeenCalled();
+    expect(output()).toBe("");
+    expect(runtime.writeJson).not.toHaveBeenCalled();
   });
   it("returns Gateway commands without a version note or text in JSON mode", async () => {
     callGateway.mockResolvedValueOnce({ joinUrl, ...joinCommands });
