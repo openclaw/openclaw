@@ -647,8 +647,8 @@ export async function saveSkillApiKey(
       kind: "error",
       message:
         current === undefined
-          ? "API key not saved — the configuration hasn't loaded yet. Try again."
-          : `API key not saved — skills.entries.${skillKey}.apiKey is set by a SecretRef or environment variable. Change it in openclaw.json.`,
+          ? "API key not saved — the configuration hasn't loaded yet. Reopen the skill and try again."
+          : `API key not saved — skills.entries.${skillKey}.apiKey is set by a SecretRef or environment variable. Change it in Settings Raw mode or openclaw.json.`,
     });
     return;
   }
@@ -659,7 +659,7 @@ export async function saveSkillApiKey(
     `API key saved — stored in openclaw.json (skills.entries.${skillKey})`,
     // Rechecked right before dispatch: a flushed Settings draft may have stored a reference.
     () => canDispatch() && replaceable() === true,
-    "Access or the stored API key changed before the skill update started.",
+    "API key not saved — access or the stored key changed while saving. Reopen the skill to see how the key is stored; change a SecretRef or environment key in Settings Raw mode.",
   );
 }
 
