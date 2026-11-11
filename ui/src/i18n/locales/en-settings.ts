@@ -633,7 +633,6 @@ const enSettings = {
     enabledSummary: "{enabled}/{total} enabled",
     enableAll: "Enable all",
     disableAll: "Disable all",
-    loadConfig: "Load the config to change tool profiles.",
     explicitAllowlist: "This agent uses a tool allowlist. Manage it in Config:",
     globalAllowlist: "Agent overrides can’t enable tools blocked by the global allowlist:",
     loadingCatalog: "Loading tools…",
