@@ -1,3 +1,4 @@
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { readUpdateRunStatus } from "../infra/update-run-status.js";
@@ -25,10 +26,10 @@ type StatusJsonCommandOptions = {
 /** Prevents --agent from implying that the aggregate status report itself is agent-scoped. */
 export function assertStatusUsageAgentScope(opts: StatusJsonCommandOptions): void {
   if (opts.agent !== undefined && opts.usage !== true) {
-    throw new Error("--agent is only valid with --usage");
+    throwExpectedCliError("--agent is only valid with --usage");
   }
   if (opts.agent !== undefined && !opts.agent.trim()) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
 }
 

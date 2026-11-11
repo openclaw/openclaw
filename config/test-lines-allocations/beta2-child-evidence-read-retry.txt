@@ -1,0 +1,4 @@
+75
+# Exact own regression-test LF growth for bounded beta.2 child-evidence reads.
+# Covers metadata 502 recovery, exhausted/403 sanitized endpoint diagnostics,
+# and the shared deadline across page fallback and retry backoff.

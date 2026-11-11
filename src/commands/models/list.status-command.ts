@@ -220,7 +220,7 @@ export async function modelsStatusCommand(
 ) {
   ensureFlagCompatibility(opts);
   if (opts.plain && opts.probe) {
-    throw new Error("--probe cannot be used with --plain output.");
+    throwExpectedCliError("--probe cannot be used with --plain output.");
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({

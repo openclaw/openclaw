@@ -1,0 +1,2 @@
+7
+# Extend the existing symbol-query fixture to verify bounded cross-file fallback batches and cached misses.

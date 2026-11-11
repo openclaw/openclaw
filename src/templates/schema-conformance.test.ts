@@ -36,6 +36,24 @@ describe("portable Template schema conformance", () => {
     ).toBe(true);
   });
 
+  it.each(["automations", "cronJobs"])("normalizes %s declarations to automations", (key) => {
+    const job = {
+      id: "daily",
+      schedule: { cron: "0 9 * * *", timezone: "UTC" },
+      session: "isolated",
+      message: "Summarize status.",
+    };
+    const result = parseTemplateManifest({ ...baseManifest, [key]: [job] });
+    expect(result).toMatchObject({ ok: true, manifest: { automations: [job] } });
+    if (result.ok) {
+      expect(result.manifest).not.toHaveProperty("cronJobs");
+    }
+  });
+
+  it("rejects ambiguous automation declarations", () => {
+    expectInvalid(parseTemplateManifest({ ...baseManifest, automations: [], cronJobs: [] }), "$");
+  });
+
   it("requires exact package versions", () => {
     const result = parseTemplateManifest({
       ...baseManifest,
@@ -121,7 +139,7 @@ describe("portable Template schema conformance", () => {
       { ...valid, delivery: { mode: "none", channel: "last" } },
       { ...valid, delivery: { mode: "announce" } },
     ]) {
-      expect(parseTemplateManifest({ ...baseManifest, cronJobs: [cronJob] }).ok).toBe(false);
+      expect(parseTemplateManifest({ ...baseManifest, automations: [cronJob] }).ok).toBe(false);
     }
   });
 });

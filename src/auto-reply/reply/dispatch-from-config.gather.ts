@@ -164,13 +164,15 @@ export async function gatherDispatchRequest(
   };
   const { cfg, dispatcher } = normalizedParams;
   bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey;
   const targetAgentId = resolveSessionAgentId({
-    sessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
+    sessionKey: targetSessionKey,
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
   await waitForAgentInputAdmission(targetAgentId, {
     cfg,
+    sessionKey: targetSessionKey,
     signal: params.replyOptions?.abortSignal,
   });
   const refusal = readAgentDatabaseAdmissionRefusal(targetAgentId);
@@ -283,7 +285,21 @@ export async function gatherDispatchRequest(
         { beforeReplyResolver: agentDispatchStartedAt === 0 },
       );
     }
-    messageLifecycle.markProcessed(outcome, opts);
+    // Admitted session identity: the agent turn owner is the operation admitted
+    // for this turn — its sessionId is fresh when /new created a session mid-turn
+    // (the pre-admission capture above is then stale) and present on a brand-new
+    // session's first turn. Validate its key against the lifecycle's session key
+    // so a command retarget or ACP binding never pairs another session's id with
+    // this message; on divergence keep the prior captured value.
+    const admittedTurnOwner = replyOperationRunState.agentTurnOwner;
+    const admittedSessionId =
+      admittedTurnOwner && admittedTurnOwner.key === sessionKey
+        ? admittedTurnOwner.sessionId
+        : undefined;
+    messageLifecycle.markProcessed(outcome, {
+      ...opts,
+      ...(admittedSessionId !== undefined ? { sessionId: admittedSessionId } : {}),
+    });
   };
   const finishReplyOperationAborted = () => {
     recordProcessed("skipped", { reason: "reply_operation_aborted" });

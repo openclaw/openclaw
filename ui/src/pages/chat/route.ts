@@ -63,14 +63,12 @@ function sessionPage(face: BoardFace) {
             face,
             creation,
           };
-          // The agent menu has already loaded its pending view. Ordinary draft
-          // creation enters a literal route directly and retains its preview until ready.
-          return target.kind === "main"
-            ? result
-            : PendingSessionCreate.preload().then(() => {
-                options.signal.throwIfAborted();
-                return result;
-              });
+          // Template Add also enters a main-agent route; it has not mounted
+          // the agent menu preview. Keep the old page until pending chat is ready.
+          return PendingSessionCreate.preload().then(() => {
+            options.signal.throwIfAborted();
+            return result;
+          });
         }
       }
       return import("./route-loader.ts").then((module) =>

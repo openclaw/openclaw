@@ -582,6 +582,7 @@ describe("exportTrajectoryBundle", () => {
   it("preserves bundle JSON and contextual secret masks", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const { tmpDir, sessionTarget, outputDir } = exportPaths(state.root);
+      const promptBody = "retained context ".repeat(4_000);
       const registered = "FIXTURE-LOOKUP-OPAQ-7422";
       const quotedSecret = 'sk-synthetic-export-"quoted-secret';
       registerSecretValueForRedaction(registered);
@@ -655,7 +656,7 @@ describe("exportTrajectoryBundle", () => {
         [
           "context.compiled",
           {
-            systemPrompt: `system includes ${rawSecrets[1]}`,
+            systemPrompt: `system prompt for ${path.join(tmpDir, "instructions.md")}\n${promptBody}${rawSecrets[1]} prompt-tail-marker`,
             tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}`, ...values }],
           },
         ],
@@ -709,6 +710,10 @@ describe("exportTrajectoryBundle", () => {
         expect.objectContaining(protectedValues),
       );
       expect(fs.statSync(path.join(outputDir, "tools.json")).size).toBeGreaterThan(32_768);
+      for (const file of ["events.jsonl", "prompts.json", "system-prompt.txt"]) {
+        expect(readText(outputDir, file)).toContain(promptBody);
+        expect(readText(outputDir, file)).toContain("prompt-tail-marker");
+      }
       for (const secret of rawSecrets) {
         expect(exportedBundleText).not.toContain(secret);
       }

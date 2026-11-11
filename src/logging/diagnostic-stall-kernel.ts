@@ -7,6 +7,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../infra/runtime-worker-url.js";
 import { hasProfilerConflict } from "./diagnostic-profile.js";
+import type { StallStackSample } from "./diagnostic-stall-profile.js";
 
 type KernelSample = {
   at: number;
@@ -29,7 +30,9 @@ export function createStallKernelRecorder(
   if (!isMainThread) {
     return undefined;
   }
-  const heartbeat = new BigInt64Array(new SharedArrayBuffer(16));
+  const heartbeat = new BigInt64Array(new SharedArrayBuffer(24));
+  // Three credits bound outstanding stack payloads even if health sampling is delayed.
+  heartbeat[2] = 3n;
   const profiling = hasProfilerConflict();
   const beat = () => {
     Atomics.store(heartbeat, 1, profiling || inspectorUrl() ? 1n : 0n);
@@ -72,10 +75,23 @@ export function createStallKernelRecorder(
   return {
     take(stall?: { startedAt: number; endedAt: number }) {
       const samples: KernelSample[] = [];
+      const stacks: StallStackSample[] = [];
       let received: ReturnType<typeof receiveMessageOnPort>;
       // Drain synchronously: the health timer can run before queued worker message callbacks.
       while ((received = receiveMessageOnPort(port1))) {
-        const sample: KernelSample = received.message;
+        const sample: KernelSample | StallStackSample = received.message;
+        if ("frames" in sample) {
+          Atomics.add(heartbeat, 2, 1n);
+          if (
+            stall &&
+            sample.at >= stall.startedAt &&
+            sample.at <= stall.endedAt &&
+            stacks.length < 3
+          ) {
+            stacks.push(sample);
+          }
+          continue;
+        }
         if (
           stall &&
           sample.at >= stall.startedAt &&
@@ -87,7 +103,7 @@ export function createStallKernelRecorder(
         }
       }
       if (!samples.length) {
-        return "";
+        return { kernelSummary: "", stacks };
       }
       // Preserve all state/wchan observations; shed counter detail before exceeding the log budget.
       let result = JSON.stringify(samples);
@@ -100,7 +116,7 @@ export function createStallKernelRecorder(
         }
         result = JSON.stringify(samples);
       }
-      return ` kernel=${result}`;
+      return { kernelSummary: ` kernel=${result}`, stacks };
     },
     stop,
   };

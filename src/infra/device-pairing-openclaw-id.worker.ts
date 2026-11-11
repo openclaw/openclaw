@@ -1,4 +1,5 @@
-// The pairing transaction owns both the one-time receipt and the node-role grant.
+// The pairing transaction owns both the per-listing receipt and the node-role grant.
+import { createHash } from "node:crypto";
 import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import { writeConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
 import { approveDevicePairingInWorker } from "./device-pairing-approval.kernel.js";
@@ -15,14 +16,21 @@ import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import type { OpenClawIdNodePairingProvenance } from "./device-pairing.types.js";
 import type { EngineConnection } from "./sql-connection.js";
 
-const receiptKey = (peerKey: string) => `devicePairing.openclawIdNode.${peerKey}`;
+type NodeListing = Pick<OpenClawIdNodePairingProvenance, "peerKey" | "authority">;
 
-/** An accepted node binding consumes automatic pairing even when it was approved manually. */
+// One receipt per owner-approved listing: removal and re-approval list W under a new seq, while
+// re-approving a still-listed W keeps its seq. Peer-only receipts from unreleased builds are not read.
+const receiptKey = ({ peerKey, authority }: NodeListing) =>
+  `devicePairing.openclawIdNode.${peerKey}.${createHash("sha256")
+    .update(JSON.stringify([authority.clawId, authority.rootPub, authority.listedSeq]))
+    .digest("hex")}`;
+
+/** A node grant under this listing consumes its automatic pairing, even when approved manually. */
 export function consumeOpenClawIdNodePairingInWorker(
   db: EngineConnection,
-  peerKey: string,
+  listing: NodeListing,
 ): boolean {
-  const key = receiptKey(peerKey);
+  const key = receiptKey(listing);
   if (readConfigMachineStateRowInDatabase(db, key)) {
     return false;
   }
@@ -30,7 +38,7 @@ export function consumeOpenClawIdNodePairingInWorker(
   return true;
 }
 
-export type OpenClawIdNodePairingInput = {
+type OpenClawIdNodePairingInput = {
   requestId: string;
   peerKey: string;
   authority: OpenClawIdNodePairingProvenance["authority"];
@@ -43,7 +51,7 @@ export type OpenClawIdNodePairingInput = {
   nowMs: number;
 };
 
-/** Consume the peer's first approval and install its bounded surface in one transaction. */
+/** Consume this listing's automatic approval and install its bounded surface in one transaction. */
 export function approveOpenClawIdNodeInWorker(
   db: EngineConnection,
   input: OpenClawIdNodePairingInput,
@@ -64,7 +72,7 @@ export function approveOpenClawIdNodeInWorker(
   ) {
     return null;
   }
-  const claimed = consumeOpenClawIdNodePairingInWorker(db, input.peerKey);
+  const claimed = consumeOpenClawIdNodePairingInWorker(db, input);
   if (!claimed) {
     return null;
   }
@@ -94,7 +102,7 @@ export function approveOpenClawIdNodeInWorker(
   const approvedState = loadDevicePairingStateForMutation(input.nowMs);
   approvedState.pairedByDeviceId[input.deviceId] = result.device;
   persistDevicePairingStoreState(approvedState, undefined, "paired");
-  // The receipt survives manual removal; token provenance identifies live grants.
+  // The receipt survives manual removal under this listing; token provenance identifies live grants.
   return result;
 }
 

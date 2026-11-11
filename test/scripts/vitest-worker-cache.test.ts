@@ -170,12 +170,17 @@ it("restores identical executable bytes into the same reserved generation path",
 });
 
 it("leaves incompatible preset generations available for their original borrower", async () => {
-  for (const preset of ["full", "runtime"] as const) {
+  for (const preset of ["full", "runtime", "tooling"] as const) {
     const f = fixture();
     await f.seed(preset);
     f.nextInvocation();
-    expect(await f.restore(preset === "full" ? "runtime" : "full")).toBeUndefined();
-    f.expectAbsent("dist");
+    for (const other of ["full", "runtime", "tooling"] as const) {
+      if (other === preset) {
+        continue;
+      }
+      expect(await f.restore(other)).toBeUndefined();
+      f.expectAbsent("dist");
+    }
 
     const restored = await f.restore(preset === "full" ? undefined : preset);
     expect(restored).toBeDefined();
@@ -183,17 +188,21 @@ it("leaves incompatible preset generations available for their original borrower
   }
 });
 
-it("retains full and runtime generations independently at their original executable paths", async () => {
+it("retains each preset independently at their original executable paths", async () => {
   const full = fixture();
   await full.seed();
   full.nextInvocation();
   const runtime = fixture("run-cache-runtime-0", full.root);
   await runtime.seed("runtime");
   runtime.nextInvocation();
+  const tooling = fixture("run-cache-tooling-0", full.root);
+  await tooling.seed("tooling");
+  tooling.nextInvocation();
 
   for (const [f, preset] of [
     [full, "full"],
     [runtime, "runtime"],
+    [tooling, "tooling"],
   ] as const) {
     expect(await f.restore(preset)).toBeDefined();
     expect(f.observe()).toEqual({ value: "first", generation: pathToFileURL(f.directory).href });

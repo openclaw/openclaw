@@ -332,6 +332,87 @@ async function openPersonCard(page: Page, input: "keyboard" | "mouse" | "touch")
 }
 
 suite.define(() => {
+  it("renders the inviter photo in a fresh guest welcome before opening a person card", () =>
+    withPage(
+      async (page) => {
+        const avatarRequests: string[] = [];
+        let photoWidth = 64;
+        await page.route("**/api/users/**/avatar*", (route) => {
+          const url = route.request().url();
+          avatarRequests.push(url);
+          if (new URL(url).pathname !== "/api/users/profile-avery/avatar") {
+            return route.fulfill({ status: url.includes("missing") ? 404 : 503 });
+          }
+          return route.fulfill({
+            contentType: "image/svg+xml",
+            body:
+              '<svg xmlns="http://www.w3.org/2000/svg" width="' +
+              photoWidth +
+              '" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#527866"/><circle cx="32" cy="24" r="12" fill="#f5d6b5"/><path d="M10 64c0-30 44-30 44 0" fill="#e3b367"/></svg>',
+          });
+        });
+        const welcome =
+          "Welcome to OpenClaw, Sam.\n\n@Avery Chen invited you. Your guest access does not expire.\n\nThis is your own session with Main.";
+        const { gateway, reference: references } = await personPage(page, {
+          ...guestWelcome,
+          historyMessages: [
+            {
+              role: "assistant",
+              content: welcome,
+              timestamp: 1,
+              __openclaw: {
+                id: "guest-welcome",
+                humanMentions: [{ profileId: "profile-avery", start: 27, end: 38 }],
+              },
+            },
+            ...["missing", "error"].map((kind) => ({
+              role: "assistant",
+              content: "@Avery Chen can also help with your review.",
+              timestamp: 2,
+              __openclaw: {
+                id: kind,
+                humanMentions: [{ profileId: "profile-" + kind, start: 0, end: 11 }],
+              },
+            })),
+          ],
+        });
+        const reference = references.first();
+        await browserExpect(reference).toHaveText("@Avery Chen");
+        const image = reference.locator("img");
+        await expect
+          .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth))
+          .toBeGreaterThan(0);
+        await browserExpect(image).toHaveCount(1);
+        expect(avatarRequests.map((url) => new URL(url).pathname)).toContain(
+          "/api/users/profile-avery/avatar",
+        );
+        expect(await gateway.getRequests("users.list")).toHaveLength(0);
+        expect(await gateway.getRequests("users.mentionable")).toHaveLength(0);
+        photoWidth = 65;
+        await page.reload();
+        await expect
+          .poll(() =>
+            reference
+              .first()
+              .locator("img")
+              .evaluate((img: HTMLImageElement) => img.naturalWidth),
+          )
+          .toBe(65);
+        for (const index of [1, 2]) {
+          await browserExpect(
+            references.nth(index).locator(".markdown-person-reference__avatar"),
+          ).toHaveAttribute("data-avatar-state", "failed");
+          await browserExpect(
+            references.nth(index).locator(".markdown-person-reference__avatar"),
+          ).toHaveAttribute("data-initials", "AC");
+          await browserExpect(references.nth(index).locator("img")).toBeHidden();
+        }
+        expect(await gateway.getRequests("users.list")).toHaveLength(0);
+        expect(await gateway.getRequests("users.mentionable")).toHaveLength(0);
+      },
+      { viewport: { width: 1180, height: 800 }, colorScheme: "dark" },
+    ));
+
   it.each([
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
     { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },

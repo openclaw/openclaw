@@ -363,11 +363,11 @@ suite.define(() => {
     ]);
     expect(legacyOwner.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
     if (grouping === "Person") {
-      // The 30px picker is centered in the 44px toolbar; the list adds 6px below it.
+      // The 28px picker is centered in the 44px toolbar; the list adds 6px below it.
       const ownerTitleBottom = await page
         .locator("#sidebar-session-owner-title")
         .evaluate((element) => element.getBoundingClientRect().bottom);
-      expect(idle.top - ownerTitleBottom).toBeCloseTo(13, 1);
+      expect(idle.top - ownerTitleBottom).toBeCloseTo(14, 1);
     }
     if (
       process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" &&
