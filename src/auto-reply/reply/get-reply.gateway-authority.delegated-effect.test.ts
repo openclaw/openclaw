@@ -316,6 +316,8 @@ it.each([
         operationalRunInstance,
         approvalAuthority,
         fullPermission: true,
+        // Automatic delegated changes now also require a live auto-approve grant.
+        assertAutoApproveChangesCurrent: () => {},
         // The exact resolver this PR copies into the reply session context.
         gatewayContextResolver: bound.resolver,
       },
