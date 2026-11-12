@@ -352,6 +352,8 @@ export function detachPartialSnapshot<TEvent>(event: TEvent): TEvent {
 export function parseOpenAICompletionsUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;
+    is_byok?: unknown;
+    cost_details?: { upstream_inference_cost?: unknown } | null;
     cache_creation_input_tokens?: number;
     cached_tokens?: number;
     prompt_cache_hit_tokens?: number;
@@ -409,8 +411,19 @@ export function parseOpenAICompletionsUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, usage);
-  applyProviderReportedUsageCost(usage, rawUsage.cost);
+  applyProviderReportedUsageCost(usage, resolveBilledUsageCost(rawUsage));
   return usage;
+}
+
+// OpenRouter BYOK `cost` is only its fee; the upstream provider bills inference to the user's key.
+// Without the upstream amount the fee would understate spend, so keep the catalog estimate.
+function resolveBilledUsageCost(rawUsage: Parameters<typeof parseOpenAICompletionsUsage>[0]) {
+  if (rawUsage.is_byok !== true) {
+    return rawUsage.cost;
+  }
+  const fee = asFiniteNumber(rawUsage.cost);
+  const upstream = asFiniteNumber(rawUsage.cost_details?.upstream_inference_cost);
+  return fee !== undefined && upstream !== undefined && upstream >= 0 ? fee + upstream : undefined;
 }
 
 export function createOpenAIResponseHook(
