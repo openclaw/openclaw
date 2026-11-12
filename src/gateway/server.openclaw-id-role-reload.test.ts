@@ -5,6 +5,7 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import {
   formatIrohEndpointKey,
   randomBytes,
+  signStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
@@ -154,10 +155,37 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     expect(member.hello?.auth.roleAllowsAdmin).toBe(true);
     expect(member.hello?.auth.scopes).toContain("operator.admin");
     await member.client.request("device.pair.list", {});
+    // The real owner RPC accepts a device signature; a member cannot sign this change.
+    const changeRole = async (role: string) => {
+      const { link } = await reconnect.request<{ link: { seq: number } }>("openclawId.people", {});
+      const statement = await signStatement(
+        "MembershipChange",
+        {
+          claw_id: claw.clawId,
+          seq: link.seq + 1,
+          target: { op: "set_role", account_id: "role-member", role },
+          issued_at: Math.floor(Date.now() / 1000),
+        },
+        claw.device,
+      );
+      await reconnect.request("openclawId.authority", { action: "submit", statement });
+    };
+    await changeRole("viewer");
+    expect(await withinTest(member.closed.promise, signal)).toBe(1008);
+    await member.client.stopAndWait();
+    const reassigned = await connectMember();
+    expect(reassigned.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
+    await reassigned.client.request("sessions.list", {});
+    await expect(reassigned.client.request("device.pair.list", {})).rejects.toThrow();
+    await changeRole("guest");
+    expect(await withinTest(reassigned.closed.promise, signal)).toBe(1008);
+    await reassigned.client.stopAndWait();
+    const restored = await connectMember();
+    expect(restored.hello?.auth.roleAllowsAdmin).toBe(true);
     config.gateway!.roles!.definitions.guest = MEMBER_ROLE_PRESETS.viewer;
     await apply(config);
-    expect(await withinTest(member.closed.promise, signal)).toBe(4001);
-    await member.client.stopAndWait();
+    expect(await withinTest(restored.closed.promise, signal)).toBe(4001);
+    await restored.client.stopAndWait();
     const viewer = await connectMember();
     expect(viewer.hello?.auth.roleAllowsAdmin).toBe(false);
     expect(viewer.hello?.auth.scopes).toEqual(["operator.sessions.read"]);

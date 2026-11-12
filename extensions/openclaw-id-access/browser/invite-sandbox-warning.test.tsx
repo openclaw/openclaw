@@ -41,14 +41,42 @@ it("warns from the selected role's catalog policy and tracks backend and definit
       <InviteForm
         motion={createPeopleMotion()}
         components={components}
+        roles={[
+          {
+            name: "operator",
+            defined: true,
+            sessions: "write",
+            admin: false,
+            requiresSandbox: false,
+          },
+          {
+            name: "viewer",
+            defined: true,
+            sessions: "view",
+            admin: false,
+            requiresSandbox: requiresSandbox(),
+          },
+        ]}
         disabled={false}
         locale="en-US"
         onCreate={vi.fn()}
         link={{
           linked: true,
           roles: [
-            { name: "operator", defined: true, requiresSandbox: false },
-            { name: "viewer", defined: true, requiresSandbox: requiresSandbox() },
+            {
+              name: "operator",
+              defined: true,
+              sessions: "view",
+              admin: false,
+              requiresSandbox: false,
+            },
+            {
+              name: "viewer",
+              defined: true,
+              sessions: "view",
+              admin: false,
+              requiresSandbox: requiresSandbox(),
+            },
           ],
           sandboxBackend: { backend: "docker", available: available() },
         }}
@@ -93,7 +121,15 @@ it("uses custom role names and stays quiet for undefined roles or absent people 
       <InviteSandboxWarning
         role={role()}
         link={{
-          roles: [{ name: "researcher", defined: defined(), requiresSandbox: true }],
+          roles: [
+            {
+              name: "researcher",
+              defined: defined(),
+              sessions: "view",
+              admin: false,
+              requiresSandbox: true,
+            },
+          ],
           sandboxBackend: { backend: "podman", available: false },
         }}
       />

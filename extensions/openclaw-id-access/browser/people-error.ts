@@ -23,6 +23,10 @@ const MESSAGES: Readonly<Record<string, string>> = {
   not_linked: "Turn on remote access on the computer that runs this claw before inviting people.",
   unconfigured:
     "Remote access is not set up for this claw. Ask the person who manages it to finish setup.",
+  role_invalid:
+    "Use a role name of 1–64 lowercase letters, digits, - or _, starting with a letter. Rename the role in config.",
+  role_undefined:
+    "That role is no longer defined on this claw. Refresh this page and choose another role.",
   seq_conflict:
     "Access changed while you were making this update. Refresh this page and review the current access before trying again.",
   invite_not_pending:

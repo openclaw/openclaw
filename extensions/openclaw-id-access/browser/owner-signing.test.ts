@@ -94,3 +94,74 @@ describe("signAsOwner", () => {
     await expect(hasValidSignature(statement)).resolves.toBe(true);
   });
 });
+
+it("signs set_role with the listed browser key and rejects undefined roles before submission", async () => {
+  const { changeMemberRole, createInvite } = await import("./invites.js");
+  const { parseStatement } = await import("@openclaw/openclaw-id-protocol");
+  const clawId = "c".repeat(32);
+  const signer = await storeDeviceKey(clawId);
+  const link: Link = {
+    linked: true,
+    clawId,
+    seq: 7,
+    ownerDevices: [
+      {
+        devicePub: formatEd25519PublicKey(signer.publicKey),
+        label: "Browser",
+        peerKeys: [],
+        cert: {},
+      },
+    ],
+    roles: [
+      { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
+    ],
+  };
+  const request = vi.fn();
+  await changeMemberRole(request, link, "member", "viewer");
+  const params = request.mock.calls[0]?.[1];
+  expect(request.mock.calls[0]?.[0]).toBe("openclawId.authority");
+  expect(params.action).toBe("submit");
+  const parsed = parseStatement(params.statement, "MembershipChange");
+  if (!parsed.ok) {
+    throw new Error(parsed.detail);
+  }
+  expect(parsed.statement.body).toMatchObject({
+    seq: 8,
+    target: { op: "set_role", account_id: "member", role: "viewer" },
+  });
+  expect(parsed.statement.signer).toBe(formatEd25519PublicKey(signer.publicKey));
+  await expect(hasValidSignature(parsed.statement)).resolves.toBe(true);
+  request.mockClear();
+  await expect(changeMemberRole(request, link, "member", "deleted")).rejects.toMatchObject({
+    code: "role_undefined",
+  });
+  await expect(createInvite(request, link, "person@example.test", "deleted")).rejects.toMatchObject(
+    { code: "role_undefined" },
+  );
+  expect(request).not.toHaveBeenCalled();
+  await expect(
+    changeMemberRole(
+      request,
+      {
+        ...link,
+        roles: [
+          {
+            name: "Research Team",
+            defined: true,
+            sessions: "view",
+            requiresSandbox: false,
+            admin: false,
+          },
+        ],
+      },
+      "member",
+      "Research Team",
+    ),
+  ).rejects.toMatchObject({ code: "role_invalid" });
+  expect(request).not.toHaveBeenCalled();
+  stored.clear();
+  await expect(changeMemberRole(request, link, "member", "viewer")).rejects.toMatchObject({
+    code: "no_owner_key",
+  });
+  expect(request).not.toHaveBeenCalled();
+});
