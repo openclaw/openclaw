@@ -11,7 +11,7 @@ export function buildCronToolDescription(params: {
 }): string {
   if (params.selfRemoveOnly) {
     return params.managementOnly
-      ? "Inspect or remove only the current automation. Actions: list [includeDisabled] (enabled only by default), get jobId (saved state), remove jobId. Use the current job ID; other jobs and management actions are unavailable."
+      ? "Inspect or remove only the current automation. Actions: list [includeDisabled] (enabled only by default), get jobId (saved state), runs jobId [runId] (recorded outcomes and delivery receipts), remove jobId. Use the current job ID; other jobs and management actions are unavailable."
       : buildCronSelfDescription({
           activeRun: params.activeRun === true,
           nextCheckEnabled: params.nextCheckEnabled === true,
@@ -23,7 +23,7 @@ export function buildCronToolDescription(params: {
       : "";
   if (params.managementOnly) {
     return (
-      'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (enabled-only compact summaries by default; follow nextOffset); get jobId (full saved state, including streamStatus for a known watcher); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s; unfinished runs return runId); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true); bind jobId (links an automation that names this conversation only by key to its current incarnation). To stop a saved watcher, use update with job:{enabled:false}, or open it on the Automations page and turn off its Active switch. This pauses the watcher without deleting its saved record. The enabled flag alone does not prove source termination; use get jobId to inspect state.streamStatus. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.' +
+      'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (enabled-only compact summaries by default; follow nextOffset); get jobId (full saved state, including streamStatus for a known watcher); runs jobId [runId] (recorded outcomes and delivery receipts; no channel-history access); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now; waits up to timeoutMs, default 60s; unfinished runs return runId); remove jobId (operator removal requests cancellation of an active run; the result reports activeRunCancellationRequested:true); bind jobId (links an automation that names this conversation only by key to its current incarnation). To stop a saved watcher, use update with job:{enabled:false}, or open it on the Automations page and turn off its Active switch. This pauses the watcher without deleting its saved record. The enabled flag alone does not prove source termination; use get jobId to inspect state.streamStatus. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.' +
       commandPolicySuffix
     );
   }
