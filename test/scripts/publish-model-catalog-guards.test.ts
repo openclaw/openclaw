@@ -272,8 +272,9 @@ describe("task facts", () => {
         return !hosted.has(provider) || discovery === "runtime" || discovery === "refreshable";
       });
     });
-    // Five declare runtime listing; ONNX presets are local artifacts; Rerank has no fixed list.
-    expect(unhosted.join(",")).toBe("baseten,clawrouter,levanto,onnx,openai,openrouter,rerank");
+    // Five list at runtime; ONNX is local, Rerank has no fixed list, SubQ retired its only model.
+    const fixed = "baseten,clawrouter,levanto,onnx,openai,openrouter,rerank,subq";
+    expect(unhosted.join(",")).toBe(fixed);
   });
 
   it("does not use native-only rows to satisfy the released chat catalog floor", async () => {

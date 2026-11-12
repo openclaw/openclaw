@@ -61,7 +61,7 @@ it.each(changes)(
     withAdmissionFixture(
       "subq",
       {
-        model: "subq-snap-preview",
+        model: "synthetic-decision-model",
         answers: {
           urgent: { type: "noul", noul: 0.9 },
           route: { type: "choice", choice: "support", probabilities: { support: 0.8, sales: 0.2 } },
@@ -84,7 +84,7 @@ async function runScenario(
 ) {
   const cfg: OpenClawConfig = {
     agents: {
-      defaults: { decisionModel: "subq/subq-snap-preview", workspace: state.workspaceDir },
+      defaults: { decisionModel: "subq/synthetic-decision-model", workspace: state.workspaceDir },
       entries: { main: {} },
     },
     plugins: {
@@ -175,7 +175,7 @@ async function runScenario(
         policy: {
           sourceAgent: "main",
           allow: ["subq/*"],
-          deny: change === "model-denied" ? ["subq/subq-snap-preview"] : [],
+          deny: change === "model-denied" ? ["subq/synthetic-decision-model"] : [],
         },
         manifestPlugins: metadata,
       }),
@@ -262,7 +262,7 @@ async function runScenario(
           method: "POST",
           authorization: "Bearer synthetic-subq-key",
           body: {
-            model: "subq-snap-preview",
+            model: "synthetic-decision-model",
             questions: { urgent: { type: "noul" } },
           },
         });
