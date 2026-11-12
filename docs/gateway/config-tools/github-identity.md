@@ -46,6 +46,23 @@ GitHub CLI identity is native by default. When `tools.github` is omitted, local 
 
 Gateway GitHub reads and Publish PR account options reuse successful `gh auth token --hostname github.com` reads for up to 60 seconds, matching the credential-verification cache. Host `gh auth login`, `logout`, or `switch` changes can therefore take up to 60 seconds to appear on those read surfaces. Concurrent reads share one native lookup. OAuth shutdown, profile replacement or rotation, and disconnect clear the native-token cache. Environment tokens, managed profile credentials, caller permissions, and session access are still checked live; publication obtains its own live native credential. Failed token reads and anonymous-access absence proofs are not cached.
 
+The Gateway also samples secret-free native configuration facts in its GitHub
+lifecycle, without GitHub API verification or per-turn credential discovery. Only
+authoritative absence narrows built-in OpenClaw `github_publish` listings to
+credential-free readiness and original-request receipt observation;
+`github_identity_status` and public readers remain available. Unknown discovery
+results and configured but unhealthy identities retain their authenticated action declarations; execution still checks
+current credentials and authority. Another agent’s possible delegated publisher
+also keeps the declaration unknown rather than claiming all publishing routes
+are absent. This does not cache absence for credential reads or discard accepted
+publication work. Native configuration is sampled during maintenance, normally
+every 60 seconds. Existing sessions keep their first tool listing across background
+discovery and internal wakes; new sessions, changed tool configuration, or an
+explicit tool refresh use the latest selection. Native and SDK harnesses without
+this session-owned declaration pin retain their existing GitHub action listings;
+this change does not narrow Codex creation-time tools or rotate its warm threads.
+Their execution still checks current credentials and authority.
+
 Publication credentials read from native `gh` storage retain their configured issuer
 in the child environment, even when the Gateway's ambient `GH_HOST` is unset or
 points elsewhere. Ambient Enterprise tokens still require a matching issuer.
@@ -178,11 +195,16 @@ identity, and keeps current authority through any preparation handoff. The reque
 can be made in one message or established earlier in the conversation before the
 URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
-project first. Existing managed projects must match the PR's head or base
+project first. If it has no PR base history and an accessible registered project
+already provides that history, preparation asks you to start a session in that
+project before fetching. This preserves the empty workspace's files and avoids
+repeating a full-history download. Existing managed projects must match the PR's head or base
 repository.
 
 An ordinary conversation without a project ends its active turn, prepares a new
-session-owned workspace, and resumes in the same conversation. Existing files
+session-owned workspace, and resumes in the same conversation. When its PR base
+matches an accessible registered project, preparation uses that project's shared
+Git history, including for a PR whose head belongs to a fork. Existing files
 stay in their original source; earlier message links open them read-only,
 including downloads and relative HTML assets. The Files panel shows the current
 PR workspace. Sibling conversations keep their original source. Open editors
@@ -236,8 +258,12 @@ deleted.
 
 Content acquisition errors identify the failed Git stage and retain a bounded,
 redacted native reason. A fetch timeout, failed object inventory, and objects
-still missing after a successful fetch are reported separately. Use that reason
-to investigate before retrying `prepare_pr`.
+still missing after a successful fetch are reported separately. A commit-fetch
+timeout directs you to a new session in the PR's base project, where Git can reuse
+its history, instead of repeating the same full-history download. Successful
+commit acquisitions retain `refs/openclaw/fetched/<sha>` in the source repository
+so later fetches can advertise the acquired history even before PR preparation
+finishes. Content-only hydration does not create these refs.
 
 An interrupted preparation retains the same accepted source for retry while
 reconciling the current destination for its review comparison.

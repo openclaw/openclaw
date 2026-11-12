@@ -1,3 +1,0 @@
-# Native CLI-to-agent readiness with controlled and real models; live authority and scope boundaries.
-# Reuses readiness fixtures; proves cached list/presence revocation after awaited preparation.
-651

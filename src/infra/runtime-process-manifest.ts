@@ -74,6 +74,11 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "package-update-activation-recovery",
       ".mjs",
     ),
+    managedHandoffPostgresBridge: runtimeProcessEntrypoint(
+      "infra/update-managed-service-handoff-postgres.worker",
+      "managed-handoff-postgres-bridge.worker",
+      ".mjs",
+    ),
     managedHandoffRuntime: runtimeProcessEntrypoint(
       "infra/update-managed-service-handoff-sealed",
       "managed-handoff-runtime",
@@ -107,6 +112,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
+    secretFileRead: runtimeProcessEntrypoint("infra/secret-file-read.worker"),
     ttsPreferences: runtimeProcessEntrypoint("tts/tts-settings-write.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
@@ -437,6 +443,14 @@ export const pluginRuntimeProcessManifest = {
     sourceWorkerName: "telegram-ingress-worker.runtime",
     distWorkerPath: "telegram-ingress-worker.runtime.js",
   },
+  telegramWidgetCheck: {
+    ...pluginRuntimeProcess(
+      "telegram",
+      "src/widgets/widget-check",
+      "src/widgets/widget-check.worker",
+    ),
+    sourceWorkerName: "widget-check.worker",
+  },
   onnxInference: pluginRuntimeProcess("onnx", "index", "src/inference.worker"),
   teamReportsStore: pluginRuntimeProcess("team-reports", "index", "src/store.worker"),
   teamReportsRun: pluginRuntimeProcess("team-reports", "index", "src/run.worker"),
@@ -498,6 +512,10 @@ export const runtimeProcessHelperManifest = {
 
 // Each sealed bootstrap selects only the sibling entries it owns.
 export const runtimeProcessSealedManifest = {
+  managedHandoff: {
+    ownerSource: "src/infra/update-managed-service-handoff-sealed.ts",
+    entries: [["postgresBridge", "managedHandoffPostgresBridge"]],
+  },
   worker: {
     ownerSource: "src/worker/worker-deploy-runtime.ts",
     entries: [
@@ -526,20 +544,14 @@ export const runtimeProcessSealedManifest = {
     ownerSource: string;
     entries: readonly (readonly [
       keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
-      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
+      (
+        | keyof typeof runtimeProcessDeployManifest
+        | keyof typeof runtimeProcessHelperManifest
+        | keyof ReturnType<typeof createRuntimeProcessEntrypoints>
+      ),
     ])[];
   }
 >;
-
-export function createSealedRuntimeProcessEntrypoints(
-  group: keyof typeof runtimeProcessSealedManifest,
-  currentModuleUrl: string,
-) {
-  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
-    name,
-    url: new URL(`./${entry}.mjs`, currentModuleUrl),
-  }));
-}
 
 /** Source-only build workers are declared without entering the packaged runtime graph. */
 export const runtimeProcessToolingEntrypoints = {

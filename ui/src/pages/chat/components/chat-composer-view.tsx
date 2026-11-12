@@ -333,16 +333,16 @@ export function renderChatComposerView(
               </ChatLazyBoundary>
             )}
           </Show>
-          <Show when={!props.mobileActivityPills?.goal && props.selectedSession?.goal} keyed>
+          <Show when={!props.mobileActivityPills?.goal && props.selectedSession?.goal}>
             {(goal) => (
               <div class="agent-chat__goal-float">
                 <ChatLazyBoundary>
                   <ChatGoal
-                    goal={goal}
+                    goal={goal()}
                     resumeRecovery={resumeRecovery()}
                     resumeBusy={props.goalResumeBusy}
                     connected={props.connected}
-                    expanded={context().state.presentation.goalExpandedId === goal.id}
+                    expanded={context().state.presentation.goalExpandedId === goal().id}
                     canAct={
                       props.connected &&
                       props.canSend &&
@@ -358,7 +358,7 @@ export function renderChatComposerView(
                     }
                     onExpandedChange={(expanded) => {
                       context().state.updatePresentation((draft) => {
-                        draft.goalExpandedId = expanded ? goal.id : null;
+                        draft.goalExpandedId = expanded ? goal().id : null;
                       });
                     }}
                   />

@@ -459,7 +459,7 @@ describe("GitHub publication branch history", () => {
           fault === "failed" || fault === "wrong-ref"
             ? argv.includes("ls-remote")
             : fault === "fetch"
-              ? argv.includes("fetch") && argv.at(-1) === remoteCommit
+              ? argv.includes("fetch") && argv.at(-1)?.split(":")[0] === remoteCommit
               : argv.includes("--is-ancestor") && argv.at(-2) === remoteCommit;
         if (targeted) {
           faultInjected = true;
