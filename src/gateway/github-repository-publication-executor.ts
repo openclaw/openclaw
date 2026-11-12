@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import { githubRepositoryUrl } from "../agents/github-host.js";
-import { readNativeGitHubToken } from "../agents/github-read-identity.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
@@ -10,6 +9,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { prepareGitHubPublicationContent } from "./github-publication-content.js";
 import {
   createGitHubPublicationExecutionIdentity,
+  prepareGitHubPublicationWorkerIdentity,
   type GitHubPublicationIdentityOwner,
 } from "./github-publication-execution-identity.js";
 import {
@@ -19,6 +19,7 @@ import {
   GitHubPublicationRequesterUnavailableError,
   GitHubPublicationWorkspaceChangedError,
   recordGitHubPublicationFailure,
+  gitHubPublicationWorkerReadFailure,
 } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
@@ -80,6 +81,7 @@ export async function executeRepositoryGitHubPublication(params: {
   snapshotRoot: string;
   history?: RepositoryGitHistory;
   readDispatchCredential?: GitHubCredentialReader;
+  signal?: AbortSignal;
   prepareIntegration?: PrepareRepositoryPublicationIntegration;
   requesterProfileId?: string;
   storePath: string;
@@ -450,30 +452,47 @@ export async function executeRepositoryGitHubPublication(params: {
           "Publication is waiting for its worker integration owner; retry the same request after worker recovery.",
         );
       }
-      identity = await refreshIdentity();
-      const token = await readNativeGitHubToken(
-        identity.env,
-        true,
-        identity.host ?? resolveGitHubHost(),
-      );
-      assertAction();
-      if (!token || !row.checkpoint_digest) {
+      if (!row.checkpoint_digest) {
         throw new Error("GitHub publication integration identity is unavailable.");
       }
-      integration = await params.prepareIntegration(
-        { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
-        {
-          snapshotRoot: params.snapshotRoot,
-          snapshotDigest: row.checkpoint_digest,
-          history: params.history,
-          sourceUrl: githubRepositoryUrl(pushRepository, identity.host ?? resolveGitHubHost()),
-          targetUrl: githubRepositoryUrl(repository, identity.host ?? resolveGitHubHost()),
-          targetCommit: remoteBase,
-          token,
-          readNativeCredential: params.readDispatchCredential,
-          assertCurrent: assertAction,
-        },
-      );
+      const worker = await prepareGitHubPublicationWorkerIdentity({
+        agentId: row.agent_id,
+        signal: params.signal,
+        assertCurrent: assertAction,
+      });
+      try {
+        // Probe both repositories as the execution account, not the personal publisher.
+        // Native Git still verifies access to the exact pinned objects during fetch.
+        for (const owner of new Set([pushRepository, repository])) {
+          try {
+            await api("repos/" + owner, worker.identity, worker.assertCurrent);
+          } catch (error) {
+            throw gitHubPublicationWorkerReadFailure(error);
+          }
+        }
+        integration = await params.prepareIntegration(
+          { sessionId: row.session_id, sessionKey: row.session_key, agentId: row.agent_id },
+          {
+            snapshotRoot: params.snapshotRoot,
+            snapshotDigest: row.checkpoint_digest,
+            history: params.history,
+            sourceUrl: githubRepositoryUrl(pushRepository, identity.host ?? resolveGitHubHost()),
+            targetUrl: githubRepositoryUrl(repository, identity.host ?? resolveGitHubHost()),
+            targetCommit: remoteBase,
+            token: worker.identity.env.GH_TOKEN!,
+            signal: worker.signal,
+            readNativeCredential: params.readDispatchCredential,
+            assertCurrent: worker.assertCurrent,
+          },
+        );
+        worker.assertCurrent();
+      } catch (error) {
+        // A cancelled transfer can wrap its cause; retain the live local owner refusal.
+        worker.assertCurrent();
+        throw error;
+      } finally {
+        worker.release();
+      }
       assertAction();
       const blobRoots = new Map<string, string>();
       for (const selected of [

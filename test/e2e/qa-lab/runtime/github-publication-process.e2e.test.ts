@@ -289,6 +289,22 @@ for (const scenario of ["allowed", "revoked"] as const) {
               account: { login: "setup-fixture" },
             },
           });
+          // Configure returns the persisted selection; publication consumes the live
+          // runtime selection after its normal asynchronous config application.
+          await vi.waitFor(async () => {
+            expect(
+              await operator!.request("tools.github.status", {
+                agentId: "qa",
+                selectedScope: "agent",
+              }),
+            ).toMatchObject({
+              effective: {
+                source: "agent-override",
+                credentialState: "available",
+                account: { login: "setup-fixture" },
+              },
+            });
+          });
           const accepted = await rpc<SessionGitHubPublicationResult>(
             "sessions.github.publish",
             publication,

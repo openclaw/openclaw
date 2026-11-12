@@ -6,7 +6,7 @@ import type { createRequesterPolicyFixture } from "./github-publication-requeste
 
 // Shared synthetic credential provider; native context/profile authority remains authoritative.
 export function registerPublicationCredentialFixture(
-  f: Awaited<ReturnType<typeof createRequesterPolicyFixture>>,
+  f: Pick<Awaited<ReturnType<typeof createRequesterPolicyFixture>>, "config">,
   events: string[],
 ) {
   const synthetic = "local-synthetic-no-provider-authority";

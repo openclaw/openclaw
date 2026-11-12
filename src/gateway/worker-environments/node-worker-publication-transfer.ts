@@ -22,6 +22,8 @@ export async function prepareNodeWorkerPublicationIntegration(
   },
   input: RepositoryPublicationIntegrationInput,
 ) {
+  const signal = input.signal ? AbortSignal.any([params.signal, input.signal]) : params.signal;
+  signal.throwIfAborted();
   input.assertCurrent();
   if (!(await params.supportsIntegration?.())) {
     throw new StaleWorkerBuildError();
@@ -47,7 +49,7 @@ export async function prepareNodeWorkerPublicationIntegration(
       const captured = await captureWorkspaceSnapshot({
         root: inputRoot,
         baseCommit: null,
-        signal: params.signal,
+        signal,
       });
       input.assertCurrent();
       const download = params.workspaceTransfer.publishSnapshot(
@@ -78,7 +80,7 @@ export async function prepareNodeWorkerPublicationIntegration(
             ...(gitHistory ? { checkpointGitHistory: gitHistory } : {}),
           },
           "Worker could not integrate the saved checkpoint; inspect worker availability or merge conflicts and retry the same request.",
-          { assertCurrent: input.assertCurrent },
+          { assertCurrent: input.assertCurrent, signal },
         );
         result = params.workspaceTransfer.takeUpload(
           params.environmentId,

@@ -55,6 +55,29 @@ export class GitHubPublicationApiError extends Error {
   }
 }
 
+/** Shared Git reads and personal publication can have different repository permissions. */
+export function gitHubPublicationWorkerReadFailure(error: unknown): unknown {
+  // GitHub also uses 403 for throttling; status alone cannot prove access was lost.
+  if (error instanceof GitHubPublicationApiError && /HTTP 403/u.test(error.message)) {
+    return new GitHubPublicationKnownFailure("Worker repository read is unavailable (HTTP 403).", {
+      code: "unavailable",
+      nextAction:
+        "GitHub may be rate-limiting this read. Wait before retrying; if the refusal persists, verify the normal worker execution account's repository access. The personal publisher connection is separate.",
+    });
+  }
+  if (error instanceof GitHubPublicationApiError && /HTTP 404/u.test(error.message)) {
+    return new GitHubPublicationKnownFailure(
+      "Worker execution identity cannot read the publication repositories.",
+      {
+        code: "identity_unavailable",
+        nextAction:
+          "The normal worker GitHub execution account could not read the source or target repository. Review its existing access, then explicitly request publication again. This failed request and checkpoint remain saved; the personal publisher connection is separate.",
+      },
+    );
+  }
+  return error;
+}
+
 export function rejectGitHubPublicationSelection(
   message: string,
   preparation?: GitHubPublicationPreparation,

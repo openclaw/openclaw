@@ -196,6 +196,7 @@ export function createRepositoryGitHubPublicationExecution(params: {
             snapshotRoot: prepared.snapshotRoot,
             history: prepared.history,
             prepareIntegration: params.prepareIntegration,
+            signal: (action ?? getRequester()).signal,
             readDispatchCredential: (action ?? getRequester()).prepareDispatchCredential?.({
               sessionId: row.session_id,
               requestDigest: row.request_digest,

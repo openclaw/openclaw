@@ -11,6 +11,7 @@ export type RepositoryPublicationIntegrationInput = {
   targetUrl: string;
   targetCommit: string;
   token: string;
+  signal?: AbortSignal;
   readNativeCredential?: GitHubCredentialReader;
   assertCurrent: () => void;
 };
