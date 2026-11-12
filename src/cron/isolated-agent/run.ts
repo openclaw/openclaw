@@ -447,6 +447,8 @@ async function runCronIsolatedAgentTurnInTrace(
                 lane: params.lane,
                 agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
                 persistRunContinuationSession: prepared.context.runContinuationSession?.sync,
+                recordScheduledMemoryParent:
+                  prepared.context.runContinuationSession?.recordScheduledMemoryParent,
                 abortSignal,
                 lifecycle: {
                   ...lifecycle,

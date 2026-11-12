@@ -3371,3 +3371,44 @@ unchanged content hash. Earlier
 editors cannot write to a different same-name file, even with identical bytes.
 Older runtimes do not implement message-qualified prior-file access or this new
 adoption behavior; original files remain in their source without migration.
+
+## Scheduled run parent receipts
+
+A scheduled run whose job is linked to a parent conversation and runs as a
+child (`isolated` or `current` session target) executes in its own hidden
+`:run:` row. The run resolves its memory audience through its admitted parent,
+but sessions it spawns walk their spawn lineage to the run row, which is not the
+parent. Cron run preparation therefore records one private
+`scheduledMemoryParent` relation in that row's existing `entry_json`: the
+parent's session key, session ID, lifecycle revision (when the link recorded
+one), and the occurrence's admitted owner bit.
+
+- **Writer:** only the cron run-continuation write that prepares the `:run:`
+  row, once per attempt, before the agent runs. A retried attempt whose
+  occurrence has no parent clears it. In-session runs execute on their parent's
+  own row and detached runs have no parent, so neither records one.
+- **Not settable elsewhere:** `sessions.create` and `sessions.patch` are closed
+  schemas without this field, spawn parameters never reach it, and the plugin
+  session-store API strips it from reads and writes. The slot key is reserved.
+- **Reader:** memory-audience resolution follows the receipt only from a
+  spawned session's lineage, and only when both the spawn and the occurrence
+  were owner-attributed. The parent hop must still match the recorded session
+  ID and lifecycle revision, so a parent reset or replacement denies the
+  spawned session. Every other combination resolves from the run row exactly
+  as before.
+- **Lifetime:** the relation lives as long as the run row: cron removes the
+  row once the run and its spawned sessions settle, and otherwise session
+  maintenance prunes it after `cron.sessionRetention` (24 hours by default).
+  Reset, rollover, and carry-over never copy it; rotating the row through the
+  public session writer clears it.
+- **Upgrade:** existing run rows and sessions spawned before the upgrade carry
+  no receipt and an earlier non-owner spawn bit, so they keep resolving from
+  the run row. The next occurrence of an existing linked job records the
+  receipt.
+- **Downgrade:** older Gateways keep the unknown optional field but ignore it.
+  A session spawned after this change already recorded the occurrence's owner
+  bit, so until its run row expires it resolves from the run row's copied chat
+  type: owner-private for a direct-chat parent, without the parent-reset
+  check. Sessions spawned by the older Gateway behave as before this change.
+
+There is no SQL migration, table, column, index, or schema-version change.

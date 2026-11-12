@@ -40,6 +40,7 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
+import { resolveScheduledRunMemoryReceipt } from "../execution-context-registry.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -226,6 +227,11 @@ export function createCronPromptExecutor(
       executionIdentity: params.executionIdentity,
     });
     params.onPromptAdmission(cronAdmission);
+    // Sessions this attempt spawns resolve memory through the row's receipt, so
+    // it must name this occurrence's admitted parent before the agent runs.
+    await params.recordScheduledMemoryParent?.(
+      resolveScheduledRunMemoryReceipt(scheduledExecution.result),
+    );
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
     // from session keys or run ids. Cleared when the run settles. A job whose
