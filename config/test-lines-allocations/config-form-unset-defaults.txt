@@ -1,3 +1,3 @@
-165
-# Regression coverage for inherited ui.prefs defaults: muted inherited controls, dynamic enum
-# naming, sensitive/example exclusion, and reselect authoring without materializing defaults.
+95
+# Regression coverage for optional schema defaults, dynamic inherited enums and
+# reselect authoring without materializing defaults. Existing scalar/secret tests retain their coverage.
