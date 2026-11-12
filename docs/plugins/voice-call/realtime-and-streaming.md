@@ -3,6 +3,7 @@ summary: "Realtime voice conversations, tool policy, agent voice context, and st
 read_when:
   - You want a full-duplex realtime voice model on a call
   - You are tuning realtime tool policy or agent consult
+  - You want each agent to speak with its own realtime voice
   - You are streaming Twilio call audio to a transcription provider
 title: "Voice call realtime and streaming"
 sidebarTitle: "Realtime and streaming"
@@ -27,6 +28,7 @@ Runtime behavior:
 - `realtime.provider` is optional. If unset, Voice Call selects the first configured realtime voice provider in provider priority order. Providers named in `realtime.providers` are discovered even when another provider is already active; plugin disablement and allow/deny rules still apply.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
+- `realtime.voiceByAgent` optionally gives each agent its own voice; see [Per-agent voices](/plugins/voice-call/realtime-and-streaming#per-agent-voices).
 - On models that support function tools, Voice Call exposes the built-in `openclaw_end_call` realtime tool. It takes no arguments or call ID; the active voice bridge binds it to the current call.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. GPT-Live uses native delegation to the same call-owned agent consult instead. The realtime model can delegate when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
@@ -335,6 +337,49 @@ be used for tool work, current information, memory lookups, or workspace state.
   },
 }
 ```
+
+### Per-agent voices
+
+`realtime.voiceByAgent` maps agent IDs to voices for the selected realtime
+provider. Each call uses the voice of the agent that owns it: the agent that
+placed an outbound call, or the agent an inbound call is routed to, such as a
+number route's `agentId` or the plugin `agentId`. A matching entry replaces the
+provider's configured `voice` or `speakerVoice` for that call only. Agents
+without an entry keep the provider voice, and leaving `voiceByAgent` unset keeps
+a single voice for every call. Startup logs a warning for keys that match no
+configured agent.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          agentId: "main",
+          numbers: {
+            "+15550009999": { agentId: "support" },
+          },
+          realtime: {
+            enabled: true,
+            provider: "openai",
+            providers: {
+              openai: { voice: "cedar" },
+            },
+            voiceByAgent: {
+              support: "marin",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Voice names pass to the provider unchanged, so use names that the selected
+provider and model support, and update them when you change
+`realtime.provider`. `voiceByAgent` applies only to realtime calls; classic
+calls keep their `tts` voice.
 
 ### Realtime provider examples
 

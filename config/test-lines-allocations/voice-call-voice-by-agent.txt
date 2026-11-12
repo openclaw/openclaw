@@ -1,0 +1,2 @@
+# Per-agent realtime voice: schema parity, outbound/unmapped/unset registration, inbound route voice, unknown-key warning (+71), plus the base commit's 5-line overage.
+76

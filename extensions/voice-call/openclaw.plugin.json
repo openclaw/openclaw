@@ -230,6 +230,11 @@
       "label": "Agent Voice Context Files",
       "advanced": true
     },
+    "realtime.voiceByAgent": {
+      "label": "Realtime Voice By Agent",
+      "help": "Voice for calls handled by each agent ID. Overrides the selected realtime provider's voice for that agent; other agents keep the provider voice.",
+      "advanced": true
+    },
     "realtime.providers": {
       "label": "Realtime Provider Config",
       "advanced": true
@@ -932,6 +937,16 @@
                   "minLength": 1
                 }
               }
+            }
+          },
+          "voiceByAgent": {
+            "type": "object",
+            "propertyNames": {
+              "minLength": 1
+            },
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "providers": {

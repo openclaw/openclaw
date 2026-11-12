@@ -156,6 +156,10 @@ Route overrides support exactly these fields:
 - `responseSystemPrompt`
 - `responseTimeoutMs`
 
+Realtime calls speak with the realtime provider voice instead of `tts`. To give
+a routed agent its own realtime voice, add it to
+[`realtime.voiceByAgent`](/plugins/voice-call/realtime-and-streaming#per-agent-voices).
+
 The `tts` route value deep-merges over the global Voice Call `tts` config, so
 you can usually override only the provider voice:
 

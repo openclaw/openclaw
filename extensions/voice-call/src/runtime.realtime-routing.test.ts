@@ -58,7 +58,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("voice-call realtime route ownership", () => {
-  it("selects provider readiness and bridge auth from each inbound number owner", async ({
+  it("selects provider readiness, bridge auth, and voice from each inbound number owner", async ({
     signal,
   }) => {
     const sockets: WebSocket[] = [];
@@ -95,6 +95,7 @@ describe("voice-call realtime route ownership", () => {
       config.staleCallReaperSeconds = 0;
       config.serve = { ...config.serve, port: 0 };
       config.realtime.enabled = true;
+      config.realtime.voiceByAgent = { support: "marin" };
       config.numbers = {
         "+15550001001": { agentId: "sales" },
         "+15550001002": { agentId: "support" },
@@ -138,6 +139,17 @@ describe("voice-call realtime route ownership", () => {
           expect.objectContaining({ agentId, providerConfig }),
         );
       }
+      const voiceOverrides = new Map(
+        mocks.resolveConfiguredRealtimeVoiceProviderAsync.mock.calls.map(
+          ([params]) => [params.agentId, params.providerConfigOverrides] as const,
+        ),
+      );
+      expect(voiceOverrides).toEqual(
+        new Map([
+          ["sales", undefined],
+          ["support", { voice: "marin", speakerVoice: "marin" }],
+        ]),
+      );
 
       const hangupCall = vi.spyOn(MockProvider.prototype, "hangupCall");
       onTestFinished(() => hangupCall.mockRestore());

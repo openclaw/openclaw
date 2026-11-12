@@ -109,6 +109,7 @@ Notes:
 - `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
 - `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
 - `realtime.idleHangupMs` is optional. When set to a positive integer, an active realtime call ends after neither side has spoken for that many milliseconds; in-flight agent consults pause the timer. Unset keeps the current no-speech-idle-limit behavior.
+- `realtime.voiceByAgent` is optional. It maps agent IDs to realtime voice names; a call owned by a listed agent uses that voice instead of the provider's configured voice, and other agents keep the provider voice.
 
 ## Per-call briefs and errands
 

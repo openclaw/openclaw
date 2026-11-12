@@ -372,6 +372,47 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(unknownRegistration.instructions.match(/Agent context:/g)).toHaveLength(1);
   });
 
+  it("overrides the provider voice only for agents in realtime.voiceByAgent", async () => {
+    const coreConfig: OpenClawConfig = { agents: { entries: { operator: {}, support: {} } } };
+    const voiceOverridesFor = async (agentId: string) => {
+      const resolveCallRegistration = expectDefined(
+        mocks.realtimeHandlerCtorArgs.at(-1),
+        "realtime handler",
+      )[2];
+      await resolveCallRegistration({
+        callId: `call-${agentId}`,
+        provider: "mock",
+        direction: "outbound",
+        state: "active",
+        from: "+15550001111",
+        to: "+15550002222",
+        startedAt: 0,
+        transcript: [],
+        processedEventIds: [],
+        agentId,
+      });
+      const [params] = expectDefined(
+        mocks.resolveConfiguredRealtimeVoiceProviderAsync.mock.lastCall,
+        "realtime provider resolution",
+      );
+      return params.providerConfigOverrides;
+    };
+
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const unsetConfig = createRealtimeConfig({}, { agentId: "operator" });
+    await createRuntime({ config: unsetConfig, coreConfig, logger });
+    expect(await voiceOverridesFor("support")).toBeUndefined();
+
+    const voiceByAgent = { Support: "marin", suport: "cedar" };
+    const config = createRealtimeConfig({ voiceByAgent }, { agentId: "operator" });
+    await createRuntime({ config, coreConfig, logger });
+    expect(await voiceOverridesFor("support")).toEqual({ voice: "marin", speakerVoice: "marin" });
+    expect(await voiceOverridesFor("operator")).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      "[voice-call] realtime.voiceByAgent.suport matches no configured agent, so its voice is never used.",
+    );
+  });
+
   it.each([
     ["twilio", undefined],
     ["telnyx", undefined],

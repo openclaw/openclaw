@@ -252,13 +252,27 @@ export async function createVoiceCallRuntime(params: {
       ...config.realtime,
       tools: resolveVoiceCallRealtimeTools(config.realtime.toolPolicy, config.realtime.tools),
     };
+    const realtimeAgentIds = new Set(listRealtimeAgentIds(config, cfg));
+    const voiceByAgentId = new Map<string, string>();
+    for (const [key, voice] of Object.entries(config.realtime.voiceByAgent ?? {})) {
+      const agentId = normalizeAgentId(key);
+      voiceByAgentId.set(agentId, voice);
+      if (!realtimeAgentIds.has(agentId)) {
+        log.warn(
+          `[voice-call] realtime.voiceByAgent.${key} matches no configured agent, so its voice is never used.`,
+        );
+      }
+    }
     const resolveCallRegistration = async (call: CallRecord) => {
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
       const agentId = resolveCallAgentId(call);
+      const voice = voiceByAgentId.get(agentId);
       const resolved = await realtimeVoiceRuntime.resolveConfiguredRealtimeVoiceProviderAsync({
         configuredProviderId: effectiveConfig.realtime.provider,
         providerConfigs: effectiveConfig.realtime.providers,
+        // Realtime providers read speakerVoice before voice; set both so this agent's voice wins.
+        providerConfigOverrides: voice ? { voice, speakerVoice: voice } : undefined,
         cfg,
         agentId,
         surface: "gateway-relay",

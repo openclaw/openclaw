@@ -628,3 +628,21 @@ it("validates the realtime input transcription model in runtime and manifest sch
   rejectsConfig(invalid, /inputTranscriptionModel/);
   expect(validateJsonSchemaValue({ schema: configSchema, value: invalid }).ok).toBe(false);
 });
+
+it("validates per-agent realtime voices in runtime and manifest schemas", () => {
+  const { configSchema } = JSON.parse(
+    readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  );
+  const voiceByAgent = { main: "cedar", support: "marin" };
+  expect(normalizeVoiceCallConfig({ realtime: { voiceByAgent } }).realtime.voiceByAgent).toEqual(
+    voiceByAgent,
+  );
+  expect(
+    validateJsonSchemaValue({ schema: configSchema, value: { realtime: { voiceByAgent } } }).ok,
+  ).toBe(true);
+  for (const invalid of [{ support: "" }, { support: 7 }, { "": "marin" }]) {
+    const value = { realtime: { voiceByAgent: invalid } };
+    rejectsConfig(value, /voiceByAgent/);
+    expect(validateJsonSchemaValue({ schema: configSchema, value }).ok).toBe(false);
+  }
+});

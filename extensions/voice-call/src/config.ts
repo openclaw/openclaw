@@ -221,6 +221,8 @@ const VoiceCallRealtimeConfigSchema = z
     agentContext: VoiceCallRealtimeAgentContextConfigSchema.default(
       VoiceCallRealtimeAgentContextConfigSchema.parse({}),
     ),
+    /** Per-agent realtime voice; overrides the selected provider's voice for that agent's calls. */
+    voiceByAgent: z.record(z.string().min(1), z.string().min(1)).optional(),
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: z
       .record(
