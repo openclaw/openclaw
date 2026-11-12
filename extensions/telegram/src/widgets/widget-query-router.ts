@@ -68,7 +68,7 @@ export function createTelegramWidgetRequestGate(now: () => number = Date.now) {
  * The tap turn may run before the agent has loaded show_widget, so the request names its
  * widget and how to answer in place.
  */
-export function formatTelegramWidgetRequestText(
+function formatTelegramWidgetRequestText(
   data: string,
   widget?: { title: string; state?: string; source?: string },
 ): string {

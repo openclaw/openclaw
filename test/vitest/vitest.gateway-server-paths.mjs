@@ -10,6 +10,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/deep-research-recovery.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
   "test/plugins/deep-research-startup.gateway.test.ts",
+  "test/plugins/reef-shutdown.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
 ];
 
@@ -687,6 +688,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-chat.retired-projection.test.ts",
   "src/gateway/server-plugin-subagent-runtime.overrides.test.ts",
   // Loads the real plugin runtime that neighboring server tests replace with mocks.
+  "src/gateway/server.feature-session-actions.test.ts",
   "src/gateway/server.chat-cli-auth.test.ts",
   "src/gateway/server.chat-recovered-output.test.ts",
   "src/gateway/server.cli-watchdog.test.ts",

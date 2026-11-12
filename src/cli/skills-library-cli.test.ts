@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsLibraryReadResult } from "../../packages/gateway-protocol/src/index.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -115,15 +116,7 @@ describe("skills library CLI", () => {
                   revision,
                   ...(name === "rollback" ? ["--revision", "b".repeat(64)] : []),
                 ];
-      const flags = [
-        "--url",
-        "ws://127.0.0.1:12345",
-        "--port",
-        "12345",
-        "--timeout",
-        "14000",
-        "--json",
-      ];
+      const flags = "--url ws://127.0.0.1:12345 --port 12345 --timeout 14000 --json".split(" ");
       for (const command of [
         [...flags, name, ...args],
         [name, ...args, ...flags],
@@ -200,16 +193,23 @@ describe("skills library CLI", () => {
       "skills.library.list",
       expect.anything(),
       { scope: "all", sessionKey },
-      undefined,
+      { signal: undefined },
     );
     await parse(["read", skillId, "--session", sessionKey, "--revision", revision, "--json"]);
     expect(mocks.call).toHaveBeenLastCalledWith(
       "skills.library.read",
       expect.anything(),
       { skillId, sessionKey, revision },
-      undefined,
+      { signal: undefined },
     );
     expect(mocks.writeJson).toHaveBeenLastCalledWith(read);
+    const work = new AsyncWorkScope();
+    mocks.call.mockImplementationOnce(async () => {
+      work.beginClose(); // the read settles after Ctrl+C
+      return read;
+    });
+    await work.run(() => parse(["read", skillId, "--session", sessionKey, "--revision", revision]));
+    expect(mocks.writeStdout).not.toHaveBeenCalled();
     mocks.call.mockClear();
     await parse(["read", skillId, "--session", sessionKey]);
     expect(mocks.error).toHaveBeenCalledWith(

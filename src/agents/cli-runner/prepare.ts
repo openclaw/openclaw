@@ -250,6 +250,12 @@ async function prepareCliRunContextWithinReadFence(
   // Control bytes must reach the resumed backend without turn hooks, prompts,
   // tools, MCP, skills, or context-engine setup changing their execution.
   const skipsTurnPreparation = isSideQuestion || isControlOperation;
+  // Manual compaction resumes the session's cached native transcript, so it keeps the turn's
+  // request prefix (tool selection, MCP tool list, system prompt) for the provider cache to
+  // hit; hooks, history, context engine and prompt bytes stay skipped, and its MCP grant
+  // refuses every call. Node-placed Claude strips those transports, so it keeps skipping.
+  const skipsTurnPrefix =
+    isSideQuestion || (isControlOperation && params.sessionEntry?.execHost === "node");
   const runtimeChatType = params.chatType ?? params.sessionEntry?.chatType;
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
@@ -330,7 +336,7 @@ async function prepareCliRunContextWithinReadFence(
     resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
     sideQuestionToolMode: backendResolved.sideQuestionToolMode,
     isSideQuestion,
-    skipsTurnPreparation,
+    skipsTurnPreparation: skipsTurnPrefix,
   });
   params = toolPolicy.params;
   const { runtimeToolsAllowPolicy, managedNativeTools } = toolPolicy;
@@ -676,7 +682,7 @@ async function prepareCliRunContextWithinReadFence(
     { ...params, ...workspaceResolution, sessionRoot: params.sessionEntry?.sessionRoot },
     params.bootstrapWorkspaceDir ?? canonicalWorkspace,
   );
-  const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
+  const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPrefix
     ? { bootstrapFiles: [], contextFiles: [] }
     : await resolveBootstrapContextForRunImpl({
         workspaceDir: bootstrapWorkspaceDir,
@@ -701,7 +707,7 @@ async function prepareCliRunContextWithinReadFence(
   const systemAgentMcpConfig = internalParams.systemAgentTool
     ? buildSystemAgentToolsMcpServerConfig(internalParams.systemAgentTool)
     : undefined;
-  const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPreparation && !systemAgentMcpConfig;
+  const canUseGatewayTools = !nodeClaudePlacement && !skipsTurnPrefix && !systemAgentMcpConfig;
   const bundleMcpEnabled =
     canUseGatewayTools && backendResolved.bundleMcp && params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? getActiveMcpLoopbackRuntime() : undefined;
@@ -726,7 +732,7 @@ async function prepareCliRunContextWithinReadFence(
       backend: backendResolved,
       enabled: bundleMcpEnabled,
       nodePlacement: nodeClaudePlacement,
-      skipPreparation: skipsTurnPreparation,
+      skipPreparation: skipsTurnPrefix,
     });
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined && canUseGatewayTools && params.disableTools !== true;
@@ -803,12 +809,13 @@ async function prepareCliRunContextWithinReadFence(
           ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
           ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
         },
+        forGrant: turnAudience.forGrant,
         resolvePolicyTools: resolveMcpLoopbackPolicyTools,
         resolveScopedTools: resolveMcpLoopbackScopedTools,
       })
-    : { params, tools: [] };
+    : { params, tools: [], grantAudience: undefined };
   params = await retainPolicyAllowedManagedNativeTools(
-    mcpProjection.params,
+    mcpProjection,
     managedNativeTools,
     backendResolved,
     resolveNativeMcpCapabilityProfile,
@@ -856,7 +863,7 @@ async function prepareCliRunContextWithinReadFence(
     projectedToolNames: projectedTools.map((tool) => tool.name),
   });
   const bootstrapRouting =
-    skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
+    skipsTurnPrefix || !canTransportSystemPrompt(backendResolved.config)
       ? undefined
       : await resolveWorkspaceBootstrapRouting({
           isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
@@ -924,7 +931,7 @@ async function prepareCliRunContextWithinReadFence(
     tools: projectedTools,
     promptBuildRestrictsTools,
     hostOwnedTools,
-    nativeAuthorityAllowed: !skipsTurnPreparation && !nodeClaudePlacement,
+    nativeAuthorityAllowed: !skipsTurnPrefix && !nodeClaudePlacement,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
   });
   const extraSystemPromptHash = resolveCliBootstrapPromptHash({
@@ -947,7 +954,7 @@ async function prepareCliRunContextWithinReadFence(
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
-            turnAudience: turnAudience.forGrant(mcpGrant.context.sessionKey),
+            turnAudience: mcpProjection.grantAudience,
           })
         : undefined;
     const mcpClientGrant = mcpClient?.grant;
@@ -1212,7 +1219,7 @@ async function prepareCliRunContextWithinReadFence(
     const claudeSkillsPlugin =
       // Exact Claude execution strips native plugins; keep selected skills in
       // the host prompt instead of suppressing them for an unusable plugin.
-      skipsTurnPreparation || nodeClaudePlacement || params.cliToolAvailability !== undefined
+      skipsTurnPrefix || nodeClaudePlacement || params.cliToolAvailability !== undefined
         ? { args: [], cleanup: async () => {} }
         : await prepareClaudeCliSkillsPlugin({
             backendId: backendResolved.id,
@@ -1370,24 +1377,22 @@ async function prepareCliRunContextWithinReadFence(
       workspaceDir,
       cwd,
       agentId: sessionAgentId,
-      skipTurnPreparation: skipsTurnPreparation,
+      skipTurnPreparation: skipsTurnPrefix,
       skipSkills: nodeClaudePlacement || claudeSkillsPlugin.args.length > 0,
       moduleUrl: import.meta.url,
     });
     const { runtimeChannel, runtimeCapabilities, customInlineButtonHint, messageToolHints } =
       resolveRuntimeChannelPromptContext({
         cfg: params.config,
-        channel: skipsTurnPreparation
-          ? undefined
-          : (params.messageChannel ?? params.messageProvider),
+        channel: skipsTurnPrefix ? undefined : (params.messageChannel ?? params.messageProvider),
         accountId: params.agentAccountId,
         requester: params,
       });
     const requesterProfileId = readRunOperatorAuthority(params)?.profileId;
-    const builtSystemPrompt = isControlOperation
-      ? ""
-      : isSideQuestion
-        ? extraSystemPrompt
+    const builtSystemPrompt = isSideQuestion
+      ? extraSystemPrompt
+      : skipsTurnPrefix
+        ? ""
         : await prepareCliSystemPrompt({
             preparedTtsPreferences: params.preparedTtsPreferences,
             preparedSessionEntry: params.sessionEntry,
@@ -1417,7 +1422,7 @@ async function prepareCliRunContextWithinReadFence(
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
           });
-    const transformedSystemPrompt = !skipsTurnPreparation
+    const transformedSystemPrompt = !skipsTurnPrefix
       ? (backendResolved.transformSystemPrompt?.({
           config: params.config,
           workspaceDir,
@@ -1566,7 +1571,7 @@ async function prepareCliRunContextWithinReadFence(
           maxHistoryChars: autoReseedHistoryChars,
         })
       : undefined;
-    systemPrompt = skipsTurnPreparation
+    systemPrompt = skipsTurnPrefix
       ? systemPrompt
       : finalizeCliSystemPrompt(systemPrompt, { modelDisplay, backendResolved, params });
     if (sessionPromptContext?.resumeContext) {

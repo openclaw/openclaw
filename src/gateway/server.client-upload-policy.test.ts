@@ -17,7 +17,11 @@ import {
   installAgentAuthorityProofFixture,
   PNG,
 } from "./server.agent-runtime-authority-proof.test-support.js";
-import { agentCommandMock, dispatchInboundMessageMock } from "./test-helpers.js";
+import {
+  agentCommandMock,
+  dispatchInboundMessageMock,
+  mockGetReplyFromConfigOnce,
+} from "./test-helpers.js";
 
 const handlers: Record<string, GatewayRequestHandler> = {
   "chat.send": handleDirectExternalChatSend,
@@ -116,6 +120,7 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
       attachments: [attachment()],
     };
     const send = (requestParams = params) => invoke(request(f, method, requestParams, true));
+    mockGetReplyFromConfigOnce(async () => ({ text: "Upload received." }));
     const accepted = await send();
     expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
     await f.drain();

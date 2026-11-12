@@ -18,10 +18,15 @@ function resolve(managedNativeTools: unknown, agentId = "main") {
 }
 
 describe("Claude CLI managed native tools", () => {
-  it("keeps nothing unless the operator selects tools", () => {
-    expect(buildAnthropicCliBackend().resolveManagedNativeTools?.({ agentId: "main" })).toEqual([]);
-    expect(resolve(undefined)).toEqual([]);
-    expect(resolve({})).toEqual([]);
+  it("keeps native WebSearch unless an explicit list replaces it", () => {
+    expect(buildAnthropicCliBackend().resolveManagedNativeTools?.({ agentId: "main" })).toEqual([
+      "WebSearch",
+    ]);
+    expect(resolve(undefined)).toEqual(["WebSearch"]);
+    expect(resolve({ agents: { ops: [] } })).toEqual(["WebSearch"]);
+    expect(resolve({ agents: { ops: [] } }, "ops")).toEqual([]);
+    expect(resolve({ default: [] })).toEqual([]);
+    expect(resolve({ default: ["Agent"] })).toEqual(["Agent"]);
   });
 
   it("applies the default, replaced by an agent's own list", () => {

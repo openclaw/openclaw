@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
-import { hasKnownPricing } from "../../model-catalog/pricing.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -63,22 +62,29 @@ type AsyncModelResolutionOptions = {
 };
 
 /**
- * Discovery hooks give models their bundled rows do not price yet (a newly released Claude
- * model, for example) zero-rate placeholders. Each call bills at its own model's resolved
- * price, so the transport records the API-rate cost instead of $0. Authored prices, publisher
- * zeros and private endpoints resolve unchanged.
+ * The transport bills each call from `model.cost`, so it carries the pricing owner's answer:
+ * authored prices, then the hosted catalog over the bundled row it supersedes. The runtime row's
+ * own cost is a bundled snapshot or a discovery zero placeholder (a newly released Claude model,
+ * for example) and stays only when the owner has no price, as for private endpoints.
+ * Configured overrides already priced the rows of a provider whose models.json or source config
+ * authors model costs, with their own alias, tier and inherited-field rules; those rows keep their
+ * price. Accepted edge: one authored row keeps that provider's other priced rows on their bundled
+ * snapshot, as before.
  */
-function withResolvedPricing(model: Model, cfg: OpenClawConfig | undefined, agentDir: string) {
-  if (hasKnownPricing(model.cost)) {
-    return model;
-  }
-  const cost = resolveModelCostConfig({
+async function withResolvedPricing(
+  model: Model,
+  cfg: OpenClawConfig | undefined,
+  agentDir: string,
+) {
+  const cost = await resolveModelCostConfig({
     provider: model.provider,
     model: model.id,
     config: cfg,
     agentDir,
+    runtimeCost: model.cost,
   });
-  return cost && hasKnownPricing(cost) ? { ...model, cost } : model;
+  // The owner answers all-zero only for authored or publisher-validated free pricing.
+  return cost && cost !== model.cost ? { ...model, cost } : model;
 }
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -239,8 +245,14 @@ export async function resolveModelAsync(
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
+        const pricedModel = await withResolvedPricing(
+          suppressedRuntimeModel,
+          cfg,
+          resolvedAgentDir,
+        );
+        options?.assertCurrent?.();
         return {
-          model: withResolvedPricing(suppressedRuntimeModel, cfg, resolvedAgentDir),
+          model: pricedModel,
           logicalRef,
           authStorage,
           modelRegistry,
@@ -341,8 +353,10 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
+      const pricedModel = await withResolvedPricing(model, cfg, resolvedAgentDir);
+      options?.assertCurrent?.();
       return {
-        model: withResolvedPricing(model, cfg, resolvedAgentDir),
+        model: pricedModel,
         logicalRef,
         authStorage,
         modelRegistry,
