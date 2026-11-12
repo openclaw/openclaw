@@ -11710,8 +11710,9 @@ describe("ci workflow guards", () => {
         groups_gzip_base64: expect.any(String),
       });
       if (eventName === "pull_request") {
+        // The unfiltered infra group includes the retained-runtime Bun child proof.
+        expect(row.requires_bun).toBe(grouped ? true : undefined);
         for (const field of [
-          "requires_bun",
           "requires_dist",
           "requires_go",
           "requires_ripgrep",

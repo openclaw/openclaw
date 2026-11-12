@@ -609,6 +609,7 @@ async function verifyCrossHumanAdmission(
   );
   scenario.releaseTarget.resolve();
   const previousSetting = getRuntimeConfig().messages?.queue?.allowCollaborativeSteering;
+  const previousFallback = getRuntimeConfig().messages?.queue?.collaborativeSteeringFallback;
   const firstReply = humanReplies.length;
   const running: { alice?: ReturnType<typeof runHuman>; bob?: ReturnType<typeof runHuman> } = {};
   using steering = await observeProofSteeringAdmission(scenario.sourcePrompt);
@@ -617,6 +618,10 @@ async function verifyCrossHumanAdmission(
     async [Symbol.asyncDispose]() {
       await settleProofScenario(scenario, [running.alice, running.bob]);
       await configureProofCollaboration(previousSetting);
+      await patchProofConfig(
+        { messages: { queue: { collaborativeSteeringFallback: previousFallback ?? null } } },
+        ["messages.queue.collaborativeSteeringFallback"],
+      );
     },
   };
   if (collaborative) {
@@ -628,6 +633,16 @@ async function verifyCrossHumanAdmission(
   await configureProofCollaboration(
     allowCollaborativeSteering,
     allowCollaborativeSteering === true,
+  );
+  await patchProofConfig(
+    {
+      messages: {
+        queue: {
+          collaborativeSteeringFallback: allowCollaborativeSteering === false ? "reject" : null,
+        },
+      },
+    },
+    ["messages.queue.collaborativeSteeringFallback"],
   );
   expect(getRuntimeConfig().messages?.queue?.allowCollaborativeSteering).toBe(
     allowCollaborativeSteering,
@@ -657,7 +672,7 @@ async function verifyCrossHumanAdmission(
     // The receipt waits for transcript commitment, which needs Alice's held
     // tool to finish. Observe real admission before releasing that tool.
     await steering.waitForAdmission(running.bob, signal);
-  } else if (allowCollaborativeSteering !== true) {
+  } else if (allowCollaborativeSteering === false) {
     expect(await running.bob).toMatchObject({ collaborativeSteeringRefused: true });
     expect(scenario.sourceRequests).toEqual([]);
     expect(scenario.incumbentCompleted).toBe(false);
@@ -669,9 +684,9 @@ async function verifyCrossHumanAdmission(
   }
   const expectedReplies = collaborative
     ? []
-    : (allowCollaborativeSteering === true
-        ? [FOLLOWUP_REPLY]
-        : [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY]
+    : (allowCollaborativeSteering === false
+        ? [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY]
+        : [FOLLOWUP_REPLY]
       ).map((text) => ({ sender: "bob", text }));
   expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
     expectedReplies,
