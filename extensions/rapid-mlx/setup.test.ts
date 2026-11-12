@@ -169,10 +169,7 @@ describe("Rapid-MLX setup through the inference catalog", () => {
       api: "openai-completions",
       apiKey: "rapid-mlx-local",
       baseUrl: localUrl,
-      models: [
-        { id: "custom-chat", contextWindow: 8_192 },
-        { id: modelId, contextWindow: 32_768 },
-      ],
+      models: [],
     });
     expect(fetchMock.mock.lastCall?.[0]).toBe(`${localUrl}/models`);
     expect(authorization(fetchMock)).toBeNull();
@@ -190,6 +187,53 @@ describe("Rapid-MLX setup through the inference catalog", () => {
     await expect(detectRapidMlxAvailability(guidedContext())).resolves.toBe(true);
     await expect(detectRapidMlx(guidedContext())).resolves.toBeNull();
   });
+
+  it("uses the served ceiling for automatic selection and runtime catalog budgets", async () => {
+    fixture([{ id: modelId, context_window: 131_072, max_model_len: 8_192 }]);
+    await expect(detectRapidMlx(guidedContext())).resolves.toBeNull();
+    const catalog = await discoverRapidMlxProvider(catalogContext());
+    expect(catalog).toMatchObject({
+      provider: { models: [{ id: modelId, contextWindow: 8_192 }] },
+    });
+  });
+
+  it.each(["guided", "interactive", "noninteractive"])(
+    "keeps authored rows and refreshes discovered metadata after %s setup",
+    async (mode) => {
+      const authored = {
+        id: "private-model",
+        name: "Authored",
+        reasoning: false,
+        input: ["text"] as ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 65_536,
+        maxTokens: 1024,
+      };
+      const config = configWithProvider({ models: [authored] });
+      fixture([{ id: modelId, context_window: 32_768 }]);
+      const result =
+        mode === "noninteractive"
+          ? await configureRapidMlxNonInteractive(nonInteractiveContext(config))
+          : applyProviderAuthConfigPatch(
+              config,
+              (mode === "guided"
+                ? await prepareRapidMlx({
+                    ...guidedContext(),
+                    config,
+                    modelRef: `rapid-mlx/${modelId}`,
+                  })
+                : await configureRapidMlxInteractive({ ...interactiveContext(), config })
+              )?.configPatch,
+            );
+      assert(result, "Missing setup configuration");
+      expect(result.models?.providers?.["rapid-mlx"]?.models).toEqual([authored]);
+      fixture([{ id: modelId, context_window: 65_536 }]);
+      const catalog = await discoverRapidMlxProvider({ ...catalogContext(), config: result });
+      expect(catalog).toMatchObject({
+        provider: { models: [{ id: modelId, contextWindow: 65_536 }] },
+      });
+    },
+  );
 
   it.each([401, 503])("does not produce configuration after HTTP %s", async (status) => {
     fixture(rows, status);

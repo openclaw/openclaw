@@ -60,6 +60,12 @@ Chat model references use the `rapid-mlx/` prefix:
 openclaw models set "rapid-mlx/mlx-community/Qwen3.5-4B-MLX-4bit"
 ```
 
+Setup saves the connection and preserves authored model overrides; discovered
+catalog rows stay live rather than being copied into configuration. When the
+server advertises `max_model_len`, selection and runtime budgets use that served
+ceiling, capped by the native `context_window`. Embedding-only rows are excluded
+from the chat picker.
+
 ## Memory embeddings
 
 Serve an embedding model with Rapid-MLX, then set its exact `/v1/models` ID in

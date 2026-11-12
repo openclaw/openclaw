@@ -10,12 +10,14 @@ import {
 import {
   buildOpenAICompatibleLiveModels,
   LiveModelCatalogHttpError,
+  readLiveModelCatalogPositiveSafeIntegerField,
   runLiveProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   selectPreferredLocalModelId,
   type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { applyProviderConnectionConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
   discoverOpenAICompatibleLocalModels,
@@ -58,12 +60,26 @@ function headerPatch(
     : next;
 }
 
+function connectionProvider(listing: Listing, config: OpenClawConfig): ModelProviderConfig {
+  const connection = applyProviderConnectionConfig(config, {
+    providerId: RAPID_MLX_PROVIDER_ID,
+    api: "openai-completions",
+    baseUrl: listing.provider.baseUrl,
+    // Inventory belongs to discovery even in replace mode; retain authored rows.
+    catalogModels: [],
+  });
+  return {
+    ...listing.provider,
+    models: connection.models?.providers?.[RAPID_MLX_PROVIDER_ID]?.models ?? [],
+  };
+}
+
 function setupResult(
   listing: Listing,
   modelId: string,
   config: OpenClawConfig,
 ): ProviderAuthResult {
-  const { provider } = listing;
+  const provider = connectionProvider(listing, config);
   const configured = config.models?.providers?.["rapid-mlx"];
   const previous =
     configured?.baseUrl.trim().replace(/\/+$/, "") === provider.baseUrl ? configured : undefined;
@@ -285,7 +301,7 @@ export async function configureRapidMlxNonInteractive(
     return null;
   }
   config.models.providers["rapid-mlx"] = {
-    ...listing.provider,
+    ...connectionProvider(listing, ctx.config),
     auth: credential?.keyRef ? "api-key" : listing.provider.auth,
     apiKey:
       credential?.keyRef ??
@@ -391,6 +407,16 @@ async function listRapidMlxModels(params: {
       }
       return null;
     }
+    // Rapid-MLX reports the native window separately from its served ceiling.
+    // Normalize once so automatic selection and the shared projection agree.
+    const rows = result.rows;
+    for (const { model } of rows) {
+      const ceiling = readLiveModelCatalogPositiveSafeIntegerField(model, "max_model_len");
+      if (ceiling !== undefined) {
+        const native = readLiveModelCatalogPositiveSafeIntegerField(model, "context_window");
+        model.context_window = Math.min(ceiling, native ?? ceiling);
+      }
+    }
     const provider: ModelProviderConfig = {
       ...existing,
       baseUrl,
@@ -401,10 +427,10 @@ async function listRapidMlxModels(params: {
     };
     // Use the shared chat projection; memory setup selects embedding models separately.
     provider.models = buildOpenAICompatibleLiveModels(
-      result.rows.map(({ model }) => model),
+      rows.map(({ model }) => model),
       provider,
     );
-    return { provider, rows: result.rows };
+    return { provider, rows };
   } catch (error) {
     params.signal?.throwIfAborted();
     if (params.strict) {

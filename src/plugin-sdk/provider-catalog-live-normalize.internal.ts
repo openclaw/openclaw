@@ -172,6 +172,14 @@ function rowAdvertisesChatModel(
   ) {
     return true;
   }
+  // Explicit non-chat endpoints take precedence over model-name guesses. A
+  // generic feature such as "tools" alone does not describe the output kind.
+  if (capabilityStrings.includes("text")) {
+    return true;
+  }
+  if (capabilityStrings.some((value) => NON_TEXT_MODEL_ID_PATTERN.test(value))) {
+    return false;
+  }
   return undefined;
 }
 
