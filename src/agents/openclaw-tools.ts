@@ -19,6 +19,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentIds,
 } from "./agent-scope.js";
+import { gateAgentToolExecution } from "./agent-tool-availability.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { readGitHubPublicationConfiguration } from "./github-tool-identity-config.js";
 import {
@@ -382,30 +383,28 @@ function* createOpenClawToolsSteps(
     hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
-  const messageTool = options?.disableMessageTool
-    ? null
-    : ((yield {
-        message: {
-          ...options,
-          agentSessionKey:
-            options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
-          runSessionKey:
-            options?.runSessionKey ??
-            (options?.messageToolTurnCapability ? options.agentSessionKey : undefined),
-          agentId: sessionAgentId,
-          messageActionTurnCapability:
-            options?.messageToolTurnCapability?.token ?? options?.messageActionTurnCapability,
-          admitScheduledInvocation: options?.admitScheduledMessageInvocation,
-          preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
-          currentMessagingTarget:
-            options?.currentMessagingTarget ??
-            (options?.sourceReplyOnly ? options.agentTo : undefined),
-          currentChannelProvider: options?.agentChannel,
-          requireExplicitTarget: options?.requireExplicitMessageTarget,
-          requesterSenderId: options?.requesterSenderId ?? undefined,
-          workspaceDir,
-        },
-      })[0] ?? null);
+  const messageTool =
+    (yield {
+      message: {
+        ...options,
+        agentSessionKey: options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
+        runSessionKey:
+          options?.runSessionKey ??
+          (options?.messageToolTurnCapability ? options.agentSessionKey : undefined),
+        agentId: sessionAgentId,
+        messageActionTurnCapability:
+          options?.messageToolTurnCapability?.token ?? options?.messageActionTurnCapability,
+        admitScheduledInvocation: options?.admitScheduledMessageInvocation,
+        preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
+        currentMessagingTarget:
+          options?.currentMessagingTarget ??
+          (options?.sourceReplyOnly ? options.agentTo : undefined),
+        currentChannelProvider: options?.agentChannel,
+        requireExplicitTarget: options?.requireExplicitMessageTarget,
+        requesterSenderId: options?.requesterSenderId ?? undefined,
+        workspaceDir,
+      },
+    })[0] ?? null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     ...options,
@@ -563,7 +562,11 @@ function* createOpenClawToolsSteps(
           cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
         })
       : []),
-    includeMessageTool ? messageTool : null,
+    includeMessageTool && messageTool
+      ? options?.disableMessageTool
+        ? gateAgentToolExecution(messageTool, "message is disabled for this turn. Do not retry it.")
+        : messageTool
+      : null,
     !isCoreCanvasHostEnabled(resolvedConfig) && !currentChannelWidgetPresenter
       ? null
       : createShowWidgetTool({

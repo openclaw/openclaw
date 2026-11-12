@@ -10,7 +10,12 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createStructuredOutputTool } from "./tools/structured-output-tool.js";
 
 /** Requester-facing tools a non-interactive collector turn must never receive. */
-const COLLECTOR_WITHHELD_TOOL_NAMES = new Set(["ask_user", "sessions_send", "sessions_yield"]);
+const COLLECTOR_WITHHELD_TOOL_NAMES = new Set([
+  "message",
+  "ask_user",
+  "sessions_send",
+  "sessions_yield",
+]);
 
 export type SwarmCollectorToolContext = {
   runId: string;
