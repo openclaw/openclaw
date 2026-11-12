@@ -1,2 +1,2 @@
-# Main-thread watcher isolation, asynchronous admission, and Windows native-handle lifecycle regression proof.
-80
+# Watcher thread isolation, portable lifecycle, startup recovery, and affected consumer boundary proof.
+118

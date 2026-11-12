@@ -302,7 +302,8 @@ it("shares one watcher, forwards invalidation and reconciles an atomic replaceme
   const directory = tempDirs.make("owned-directory-external-");
   const filename = path.join(directory, "profiles");
   fs.writeFileSync(filename, "before");
-  const watch = vi.spyOn(nativeWatchFs, "watch");
+  // Hold native events while proving missed-notification recovery and explicit delivery.
+  const watch = vi.spyOn(nativeWatchFs, "watch").mockImplementation(() => new SilentWatch());
   const listener = vi.fn(() => fs.readFileSync(filename, "utf8"));
   const otherListener = vi.fn();
   observe(directory, listener);

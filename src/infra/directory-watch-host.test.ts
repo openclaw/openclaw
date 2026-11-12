@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,9 +16,27 @@ const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 afterEach(() => {
   Object.defineProperty(process, "platform", platform);
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
 
 describe("directory watch host", () => {
+  it("keeps observation recoverable when helper startup throws", async () => {
+    vi.spyOn(childProcess, "spawn").mockImplementationOnce(() => {
+      throw new Error("synthetic helper startup failure");
+    });
+    syncBuiltinESMExports();
+    const unavailable = Promise.withResolvers<void>();
+    const observation = observeOwnedDirectory(tempDirs.make("directory-watch-startup-"), () =>
+      unavailable.resolve(),
+    );
+    try {
+      await unavailable.promise;
+      expect(observation.isWatching()).toBe(false);
+    } finally {
+      observation.close();
+    }
+  });
+
   it("releases retired Windows handles while other watches remain live", async () => {
     const helper = spawn(
       process.execPath,

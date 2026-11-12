@@ -103,7 +103,12 @@ export function watchDirectory(
   const id = nextId++;
   const watch = Object.assign(new EventEmitter(), { path: directoryPath, recursive });
   watch.on("change", listener);
-  register((host ??= startHost()), id, watch);
+  try {
+    register((host ??= startHost()), id, watch);
+  } catch (error) {
+    host?.watches.delete(id);
+    queueMicrotask(() => watch.emit("error", error, false));
+  }
   return Object.assign(watch, {
     close() {
       watch.removeAllListeners("change");
