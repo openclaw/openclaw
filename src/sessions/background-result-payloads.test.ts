@@ -222,10 +222,11 @@ describe("background result payload projection", () => {
       // A valid base64 image/png whose content cannot be read is accepted by the
       // channel but fails to embed (a newly produced embedding failure), while a
       // rejected file URL was removed by reply-media normalization and recorded as a
-      // delivery-failed outcome before the send.
+      // delivery-failed outcome before the send. The text carries the receipt that
+      // normalization appends for the rejected source.
       const payload = setReplyPayloadMetadata(
         {
-          text: "Report",
+          text: "Report\n⚠️ probe.mp3: Delivery failed. Try sending this file again.",
           mediaUrls: ["data:image/png;base64,iVBORw0KGgpub3QgYSByZWFsIHBuZyBwYXlsb2Fk"],
         },
         {
@@ -268,6 +269,9 @@ describe("background result payload projection", () => {
         .map((block) => (block as { text?: string }).text ?? "")
         .join("\n");
       expect(referenceText).toContain("Generated image 1");
+      // The normalization receipt is superseded by the structured failure card, so
+      // it is not repeated in the display text.
+      expect(referenceText).not.toContain("Delivery failed");
       // The pre-delivery failure (a rejected source that never reached the channel)
       // keeps its failure card and is not converted into a delivered reference.
       expect(display).toContainEqual(
@@ -280,6 +284,66 @@ describe("background result payload projection", () => {
           }),
         }),
       );
+    });
+  });
+
+  it("keeps pre-delivery failure cards when no embeddable media remains", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const dir = tempDirs.make("openclaw-bg-payload-");
+      const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+      await replaceSessionEntry(
+        { sessionKey: DESTINATION_KEY, storePath },
+        { sessionId: DESTINATION_SESSION_ID, updatedAt: 1 },
+      );
+      const payload = setReplyPayloadMetadata(
+        { text: "Report\n⚠️ probe.mp3: Delivery failed. Try sending this file again." },
+        {
+          assistantMediaFailures: [
+            { code: "delivery-failed", kind: "audio", label: "probe.mp3", mimeType: "audio/mpeg" },
+          ],
+        },
+      );
+      const result = await commitBackgroundPayloadsToSession({
+        agentId: "main",
+        sessionKey: DESTINATION_KEY,
+        expectedGeneration: { sessionId: DESTINATION_SESSION_ID, lifecycleRevision: undefined },
+        payloads: [payload],
+        idempotencyKey: "confirmed-no-media-pre-delivery-failure:0",
+        deliveryConfirmed: true,
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { workspace: state.workspaceDir } },
+        },
+      });
+      expect(result).toEqual({ ok: true });
+      const messages = (
+        await loadTranscriptEvents({
+          sessionKey: DESTINATION_KEY,
+          sessionId: DESTINATION_SESSION_ID,
+          storePath,
+        })
+      )
+        .map(readTranscriptEventMessage)
+        .filter(Boolean);
+      expect(messages).toHaveLength(1);
+      const display = readAssistantDisplayContent(messages[0]);
+      // No embeddable media remains, but the pre-delivery failure still keeps its
+      // failure card instead of disappearing with the cleared metadata.
+      expect(display).toContainEqual(
+        expect.objectContaining({
+          type: "attachment_error",
+          attachment: expect.objectContaining({
+            code: "delivery-failed",
+            kind: "audio",
+            label: "probe.mp3",
+          }),
+        }),
+      );
+      const text = display
+        .filter((block) => block.type === "text")
+        .map((block) => (block as { text?: string }).text ?? "")
+        .join("\n");
+      expect(text).not.toContain("Delivery failed");
     });
   });
 });

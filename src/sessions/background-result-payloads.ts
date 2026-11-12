@@ -7,6 +7,7 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
+  stripReplyMediaFailureFallback,
   type ReplyMediaFailure,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
@@ -162,6 +163,15 @@ async function buildResultDisplayContent(params: {
   // converted into delivered references; only embedding failures produced while
   // projecting the accepted media are converted below.
   const preDeliveryFailures: ReplyMediaFailure[] = [];
+  const preDeliveryFailureBlocks = () =>
+    preDeliveryFailures.map((failure) =>
+      buildManagedMediaFailureBlock({
+        code: failure.code,
+        kind: failure.kind,
+        label: failure.label,
+        ...(failure.mimeType ? { mimeType: failure.mimeType } : {}),
+      }),
+    );
   const displayPayloads = params.payloads.map((payload) => {
     const documentNames: string[] = [];
     // Split each payload's media into embeddable entries and document references.
@@ -204,7 +214,14 @@ async function buildResultDisplayContent(params: {
       return display;
     }
     preDeliveryFailures.push(...preDelivery);
-    return setReplyPayloadMetadata(display, { assistantMediaFailures: undefined });
+    // Normalization appends a textual receipt (for example "⚠️ probe.mp3: Delivery
+    // failed…") and records the same failures as metadata. The structured failure
+    // card below supersedes that receipt, so remove it before clearing the metadata;
+    // otherwise the receipt and the card would show the same failure twice.
+    return setReplyPayloadMetadata(
+      { ...display, text: stripReplyMediaFailureFallback(display.text, preDelivery) },
+      { assistantMediaFailures: undefined },
+    );
   });
   if (!displayPayloads.some((payload) => collectReplyMediaEntries(payload).length > 0)) {
     const { assistantContent } = await buildAssistantReplyContent({
@@ -213,7 +230,11 @@ async function buildResultDisplayContent(params: {
       payloads: displayPayloads,
       includeSensitiveMedia: false,
     });
-    return [...(assistantContent ?? []), ...documentReferences.values()];
+    return [
+      ...(assistantContent ?? []),
+      ...documentReferences.values(),
+      ...preDeliveryFailureBlocks(),
+    ];
   }
   // Background results use the same workspace and live read authority as normal replies.
   const scope = await captureWebchatReplyMediaScope({
@@ -235,18 +256,7 @@ async function buildResultDisplayContent(params: {
     const displayContent = params.deliveryConfirmed
       ? retainDeliveredMediaReferences(assistantContent ?? [])
       : (assistantContent ?? []);
-    return [
-      ...displayContent,
-      ...documentReferences.values(),
-      ...preDeliveryFailures.map((failure) =>
-        buildManagedMediaFailureBlock({
-          code: failure.code,
-          kind: failure.kind,
-          label: failure.label,
-          ...(failure.mimeType ? { mimeType: failure.mimeType } : {}),
-        }),
-      ),
-    ];
+    return [...displayContent, ...documentReferences.values(), ...preDeliveryFailureBlocks()];
   } finally {
     scope.release();
   }
