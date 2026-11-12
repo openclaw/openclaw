@@ -19,8 +19,7 @@ An `openclaw-node://` link from the Gateway owner's browser uses the same flow a
 [`openclaw node join`](/cli/node#join-with-openclaw-id):
 
 ```bash
-openclaw connect "openclaw-node://join#<invitation>" \
-  --discovery-url https://discovery.example --display-name "Build Node"
+openclaw connect "openclaw-node://join#<invitation>" --display-name "Build Node"
 ```
 
 The node needs no account sign-in or Gateway token. It generates a private node
@@ -29,9 +28,10 @@ in the terminal and browser dialog, review the displayed commands and
 capabilities, then explicitly click **Approve**. If the codes differ, deny the
 request. Merely opening the approval dialog does not approve the node.
 
-Discovery is separate from the link. `--discovery-url` overrides the saved
-Discovery origin; when none is saved, this flag is required because there is no
-default origin. Never substitute the claw hostname or relay URL. The origin must
+The link carries the Gateway's Discovery origin when the Gateway has one
+configured. `--discovery-url` overrides the link's origin, which overrides the
+saved Discovery origin; when none of these exists, this flag is required because
+there is no default origin. Never substitute the claw hostname or relay URL. The origin must
 use HTTPS (HTTP only for localhost testbeds), without credentials, path, query,
 or fragment. The selected origin is saved with the verified target.
 

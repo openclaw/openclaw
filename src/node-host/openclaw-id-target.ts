@@ -4,6 +4,7 @@ import {
   isClawId,
   isEd25519PublicKey,
   isKeyFingerprint,
+  isNodeDiscoveryOrigin,
   parseStatement,
   type BindingEvidence,
   type ClawPin,
@@ -144,22 +145,10 @@ export function parseNodeRelayUrl(value: unknown): string | undefined {
 
 /** Discovery routing is deployment configuration, not an authority or a relay hint. */
 export function parseNodeDiscoveryOrigin(value: unknown): string {
-  const discovery = typeof value === "string" ? URL.parse(value) : null;
-  const localHttp =
-    discovery?.protocol === "http:" &&
-    ["localhost", "127.0.0.1", "[::1]"].includes(discovery.hostname);
-  if (
-    !discovery ||
-    (!localHttp && discovery.protocol !== "https:") ||
-    discovery.username ||
-    discovery.password ||
-    discovery.pathname !== "/" ||
-    discovery.search ||
-    discovery.hash
-  ) {
+  if (typeof value !== "string" || !isNodeDiscoveryOrigin(value)) {
     throw new Error("invalid OpenClaw ID Discovery origin");
   }
-  return discovery.origin;
+  return new URL(value).origin;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {

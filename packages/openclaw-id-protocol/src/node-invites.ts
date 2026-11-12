@@ -49,7 +49,10 @@ export async function nodeVerificationCode(
   return String(value % 1_000_000).padStart(6, "0");
 }
 
-/** Node link fields. `relay_url` is a routing hint, not a trust anchor. */
+/**
+ * Node link fields. `relay_url` and `discovery_url` are routing hints, not trust anchors: the
+ * claw ID, root fingerprint and hostname still verify everything Discovery returns.
+ */
 export type NodeJoinLink = {
   invite_id: string;
   secret: Bytes;
@@ -57,11 +60,18 @@ export type NodeJoinLink = {
   root_fp: KeyFingerprint;
   hostname: string;
   relay_url: string;
+  /** The Discovery API origin the creating Gateway uses, when it has one configured. */
+  discovery_url?: string;
 };
 
 const HOST_RE =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?::[0-9]{1,5})?$/;
 const LINK_FIELDS = ["i", "c", "r", "h", "relay"];
+
+/** An HTTPS origin (HTTP only on localhost) without userinfo, path, query or fragment. */
+export function isNodeDiscoveryOrigin(value: string): boolean {
+  return validRelay(value) && new URL(value).pathname === "/";
+}
 
 function validRelay(value: string): boolean {
   if (value.length > 512) {
@@ -90,6 +100,7 @@ export function buildNodeJoinLink(link: NodeJoinLink): string {
     r: link.root_fp.slice(3),
     h: link.hostname,
     relay: link.relay_url,
+    ...(link.discovery_url ? { d: link.discovery_url } : {}),
   });
   const result = `openclaw-node://join#${params}`;
   if (!parseNodeJoinLink(result)) {
@@ -121,8 +132,10 @@ export function parseNodeJoinLink(value: string): NodeJoinLink | null {
     params.forEach(() => {
       fieldCount += 1;
     });
+    const optional = params.getAll("d").length;
     if (
-      fieldCount !== LINK_FIELDS.length ||
+      optional > 1 ||
+      fieldCount !== LINK_FIELDS.length + optional ||
       LINK_FIELDS.some((field) => params.getAll(field).length !== 1)
     ) {
       return null;
@@ -133,7 +146,9 @@ export function parseNodeJoinLink(value: string): NodeJoinLink | null {
     const root_fp = `fp:${params.get("r") ?? ""}`;
     const hostname = params.get("h") ?? "";
     const relay_url = params.get("relay") ?? "";
+    const discovery_url = params.get("d") ?? undefined;
     if (
+      (discovery_url !== undefined && !isNodeDiscoveryOrigin(discovery_url)) ||
       parts.length !== 2 ||
       !isRandomId(invite_id) ||
       !secretText ||
@@ -148,7 +163,15 @@ export function parseNodeJoinLink(value: string): NodeJoinLink | null {
     if (secret.length !== INVITE_SECRET_BYTES) {
       return null;
     }
-    return { invite_id, secret, claw_id, root_fp, hostname, relay_url };
+    return {
+      invite_id,
+      secret,
+      claw_id,
+      root_fp,
+      hostname,
+      relay_url,
+      ...(discovery_url ? { discovery_url: new URL(discovery_url).origin } : {}),
+    };
   } catch {
     return null;
   }
