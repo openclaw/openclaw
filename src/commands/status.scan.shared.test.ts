@@ -236,14 +236,20 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it("does not use the local status RPC fallback for dotted localhost", async () => {
-    gatewayTarget("ws://localhost.:18789");
-    mocks.probeGateway.mockResolvedValue(unreachableProbe("ws://localhost.:18789"));
-
+  it.each([
+    ["local", "ws://localhost.:18789"],
+    ["remote", "wss://gateway.example/ws"],
+  ] as const)("does not use the status RPC fallback for a %s probe of %s", async (mode, url) => {
+    gatewayTarget(url);
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode,
+      gatewayMode: mode,
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue(unreachableProbe(url));
     const result = await resolveGatewayProbeSnapshot();
-
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(result.gatewayProbe?.ok).toBe(false);
+    expect(result.gatewayReachable).toBe(false);
   });
 
   it("gives the fallback status RPC only the remaining explicit CLI timeout", async () => {
@@ -258,22 +264,6 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(readProbeCall().timeoutMs).toBe(250);
     expect(readGatewayCall()).toMatchObject({ method: "status", timeoutMs: 100 });
     expect(result.gatewayProbe).toMatchObject({ ok: false, error: "timeout; warn" });
-  });
-
-  it("does not use the status RPC fallback for remote probe failures", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockResolvedValue(unreachableProbe("wss://gateway.example/ws"));
-
-    const result = await resolveGatewayProbeSnapshot({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } },
-    });
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(result.gatewayReachable).toBe(false);
   });
 
   it("stops an interrupted command instead of reporting its aborted probe", async () => {
