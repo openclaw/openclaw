@@ -225,6 +225,7 @@ for (const runtime of ["node", "node-short-path"] as const) {
                 OPENCLAW_STATE_DIR: stateDirectory,
                 OPENCLAW_CONFIG_PATH: path.join(stateDirectory, "openclaw.json"),
                 OPENCLAW_TEST_FAST: "1",
+                OPENCLAW_RETAINED_CLI_TRACE: "1",
                 NODE_DISABLE_COMPILE_CACHE: "1",
                 TMPDIR: directory,
                 TMP: directory,
@@ -235,6 +236,7 @@ for (const runtime of ["node", "node-short-path"] as const) {
               interact: (child) => {
                 let records = 0;
                 let progressRecords = 0;
+                let retentionTraceRecords = 0;
                 const observe = () => {
                   let pending = "";
                   return (chunk: string) => {
@@ -251,6 +253,11 @@ for (const runtime of ["node", "node-short-path"] as const) {
                         progressRecords++ < 9
                       ) {
                         console.log("RETAINED_CLI_PROGRESS " + line.slice(0, 4_096));
+                      } else if (
+                        line.startsWith('{"phase":"cli-composition-retention-trace"') &&
+                        retentionTraceRecords++ < 24
+                      ) {
+                        console.log("RETAINED_CLI_TRACE " + line.slice(0, 4_096));
                       }
                     }
                   };

@@ -72,6 +72,23 @@ async function runWithRetainedUpdateRuntime<T>(
       await operation((params) => {
         preparation = (async () => {
           const { mutationRoots, installTarget, env, timeoutMs } = params;
+          // Temporary diagnostic only; remove with the fixture trace flag.
+          const traceEnabled = process.env.OPENCLAW_RETAINED_CLI_TRACE === "1";
+          const traceStartedAt = performance.now();
+          const trace = (stage: string, fields: Record<string, number> = {}) => {
+            if (traceEnabled) {
+              console.error(JSON.stringify({
+                phase: "cli-composition-retention-trace",
+                stage,
+                elapsedMs: Math.round(performance.now() - traceStartedAt),
+                ...fields,
+              }));
+            }
+          };
+          const milestones = new Set([1, 4096, 8192, 16384, 32768, 65536]);
+          let inventoryCallbacks = 0;
+          let materializedCallbacks = 0;
+          trace("retain-entered");
           const assertCurrent = () => {
             if (closing) {
               throw new Error("The updater's retained runtime is closing");
@@ -121,6 +138,7 @@ async function runWithRetainedUpdateRuntime<T>(
           ) {
             return undefined;
           }
+          trace("root-resolved");
           await maintainRetainedUpdateRuntimes({
             packageRoots: [sourceRoot],
             repair: true,
@@ -192,6 +210,7 @@ async function runWithRetainedUpdateRuntime<T>(
               roots.set(entry, project(entry));
             }
           }
+          trace("inventory-start");
           const inventoryStartedAt = performance.now();
           const plan = await prepareUpdateCandidatePluginTrees({
             roots,
@@ -204,17 +223,28 @@ async function runWithRetainedUpdateRuntime<T>(
             retainedDependencyRoot: packageOwner
               ? resolveIdentityPathViaExistingAncestorSync(path.resolve(packageOwner))
               : sourceRoot,
-            onProgress: assertCurrent,
+            onProgress: () => {
+              assertCurrent();
+              if (traceEnabled && milestones.has(++inventoryCallbacks)) {
+                trace("inventory-progress", { inventoryCallbacks });
+              }
+            },
           });
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
+          trace("inventory-done", { entries: plan.entries.length, estimatedBytes: plan.bytes, inventoryMs });
           const materializationStartedAt = performance.now();
           const counts = await withUpdateCandidateIoBudget(
             { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
-            async (signal, reportProgress) =>
-              await linkUpdateCandidatePluginTrees(plan, {
+            async (signal, reportProgress) => {
+              const result = await linkUpdateCandidatePluginTrees(plan, {
                 targetStateDir: privateRoot,
                 candidateRoot,
-                onMaterialized: reportProgress,
+                onMaterialized: () => {
+                  reportProgress();
+                  if (traceEnabled && milestones.has(++materializedCallbacks)) {
+                    trace("materialization-progress", { materializedCallbacks });
+                  }
+                },
                 onProgress: () => {
                   signal.throwIfAborted();
                 },
@@ -222,10 +252,15 @@ async function runWithRetainedUpdateRuntime<T>(
                   signal.throwIfAborted();
                   assertCurrent();
                 },
-              }),
+              });
+              trace("tree-done", { ...result, materializedCallbacks });
+              return result;
+            },
           );
           const materializationMs = Math.round(performance.now() - materializationStartedAt);
+          trace("io-monitor-joined", { materializationMs });
           assertCurrent();
+          trace("bindings-start");
           const relocations = prepareRuntimeRelocations(
             [
               ...plan.relocations,
@@ -253,6 +288,7 @@ async function runWithRetainedUpdateRuntime<T>(
                 identityPath: relocateRuntimePath(entry.path, importIdentities),
               })),
           );
+          trace("bindings-done");
           prepared = true;
           return {
             inventoryMs,
