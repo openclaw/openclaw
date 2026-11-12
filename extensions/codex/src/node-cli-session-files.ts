@@ -290,6 +290,12 @@ class PageFloor {
  * reads every rollout whole instead. A rollout whose mtime was moved *earlier* than its records is
  * the one case the rule cannot see without reading it; that takes an explicit back-dating, and
  * `searchAll` covers it too.
+ *
+ * Only an `updatedAt` recovered from records can stand in the floor. A rollout whose final record
+ * outran the tail window reports its mtime instead, and on a copied home that is the copy time, not
+ * a record time: letting it into the floor would let the rewritten mtimes prove themselves and stop
+ * the walk at the prefix. Such a row is still listed (marked `partialScan`); it just proves nothing
+ * about the rollouts left unread.
  */
 async function hydrateRecencyPage(
   summaries: Map<string, CodexCliSessionSummary>,
@@ -340,7 +346,7 @@ async function hydrateRecencyPage(
     }
     const { merged, previousUpdatedAt } = mergeSessionFileSummary(summaries, read.summary);
     // History-derived `updatedAt` wins the merge, so a row only gains a value it did not have.
-    if (previousUpdatedAt === undefined) {
+    if (previousUpdatedAt === undefined && !read.updatedAtEstimatedFromMtime) {
       page.add(readUpdatedAtMs(merged.updatedAt));
     }
   }
@@ -471,6 +477,11 @@ export async function hydrateSessionsFromSessionFiles(
 type SessionFileSummaryRead = {
   summary: CodexCliSessionSummary | null;
   bytesRead: number;
+  /**
+   * Set when `updatedAt` is file mtime standing in for records the windows never reached. A rollout
+   * read whole that simply carries no `timestamp` is not this case: mtime is all it has.
+   */
+  updatedAtEstimatedFromMtime?: boolean;
 };
 
 /**
@@ -557,6 +568,7 @@ async function readSessionFileSummary(file: CodexCliSessionFile): Promise<Sessio
     tailScan.updatedAt ?? (scannedWholeFile ? headScan.updatedAt : undefined);
   return {
     bytesRead,
+    updatedAtEstimatedFromMtime: scannedUpdatedAt === undefined && !scannedWholeFile,
     summary: {
       sessionId,
       updatedAt: scannedUpdatedAt ?? new Date(file.mtimeMs).toISOString(),

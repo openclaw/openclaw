@@ -404,6 +404,28 @@ describe("codex cli node session files", () => {
     expect(parsed).not.toHaveProperty("searchTruncated");
   });
 
+  it("does not let an mtime-estimated row prove a copied page complete", async () => {
+    const rollouts = await writeRolloutFixtures(25);
+    await rewriteMtimesAsCopied(rollouts);
+    // A final record wider than the tail window: `updatedAt` falls back to the copy-time mtime.
+    const hugeTailId = "019e23d1-f33d-78e3-959e-0f56f30a5263";
+    const hugeTailFile = await writeRollout(hugeTailId, [
+      sessionMeta(hugeTailId, "/tmp/codex-huge-tail"),
+      filler(700 * 1_024),
+      filler(400 * 1_024),
+    ]);
+    const copiedLast = new Date(Date.UTC(2026, 4, 21));
+    await fs.utimes(hugeTailFile, copiedLast, copiedLast);
+
+    const parsed = await runSessionsList({ limit: 1 });
+
+    // The estimate still ranks its row, but it is a rewritten mtime, not a record time. Admitting it
+    // to the page floor used to end the read at the 21-file prefix with the five newest sessions by
+    // record unopened and nothing saying so.
+    expect(parsed.sessions).toMatchObject([{ sessionId: hugeTailId, partialScan: true }]);
+    expect(parsed).toMatchObject({ scannedFileCount: 26, sessionFileCount: 26 });
+  });
+
   it("flags a budget-cut unfiltered page and recovers its newest session with --search-all", async () => {
     // Each 768 KiB rollout spends 768 KiB of the 256 MiB budget, so the bounded page runs out after
     // 342 of these 345 — and the copy put the three newest sessions by record among the unread.
