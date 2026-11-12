@@ -239,7 +239,20 @@ describe("public session document", () => {
     expect(status.querySelector("h1")?.textContent).toBe("Loading conversation");
     expect(status.querySelector("p")?.textContent).toBe("Checking access…");
     expect(status.querySelector("button[data-public-reload]")?.textContent).toBe("Reload");
-    expect(fragment([], { entryUrl }).querySelector(".app-skeleton")).toBeNull();
+    const reader = fragment([], { entryUrl });
+    const readerSkeleton = reader.querySelector(".app-skeleton")!;
+    expect(readerSkeleton.getAttribute("aria-hidden")).toBe("true");
+    expect(readerSkeleton.querySelectorAll("a, button, [tabindex]")).toHaveLength(0);
+    expect(readerSkeleton.querySelector(".list-current")?.textContent).toBe(
+      "A shared conversation",
+    );
+    expect(reader.querySelector(".ghost-panel")?.getAttribute("aria-hidden")).toBe("true");
+    expect(reader.querySelector(".reader-title .reader-badge")?.textContent).toBe("Public session");
+    expect(reader.querySelector(".article-head .reader-badge")?.textContent).toBe("Public session");
+    expect(reader.querySelector(".reader-login")?.getAttribute("href")).toBe(entryUrl);
+    expect(reader.querySelector(".colophon")?.textContent).toBe(
+      "Made with OpenClawYour assistant, on your devices, in your chats.Get startedWhy OpenClaw",
+    );
     expect(
       fragment([], { title: "Conversation unavailable", unavailable: true }).querySelector(
         ".app-skeleton",
@@ -399,7 +412,7 @@ describe("public session document", () => {
       ],
       { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" },
     );
-    expect(html).toContain("2 messages");
+    expect(JSDOM.fragment(html).querySelector("[data-public-i18n=messageOther]")).toBeNull();
     expect(html.match(/<article class="message /g)).toHaveLength(2);
     expect(html).toContain('<span class="attachment">voice-note.mp3</span>');
     expect(html).toContain('<span class="attachment">walkthrough.mp4</span>');
@@ -458,7 +471,7 @@ describe("public session document", () => {
     }
     expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("font-src 'self'");
     expect(PUBLIC_SESSION_CONTENT_SECURITY_POLICY).toContain("frame-src 'self'");
-    expect(html).toContain('<link rel="stylesheet" href="/control/fonts/instrument-sans.css">');
+    expect(html).toContain('<link rel="stylesheet" href="/control/fonts/space-grotesk.css">');
   });
 
   it("bounds the newest public messages and visibly marks omitted history or text", () => {
