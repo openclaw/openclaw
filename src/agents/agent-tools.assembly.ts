@@ -92,8 +92,6 @@ import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool-creator-cap.js";
 import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
-export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
-
 // Yield preparation requests so sync and async entry points keep the same policy ordering.
 export function* assembleOpenClawCodingTools(
   options?: InternalCodingToolsOptions,

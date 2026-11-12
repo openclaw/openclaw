@@ -9,7 +9,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
-import { planOpenClawModelsJsonSource } from "./models-config.js";
+import { planOpenClawModelsJsonSourceWithInput as planOpenClawModelsJsonSource } from "./models-config.core.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
