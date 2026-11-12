@@ -1,3 +1,4 @@
+import { resolveIdentityPathViaExistingAncestor } from "../../infra/boundary-path.js";
 import {
   getSqliteDatabaseAdmissionIdentityForPath,
   readSqliteDatabaseWriteTokenForPath,
@@ -15,11 +16,7 @@ import type { SessionStoreWorkerReadScope } from "./session-entry-read-runtime.t
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import type { SessionStoreRegistryRead } from "./session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "./session-store-config.js";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreReadCandidate,
-} from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetInventoryRequest,
   SessionStoreTargetInventoryResult,
@@ -295,15 +292,25 @@ export async function prepareSessionStoreReaderCandidates(
       ],
     };
   }
-  const captured =
+  const candidates =
+    !options.inspection && (target.agentId || target.shared)
+      ? [
+          {
+            path: target.path,
+            physicalPath: await resolveIdentityPathViaExistingAncestor(target.path),
+          },
+        ]
+      : (
+          await prepareSessionStoreCandidatesInWorker({
+            storePath,
+            ...(!options.inspection ? { captureIdentity: false as const } : {}),
+          })
+        ).candidates;
+  const direct =
     !options.inspection && options.allowDirect && target.agentId
-      ? captureSessionStoreReadCandidate(target.path)
+      ? candidates.find(
+          (candidate) => !candidate.scope && candidate.path === candidate.physicalPath,
+        )
       : undefined;
-  const direct = captured && captured.path === captured.physicalPath ? captured : undefined;
-  const candidates = options.inspection
-    ? (await prepareSessionStoreCandidatesInWorker({ storePath })).candidates
-    : direct
-      ? [direct]
-      : captureSessionStoreReadCandidates(storePath);
   return { target, direct, candidates };
 }

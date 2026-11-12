@@ -76,7 +76,7 @@ import {
 } from "./targets.js";
 
 export type SessionStoreTargetPreparationRequest =
-  | { storePath: string }
+  | { storePath: string; captureIdentity?: false }
   | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv }
   | {
       validate: {
@@ -111,7 +111,10 @@ export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetP
     path: pathname,
     physicalPath,
     scope,
-    identity: scope ? identity : readDatabasePathIdentitySync(pathname),
+    identity:
+      scope || ("storePath" in request && request.captureIdentity === false)
+        ? identity
+        : readDatabasePathIdentitySync(pathname),
   }));
   return {
     kind: "session-target-prepare" as const,

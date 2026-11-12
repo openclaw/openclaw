@@ -7405,6 +7405,11 @@ before returning or starting another repair. A following repair can immediately
 reopen the same database; the existing journal and retry semantics remain intact.
 This changes no schema, retention, permissions, or update format.
 
+Ordinary session readers qualify cold file locators through the asynchronous
+path owner; bounded families use the existing discovery worker. They retain lexical
+and canonical paths; inspection readers additionally capture physical file identity. Live prepared sources reuse their admitted facts without
+another qualification. Both paths retain physical FIFO ordering and alias custody.
+
 Known-source history reads skip native admission during worker preparation. Cold
 reads use the existing read-candidate owner to retain any available native handle
 before choosing their lane. The worker retains physical identity, schema,
