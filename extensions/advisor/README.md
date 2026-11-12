@@ -1,6 +1,6 @@
 # Advisor (plugin)
 
-Experimental and off by default. Advisor watches user-directed work and steps
+Off by default. Advisor watches user-directed work and steps
 in while the agent goes off course: repeating failing steps, waiting on
 finished work, working around a blocker it could fix, drifting beyond the
 request, or claiming results the tools do not show.
@@ -37,4 +37,4 @@ already gave and does not repeat it. Each conversation has at most one review
 in flight; the run ending or a new user message cancels it. Gateway info logs
 record review token usage and whether a correction was steered.
 
-Docs: https://docs.openclaw.ai/concepts/experimental-features#advisor
+Docs: https://docs.openclaw.ai/plugins/reference/advisor
