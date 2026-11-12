@@ -595,7 +595,7 @@ async function verifyCrossHumanAdmission(
   conversation: "same" | "different" = "same",
   fallback?: "reject",
 ) {
-  const collaborative = allowCollaborativeSteering === true && conversation === "same";
+  const collaborative = allowCollaborativeSteering && conversation === "same";
   const id = `mixed_human_${conversation === "same" ? `${allowCollaborativeSteering}_${fallback ?? "queue"}` : "foreign"}`;
   const scenario = createScenario(
     {
@@ -631,10 +631,7 @@ async function verifyCrossHumanAdmission(
       agentId: "deployment",
     });
   }
-  await configureProofCollaboration(
-    allowCollaborativeSteering,
-    allowCollaborativeSteering === true,
-  );
+  await configureProofCollaboration(allowCollaborativeSteering, allowCollaborativeSteering);
   await patchProofConfig(
     {
       messages: {
@@ -683,11 +680,11 @@ async function verifyCrossHumanAdmission(
   } else {
     expect((await running.bob).deferredToActiveRun).toBe("followup");
   }
-  const expectedReplies = collaborative
-    ? []
-    : (fallback === "reject" ? [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY] : [FOLLOWUP_REPLY]).map(
-        (text) => ({ sender: "bob", text }),
-      );
+  // Automatic fallback is quiet; only refusal and explicit /followup send notices.
+  const expectedReplies =
+    fallback === "reject"
+      ? [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY].map((text) => ({ sender: "bob", text }))
+      : [];
   expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
     expectedReplies,
   );
