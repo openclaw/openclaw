@@ -61,6 +61,61 @@ describe("memory manager adapter retirement", () => {
   );
 });
 
+it("drains unresolved managers only when adapters retire and fences their late provider work", async () => {
+  const lifecycle: MemoryManagerLifecycle = {};
+  const registry = new MemoryManagerRegistry(lifecycle);
+  const closing = createDeferred<void>();
+  const pending = {
+    close: vi.fn(async () => {
+      await closing.promise;
+    }),
+  };
+  const affected = { close: vi.fn(async () => {}) };
+  const unaffected = { close: vi.fn(async () => {}) };
+  const primary: MemoryEmbeddingProviderAdapter = {
+    id: "primary",
+    create: async () => ({ provider: null }),
+  };
+  const other: MemoryEmbeddingProviderAdapter = {
+    id: "other",
+    create: async () => ({ provider: null }),
+  };
+  registry.track(pending, "pending");
+  registry.track(affected, "affected");
+  registry.track(unaffected, "unaffected");
+  await registry.createProvider(affected, primary, () =>
+    primary.create({ config: {}, model: "test" }),
+  );
+  await registry.createProvider(unaffected, other, () =>
+    other.create({ config: {}, model: "test" }),
+  );
+  const unchanged = prepareMemoryManagerReload(
+    { retireRuntime: false, retiringEmbeddingProviders: [] },
+    lifecycle,
+  );
+  await unchanged.drain();
+  unchanged.resume();
+  expect(pending.close).not.toHaveBeenCalled();
+  const retirement = prepareMemoryManagerReload(
+    { retireRuntime: false, retiringEmbeddingProviders: [primary] },
+    lifecycle,
+  );
+  const drain = retirement.drain();
+  try {
+    expect(pending.close).toHaveBeenCalledOnce();
+    const create = vi.fn(async () => ({ provider: null }));
+    await expect(registry.createProvider(pending, other, create)).rejects.toThrow("reloading");
+    expect(create).not.toHaveBeenCalled();
+    expect(affected.close).toHaveBeenCalledOnce();
+    expect(unaffected.close).not.toHaveBeenCalled();
+  } finally {
+    closing.resolve();
+    await drain;
+    retirement.resume();
+  }
+  expect(pending.close).toHaveBeenCalledOnce();
+});
+
 it("joins pending manager cleanup across overlapping reload drains", async () => {
   const lifecycle: MemoryManagerLifecycle = {};
   const registry = new MemoryManagerRegistry(lifecycle);
