@@ -20,6 +20,7 @@ import {
   ROOT_EPOCH,
   STATEMENT_TYPES,
   type MemberRole,
+  type NodeDescription,
   type SignedStatement,
   type StatementType,
 } from "./types.js";
@@ -202,6 +203,19 @@ const role = predicate(
   isMemberRole,
   "expected role name: 1-64 lowercase ASCII letters, digits, - or _, starting with a letter",
 );
+
+/** Whether an untrusted value is a bounded node description (as signed in NodeRedemption). */
+export function isNodeDescription(value: unknown): value is NodeDescription {
+  try {
+    nodeDescription(value, "$");
+    return true;
+  } catch (error) {
+    if (error instanceof SchemaError) {
+      return false;
+    }
+    throw error;
+  }
+}
 const ownerDeviceCertBody = object({
   device_pub: ed25519Key,
   peer_keys: list(irohKey),
