@@ -135,6 +135,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/multi-namespace.postgres.test.ts",
   "src/infra/database-engine/usage-cost-partitions.postgres.test.ts",
   "src/infra/worker-task-pool.sqlite-idle.test.ts",
+  "src/state/openclaw-state-db-bootstrap-deferral.postgres.test.ts",
   "src/state/openclaw-state-db.postgres.test.ts",
   "src/state/openclaw-state-db-open.postgres.test.ts",
   "src/state/openclaw-state.worker.settlement.test.ts",

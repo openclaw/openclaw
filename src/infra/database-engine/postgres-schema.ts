@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { escapeRegExp } from "../../shared/regexp.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
@@ -203,6 +204,53 @@ export function recordPostgresSchema(
   return schemaHash;
 }
 
+export function isPostgresAdditiveColumnFact(
+  fact: PostgresCatalogFact,
+  { table, column }: NonNullable<StoreSchema["postgresAdditiveColumns"]>[number],
+): boolean {
+  return (
+    fact.kind === "column" &&
+    fact.table === table &&
+    fact.value !== null &&
+    typeof fact.value === "object" &&
+    "name" in fact.value &&
+    fact.value.name === column
+  );
+}
+
+/** Additive columns this store predates; a missing table stays a fragment concern. */
+export function missingPostgresAdditiveColumns(
+  schema: Pick<StoreSchema, "postgresAdditiveColumns">,
+  catalog: readonly PostgresCatalogFact[],
+): NonNullable<StoreSchema["postgresAdditiveColumns"]> {
+  return (schema.postgresAdditiveColumns ?? []).filter(
+    (additive) =>
+      catalog.some((fact) => fact.kind === "table" && fact.table === additive.table) &&
+      !catalog.some((fact) => isPostgresAdditiveColumnFact(fact, additive)),
+  );
+}
+
+function withoutPostgresAdditiveColumns(
+  schema: StoreSchema,
+  columns: NonNullable<StoreSchema["postgresAdditiveColumns"]>,
+): { schema: StoreSchema; definitions: string[] } {
+  let postgres = schema.postgres ?? "";
+  const definitions = columns.map(({ table, column }) => {
+    // Appended columns keep the generated position only as the declaration's last column.
+    const declaration = new RegExp(
+      `(CREATE TABLE ${escapeRegExp(quote(table))} \\([^;]*?)\\n {2}(${escapeRegExp(quote(column))} [^,\\n]+),(?=\\n {2}[A-Z])`,
+      "u",
+    );
+    const match = declaration.exec(postgres);
+    if (!match) {
+      throw new Error(`PostgreSQL additive column ${table}.${column} is not a trailing column`);
+    }
+    postgres = postgres.replace(declaration, "$1");
+    return match[2]!;
+  });
+  return { schema: { ...schema, postgres }, definitions };
+}
+
 /** Rare upgrade/unsealed-pilot path: PostgreSQL deparses both sides on this server. */
 export function verifyPostgresSchema(
   db: PostgresSqlConnection,
@@ -211,7 +259,7 @@ export function verifyPostgresSchema(
   snapshot: ReturnType<typeof readPostgresSchema>,
   preserveSeal = false,
   requireSeal = false,
-): string | undefined {
+): { schemaHash: string | undefined; snapshot: ReturnType<typeof readPostgresSchema> } {
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
   const schemaHash = postgresSchemaHash(schema, snapshot.catalog);
   const { metadata } = snapshot;
@@ -224,19 +272,34 @@ export function verifyPostgresSchema(
     throw new Error(`PostgreSQL schema drift detected. ${recovery}`);
   }
   if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === schemaHash) {
-    return schemaHash;
+    return { schemaHash, snapshot };
   }
   if (requireSeal) {
     throw new Error(`Read-only PostgreSQL admission requires a matching schema seal. ${recovery}`);
   }
+  const missing = missingPostgresAdditiveColumns(schema, snapshot.catalog);
+  const predecessor = withoutPostgresAdditiveColumns(schema, missing);
   // Inspection may compare reconstructed source DDL without rewriting the installed seal.
   if (preserveSeal) {
-    db.runTransaction(() => verifyPostgresSchemaDefinition(db, namespace, schema, snapshot));
-    return undefined;
+    db.runTransaction(() =>
+      verifyPostgresSchemaDefinition(db, namespace, predecessor.schema, snapshot),
+    );
+    return { schemaHash: undefined, snapshot };
   }
-  // Fragment regrouping can change DDL bytes without changing the canonical catalog.
-  verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
-  return schemaHash;
+  if (missing.length === 0) {
+    // Fragment regrouping can change DDL bytes without changing the canonical catalog.
+    verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
+    return { schemaHash, snapshot };
+  }
+  // Only the exact predecessor of this version gains its additive columns before resealing.
+  const completed = db.runTransaction(() => {
+    verifyPostgresSchemaDefinition(db, namespace, predecessor.schema, snapshot);
+    for (const [index, { table }] of missing.entries()) {
+      db.exec(`ALTER TABLE ${quote(table)} ADD COLUMN ${predecessor.definitions[index]}`);
+    }
+    return verifyAndRecordPostgresSchema(db, namespace, schema);
+  });
+  return { schemaHash: postgresSchemaHash(schema, completed.catalog), snapshot: completed };
 }
 
 function verifyPostgresSchemaDefinition(
