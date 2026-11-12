@@ -11,6 +11,10 @@ import {
 import { createPersonalInstructionsTool } from "../../agents/tools/personal-instructions-tool.js";
 import { loadPersonalUserBootstrapFile } from "../../agents/workspace-personal-bootstrap.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -20,6 +24,10 @@ import type {
   UserProfileIdentity,
 } from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
+import {
+  openclawIdTunnelRolePolicy,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "../openclaw-id/tunnel-principal.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
@@ -124,6 +132,10 @@ vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
   };
 });
 
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  clearRuntimeConfigSnapshot();
+});
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let workspace: string;
 let client: GatewayClient;
@@ -184,9 +196,14 @@ describe("personal USER.md self-service", () => {
     client.connect.scopes = scopes;
     const sessionKey = "agent:main:dashboard:someone-elses-project";
     let active = true;
+    const principal = client.internal?.openclawIdPrincipal;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "alice-alias",
       scopes,
+      openclawIdPrincipal: principal,
+      readCurrentRoleFacts: principal
+        ? () => ({ assignedRole: state.role, policy: openclawIdTunnelRolePolicy(principal) })
+        : undefined,
       assertCurrent: () => {
         if (!active) {
           throw new Error("requester revoked");
@@ -229,9 +246,29 @@ describe("personal USER.md self-service", () => {
     };
   }
 
-  it.each(["operator.read", "operator.sessions.read"])(
+  it.each(["operator.read", "operator.sessions.read", "operator.admin"])(
     "routes the %s requester's chat tool from a foreign session to their canonical file",
     async (scope) => {
+      if (scope === "operator.admin") {
+        const principal = {
+          kind: "member" as const,
+          peerKey: "admin-member",
+          accountId: "alice",
+          role: "admin",
+        };
+        client.internal = { openclawIdPrincipal: principal };
+        config.gateway = {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { scopes: [], agents: [], sessions: { others: "none" } },
+              admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+            },
+          },
+        };
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        setRuntimeConfigSnapshot(config);
+      }
       const { identity } = toolTurn([scope]);
       const tool = createPersonalInstructionsTool("main");
       const execute = (params: Record<string, unknown>) =>

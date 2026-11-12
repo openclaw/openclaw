@@ -28,6 +28,7 @@ import {
 import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import {
   authorizeGatewaySessionCreation,
+  resolveAdministratorMemberRolePolicy,
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
@@ -56,7 +57,11 @@ type MentionTarget = {
   sessionKey?: string;
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
 };
-type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
+type MentionReader = {
+  profile: MentionProfile;
+  administratorMemberPolicy: ReturnType<typeof resolveAdministratorMemberRolePolicy>;
+  canRead: (target: MentionTarget) => boolean;
+};
 type MentionRanking = {
   participants: readonly SessionParticipantRecord[];
   members: ReadonlySet<string>;
@@ -157,6 +162,7 @@ export function createHumanMentionPolicy(params: {
     if (!profile) {
       return err(authenticatedProfileUnavailableError());
     }
+    const administratorMemberPolicy = resolveAdministratorMemberRolePolicy(client, cfg);
     const readerClient: GatewayClient = {
       connect: { ...client.connect },
       internal: {
@@ -177,6 +183,7 @@ export function createHumanMentionPolicy(params: {
     const { entryFilter } = prepareSessionSharing({ cfg, client: readerClient });
     return ok({
       profile,
+      administratorMemberPolicy,
       canRead: (target) => entryFilter?.(target.sessionKey, target.entry) ?? true,
     });
   }
@@ -243,11 +250,16 @@ export function createHumanMentionPolicy(params: {
     if (!agent.ok) {
       return err(agent.error);
     }
-    const creationError = authorizeGatewaySessionCreation({
-      cfg,
-      profileId: requester.profile.profileId,
-      agentId: agent.agentId,
-    });
+    const creationError = authorizeGatewaySessionCreation(
+      {
+        cfg,
+        profileId: requester.profile.profileId,
+        agentId: agent.agentId,
+      },
+      requester.administratorMemberPolicy
+        ? { policy: requester.administratorMemberPolicy }
+        : undefined,
+    );
     if (creationError) {
       return err(creationError);
     }

@@ -19,7 +19,10 @@ import {
   currentOwnerDevicePrincipal,
   openclawIdSubjectRolePolicy,
 } from "../openclaw-id/tunnel-principal.js";
-import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
+import {
+  resolveAdministratorMemberRolePolicy,
+  resolveOperatorRolePolicyForAssignment,
+} from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -63,13 +66,16 @@ export async function prepareUserBackgroundAction(
       throw new Error("Background request no longer belongs to a connected profile");
     }
     // A linked owner device keeps the owner's scopes under its person's profile (OCF-510).
-    const policy = openclawIdSubjectRolePolicy(currentOwnerDevicePrincipal(client), () =>
-      resolveOperatorRolePolicyForAssignment(
-        owner,
-        profile.role,
-        context.getRuntimeConfig(),
-        profile.githubLogin ?? null,
-      ),
+    const policy = openclawIdSubjectRolePolicy(
+      currentOwnerDevicePrincipal(client),
+      () =>
+        resolveAdministratorMemberRolePolicy(client, context.getRuntimeConfig()) ??
+        resolveOperatorRolePolicyForAssignment(
+          owner,
+          profile.role,
+          context.getRuntimeConfig(),
+          profile.githubLogin ?? null,
+        ),
     );
     if (
       ![client.connect.scopes ?? [], ...(policy ? [policy.scopes] : [])].every((allowedScopes) =>
