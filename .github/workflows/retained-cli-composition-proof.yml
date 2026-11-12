@@ -1,4 +1,4 @@
-name: Release retained drain and execution lease recovery proof
+name: Release runtime custody and input fixture recovery proof
 'on':
   workflow_dispatch:
     inputs:
@@ -6,11 +6,11 @@ name: Release retained drain and execution lease recovery proof
         required: true
         type: string
         description: Exact frozen candidate SHA; prerequisite diagnostic, not final FRV
-        default: e1260bf7ae448a0ee9a41b665e2d5a2ac9f45abf
+        default: 0825476ef97a33cf908fff0869907c44355c4d63
 permissions:
   contents: read
 concurrency:
-  group: release-114-drain-recovery-e1260bf7ae448a0ee9a41b665e2d5a2ac9f45abf
+  group: release-114-custody-recovery-0825476ef97a33cf908fff0869907c44355c4d63
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -21,9 +21,9 @@ env:
   PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
   CAPACITY_PROOF_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
   PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  CANDIDATE_SHA: e1260bf7ae448a0ee9a41b665e2d5a2ac9f45abf
-  SOURCE_TREE: ffba4c8c429dcec0811100a898bb656c2deb2e2e
-  PATHS_SHA256: a95ffee1f7c4a5bef3c2a9fe0981e63363d092266433d679662f59319e57e422
+  CANDIDATE_SHA: 0825476ef97a33cf908fff0869907c44355c4d63
+  SOURCE_TREE: 100340d3b761d67e0e26a0d9b4790d9934d7d074
+  PATHS_SHA256: 3cf57f4e09f1fcd9a5ef0f22ea38449996ba570cfc2f52f14b129ab864a63851
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
   tests:
@@ -88,24 +88,26 @@ jobs:
         2>&1 | tee .artifacts/final-ci/tests.log'
     - name: Require executed suite coverage
       shell: bash
-      run: "node --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\nconst selected=JSON.parse(process.env.TESTS_JSON);\n\
-        const report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\nassert.equal(report.numFailedTests,0);\
-        \ assert.equal(report.numFailedTestSuites,0);\nfor (const path of selected) {\n const matches=report.testResults.filter(x=>x.name.replaceAll('\\\
-        \\','/').endsWith('/'+path));\n assert.equal(matches.length,1,'Missing/duplicate suite '+path);\n assert(matches[0].assertionResults.some(x=>x.status==='passed'),'No\
-        \ executed case '+path);\n assert(matches[0].assertionResults.every(x=>['passed','pending','skipped','todo','disabled'].includes(x.status)),'Failed\
+      run: "node --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\n\
+        const selected=JSON.parse(process.env.TESTS_JSON);\nconst report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\n\
+        assert.equal(report.numFailedTests,0); assert.equal(report.numFailedTestSuites,0);\nfor (const path of selected)\
+        \ {\n const matches=report.testResults.filter(x=>x.name.replaceAll('\\\\','/').endsWith('/'+path));\n assert.equal(matches.length,1,'Missing/duplicate\
+        \ suite '+path);\n assert(matches[0].assertionResults.some(x=>x.status==='passed'),'No executed case '+path);\n\
+        \ assert(matches[0].assertionResults.every(x=>['passed','pending','skipped','todo','disabled'].includes(x.status)),'Failed\
         \ case '+path);\n}\nfor (const path of ['src/agents/code-mode.catalog-lifetime.test.ts','src/gateway/server.delegated-administration.product.test.ts','test/system-agent-delegation-authority.e2e.test.ts','ui/src/e2e/session-management.trailing-state.e2e.test.ts'])\
-        \ {\n if (!selected.includes(path)) continue;\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\\','/').endsWith('/'+path));\n\
-        \ assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Critical\
+        \ {\n if (!selected.includes(path)) continue;\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\
+        \\','/').endsWith('/'+path));\n assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Critical\
         \ cases must all pass '+path);\n}\nif (process.env.REQUIRE_STRESS==='1') {\n const suite=report.testResults.find(x=>x.name.endsWith('/packages/memory-host-sdk/src/host/session-files-large-export.test.ts'));\n\
         \ assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Stress\
         \ must execute, never skip');\n}\nif (process.platform==='win32') {\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\
-        \\','/').endsWith('/src/infra/update-retained-runtime-imports.process.test.ts'));\n for (const runtime of ['node-short-path','node-junction'])\
-        \ assert(suite?.assertionResults.some(x=>x.title.includes(runtime)&&x.status==='passed'),'Missing real '+runtime+'\
-        \ pass');\n}\nNODE\nnode --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\n\
-        const expected={ 'queued-inputs':3, permissions:4 }[process.env.PROOF_LANE];\nif (expected) {\n const report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\n\
-        \ assert.equal(report.numPassedTests,expected);\n assert.equal(report.numPendingTests,0);\n}\nNODE\n\nif [ \"$PROOF_LANE\"\
-        \ = consumed-contract ]; then node -e 'const r=require(\"./.artifacts/final-ci/tests.json\"); require(\"node:assert/strict\"\
-        ).equal(r.numPendingTests,0)'; fi\n"
+        \\','/').endsWith('/src/infra/update-retained-runtime-imports.process.test.ts'));\n for (const runtime of\
+        \ ['node-short-path','node-junction']) assert(suite?.assertionResults.some(x=>x.title.includes(runtime)&&x.status==='passed'),'Missing\
+        \ real '+runtime+' pass');\n}\nNODE\nnode --input-type=module <<'NODE'\nimport fs from 'node:fs'; import\
+        \ assert from 'node:assert/strict';\nconst expected={ 'queued-inputs':3, permissions:4 }[process.env.PROOF_LANE];\n\
+        if (expected) {\n const report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\n assert.equal(report.numPassedTests,expected);\n\
+        \ assert.equal(report.numPendingTests,0);\n}\nNODE\n\nif [ \"$PROOF_LANE\" = consumed-contract ]; then node\
+        \ -e 'const r=require(\"./.artifacts/final-ci/tests.json\"); require(\"node:assert/strict\").equal(r.numPendingTests,0)';\
+        \ fi\n"
     - name: Require all selected cases
       run: 'node -e ''const r=require("./.artifacts/final-ci/tests.json");require("node:assert/strict").equal(r.numPendingTests,0)'' '
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -124,7 +126,11 @@ jobs:
           tests_json: '["src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts"]'
         - lane: plugin-drain
           tests_json: '["src/gateway/config-reload.plugin-drain.test.ts", "src/gateway/server-plugin-reload-cleanup.test.ts",
-            "src/gateway/server-plugin-reload.recovery.test.ts"]'
+            "src/gateway/server-plugin-reload.recovery.test.ts", "src/gateway/server-plugin-reload.prepared-borrow.test.ts"]'
+        - lane: shared-auth
+          tests_json: '["src/gateway/server-methods/config.shared-auth.test.ts", "src/gateway/server-methods/config-write-flow.test.ts"]'
+        - lane: worker-context
+          tests_json: '["src/gateway/worker-environments/worker-turn-context-engine.test.ts", "src/gateway/worker-environments/worker-turn-detached-context.test.ts"]'
     env:
       TESTS_JSON: ${{ matrix.tests_json }}
       OPENCLAW_SESSION_EXPORT_STRESS: '1'
@@ -186,8 +192,13 @@ jobs:
       run: 'set -euo pipefail
 
         ( node scripts/run-oxlint.mjs --tsconfig tsconfig.json src/gateway/config-reload-plugin-drain.ts src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts
-        && pnpm exec oxfmt --check --no-error-on-unmatched-pattern -- src/gateway/config-reload-plugin-drain.ts src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts
-        && node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json ''["core","core-test-gateway-other","core-test-gateway-root"]''
+        src/gateway/server-methods/config.shared-auth.test.ts src/gateway/server-plugin-reload.prepared-borrow.test.ts
+        src/gateway/server-plugin-reload.recovery.test-support.ts src/gateway/worker-environments/worker-turn-context-engine.test.ts
+        && pnpm exec oxfmt --check --no-error-on-unmatched-pattern -- src/gateway/config-reload-plugin-drain.ts
+        src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts src/gateway/server-methods/config.shared-auth.test.ts
+        src/gateway/server-plugin-reload.prepared-borrow.test.ts src/gateway/server-plugin-reload.recovery.test-support.ts
+        src/gateway/worker-environments/worker-turn-context-engine.test.ts && node scripts/run-tsgo-core-test-shards.mjs
+        --ci-graphs-json ''["core","core-test-gateway-other","core-test-gateway-root","core-test-gateway-server"]''
         ) 2>&1 | tee .artifacts/final-ci/static.log
 
         git diff --exit-code
