@@ -1,2 +1,2 @@
-# Warm borrower no-fs regression and existing physical-replacement boundary coverage.
-11
+# Warm canonical borrow no-fs regression, replacement and fresh alias boundary coverage.
+20
