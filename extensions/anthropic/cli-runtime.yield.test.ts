@@ -6,6 +6,7 @@ import {
   createCliTestHarness,
   resultDetail,
   waitForProcessExit,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
@@ -68,7 +69,7 @@ it.each([
       context.args = [...context.args, "--fork-session"];
     }
     const records: Record<string, unknown>[] = [];
-    for await (const record of executeClaudeCli(context)) {
+    for await (const record of executeClaudeCli(withClaudeCliTestDeadline(context))) {
       records.push(record);
       if (record.subtype === "fixture_ready") {
         expect(interrupt).toBeDefined();
@@ -108,7 +109,7 @@ it("keeps genuine cancellation an error without emitting a successful yield resu
   });
   const results: Record<string, unknown>[] = [];
   const run = async () => {
-    for await (const record of executeClaudeCli(context)) {
+    for await (const record of executeClaudeCli(withClaudeCliTestDeadline(context))) {
       if (record.type === "result") {
         results.push(record);
       }

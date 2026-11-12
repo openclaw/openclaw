@@ -43,16 +43,6 @@ async function reportCleanupProgress(
   }
 }
 
-async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
-  try {
-    await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
-    await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export async function cleanupGitPreflight(
   params: {
     gitRoot: string;
@@ -102,25 +92,7 @@ export async function cleanupGitPreflight(
     runCommand: runCleanupCommand,
     timeoutMs: cleanupTimeoutMs,
   });
-  if (removeStep.exitCode !== 0 && (await repairPreflightCleanup(worktreeDir, preflightRoot))) {
-    removeStep.exitCode = 0;
-    const message =
-      process.platform === "win32"
-        ? "windows fallback cleanup removed preflight tree"
-        : "fallback cleanup removed preflight tree";
-    removeStep.stderrTail = trimLogTail(
-      [removeStep.stderrTail, message].filter(Boolean).join("\n"),
-      MAX_LOG_CHARS,
-    );
-  }
-  await runCleanupCommand(["git", "-C", options.cwd, "worktree", "prune"], {
-    cwd: options.cwd,
-  }).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    return null;
-  });
+  // The worktree is a child of this private root; one recursive removal owns both.
   const removed = await fs
     .rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
     .then(
@@ -139,6 +111,17 @@ export async function cleanupGitPreflight(
         return false;
       },
     );
+  if (removeStep.exitCode !== 0 && removed) {
+    removeStep.exitCode = 0;
+    const message =
+      process.platform === "win32"
+        ? "windows fallback cleanup removed preflight tree"
+        : "fallback cleanup removed preflight tree";
+    removeStep.stderrTail = trimLogTail(
+      [removeStep.stderrTail, message].filter(Boolean).join("\n"),
+      MAX_LOG_CHARS,
+    );
+  }
   if (removeStep.exitCode !== 0) {
     removeStep.advisory = {
       kind: "recoverable-maintenance",

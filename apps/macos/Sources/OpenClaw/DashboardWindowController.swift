@@ -24,8 +24,8 @@ private final class DashboardWindowContentView: NSView {
     }
 }
 
-/// The dashboard's empty unified toolbar exists only to grow the titlebar to
-/// 52pt so the traffic lights align with the hosted web chrome. `View > Hide
+/// The empty compact toolbar keeps the traffic lights aligned with the
+/// hosted web chrome's 40pt row. `View > Hide
 /// Toolbar` (and ⌥⌘T) would collapse the titlebar while the web inset stays
 /// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
 /// misalignment. Refusing the toggle keeps the two heights in lockstep.
@@ -34,6 +34,8 @@ private final class DashboardWindow: ExperienceWindow {
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
     var lifetimeRevision: UInt64 = 0
+    /// Set while a launch preload has never been shown; window counts skip it.
+    var isUnshownPreload = false
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
     var documentLoad: DashboardDocumentLoad?
 
@@ -107,6 +109,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
     private var nativeCommandsReady = false
+    private var lastPublishedNativeTitlebarInset: CGFloat?
     /// The document whose finish arrived while a newer load was pending.
     private var deferredFinishSourceID: String?
     private(set) var gatewayHealth: DashboardGatewayHealth?
@@ -412,6 +415,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.isWindowOpen || self.isHiddenForExperience
     }
 
+    var isUnshownPreload: Bool {
+        (self.window as? DashboardWindow)?.isUnshownPreload == true
+    }
+
+    /// A window that was never shown keeps the experience-hidden lifetime until `show()`.
+    func retainHidden() {
+        (self.window as? DashboardWindow)?.isHiddenForExperience = true
+        (self.window as? DashboardWindow)?.isUnshownPreload = true
+    }
+
     func hideForExperience() {
         guard let window else { return }
         // Keep the document and drafts, but retire actions admitted by the
@@ -433,6 +446,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func show() {
         (self.window as? DashboardWindow)?.isHiddenForExperience = false
+        (self.window as? DashboardWindow)?.isUnshownPreload = false
         self.window?.isExcludedFromWindowsMenu = false
         self.deviceSettingsMessageHandler.startObserving()
         if let window {
@@ -680,11 +694,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.title = title
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        // An empty unified toolbar grows the transparent titlebar to 52pt so the
-        // traffic lights sit vertically centered against the web titlebar row
-        // (--openclaw-native-titlebar-height); without it they hug the top edge.
+        // Keep AppKit's traffic lights and the web titlebar on the same centerline.
+        // DashboardWindowLayout supplies this style and the CSS row height.
         window.toolbar = NSToolbar(identifier: "DashboardWindowTitlebar")
-        window.toolbarStyle = .unified
+        window.toolbarStyle = DashboardWindowLayout.toolbarStyle
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
@@ -938,11 +951,11 @@ extension DashboardWindowController {
     }
 
     func navigateBack() {
-        self.activeNavigationWebView.goBack()
+        self.nativeBrowser.goBack(in: self.activeNavigationWebView)
     }
 
     func navigateForward() {
-        self.activeNavigationWebView.goForward()
+        self.nativeBrowser.goForward(in: self.activeNavigationWebView)
     }
 
     fileprivate func closeFocusedPanelOrWindow() {
@@ -974,7 +987,7 @@ extension DashboardWindowController {
     }
 
     /// Commands are deliverable when a document is live or a load is in flight
-    /// (the queue flushes at `didFinish`). A failure page, or a terminally
+    /// (the queue flushes when the shell is ready). A failure page, or a terminally
     /// cancelled load with no successor, needs a reload before dispatch —
     /// otherwise queued ⌘N/⌘K would wait on a `didFinish` that never comes.
     var canDeliverNativeCommands: Bool {
@@ -988,22 +1001,25 @@ extension DashboardWindowController {
     }
 
     private var canDispatchNativeCommands: Bool {
-        // Older shared-credential Gateways predate the shell-ready signal.
-        // Personal browser sign-in requires the current Control UI's listener-owned fact.
         self.documentHost.hasLiveContent && self.pendingGatewaySwitch == nil && self.isTrustedDashboardDocument &&
-            (!self.auth.usesBrowserIdentity || self.nativeCommandsReady)
+            self.nativeCommandsReady
     }
 
     private func refreshNativeCommandReadiness() {
-        guard self.auth.usesBrowserIdentity || self.documentLoad != nil else { return }
         let sourceID = self.notificationSourceID
         let sourceURL = self.currentURL
+        let allowsLegacyReadiness = !self.auth.usesBrowserIdentity
         Task { @MainActor [weak self] in
             guard let self else { return }
             // Messages only wake the read. A previous same-URL document cannot
             // attest that the currently displayed sign-in page has command listeners.
             let readiness = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
-                "return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true;",
+                """
+                // Current HTML declares false before asynchronous shell startup.
+                // Signal-less shared-credential bundles keep document-load delivery.
+                return window.__OPENCLAW_NATIVE_COMMANDS_READY__ === true ||
+                  (\(allowsLegacyReadiness) && window.__OPENCLAW_NATIVE_COMMANDS_READY__ === undefined);
+                """,
                 url: sourceURL)) as? Bool
             guard self.notificationSourceID == sourceID, self.currentURL == sourceURL,
                   !self.webView.isLoading else { return }
@@ -1072,6 +1088,30 @@ extension DashboardWindowController {
 
     func windowDidExitFullScreen(_: Notification) {
         self.updateToolbarVisibility(isFullScreen: false)
+    }
+
+    func windowDidUpdate(_: Notification) {
+        // Full-screen transitions can finish laying out AppKit's traffic lights
+        // after the web view's bounds have stopped changing.
+        self.publishNativeTitlebarInset()
+    }
+
+    private func publishNativeTitlebarInset() {
+        guard self.documentHost.hasLiveContent, self.isTrustedDashboardDocument,
+              let window = self.window else { return }
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        guard let trailingEdge = buttons.compactMap({ window.standardWindowButton($0) })
+            .map({ self.webView.convert($0.bounds, from: $0).maxX }).max() else { return }
+        // AppKit controls vary with toolbar style and OS. Their measured edge is
+        // in view points; the hosted controls use CSS pixels at the page's zoom.
+        let inset = (trailingEdge - self.webView.bounds.minX) / self.webView.pageZoom +
+            DashboardWindowLayout.titlebarControlsGap
+        guard self.lastPublishedNativeTitlebarInset != inset else { return }
+        self.lastPublishedNativeTitlebarInset = inset
+        self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
+            """
+            document.documentElement.style.setProperty('--openclaw-native-controls-inset', "\(inset)px");
+            """, url: self.currentURL))
     }
 
     private func updateToolbarVisibility(isFullScreen: Bool) {
@@ -1152,7 +1192,8 @@ extension DashboardWindowController {
         // An in-flight load counts as usable so opening mid-preload does not
         // cancel and restart it — unless the in-flight document is the failure
         // page, which must always be replaced.
-        currentURL != newURL || currentAuth != newAuth || isShowingFailurePage || !hasUsableDocument
+        currentURL != newURL || !currentAuth.hasSameDocumentIdentity(as: newAuth) ||
+            isShowingFailurePage || !hasUsableDocument
     }
 
     func dispatchNativeCommand(_ command: DashboardNativeCommand) {
@@ -1329,6 +1370,8 @@ extension DashboardWindowController {
                     url,
                     navigationType: navigationAction.navigationType,
                     buttonNumber: navigationAction.buttonNumber)
+                // A physical click is a new user navigation; page script cannot fake one.
+                if nativeTab.navigationWasUserActivated { nativeTab.resetAutomaticReloads() }
             }
             // Page-initiated downloads keep their external-browser behavior.
             // The explicit toolbar action owns the native Save dialog.
@@ -1449,6 +1492,8 @@ extension DashboardWindowController {
         self.documentHost.hasLiveContent = true
         guard self.isTrustedDashboardDocument else { return }
         self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
+        self.lastPublishedNativeTitlebarInset = nil
+        self.publishNativeTitlebarInset()
         self.publishNativeHistoryState()
         self.nativeBrowser.scheduleStatePush()
         self.refreshNativeCommandReadiness()
@@ -1464,9 +1509,9 @@ extension DashboardWindowController {
         self.webView(webView, didFail: navigation, withError: error)
     }
 
-    func webView(_ webView: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         if self.nativeBrowser.owns(webView) {
-            self.nativeBrowser.navigationDidFail(for: webView, error: error)
+            self.nativeBrowser.navigationDidFail(navigation, for: webView, error: error)
             return
         }
         guard webView === self.webView else { return }
@@ -1491,7 +1536,7 @@ extension DashboardWindowController {
                 message: String(localized: "The dashboard page stopped unexpectedly."),
                 detail: String(localized: "Choose Reload to try loading the dashboard again."))
         } else if self.nativeBrowser.owns(webView) {
-            webView.reload()
+            self.nativeBrowser.webContentProcessDidTerminate(webView)
         }
     }
 

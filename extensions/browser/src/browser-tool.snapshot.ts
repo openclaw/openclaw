@@ -317,7 +317,8 @@ export async function executeSnapshotAction(params: {
   };
   const query = normalizeOptionalString(input.query);
   if (query && !snapshot.blockedByDialog) {
-    const tokens = query.toLowerCase().split(/\s+/);
+    // Compare canonical forms without rewriting returned page text or element refs.
+    const tokens = query.toLowerCase().normalize("NFC").split(/\s+/);
     const source =
       snapshot.format === "ai"
         ? snapshot.snapshot
@@ -328,7 +329,7 @@ export async function executeSnapshotAction(params: {
             )
             .join("\n");
     const matches = source.split("\n").filter((line) => {
-      const lower = line.toLowerCase();
+      const lower = line.toLowerCase().normalize("NFC");
       return tokens.every((token) => lower.includes(token));
     });
     const matchedText = matches.join("\n");

@@ -1,12 +1,13 @@
 import { Command } from "commander";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { registerSkillsWorkshopCommands } from "./cli.js";
+import { registerSkillWorkshopCli } from "./cli.js";
 
 // Gateway-first routing, offline custody (the Gateway lock) and transport fallback belong to
 // the host's `routeSkillsCliRequest`; src/cli/skills-cli.workshop-contract.test.ts pins them
 // end to end. These tests pin what the plugin hands that router and how it renders results.
 const mocks = vi.hoisted(() => {
-  const stub = () => vi.fn();
   return {
     archiveWorkshopSkill: vi.fn(),
     config: {},
@@ -14,10 +15,10 @@ const mocks = vi.hoisted(() => {
     restoreWorkshopSkill: vi.fn(),
     routeSkillsCliRequest: vi.fn<(request: RouteRequest) => Promise<unknown>>(),
     defaultRuntime: {
-      log: stub(),
-      error: stub(),
-      writeStdout: stub(),
-      writeJson: stub(),
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
       exit: vi.fn((code: number) => {
         throw new Error(`__exit__:${code}`);
       }),
@@ -58,22 +59,9 @@ type RouteRequest = {
   loadLocal: () => Promise<unknown>;
 };
 
-/** Answers like a running Gateway: the request goes over the wire with the agent added. */
-function gatewayReplies(result: unknown) {
-  mocks.routeSkillsCliRequest.mockImplementation(async () => result);
-}
-
 /** Answers like the host when no Gateway owns the state: the plugin's local path runs. */
 function noGatewayOwnsState() {
   mocks.routeSkillsCliRequest.mockImplementation((request: RouteRequest) => request.loadLocal());
-}
-
-function routedRequests() {
-  return mocks.routeSkillsCliRequest.mock.calls.map(([request]) => ({
-    method: request.method,
-    params: { agentId: request.resolved.agentId, ...request.params },
-    mutation: request.mutation,
-  }));
 }
 
 const change = {
@@ -90,15 +78,21 @@ const context = { config: mocks.config, agentId: "writer", actor: "user" };
 const namedSkill = { agentId: "main", name: "release-notes" };
 const version = { ...namedSkill, versionId: "v1" };
 const archivedVersion = (id: string, action: string) => ({ id, action, createdAtMs: 1 });
-function runCli(args: string | string[]) {
-  const program = new Command().enablePositionalOptions();
-  program.exitOverride();
+async function runCli(args: string | string[]) {
+  const program = new Command().enablePositionalOptions().exitOverride();
   // The core `skills` parent's own options; the plugin adds `workshop` under it.
   const skills = program
     .command("skills")
     .option("--agent <id>", "Target agent workspace")
     .option("--json", "Output as JSON", false);
-  registerSkillsWorkshopCommands(skills);
+  const registerCli = vi.fn<OpenClawPluginApi["registerCli"]>();
+  registerSkillWorkshopCli(createTestPluginApi({ registerCli }));
+  await registerCli.mock.calls[0]![0]({
+    program: skills,
+    parentPath: ["skills"],
+    config: mocks.config,
+    logger: console,
+  });
   return program.parseAsync(typeof args === "string" ? args.split(" ") : args, { from: "user" });
 }
 
@@ -131,17 +125,20 @@ describe("skills workshop cli", () => {
     ],
     ["restore release-notes --version v1", "restore", version, true],
   ] as const)("routes %s to %s", async (argv, method, params, mutation) => {
-    gatewayReplies({ changes: [], change, content: "", skills: [] });
+    mocks.routeSkillsCliRequest.mockResolvedValue({ changes: [], change, content: "", skills: [] });
 
     await runCli(`skills workshop ${argv} --json`);
 
-    expect(routedRequests()).toStrictEqual([
-      { method: `skills.workshop.${method}`, params, mutation },
-    ]);
+    const requests = mocks.routeSkillsCliRequest.mock.calls.map(([request]) => ({
+      method: request.method,
+      params: { agentId: request.resolved.agentId, ...request.params },
+      mutation: request.mutation,
+    }));
+    expect(requests).toStrictEqual([{ method: `skills.workshop.${method}`, params, mutation }]);
   });
 
   it("rejects an explicitly blank --version instead of restoring the newest version", async () => {
-    gatewayReplies({ change });
+    mocks.routeSkillsCliRequest.mockResolvedValue({ change });
 
     await expect(
       runCli(["skills", "workshop", "restore", "release-notes", "--version", ""]),
@@ -153,7 +150,7 @@ describe("skills workshop cli", () => {
   });
 
   it("renders learned skills, archived skills, and changes as text", async () => {
-    gatewayReplies({
+    mocks.routeSkillsCliRequest.mockResolvedValue({
       agentId: "main",
       mode: "auto",
       root: "/tmp/agent/workshop-skills",
@@ -178,7 +175,7 @@ describe("skills workshop cli", () => {
     expect(listed).toContain("updated 2h ago  uses=3  Draft release notes from merged PRs");
     expect(listed).toMatch(/Archived:[^\n]*\nold-deploy {2}versions=1\n$/);
 
-    gatewayReplies({ changes: [change] });
+    mocks.routeSkillsCliRequest.mockResolvedValue({ changes: [change] });
     await runCli("skills workshop changes");
     expect(mocks.defaultRuntime.writeStdout).toHaveBeenLastCalledWith(
       "5m ago  user  archive  release-notes  archived: superseded  version=20260929T010203004Z-archive\n",

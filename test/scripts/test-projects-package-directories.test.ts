@@ -57,7 +57,7 @@ it("routes mixed package owners once beside explicit boundary and E2E leaves", (
       "unit",
       "unit-fast-isolated",
       "infra",
-      "unit-fast",
+      "markdown",
       "gateway-client",
       "gateway-client",
       "infra",

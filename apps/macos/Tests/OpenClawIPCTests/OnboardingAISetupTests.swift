@@ -3623,6 +3623,8 @@ struct OnboardingAISetupTests {
             "agents.list", "openclaw.setup.detect", "agents.list", "openclaw.setup.activate",
         ])
         #expect(view.aiSetup.verifiedExistingInference)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(handoffs == [.dashboard])
     }
 

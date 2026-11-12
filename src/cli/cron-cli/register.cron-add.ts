@@ -20,7 +20,9 @@ import {
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   assertCronCliJobSpec,
+  callCronReadFromCli,
   assertCronTimeoutSupported,
+  buildCronCommandShellArgvForGateway,
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
   handleCronCliError,
@@ -44,7 +46,7 @@ export function registerCronStatusCommand(cron: Command) {
       .description("Show automations scheduler status")
       .action(async (opts) => {
         try {
-          const res = await callGatewayFromCli("cron.status", opts, {});
+          const res = await callCronReadFromCli("cron.status", opts, {});
           printCronJson(res);
         } catch (err) {
           handleCronCliError(err);
@@ -156,8 +158,8 @@ export function registerCronAddCommand(cron: Command) {
             const resolvedPayload = await (async () => {
               // System events require main; agent turns may also run in its shared conversation.
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
-              const optionMessage = normalizeOptionalString(opts.message);
-              const positionalMessage = normalizeOptionalString(messageArg);
+              const optionMessage = readNonBlankString(opts.message);
+              const positionalMessage = readNonBlankString(messageArg);
               const commandShell = readNonBlankString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               // File arguments identify exact local paths; trimming can select another file.
@@ -241,7 +243,9 @@ export function registerCronAddCommand(cron: Command) {
                 );
                 return {
                   kind: "command" as const,
-                  argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
+                  argv:
+                    commandArgv ??
+                    (await buildCronCommandShellArgvForGateway(commandShell ?? "", opts)),
                   cwd: readNonBlankString(opts.commandCwd),
                   env: parseCronCommandEnv(opts.commandEnv),
                   input: typeof opts.commandInput === "string" ? opts.commandInput : undefined,

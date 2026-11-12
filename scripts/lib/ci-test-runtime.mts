@@ -121,10 +121,14 @@ const nodeRequiredFiles = new Set([
 // Physical schema and worker lifecycle proofs exercise both host runtimes. Keep Bun coverage
 // while qualifying Node workers independently of any guest runtime choice.
 const bothHostFiles = new Set([
+  // Portable catalog lifecycle plus a separate V8 planner-count proof.
+  "src/agents/prepared-model-catalog-worker.reuse.integration.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/code-mode-engine-parity.test.ts",
   "src/agents/code-mode.failure-phase.test.ts",
   "src/cli/update-cli/update-command-admission-terminal.test.ts",
+  // Cold Decision preparation must retain the same owner on both host runtimes.
+  "src/decisions/clawrouter.integration.test.ts",
   "src/infra/sqlite-database-admission.worker.test.ts",
   "src/infra/sqlite-schema-facts.native.test.ts",
   "src/infra/sqlite-schema-facts.physical-cache.test.ts",

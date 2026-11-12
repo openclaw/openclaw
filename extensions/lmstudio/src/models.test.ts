@@ -196,7 +196,8 @@ describe("lmstudio-models", () => {
       input: ["text"],
       contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      // Half of the 64,000-token JIT load window stays available for the prompt.
+      maxTokens: 32_000,
     });
     for (const index of [1, 3]) {
       expect(models[index]?.compat).toEqual({ supportsUsageInStreaming: true });

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import * as modelsConfigState from "../../agents/models-config-state.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePluginGenerationRetiredError,
@@ -477,6 +478,9 @@ describe("runtime.llm.complete", () => {
   it.each([0.0042, 0])(
     "preserves billed cost %s through host dispatch and logging",
     async (costUsd) => {
+      using pricing = vi
+        .spyOn(modelsConfigState, "captureModelsJsonCostSource")
+        .mockRejectedValue(new Error("Recorded billing must not prepare fallback pricing"));
       const usage = {
         ...createRuntimeLlmUsageFixture(),
         cost: { total: costUsd, totalOrigin: "provider-billed" },
@@ -556,6 +560,7 @@ describe("runtime.llm.complete", () => {
         },
       );
       expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd });
+      expect(pricing).not.toHaveBeenCalled();
     },
   );
 

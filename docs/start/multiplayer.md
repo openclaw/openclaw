@@ -21,7 +21,7 @@ We use [team.openclaw.ai](https://team.openclaw.ai) as a multiplayer claw and sh
 workspace for OpenClaw itself. Maintainers and agents work through repository
 changes in the same conversations:
 
-1. **Start a repository task.** Choose the OpenClaw project in **New conversation**
+1. **Start a repository task.** Choose the OpenClaw project in **New session**
    and select **Worktree** for a [managed branch and checkout](/concepts/managed-worktrees).
    Give the agent a concrete change and the checks that demonstrate it works.
 2. **Work together.** Teammates with access can open the session, add context,

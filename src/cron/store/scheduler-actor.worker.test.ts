@@ -20,6 +20,7 @@ import { readCronRunRecordsInDatabase } from "./run-history.kernel.js";
 import { queueJob } from "./run-queue.test-support.js";
 import { cancelCronRequestsInWorker } from "./run-queue.worker.js";
 import { ensureCronRunReceiptSchema } from "./run-receipt-store.js";
+import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 import { saveCronStoreInDatabase } from "./save.kernel.js";
 import type { CronSchedulerOperations, CronSchedulerSnapshot } from "./scheduler-actor.types.js";
 import { runCronSchedulerInWorker, stopCronSchedulerInWorker } from "./scheduler-actor.worker.js";
@@ -84,6 +85,40 @@ function withinWorker<T>(run: () => T): T {
   return runWithSqliteWorkerStateContext(
     { environment: { ...fixture.env, OPENCLAW_STATE_DIR: fixture.stateDir } },
     run,
+  );
+}
+
+function finishRun(
+  storeKey: string,
+  launch: Required<Pick<CronRunFinalizationOutcome, "job" | "runReceipt">>,
+  endedAt: number,
+  outcome: Partial<CronRunFinalizationOutcome> = {},
+) {
+  withinWorker(() =>
+    finalizeCronRunsInWorker(database, {
+      storeKey,
+      snapshot: {
+        nowMs: endedAt,
+        defaultAgentId: "main",
+        outcomes: [
+          {
+            jobId: launch.job.id,
+            job: launch.job,
+            runReceipt: launch.runReceipt,
+            status: "ok",
+            completionStatus: "succeeded",
+            errorReason: undefined,
+            deliveryState: {
+              status: "not-requested",
+              failureNotification: { status: "not-requested" },
+            },
+            startedAt: launch.runReceipt.startedAtMs,
+            endedAt,
+            ...outcome,
+          },
+        ],
+      },
+    }),
   );
 }
 
@@ -402,32 +437,7 @@ it.each([false, true])("recovers stale cron slots unless skipMissedJobs=%s", (sk
   }
   let launch = tick.launches[0]!;
   for (let slot = 1; slot <= 30; slot += 1) {
-    const endedAt = launch.runReceipt.startedAtMs + 100;
-    withinWorker(() =>
-      finalizeCronRunsInWorker(database, {
-        storeKey: scheduler.storeKey,
-        snapshot: {
-          nowMs: endedAt,
-          defaultAgentId: "main",
-          outcomes: [
-            {
-              jobId: launch.job.id,
-              job: launch.job,
-              runReceipt: launch.runReceipt,
-              status: "ok",
-              completionStatus: "succeeded",
-              errorReason: undefined,
-              deliveryState: {
-                status: "not-requested",
-                failureNotification: { status: "not-requested" },
-              },
-              startedAt: launch.runReceipt.startedAtMs,
-              endedAt,
-            },
-          ],
-        },
-      }),
-    );
+    finishRun(scheduler.storeKey, launch, launch.runReceipt.startedAtMs + 100);
     const next = scheduler.tick(now + slot * minute, slot * minute);
     expect(jobIds(next.launches), `scheduled minute ${slot}`).toEqual(["stale-future"]);
     launch = next.launches[0]!;
@@ -529,13 +539,70 @@ it("observes future deadlines without SQL wakes and retries an unacknowledged du
 });
 
 it.each([
-  { name: "on-time long deadline", due: 10, elapsed: 10, accepted: 7 },
-  { name: "missed work after sleep", due: 1, elapsed: 60, accepted: 5 },
-])("bounds catch-up only for $name", ({ name, due, elapsed, accepted }) => {
+  { name: "on-time long deadline", due: 10, elapsed: 10, skip: undefined, accepted: 7 },
+  { name: "missed work after sleep", due: 1, elapsed: 60, skip: undefined, accepted: 5 },
+  { name: "a late wake", due: 1, elapsed: 1.05, skip: "late", accepted: 5 },
+  { name: "a clock jump", due: 1, elapsed: 1.05, skip: "jump", accepted: 0 },
+  { name: "a refreshed clock jump", due: 1, elapsed: 1.05, skip: "refreshed jump", accepted: 0 },
+] as const)("bounds catch-up only for $name", ({ name, due, elapsed, skip, accepted }) => {
   const scheduler = storedScheduler(
     name,
     jobSeries("job", 7, () => now + due * minute),
   );
+  const config = { ...snapshot.config, cronConfig: { skipMissedJobs: skip !== undefined } };
+  scheduler.start(now, { snapshot: { config } });
+  // A late wake moves wall and monotonic time together; a clock jump moves only the wall.
+  const atMs = now + (skip?.endsWith("jump") ? 60 : elapsed) * minute;
+  if (skip === "refreshed jump") {
+    scheduler.refresh({ nowMs: atMs, monotonicMs: elapsed * minute });
+  }
+  expect(scheduler.tick(atMs, elapsed * minute).accepted).toHaveLength(accepted);
+});
+
+it("backs off one deferred occurrence through restart and runs it once when admission clears", async () => {
+  const dueAt = now + 1_000;
+  const scheduler = singleJobScheduler("waiting", dueAt, {
+    payload: { kind: "agentTurn", message: "Synthetic pending occurrence" },
+    state: { nextRunAtMs: dueAt, lastRunStatus: "ok", consecutiveErrors: 0 },
+  });
   scheduler.start();
-  expect(scheduler.tick(now + elapsed * minute, elapsed * minute).accepted).toHaveLength(accepted);
+  let atMs = dueAt;
+  let launch = scheduler.tick(atMs, atMs - now).launches[0]!;
+  const busy = {
+    status: "skipped",
+    completionStatus: "failed",
+    admissionDeferred: true,
+    executionStarted: false,
+    summary: "Agent is busy",
+  } as const;
+  for (const [index, delay] of [30_000, 60_000, 120_000, 240_000, 300_000, 300_000].entries()) {
+    finishRun(scheduler.storeKey, launch, atMs, busy);
+    expect(scheduler.tick(atMs + 2_000, atMs + 2_000 - now).launches).toEqual([]);
+    expect(scheduler.job("waiting").state).toMatchObject({
+      nextRunAtMs: dueAt,
+      lastRunStatus: "ok",
+      consecutiveErrors: 0,
+      admissionDeferred: {
+        reason: "Agent is busy",
+        sinceMs: dueAt,
+        attempts: index + 1,
+        retryAtMs: atMs + delay,
+      },
+    });
+    expect(scheduler.receipts()).toHaveLength(1);
+    atMs += delay;
+    if (index === 5) {
+      // An elapsed wait remains the same occurrence, even with agent catch-up deferral enabled.
+      await scheduler.restart(atMs + 1, { deferAgentWork: true });
+      expect(scheduler.job("waiting").state.nextRunAtMs).toBe(dueAt);
+      atMs += 2;
+    }
+    launch = scheduler.tick(atMs, atMs - now).launches[0]!;
+    expect(launch).toBeDefined();
+  }
+  finishRun(scheduler.storeKey, launch, atMs);
+  expect(scheduler.job("waiting").state.admissionDeferred).toBeUndefined();
+  expect(scheduler.job("waiting").state.lastRunStatus).toBe("ok");
+  expect(scheduler.tick(atMs + 2_000, atMs + 2_000 - now).launches).toEqual([]);
+  expect(scheduler.receipts()).toHaveLength(1);
 });

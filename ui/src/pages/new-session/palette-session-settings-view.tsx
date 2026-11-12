@@ -1,10 +1,13 @@
 import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { HeaderSearch } from "../../components/solid/header-search.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { SwitchIndicator } from "../../components/solid/switch.tsx";
+import { keyboardHints } from "../../lib/keyboard-hints.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -38,7 +41,6 @@ export function PaletteSessionSettingsView(properties: {
     (previous = false) => !properties.options.draft.place.requiredPlacement && previous,
   );
   const [query, setQuery] = createSignal("");
-  const [searching, setSearching] = createSignal(false);
   let focusTarget: FocusTarget | undefined;
   const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   const focusControls = new Set<HTMLElement>();
@@ -54,15 +56,13 @@ export function PaletteSessionSettingsView(properties: {
     setOpen(false);
     setPlaces(false);
     setQuery("");
-    setSearching(false);
     focusTarget = undefined;
   };
   const showPlaces = (value: boolean, pointer = false) => {
     setPlaces(value);
     setQuery("");
-    setSearching(false);
-    // Pointer entry focuses Back; keyboard entry goes straight to search.
-    focusTarget = value ? (pointer ? "back" : "search") : "workspace";
+    // Search takes focus; a touch tap focuses Back so no on-screen keyboard covers the list.
+    focusTarget = value ? (pointer && !keyboardHints.visible() ? "back" : "search") : "workspace";
   };
   const view = createMemo(() => resolvePaletteSessionSettings(properties.options, query()));
   const selectMachine = (
@@ -131,11 +131,12 @@ export function PaletteSessionSettingsView(properties: {
     }
     const panel = event.currentTarget;
     const controls = [...focusControls, ...(readAgentControls?.() ?? [])]
+      // Arrows walk the field and the choices; Tab still reaches the field's clear button.
       .filter(
         (control) =>
           panel.contains(control) &&
           !control.matches(":disabled") &&
-          !(searching() && control.matches(".header-search__toggle")),
+          !control.matches(".header-search__clear"),
       )
       .toSorted((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
@@ -181,15 +182,13 @@ export function PaletteSessionSettingsView(properties: {
         <HeaderSearch
           class="palette-session-settings__heading"
           inputClass="palette-session-settings__search"
-          title={t("newSession.projects")}
           label={t("common.search")}
+          placeholder={t("newSession.searchProjects")}
           query={query()}
-          open={searching()}
           controlRef={controlRef}
-          toggleRef={(node) => {
+          inputRef={(node) => {
             focusTargets.search = node;
           }}
-          onOpenChange={setSearching}
           onQueryChange={setQuery}
           leading={
             <button
@@ -411,7 +410,9 @@ export function PaletteSessionSettingsView(properties: {
                   <Icon name="gitBranch" />
                 </span>
                 <span>{t("newSession.checkoutWorktree")}</span>
-                <span class="palette-session-settings__switch" aria-hidden="true" />
+                <span class="palette-session-settings__switch">
+                  <SwitchIndicator checked={place().worktree} size="sm" />
+                </span>
               </button>
             ) : undefined}
           </>
@@ -449,8 +450,7 @@ export function PaletteSessionSettingsView(properties: {
                     : undefined
                 }
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   ref={[controlRef()]}
                   checked={properties.options.preferences.remember}
                   disabled={view().locked || !properties.options.preferences.available}

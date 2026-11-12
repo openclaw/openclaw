@@ -18,6 +18,7 @@ type PostgresBridgeParameters = {
   lockTimeoutMs?: number;
   statementTimeoutMs?: number;
   reuse?: boolean;
+  readOnly?: boolean;
 };
 
 export function postgresBridgeReuseKey(params: PostgresBridgeParameters): string {
@@ -26,6 +27,7 @@ export function postgresBridgeReuseKey(params: PostgresBridgeParameters): string
       params.url,
       params.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS,
       params.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS,
+      params.readOnly === true,
     ]),
   );
 }
@@ -60,6 +62,7 @@ export function createPostgresBridge(params: PostgresBridgeParameters): Postgres
           connectTimeoutMs: POSTGRES_CONNECT_TIMEOUT_MS,
           lockTimeoutMs: params.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS,
           statementTimeoutMs: params.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS,
+          readOnly: params.readOnly === true,
         },
       } satisfies PostgresPoolSetup,
       [port2],

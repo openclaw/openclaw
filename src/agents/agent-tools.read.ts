@@ -31,6 +31,11 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  type ApplyPatchContainmentSource,
+  isSandboxRootEscapeError,
+  withWorkspaceRecoveryHint,
+} from "./apply-patch-containment-hint.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -679,20 +684,6 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
-function isSandboxRootEscapeError(error: unknown): error is Error {
-  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
-}
-
-function withWorkspaceSafeTempHint(error: unknown): unknown {
-  if (!isSandboxRootEscapeError(error)) {
-    return error;
-  }
-  const message = error.message.includes(".openclaw/tmp/")
-    ? error.message
-    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
-  return new Error(message, { cause: error });
-}
-
 async function assertSandboxPathWithinAnyRoot(params: {
   cwd?: string;
   filePath: string;
@@ -745,6 +736,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
     resolutionCwd?: string;
+    containmentSource?: ApplyPatchContainmentSource;
     bridge?: SandboxFsBridge;
     readPathValidation?: "bridge";
   },
@@ -815,7 +807,11 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
             });
           }
         } catch (error) {
-          throw withWorkspaceSafeTempHint(error);
+          throw withWorkspaceRecoveryHint(
+            error,
+            !options?.bridge && mounts.length === 0,
+            options?.containmentSource,
+          );
         }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
@@ -1087,24 +1083,18 @@ export function wrapReadToolWithSkillContent(
               options,
             ))
           : tool;
-      // Skill instructions are served whole. Some models still send paging arguments,
-      // so windows are dropped rather than rejected.
-      const instructionArgs: Record<string, unknown> = { ...record, path: normalizedPath };
-      for (const key of ["offset", "limit", "cursor"]) {
-        delete instructionArgs[key];
-      }
+      // Instructions that fit are served whole, ignoring stray paging arguments. Larger
+      // ones page through the normal read continuation, whose notice fits the budget.
+      const readArgs: Record<string, unknown> = { ...record, path: normalizedPath };
+      const { offset, limit, cursor, ...instructionArgs } = readArgs;
       try {
         const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
         const details = result.details;
         const detailsKind = details.kind;
         if (detailsKind === "truncated") {
           resetDelivery();
-          const text =
-            "Skill instructions cannot be partially served: the whole document exceeds this call's read or model-context budget. Ask the operator to reduce the document or increase the model context.";
-          return {
-            content: [{ type: "text", text }],
-            details: { kind: "text", content: text },
-          };
+          const windowed = offset !== undefined || limit !== undefined || cursor !== undefined;
+          return windowed ? await instructionTool.execute(toolCallId, readArgs, signal) : result;
         }
         if (detailsKind !== "text") {
           resetDelivery();

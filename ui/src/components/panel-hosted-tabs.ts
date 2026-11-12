@@ -30,6 +30,8 @@ export type PanelHostedTab = {
   badge?: string | null;
   className?: string;
   closeDisabled?: boolean;
+  /** Explicit click/Enter/Space action, separate from automatic tab selection. */
+  onActivate?: () => void;
 };
 
 export type PanelHostedTabsElement = HTMLElement & {
@@ -37,7 +39,7 @@ export type PanelHostedTabsElement = HTMLElement & {
   readonly activeHostedTabId: string | null;
   /** Header actions while this panel is the active side panel; rendered by the host in light DOM. */
   readonly hostedActions?: HTMLElement;
-  selectHostedTab(id: string): void;
+  selectHostedTab(id: string, event?: MouseEvent | KeyboardEvent): void;
   closeHostedTab(id: string): Promise<void>;
 };
 
