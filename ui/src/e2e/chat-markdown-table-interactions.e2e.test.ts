@@ -1,8 +1,11 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
@@ -109,6 +112,12 @@ suite.define(() => {
         kind === "attributed",
       );
       await waitForLayoutSettled(page, ".chat-thread, .markdown-table, .chat-avatar");
+      if (kind === "plain" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await writeFile(
+          path.join(suite.artifactDir, "leading-table.png"),
+          await takeControlUiViewportScreenshot(page, table, [table]),
+        );
+      }
       const tableBounds = (await table.boundingBox())!;
       const avatarBounds = (await avatar.boundingBox())!;
       const overlaps =

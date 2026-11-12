@@ -419,6 +419,13 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
+/* Resolve container units at the row, before nested message size containers. */
+@property --chat-table-bleed {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0;
+}
+
 /* The transcript, excluding reserved Details space, owns spare width.
    Only top-level assistant tables borrow it; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
@@ -444,7 +451,7 @@
   }
 
   .chat-virtual-row {
-    --chat-table-outset: max(
+    --chat-table-bleed: max(
       0px,
       min(
         12rem,
@@ -461,7 +468,7 @@
 
   /* Bubble surfaces own their width; wide tables scroll inside that surface. */
   .chat--bubbles .chat-virtual-row {
-    --chat-table-outset: 0px;
+    --chat-table-bleed: 0px;
   }
 
   .chat-virtual-row:has(.chat-group.assistant .chat-bubble > .chat-text > .markdown-table) {
@@ -470,9 +477,9 @@
   }
 
   .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
-    width: calc(100% + 2 * var(--chat-table-outset, 0px));
+    width: calc(100% + 2 * var(--chat-table-bleed));
     max-width: none;
-    margin-inline: calc(-1 * var(--chat-table-outset, 0px));
+    margin-inline: calc(-1 * var(--chat-table-bleed));
   }
 
   /* Keep the existing phone-landscape layout, including its touch controls. */
@@ -480,7 +487,7 @@
     .chat-group.assistant .chat-bubble > .chat-text > .markdown-table {
       width: max-content;
       min-width: 100%;
-      max-width: calc(100% + 2 * var(--chat-table-outset, 0px));
+      max-width: calc(100% + 2 * var(--chat-table-bleed));
       margin-inline: 0;
       margin-bottom: 24px;
       left: 50%;

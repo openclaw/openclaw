@@ -122,6 +122,21 @@ it.each([false, true])(
 
 it.each([
   [
+    "chat.sessionSharing.publicDraftDescription",
+    "The public link stays readable in draft.",
+    () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
+  ],
+  [
+    "chat.sessionSharing.sharedDescription",
+    "Everyone with access can send",
+    () => import("../pages/chat/components/chat-session-sharing-menu.tsx"),
+  ],
+  [
+    "chat.sessionSharing.searchPeople",
+    "Search people…",
+    () => import("../pages/chat/components/chat-session-sharing-mobile.tsx"),
+  ],
+  [
     "chat.sessionSharing.copyPublicLink",
     "Copy public link",
     () => import("../pages/chat/components/chat-session-sharing-content.tsx"),

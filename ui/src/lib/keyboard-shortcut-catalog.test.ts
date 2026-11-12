@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { afterEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
@@ -8,9 +7,10 @@ import {
   matchesShortcutCombo,
   formatKeyboardShortcutParts,
 } from "./keyboard-shortcut-contract.ts";
+import { KEYBOARD_REFERENCE_COMBOS } from "./keyboard-shortcut-reference.ts";
 
 const keydown = (init: KeyboardEventInit) => new KeyboardEvent("keydown", init);
-const combos = KEYBOARD_SHORTCUT_COMBOS;
+const combos = { ...KEYBOARD_SHORTCUT_COMBOS, ...KEYBOARD_REFERENCE_COMBOS };
 const matches = (id: keyof typeof combos, init: KeyboardEventInit) =>
   matchesShortcutCombo(combos[id], keydown(init));
 

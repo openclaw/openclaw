@@ -372,29 +372,50 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   )) {
     sessionSharing[key] = value;
     const coldKeys: Array<keyof typeof sharingCopy> =
-      key === "closeSearch"
-        ? ["noPeopleFound", "tryAnotherName"]
-        : key === "current"
-          ? ["visibility"]
-          : key === "draft"
-            ? ["publishDraft"]
-            : key === "owner"
-              ? ["noPeople"]
-              : key === "guestWelcomeRetry"
-                ? ["publicAccess"]
-                : key === "worldReadable"
-                  ? [
-                      "notPublic",
-                      "enablePublicAccess",
-                      "disablePublicAccess",
-                      "copyPublicLink",
-                      "publicConfirmTitle",
-                      "publicConfirmMessage",
-                      "publicConfirmEnable",
-                      "publicEnabled",
-                      "publicDisabled",
-                    ]
-                  : [];
+      key === "sessionAccess"
+        ? [
+            "sharedDescription",
+            "readOnlyDescription",
+            "suggestDescription",
+            "draftDescription",
+            "linkSharing",
+            "anyoneWithLink",
+            "publicLinkDescription",
+            "publicDraftDescription",
+            "linkUnavailable",
+            "permissions",
+          ]
+        : key === "creator"
+          ? [
+              "canRead",
+              "canSuggest",
+              "canSend",
+              "searchPeople",
+              "closeSearch",
+              "noPeopleFound",
+              "tryAnotherName",
+            ]
+          : key === "current"
+            ? ["visibility"]
+            : key === "draft"
+              ? ["publishDraft"]
+              : key === "owner"
+                ? ["noPeople"]
+                : key === "guestWelcomeRetry"
+                  ? ["publicAccess"]
+                  : key === "worldReadable"
+                    ? [
+                        "notPublic",
+                        "enablePublicAccess",
+                        "disablePublicAccess",
+                        "copyPublicLink",
+                        "publicConfirmTitle",
+                        "publicConfirmMessage",
+                        "publicConfirmEnable",
+                        "publicEnabled",
+                        "publicDisabled",
+                      ]
+                    : [];
     for (const name of coldKeys) {
       sessionSharing[name] = sharingCopy[name];
     }
