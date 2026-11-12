@@ -71,13 +71,13 @@ suite.define(() => {
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, source));
     const composer = page.locator(".agent-chat__composer-combobox textarea");
     await composer.fill("Unfinished thought");
-    await composer.evaluate((element) => element.setSelectionRange(4, 4));
+    await composer.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(4, 4));
     const command = { kind: "panel", panel: "portal", open: true, portalId: "preview-web" };
     await gateway.emitGatewayEvent("ui.command", { command, sessionKey: background });
     expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(source));
     expect(await composer.inputValue()).toBe("Unfinished thought");
     expect(
-      await composer.evaluate((element) => ({
+      await composer.evaluate((element: HTMLTextAreaElement) => ({
         focused: document.activeElement === element,
         caret: element.selectionStart,
       })),
