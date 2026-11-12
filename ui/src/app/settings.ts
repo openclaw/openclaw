@@ -38,6 +38,7 @@ import {
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
   normalizeDashboardsDisplay,
+  normalizeSessionFilesDisplay,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
   type UiPreferences,
@@ -462,6 +463,7 @@ export function loadUiPreferences(
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
       dashboardsDisplay: normalizeDashboardsDisplay(parsed.dashboardsDisplay),
+      sessionFilesDisplay: normalizeSessionFilesDisplay(parsed.sessionFilesDisplay),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
         parsed.sidebarSessionActivePanels,
@@ -652,6 +654,7 @@ export function saveSettings(
         ? next.boardSessionViews
         : undefined,
     dashboardsDisplay: normalizeDashboardsDisplay(next.dashboardsDisplay),
+    sessionFilesDisplay: normalizeSessionFilesDisplay(next.sessionFilesDisplay),
     sidebarSessionLayouts:
       next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
         ? next.sidebarSessionLayouts

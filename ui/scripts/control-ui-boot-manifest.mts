@@ -56,9 +56,8 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
     }
     res.setHeader("Content-Type", mime[path.extname(filePath)] ?? "application/octet-stream");
     const source = fs.readFileSync(filePath);
-    // Like the Gateway, anchor the portable entry before a canonical deep route
-    // reloads. Import-map keys/targets need the same root as src/href assets;
-    // otherwise /chat/main cannot resolve the build's module imports.
+    // Like the Gateway, anchor entries and import-map keys/targets before a
+    // deep-route reload; rooting only src/href leaves placeholder imports unmapped.
     res.end(
       filePath.endsWith("index.html")
         ? source.toString("utf8").replaceAll('"./assets/', '"/assets/')

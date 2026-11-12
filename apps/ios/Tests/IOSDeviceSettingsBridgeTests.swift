@@ -10,16 +10,16 @@ struct IOSDeviceSettingsBridgeTests {
         let original = try Self.controlUIConfig()
         let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         model.activeGatewayConnectConfig = original
-        model.setOperatorConnected(true)
-        defer { model.setOperatorConnected(false) }
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
+        defer { model.apply(.dropped, to: .operator, route: nil) }
 
         var document = IOSDeviceSettingsDocument()
         document.commitNavigation()
         let beforeReconnect = document.requestIdentity(authorityGeneration: model.operatorAuthorityGeneration)
         #expect(document.accepts(beforeReconnect, authorityGeneration: model.operatorAuthorityGeneration))
 
-        model.setOperatorConnected(false)
-        model.setOperatorConnected(true)
+        model.apply(.dropped, to: .operator, route: nil)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         #expect(model.isOperatorGatewayConnected)
         #expect(document.isAvailable)
         #expect(!document.accepts(beforeReconnect, authorityGeneration: model.operatorAuthorityGeneration))
@@ -41,8 +41,8 @@ struct IOSDeviceSettingsBridgeTests {
         #expect(document.accepts(afterCredentialChange, authorityGeneration: model.operatorAuthorityGeneration))
 
         document.startNavigation()
-        model.setOperatorConnected(false)
-        model.setOperatorConnected(true)
+        model.apply(.dropped, to: .operator, route: nil)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         document.invalidateRequests()
         let provisional = document.requestIdentity(authorityGeneration: model.operatorAuthorityGeneration)
         #expect(!document.accepts(provisional, authorityGeneration: model.operatorAuthorityGeneration))

@@ -1,0 +1,3 @@
+# Bundled plugin review adds 12 test lines; native consent/policy qualification
+# adds 13. The other 474 lines in this layer already have exact allocations.
+25

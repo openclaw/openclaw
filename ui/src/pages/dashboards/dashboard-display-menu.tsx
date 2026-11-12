@@ -21,7 +21,7 @@ export function DashboardDisplayMenu(props: {
       label={t("dashboardsPage.display")}
       lazy="while-open"
       placement="bottom-end"
-      triggerClass={[iconButtonClass({ size: 36 }), "dashboards-display__trigger"]}
+      triggerClass={[iconButtonClass(), "dashboards-display__trigger"]}
       triggerTitle={t("dashboardsPage.display")}
       triggerAriaLabel={t("dashboardsPage.display")}
       trigger={<Icon name="slidersHorizontal" />}

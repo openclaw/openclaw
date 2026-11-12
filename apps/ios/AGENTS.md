@@ -9,6 +9,15 @@
 - System font modifiers are acceptable for SF Symbol `Image(systemName:)` sizing, not for user-visible text unless a platform control makes branded typography impossible. If an exception is intentional, keep it narrow and explain why.
 - The typography scanner in `apps/ios/Tests/OpenClawTypographyTests.swift` enforces this rule across iOS sources (no per-surface pins to update); when touching iOS text surfaces, run the focused typography test.
 
+## Concurrency
+
+- Callbacks handed to Apple or third-party APIs must be `@Sendable` unless the API guarantees main-queue delivery. In `@MainActor` code, a closure literal passed to a callback parameter that is not `@Sendable` inherits main-actor isolation, and Swift 6 traps when the API calls it on another queue (the speech-permission crash fixed in #196822). Write `{ @Sendable ... in }` or build the closure in a `nonisolated` function, and hop back with `Task { @MainActor in ... }`. The SDK header states whether a callback is `NS_SWIFT_SENDABLE` and which queue calls it.
+- Permission prompts go through `PermissionRequestBridge`: it checks the request is still current right before the OS prompt starts, resumes exactly once, and resumes on cancel. Apple's async permission APIs hop off the main actor before starting the prompt, which breaks that check.
+
+## Secrets
+
+- Tokens, passwords, setup/bootstrap codes and keys go through `GenericPasswordKeychainStore` (or the file-protected device credential store in OpenClawKit), never `UserDefaults`, `@AppStorage`, `@SceneStorage` or plain files. Hold a secret typed into a field in `@State` until it is saved to the Keychain (the setup-code leak fixed in #197049).
+
 ## Licenses Screen
 
 - Maintain the Settings Licenses screen when iOS app dependencies change.

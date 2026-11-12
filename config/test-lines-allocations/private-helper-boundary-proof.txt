@@ -1,0 +1,2 @@
+15
+# Preserve widget prompt and diagnostic redaction contracts through production router/log boundaries while removing test-only exports.

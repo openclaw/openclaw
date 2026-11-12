@@ -57,6 +57,14 @@ if ! [[ "$lines" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# grep returns 1 for a valid pattern with no input; syntax errors must not poll.
+grep "$grep_flag" -- "$pattern" </dev/null >/dev/null || {
+  status=$?
+  if (( status != 1 )); then
+    exit "$status"
+  fi
+}
+
 if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux not found in PATH" >&2
   exit 1

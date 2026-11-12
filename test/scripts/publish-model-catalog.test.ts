@@ -856,15 +856,14 @@ describe("publish model catalog", () => {
   });
 
   it("parses supported CLI arguments and rejects missing output", () => {
-    expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toEqual({
+    expect(parsePublishModelCatalogArgs(["--dry-run", "--out", "ignored.json"])).toMatchObject({
       dryRun: true,
       pricing: false,
       out: "ignored.json",
     });
-    expect(parsePublishModelCatalogArgs(["--pricing", "--dry-run"])).toEqual({
-      dryRun: true,
-      pricing: true,
-    });
+    expect(
+      parsePublishModelCatalogArgs(["--pricing", "--dry-run", "--previous-v3", "v3.json"]),
+    ).toMatchObject({ dryRun: true, pricing: true, previous: { v3: "v3.json" } });
     expect(() => parsePublishModelCatalogArgs([])).toThrow("provide --out");
   });
 
