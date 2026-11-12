@@ -148,7 +148,7 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
     {
         let query = try database.prepare("""
         SELECT claw_id, root_fingerprint, binding_sequence, snapshot_sequence, snapshot_issued_at,
-          snapshot_binding_sequence FROM openclaw_id_node_targets WHERE hostname = ?
+          snapshot_binding_sequence, snapshot_gateway_key FROM openclaw_id_node_targets WHERE hostname = ?
         """)
         try query.bindText(hostname, at: 1)
         guard try query.step() == .row else { return nil }
@@ -158,7 +158,9 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
             bindingSequence: query.int64(at: 2),
             snapshotSequence: query.int64(at: 3),
             snapshotIssuedAt: query.int64(at: 4),
-            snapshotBindingSequence: query.int64(at: 5))
+            snapshotBindingSequence: query.int64(at: 5),
+            snapshotGatewayKey: query.valueType(at: 6) == .null ? nil
+                : query.requiredText(at: 6, field: "snapshot Gateway key")).clampedLegacy()
     }
 
     private static func write(
@@ -170,10 +172,11 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
         let query = try database.prepare("""
         INSERT INTO openclaw_id_node_targets
           (hostname, claw_id, root_fingerprint, binding_sequence, snapshot_sequence, snapshot_issued_at,
-           snapshot_binding_sequence) VALUES (?, ?, ?, ?, ?, ?, ?)
+           snapshot_binding_sequence, snapshot_gateway_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(hostname) DO UPDATE SET binding_sequence = excluded.binding_sequence,
           snapshot_sequence = excluded.snapshot_sequence, snapshot_issued_at = excluded.snapshot_issued_at,
-          snapshot_binding_sequence = excluded.snapshot_binding_sequence
+          snapshot_binding_sequence = excluded.snapshot_binding_sequence,
+          snapshot_gateway_key = excluded.snapshot_gateway_key
         """)
         try query.bindText(hostname, at: 1)
         try query.bindText(state.clawID, at: 2)
@@ -182,6 +185,8 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
         try query.bindInt64(state.snapshotSequence, at: 5)
         try query.bindInt64(state.snapshotIssuedAt, at: 6)
         try query.bindInt64(state.snapshotBindingSequence, at: 7)
+        // An unbound parameter is NULL: a state without a key (never written by this version).
+        if let key = state.snapshotGatewayKey { try query.bindText(key, at: 8) }
         _ = try query.step()
     }
 }

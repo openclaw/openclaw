@@ -293,7 +293,7 @@ struct MacNodeOpenClawIDBridgeWebSocketTests {
     {
         let tunnel = OpenClawIDNodeTunnel(
             endpoint: BridgeWebSocketUnusedEndpoint(),
-            verifiedServerKey: "synthetic",
+            verifiedServerKey: { "synthetic" },
             relayURL: URL(string: "https://relay.invalid")!)
         let bridge = try await MacNodeOpenClawIDBridge.start(
             tunnel: tunnel,
