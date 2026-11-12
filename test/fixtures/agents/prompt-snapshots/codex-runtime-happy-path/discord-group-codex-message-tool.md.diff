@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=4e93046f955f3adf6c8250dc5a4fdf178f7f3caa336ab1a7a838ed2d1ec2d9cb
-+++ discord-group-codex-message-tool.md	sha256=d49c55fc20b9d4f116d968b2991d9e6eac1d90aa931824254a10b062050232a0
+--- telegram-direct-codex-message-tool.md	sha256=bd4ae5183ad9f18b7c8f23e8391a18d553a31db5233d7fcf486cda9ba8d00a77
++++ discord-group-codex-message-tool.md	sha256=aea79ff45e0d3102cde1f8a64554a2c4c8a46fc41d5e40c185c15fdb43efd6ad
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -77,19 +77,19 @@
 @@ -531,1 +535,1 @@
 -<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
 +<external_openclaw_current_sender>{"sender":{"id":"424242","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
-@@ -557,1 +561,1 @@
+@@ -555,1 +559,1 @@
 -[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
 +[OpenClaw conversation info: sender={"id":"424242","name":"Pash","username":"pash"}]
-@@ -576,1 +580,1 @@
+@@ -574,1 +578,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"channel:987654321","message_id":"discord-msg-0001","conversation_label":"OpenClaw/#agent-sandbox","sender":{"id":"424242","name":"Pash","username":"pash"},"group_subject":"OpenClaw maintainers","group_channel":"#agent-sandbox","group_space":"OpenClaw","is_group_chat":true,"was_mentioned":true,"history_count":2}
-@@ -579,1 +583,5 @@
+@@ -577,1 +581,5 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Chat history since last reply: ⟦openclaw:ctx⟧
 +Peter: I pushed the Discord-side message-tool bridge.
 +Pash: @OpenClaw please verify the Codex happy path too.
 +
 +can you audit whether this prompt path has conflicting silence instructions?
-@@ -584,1 +592,1 @@
+@@ -582,1 +590,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)

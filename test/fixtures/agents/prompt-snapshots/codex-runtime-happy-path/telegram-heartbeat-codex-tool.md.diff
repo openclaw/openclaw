@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=4e93046f955f3adf6c8250dc5a4fdf178f7f3caa336ab1a7a838ed2d1ec2d9cb
-+++ telegram-heartbeat-codex-tool.md	sha256=87dee9c906ab010ff98456cc8ba51478d1663ebe532f3bc6a92f53ca1fc3b2d3
+--- telegram-direct-codex-message-tool.md	sha256=bd4ae5183ad9f18b7c8f23e8391a18d553a31db5233d7fcf486cda9ba8d00a77
++++ telegram-heartbeat-codex-tool.md	sha256=b7834279d33de2ee4bd075d47c2d0deefdd6c9d844454b0a3f91a86bfbb14f52
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -67,20 +67,20 @@
 -<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
 -```
 -
-@@ -557,1 +549,0 @@
+@@ -555,1 +547,0 @@
 -[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
-@@ -576,1 +568,1 @@
+@@ -574,1 +566,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"user:1000001","message_id":"heartbeat-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
-@@ -579,1 +571,1 @@
+@@ -577,1 +569,1 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted. If the heartbeat_respond tool is not available in this run, reply NO_REPLY when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.
-@@ -584,1 +576,1 @@
+@@ -582,1 +574,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)
-@@ -604,0 +597,1 @@
+@@ -602,0 +595,1 @@
 +  "heartbeat_respond",
-@@ -755,0 +749,39 @@
+@@ -753,0 +747,39 @@
 +  },
 +  {
 +    "description": "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",

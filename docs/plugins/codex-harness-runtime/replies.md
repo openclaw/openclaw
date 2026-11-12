@@ -17,11 +17,10 @@ contract: the agent replies normally and OpenClaw posts the final text to the
 source conversation. Set `messages.visibleReplies: "message_tool"` to keep
 final assistant text private unless the agent calls `message(action="send")`.
 
-Commentary follows the conversation's progress settings and may be hidden or
-temporary. When a question arrives while work continues, the agent is instructed
-to send its answer with `message(action="send", final=false)` and continue the
-task. The final response covers answers and results that have not already been
-delivered. This does not enable commentary or change streaming settings.
+Commentary follows the conversation's progress settings. In automatic mode, a
+mid-task question does not require a separate post. The agent can still send a
+reply before it finishes when that is useful. A message sent with `final=false`
+stays in the conversation; it is not a temporary progress preview.
 
 Native Codex messages explicitly marked for asynchronous delivery use an
 independent delivery intent. They are delivered separately from optional progress
