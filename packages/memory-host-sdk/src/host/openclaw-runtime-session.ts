@@ -2,10 +2,7 @@
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
-import {
-  readTranscriptExportSnapshotReadOnlySync,
-  readTranscriptStatsSync as readAccessorTranscriptStatsSync,
-} from "../../../../src/config/sessions/session-accessor.js";
+import { readTranscriptStatsSync as readAccessorTranscriptStatsSync } from "../../../../src/config/sessions/session-accessor.js";
 import type { SessionTranscriptReadScope } from "../../../../src/config/sessions/session-accessor.types.js";
 import {
   withSessionActorStorage,
@@ -15,10 +12,15 @@ import { warnPluginSdkDeprecation } from "../../../../src/plugins/sdk-deprecatio
 import { captureMemoryOwner } from "./session-memory-authority.js";
 import { readTranscriptStatsBatchReadOnlySync } from "./session-transcript-stats-read.js";
 
+export { readTranscriptExportSnapshotReadOnlySync } from "../../../../src/config/sessions/session-accessor.sqlite-read.js";
+export type SessionEntrySnapshot = NonNullable<
+  ReturnType<
+    typeof import("../../../../src/config/sessions/session-accessor.sqlite-read.js").readTranscriptExportSnapshotReadOnlySync
+  >
+>;
 export { readAccessorTranscriptStatsSync as readTranscriptStatsSync };
 export { readTranscriptStatsAsync } from "../../../../src/config/sessions/session-transcript-stats.js";
 export { warnPluginSdkDeprecation };
-export { readTranscriptExportSnapshotReadOnlySync };
 export { readRestoredSessionTranscript } from "../../../../src/config/sessions/session-cold-storage-read.js";
 export { readTranscriptStatsBatchReadOnlyAsync } from "../../../../src/config/sessions/session-transcript-stats-batch.js";
 export { SessionTranscriptColdError } from "../../../../src/config/sessions/session-cold-storage-state.js";
@@ -62,7 +64,11 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
     sessionKey: scope.sessionKey,
   };
   return {
-    memoryEntry(absPath: string, options: import("./session-files.js").BuildSessionEntryOptions) {
+    memoryEntry(
+      absPath: string,
+      options: import("./session-files.js").BuildSessionEntryOptions,
+      sink: import("./session-entry-render.js").SessionEntryRenderSink,
+    ) {
       return read(async (memory) => {
         const { buildSessionEntryFromSnapshot } = await import("./session-files.js");
         const snapshot = await memory.actor.storage.read(
@@ -89,6 +95,7 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
           () => {
             memory.actor.snapshot(memory.authority);
           },
+          sink,
         );
       }, null);
     },
@@ -106,34 +113,14 @@ export function captureIncognitoMemoryReader(scope: SessionTranscriptReadScope) 
 }
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
-export async function prepareSessionEntriesInWorker(
+export async function streamSessionEntriesInWorker(
   ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntriesInWorker
+    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").streamSessionEntriesInWorker
   >
 ) {
-  const { prepareSessionEntriesInWorker: prepare } =
+  const { streamSessionEntriesInWorker: stream } =
     await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return prepare(...args);
-}
-
-export async function prepareSessionEntryInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").prepareSessionEntryInWorker
-  >
-) {
-  const { prepareSessionEntryInWorker: prepare } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return prepare(...args);
-}
-
-export async function readSessionEntrySnapshotInWorker(
-  ...args: Parameters<
-    typeof import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js").readSessionEntrySnapshotInWorker
-  >
-) {
-  const { readSessionEntrySnapshotInWorker: read } =
-    await import("../../../../src/config/sessions/session-transcript-read-worker-runtime.js");
-  return read(...args);
+  return stream(...args);
 }
 
 export async function readSessionTranscriptCorpusInWorker(

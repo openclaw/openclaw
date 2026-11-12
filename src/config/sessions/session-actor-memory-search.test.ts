@@ -4,7 +4,8 @@ import { readTranscriptStatsBatchReadOnlySync } from "../../plugin-sdk/memory-co
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { streamSessionEntry } from "../../../packages/memory-host-sdk/src/host/session-files.js";
+import { runWithSessionActorStorage, acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
@@ -276,3 +277,35 @@ it.each([false, true])(
     );
   },
 );
+
+
+it("blocks the next export page after its consumer revokes incognito disclosure", async () => {
+  const { create } = await fixture();
+  const { binding, sessionKey } = await create("paged-export", [
+    message("first", "first " + "x".repeat(600_000)),
+    message("second", "second " + "y".repeat(600_000)),
+  ]);
+  let allowed = true;
+  const selectedAuthority: SessionActorAuthority = {
+    assertCurrent() {},
+    authorize() {
+      if (!allowed) {
+        throw new Error("Memory disclosure was revoked");
+      }
+    },
+  };
+  const pages: string[] = [];
+  await expect(
+    runWithSessionActorStorage({ ...binding, authority: selectedAuthority }, () =>
+      streamSessionEntry(sessionKey, {
+        agentId, storePath, sessionKey, sessionId: "paged-export",
+      }, {
+        onPage(page) {
+          pages.push(page.lines[0]!.slice(0, 11));
+          allowed = false;
+        },
+      }),
+    ),
+  ).rejects.toThrow("Memory disclosure was revoked");
+  expect(pages).toEqual(["User: first"]);
+});

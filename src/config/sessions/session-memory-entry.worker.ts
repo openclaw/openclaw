@@ -3,7 +3,6 @@ import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { prepareSessionMemoryEntries } from "./session-memory-entry-preparation.worker.js";
 import type { SessionEntriesWorkerInput } from "./session-transcript-worker-read.types.js";
 import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
-export { prepareSessionMemoryEntry } from "./session-memory-entry-preparation.worker.js";
 
 /** The dispatcher delegates acknowledged delivery to the export owner. */
 export async function deliverSessionMemoryEntries(
@@ -15,9 +14,9 @@ export async function deliverSessionMemoryEntries(
     throw new Error("Session exports require their host delivery channel");
   }
   channel.consumeInput();
-  await prepareSessionMemoryEntries(entries, async (index, value) => {
+  await prepareSessionMemoryEntries(entries, async (delivery) => {
     control.throwIfCancelled();
-    const response = await channel.request({ kind: "session-entries", index, value });
+    const response = await channel.request({ kind: "session-entries", ...delivery });
     response.consumed();
     control.throwIfCancelled();
   });

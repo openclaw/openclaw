@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -7,6 +7,110 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionResetRecallCutoff } from "./session-reset-recall.js";
 import type { MemoryEntryProvenance } from "./types.js";
+
+/** One exported message: all of its wrapped lines share these facts. */
+type SessionEntryLineRun = {
+  sourceLine: number;
+  timestampMs: number;
+  provenance: MemoryEntryProvenance;
+  lines: number;
+};
+
+const HASH_FLUSH_CHARS = 64 * 1024;
+
+/**
+ * Computes the persisted entry hash while lines stream in, without retaining the rendered
+ * content: sha256 over the content, then "\n"-separated comma-joined line map and timestamps,
+ * the JSON line provenance and the JSON reset recall cutoff. Line facts are retained run-length
+ * encoded per message, because that format places them after the complete content.
+ */
+export function createSessionEntryHasher(prefixLineCount?: number) {
+  let content = createHash("sha256");
+  let runs: SessionEntryLineRun[] = [];
+  let lineCount = 0;
+  let prefix: Hash | undefined;
+  const capturePrefix = () => {
+    if (prefixLineCount === lineCount) {
+      prefix = content.copy();
+    }
+  };
+  capturePrefix();
+  const digest = (
+    hash: Hash,
+    limit: number,
+    resetRecallCutoff: SessionResetRecallCutoff,
+  ): string => {
+    let buffer = "";
+    const write = (text: string) => {
+      buffer += text;
+      if (buffer.length >= HASH_FLUSH_CHARS) {
+        hash.update(buffer);
+        buffer = "";
+      }
+    };
+    const writeFacts = (encode: (run: SessionEntryLineRun) => string, separator: string): void => {
+      let remaining = limit;
+      let first = true;
+      for (const run of runs) {
+        if (remaining <= 0) {
+          break;
+        }
+        const value = encode(run);
+        const count = Math.min(run.lines, remaining);
+        for (let index = 0; index < count; index++) {
+          write(first ? value : separator + value);
+          first = false;
+        }
+        remaining -= count;
+      }
+    };
+    write("\n");
+    writeFacts((run) => String(run.sourceLine), ",");
+    write("\n");
+    writeFacts((run) => String(run.timestampMs), ",");
+    write("\n[");
+    // JSON.stringify(array) joins each element's own encoding with commas.
+    writeFacts((run) => JSON.stringify(run.provenance), ",");
+    write("]\n");
+    write(JSON.stringify(resetRecallCutoff));
+    hash.update(buffer);
+    return hash.digest("hex");
+  };
+  return {
+    get lineCount() {
+      return lineCount;
+    },
+    /** Appends one message's rendered lines. */
+    append(lines: readonly string[], facts: Omit<SessionEntryLineRun, "lines">): void {
+      for (const line of lines) {
+        content.update(lineCount === 0 ? line : `\n${line}`);
+        lineCount++;
+        capturePrefix();
+      }
+      if (lines.length > 0) {
+        runs.push({ ...facts, lines: lines.length });
+      }
+    },
+    /** Discards every appended line. */
+    reset(): void {
+      content = createHash("sha256");
+      runs = [];
+      lineCount = 0;
+      prefix = undefined;
+      capturePrefix();
+    },
+    finish(resetRecallCutoff: SessionResetRecallCutoff): { hash: string; prefixHash?: string } {
+      const prefixHash =
+        prefix && prefixLineCount !== undefined
+          ? digest(prefix, prefixLineCount, resetRecallCutoff)
+          : undefined;
+      return {
+        hash: digest(content, lineCount, resetRecallCutoff),
+        ...(prefixHash ? { prefixHash } : {}),
+      };
+    },
+  };
+}
 
 export function hashSessionEntrySnapshot(params: {
   content: string;

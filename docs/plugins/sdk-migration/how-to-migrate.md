@@ -812,6 +812,22 @@ also reads durable snapshots in the worker when an `onTranscriptMessage`
 observer is supplied, then invokes the observer on the caller with the original
 messages and timestamps.
 
+For memory indexing, use `streamSessionEntry(path, options, stream)` or
+`streamSessionEntries(inputs)` from the same SDK surface. `onPage` receives
+consecutive rendered lines, their source line map, timestamps, and provenance;
+return a promise to apply backpressure. `onReset` means earlier pages belong to
+an abandoned export and must be discarded before accepting new pages. The
+returned summary retains the persisted entry hash and reset-recall metadata.
+Durable SQLite exports release each read transaction before delivering a page;
+incognito exports recheck the actor's live authority before each disclosure.
+
+`buildSessionEntry`, `buildSessionEntries`, and `matchesSessionEntryPrefixHash`
+retain their complete-entry contracts. The builders collect streamed pages for
+callers that need the full document; they are not bounded-memory consumers.
+File-based archives and a single large record can also require their original
+input in memory. Memory indexing, startup scanning, and dreaming consume the
+stream without collecting the full rendered document.
+
 ## Prepare session entry changes
 
 Use `prepareSessionEntryPatch` or `applySessionEntryPatch` from

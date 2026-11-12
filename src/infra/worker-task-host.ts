@@ -34,7 +34,6 @@ const diagnosticTaskKinds = new Set([
   "prepare",
   "prepare-session",
   "transcript-stats",
-  "session-entry",
   "session-entries",
   "session-cleanup",
   "session-memory-capture",

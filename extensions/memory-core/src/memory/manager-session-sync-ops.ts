@@ -7,7 +7,7 @@ import {
   observeAgentRunActivity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
+  streamSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
   sessionPathForFile,
   sessionPathForSessionIdentity,
@@ -249,7 +249,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
             // that corpus metadata cannot express. Recheck on every catch-up so a
             // later user turn can make a previously excluded session eligible.
             if (!indexedPaths.has(this.sessionPathForCorpusEntry(corpusEntry))) {
-              const entry = await buildSessionEntry(
+              const entry = await streamSessionEntry(
                 corpusEntry.sessionFile,
                 this.buildSessionEntryOptions(corpusEntry),
               );

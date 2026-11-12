@@ -8,7 +8,7 @@ import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { prepareSessionEntriesInWorker } from "./session-transcript-read-worker-runtime.js";
+import { streamSessionEntriesInWorker } from "./session-transcript-read-worker-runtime.js";
 
 const body = "synthetic detail ".repeat(262_144);
 
@@ -36,20 +36,32 @@ it("exports every medium transcript through the production 512 MiB worker", asyn
       ).toBe(true);
     }
     // The previous worker retained all projected sources plus all rendered results and OOMed.
-    const results = await prepareSessionEntriesInWorker(requests);
+    const counts = requests.map(() => ({ words: 0, first: "", last: "" }));
+    const results = await streamSessionEntriesInWorker(
+      requests.map((request) => ({ ...request, pages: true, messages: false })),
+      async (index, update) => {
+        const count = counts[index]!;
+        if ("reset" in update) {
+          Object.assign(count, { words: 0, first: "", last: "" });
+        } else if ("page" in update) {
+          for (const line of update.page.lines) {
+            count.first ||= line.slice(0, 64);
+            count.last = line.slice(-64);
+            count.words += [...line.matchAll(/(?:synthetic|detail)/g)].length;
+          }
+        }
+      },
+    );
     expect(results).toHaveLength(requests.length);
-    for (const [index, result] of results.entries()) {
-      if (!("entry" in result) || !result.entry) {
-        throw new Error("Synthetic hot source was reported cold");
+    for (const [index, count] of counts.entries()) {
+      const result = results[index]!;
+      expect("cold" in result).toBe(false);
+      if ("summary" in result) {
+        expect(result.summary).not.toBeNull();
       }
-      expect(result.entry?.content.startsWith("User: HEAD_" + index + " ")).toBe(true);
-      expect(result.entry?.content.endsWith(" TAIL_" + index)).toBe(true);
-      const words = /\b(?:synthetic|detail)\b/g;
-      let wordCount = 0;
-      while (words.test(result.entry.content)) {
-        wordCount++;
-      }
-      expect(wordCount).toBe(262_144 * 2);
+      expect(count.first.startsWith("User: HEAD_" + index + " ")).toBe(true);
+      expect(count.last.endsWith(" TAIL_" + index)).toBe(true);
+      expect(count.words).toBe(262_144 * 2);
     }
   });
 }, 30_000);

@@ -2,54 +2,42 @@ import { projectSessionEntryRecord } from "../../../packages/memory-host-sdk/src
 import {
   renderSessionEntrySnapshot,
   readSessionEntryResetRecallCutoff,
+  type SessionEntryRenderSink,
 } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { SessionTranscriptExportChangedError } from "./session-accessor.sqlite-export-slices.js";
 import {
+  openTranscriptExportReadOnly,
   readTranscriptExportSnapshotFromDatabase,
-  readTranscriptExportSnapshotReadOnlySync,
 } from "./session-accessor.sqlite-read.js";
-import {
-  resolveSqliteTranscriptReadScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteTranscriptReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
-  SessionEntryWorkerInput,
   SessionEntriesWorkerInput,
+  SessionEntriesWorkerUpdate,
 } from "./session-transcript-worker-read.types.js";
-import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
 
 type Snapshot = ReturnType<typeof readTranscriptExportSnapshotFromDatabase>;
+type Request = SessionEntriesWorkerInput["entries"][number];
+type Delivery = { index: number } & SessionEntriesWorkerUpdate;
 const snapshots = new Map<string, Snapshot>();
 const MAX_SNAPSHOTS = 16;
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+const MAX_EXPORT_ATTEMPTS = 3;
 
-/** The export worker retains projected rows; transcript rewrite identity replaces the prefix. */
-export async function prepareSessionMemoryEntry(request: SessionEntryWorkerInput) {
-  const [result] = await prepareSessionMemoryEntries([request]);
-  if ("cold" in result!) {
-    throw new SessionTranscriptColdError(request.options.sessionId);
-  }
-  return result!;
-}
-
+/** Each page is consumed before the next slice enters the export worker's heap. */
 export async function prepareSessionMemoryEntries(
   entries: SessionEntriesWorkerInput["entries"],
-  publish?: (
-    index: number,
-    value: SessionTranscriptWorkerValues["session-entries"]["entries"][number],
-  ) => Promise<void>,
-): Promise<SessionTranscriptWorkerValues["session-entries"]["entries"]> {
-  const results: SessionTranscriptWorkerValues["session-entries"]["entries"] = [];
-  // Export one admitted snapshot at a time. The host acknowledges its rendered value
-  // before another transcript enters this worker's bounded heap.
+  publish: (delivery: Delivery) => Promise<void>,
+): Promise<void> {
   for (const [index, request] of entries.entries()) {
     const resolved = resolveSqliteTranscriptReadScope(request.options);
-    const previous = snapshots.get(snapshotKey(request));
+    // Observers see original messages; projected rows never enter their cache.
+    const previous = request.messages ? undefined : snapshots.get(snapshotKey(request));
     const options = {
-      projectEvent: projectSessionEntryRecord,
+      projectEvent: request.messages ? undefined : projectSessionEntryRecord,
       previous:
         previous?.generation != null && previous.throughSeq !== undefined
           ? {
@@ -59,69 +47,108 @@ export async function prepareSessionMemoryEntries(
             }
           : null,
     };
-    let snapshot: Snapshot | null | "cold";
-    try {
-      const read = withOpenClawAgentDatabaseReadOnly(
-        (database) =>
-          runSqliteReadSnapshotSync(
-            database.db,
-            () =>
-              runWithSessionTranscriptReadFence(request.admission, () =>
-                readTranscriptExportSnapshotFromDatabase(
-                  database,
-                  resolved,
-                  request.options,
-                  options,
-                  { deferAboveBytes: MAX_SNAPSHOT_BYTES },
+    let delivered = false;
+    const sink: SessionEntryRenderSink = {
+      prefixLineCount: request.prefixLineCount,
+      pageMessages: request.messages,
+      page:
+        request.pages || request.messages
+          ? async (page) => {
+              const lines = request.pages && page.lines.length > 0;
+              delivered ||= lines;
+              await publish({
+                index,
+                page: lines
+                  ? page
+                  : {
+                      startLine: page.startLine,
+                      lines: [],
+                      lineMap: [],
+                      messageTimestampsMs: [],
+                      lineProvenance: [],
+                      ...(page.messages ? { messages: page.messages } : {}),
+                    },
+              });
+            }
+          : undefined,
+      reset: async () => {
+        if (delivered) {
+          delivered = false;
+          await publish({ index, reset: true });
+        }
+      },
+    };
+    let value: Extract<SessionEntriesWorkerUpdate, { value: unknown }>["value"];
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            runSqliteReadSnapshotSync(
+              database.db,
+              () =>
+                runWithSessionTranscriptReadFence(request.admission, () =>
+                  readTranscriptExportSnapshotFromDatabase(
+                    database,
+                    resolved,
+                    request.options,
+                    options,
+                    { deferAboveBytes: MAX_SNAPSHOT_BYTES },
+                  ),
                 ),
-              ),
-            { operationLabel: "session transcript export" },
-          ),
-        toDatabaseOptions(resolved),
-      );
-      snapshot = read.found ? read.value : null;
-      if (snapshot?.deferred) {
-        const batchHead = snapshot;
-        snapshot = runWithSessionTranscriptReadFence(
-          request.admission,
-          () =>
-            readTranscriptExportSnapshotReadOnlySync(request.options, options, batchHead) ?? null,
+              { operationLabel: "session transcript export" },
+            ),
+          toDatabaseOptions(resolved),
         );
+        const snapshot = read.found ? read.value : null;
+        if (!request.messages) {
+          retainSnapshot(snapshotKey(request), snapshot);
+        }
+        const opened = snapshot?.deferred
+          ? runWithSessionTranscriptReadFence(request.admission, () =>
+              openTranscriptExportReadOnly(request.options, options, snapshot),
+            )
+          : snapshot && { snapshot, events: snapshot.events };
+        // Lazy advancement reads its next slice under the same admitted user-turn fence.
+        const events = opened && {
+          [Symbol.iterator]: () => {
+            const iterator = opened.events[Symbol.iterator]();
+            return {
+              next: () =>
+                runWithSessionTranscriptReadFence(request.admission, () => iterator.next()),
+            };
+          },
+        };
+        const summary =
+          opened && events
+            ? await renderSessionEntrySnapshot(
+                request.absPath,
+                request.options,
+                { ...opened.snapshot, events },
+                sink,
+              )
+            : null;
+        value = {
+          summary,
+          resetRecallCutoff: summary ? readSessionEntryResetRecallCutoff(summary) : { state: "absent" },
+        };
+        break;
+      } catch (error) {
+        if (error instanceof SessionTranscriptColdError) {
+          await sink.reset?.();
+          value = { cold: true };
+          break;
+        }
+        if (!(error instanceof SessionTranscriptExportChangedError) || attempt >= MAX_EXPORT_ATTEMPTS) {
+          throw error;
+        }
+        await sink.reset?.();
       }
-    } catch (error) {
-      if (!(error instanceof SessionTranscriptColdError)) {
-        throw error;
-      }
-      snapshot = "cold";
     }
-    let value: SessionTranscriptWorkerValues["session-entries"]["entries"][number];
-    if (snapshot === "cold") {
-      value = { cold: true };
-    } else {
-      retainSnapshot(snapshotKey(request), snapshot);
-      const entry = snapshot
-        ? await renderSessionEntrySnapshot(
-            request.absPath,
-            request.options,
-            snapshot,
-            snapshot.stats.sizeBytes > MAX_SNAPSHOT_BYTES,
-          )
-        : null;
-      value = {
-        entry,
-        resetRecallCutoff: entry ? readSessionEntryResetRecallCutoff(entry) : { state: "absent" },
-      };
-    }
-    if (publish) {
-      await publish(index, value);
-    } else {
-      results[index] = value;
-    }
+    await publish({ index, value });
   }
-  return results;
 }
 
-function snapshotKey({ options }: SessionEntriesWorkerInput["entries"][number]) {
+function snapshotKey({ options }: Request) {
   return JSON.stringify([options.storePath, options.agentId, options.sessionId]);
 }
 

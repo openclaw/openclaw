@@ -9,6 +9,10 @@ import {
   type MemoryEntryProvenance,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import type {
+  SessionEntryStream,
+  SessionEntrySummary,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { EmbeddingProvider } from "./embeddings.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
@@ -21,15 +25,18 @@ export type MemoryIndexEntry = {
   size: number;
   hash: string;
   kind?: "markdown" | "multimodal";
-  content?: string;
   contentText?: string;
-  lineMap?: number[];
-  lineProvenance?: MemoryEntryProvenance[];
+  content?: string;
   sessionId?: string;
+  /** Session sources stream their export again while chunking, under this entry's state. */
+  streamSessionExport?: (stream: SessionEntryStream) => Promise<SessionEntrySummary | null>;
 };
 
 export type MemoryIndexPreparationInput = {
-  entry: Pick<MemoryIndexEntry, "path" | "mtimeMs" | "lineMap" | "lineProvenance">;
+  entry: Pick<MemoryIndexEntry, "path" | "mtimeMs"> & {
+    lineMap?: number[];
+    lineProvenance?: MemoryEntryProvenance[];
+  };
   source: MemorySource;
   content: string;
   pathClassification: Awaited<ReturnType<typeof resolveMemoryPathClassification>>;
@@ -130,7 +137,7 @@ export function prepareMemoryIndexChunks({
 }
 
 export function resolveChunkProvenance(
-  entry: Pick<MemoryIndexEntry, "lineProvenance" | "mtimeMs">,
+  entry: Pick<MemoryIndexEntry, "mtimeMs"> & { lineProvenance?: readonly MemoryEntryProvenance[] },
   source: MemorySource,
   chunk: MemoryChunk,
   pathOriginClass: MemoryEntryProvenance["originClass"],
