@@ -104,6 +104,17 @@ describe("Browser panel", () => {
     expect(resolveBrowserAddressInput("   ")).toBeNull();
   });
 
+  it("keeps opening addresses whose path or query has spaces, or an explicit default port", () => {
+    expect(resolveBrowserAddressInput("https://example.com/a b")).toBe("https://example.com/a%20b");
+    expect(resolveBrowserAddressInput("example.com/a b")).toBe("https://example.com/a%20b");
+    expect(resolveBrowserAddressInput("example.com/find?q=a b")).toBe(
+      "https://example.com/find?q=a%20b",
+    );
+    expect(resolveBrowserAddressInput("localhost:3000/a b")).toBe("https://localhost:3000/a%20b");
+    expect(resolveBrowserAddressInput("devbox:443")).toBe("https://devbox/");
+    expect(resolveBrowserAddressInput("devbox:443/a")).toBe("https://devbox/a");
+  });
+
   it("restores persisted open state when a mounted tag upgrades lazily", async () => {
     persistedDock();
     const tagName = `test-lazy-browser-panel-${crypto.randomUUID()}`;

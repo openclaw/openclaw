@@ -32,23 +32,30 @@ export function resolveBrowserAddressInput(raw: string): string | null {
   if (!trimmed) {
     return null;
   }
-  // Text with spaces is a query even when it starts like "note: ...".
-  if (!/\s/.test(trimmed)) {
-    if (EXPLICIT_SCHEME.test(trimmed)) {
-      return normalizeBrowserUrlDraft(trimmed);
-    }
+  const search = `https://www.google.com/search?${new URLSearchParams({ q: trimmed })}`;
+  if (/^https?:\/\//i.test(trimmed)) {
+    return normalizeBrowserUrlDraft(trimmed) ?? search;
+  }
+  if (EXPLICIT_SCHEME.test(trimmed)) {
+    // Text with spaces is a query even when it starts like "note: ...".
+    return /\s/.test(trimmed) ? search : null;
+  }
+  // The host part decides, so spaces in a path or query keep the address.
+  const host = trimmed.split(/[/?#]/, 1)[0] ?? "";
+  if (!/\s/.test(host)) {
     const parsed = URL.parse(`https://${trimmed}`);
     // A bare word ("openclaw") is a search; hosts with a dot, a port,
-    // localhost or an IPv6 literal stay addresses, as they were before.
+    // localhost or an IPv6 literal stay addresses, as they were before. The
+    // port is read from the typed text: URL parsing drops the https default.
     if (
       parsed &&
       (parsed.hostname.includes(".") ||
         parsed.hostname === "localhost" ||
         parsed.hostname.startsWith("[") ||
-        parsed.port)
+        /:\d+$/.test(host))
     ) {
       return parsed.toString();
     }
   }
-  return `https://www.google.com/search?${new URLSearchParams({ q: trimmed })}`;
+  return search;
 }
