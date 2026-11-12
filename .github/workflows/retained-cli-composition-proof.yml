@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Reviewed generated four-backport candidate SHA
+        description: Reviewed five-backport candidate SHA
         required: true
         type: string
 permissions:
@@ -14,9 +14,10 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   BASE_SHA: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
-  CANDIDATE_SHA: f38131f934b45447558cf6f431353a49656198d5
-  SOURCE_TREE: a2b41999e8f0ac728cec97457e0500a76a7fd71e
-  PATHS_SHA256: 0f3f3c4058345f4b099f067e11c98729d9e4842fbd2889f789b035e47019340c
+  CANDIDATE_SHA: 258908e6b943c0197bca8d0306dbbbbf503bcb22
+  BEFORE_SHA: f38131f934b45447558cf6f431353a49656198d5
+  SOURCE_TREE: 280d7a25d8303d9d753735862c4df49a5ddf609a
+  PATHS_SHA256: 85e3d04cb739af85ae7cb6fd69ea047c07e39aec92c526b28bfec6da3edd053e
 jobs:
   checks:
     strategy:
@@ -63,15 +64,21 @@ jobs:
         run: |
           set -euo pipefail
           git diff --name-only "$BASE_SHA" HEAD -- '*.test.ts' '*.test.tsx' '*.spec.ts' '*.spec.tsx' > .artifacts/required-backports/test-paths.txt
-          if test -f src/gateway/derive-goal-session-title.test.ts; then
-            echo src/gateway/derive-goal-session-title.test.ts >> .artifacts/required-backports/test-paths.txt
-          fi
+          test "$(wc -l < .artifacts/required-backports/test-paths.txt)" -eq 21
+          cat >> .artifacts/required-backports/test-paths.txt <<'PATHS'
+          src/agents/code-mode.agent-loop.test.ts
+          src/agents/code-mode.failure-phase.test.ts
+          src/agents/code-mode.wait.test.ts
+          src/agents/code-mode-shell-source.test.ts
+          src/agents/code-mode.bridge.test.ts
+          src/agents/code-mode.catalog-index.test.ts
+          PATHS
           LC_ALL=C sort -u .artifacts/required-backports/test-paths.txt -o .artifacts/required-backports/test-paths.txt
           grep -Fx src/gateway/server.delegated-administration.product.test.ts .artifacts/required-backports/test-paths.txt
           grep -Fx test/system-agent-delegation-authority.e2e.test.ts .artifacts/required-backports/test-paths.txt
           mapfile -t tests < .artifacts/required-backports/test-paths.txt
-          test "${#tests[@]}" -gt 0
-          node scripts/test-projects.mts "${tests[@]}" -- --reporter=default --reporter=json --outputFile=.artifacts/required-backports/tests.json 2>&1 | tee .artifacts/required-backports/tests.log
+          test "${#tests[@]}" -eq 27
+          node scripts/test-projects.mts "${tests[@]}" -- --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/required-backports/tests.json" 2>&1 | tee .artifacts/required-backports/tests.log
       - name: Verify critical suites actually ran
         if: matrix.lane == 'tests'
         run: |
@@ -79,7 +86,15 @@ jobs:
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
           const report = JSON.parse(fs.readFileSync('.artifacts/required-backports/tests.json', 'utf8'));
-          for (const suffix of ['src/gateway/server.delegated-administration.product.test.ts', 'test/system-agent-delegation-authority.e2e.test.ts', 'ui/src/e2e/session-management.trailing-state.e2e.test.ts']) {
+          const selected = fs.readFileSync('.artifacts/required-backports/test-paths.txt', 'utf8').trim().split('\n');
+          assert.equal(selected.length, 27);
+          for (const suffix of selected) {
+            const matches = report.testResults.filter((item) => item.name.replaceAll('\\', '/').endsWith('/' + suffix));
+            assert.equal(matches.length, 1, 'Missing or duplicate selected suite: ' + suffix);
+            assert(matches[0].assertionResults.some((item) => item.status === 'passed'), 'No executed passing cases: ' + suffix);
+            assert(matches[0].assertionResults.every((item) => ['passed', 'pending', 'skipped', 'todo', 'disabled'].includes(item.status)), 'Failed selected suite: ' + suffix);
+          }
+          for (const suffix of ['src/agents/code-mode.catalog-lifetime.test.ts', 'src/gateway/server.delegated-administration.product.test.ts', 'test/system-agent-delegation-authority.e2e.test.ts', 'ui/src/e2e/session-management.trailing-state.e2e.test.ts']) {
             const file = report.testResults.find((item) => item.name.replaceAll('\\', '/').endsWith(suffix));
             assert(file && file.assertionResults.length > 0, 'Missing executed suite: ' + suffix);
             assert(file.assertionResults.every((item) => item.status === 'passed'), 'Non-passing critical suite: ' + suffix);
@@ -96,5 +111,128 @@ jobs:
         with:
           name: required-backports-${{ matrix.lane }}-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/required-backports/
+          if-no-files-found: error
+          retention-days: 14
+  before-capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f38131f934b45447558cf6f431353a49656198d5
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind BEFORE source and overlay only identical regression inputs
+        env:
+          TARGET_SHA: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$TARGET_SHA" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$BEFORE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = a2b41999e8f0ac728cec97457e0500a76a7fd71e
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$SOURCE_TREE"
+          test "$(git rev-parse "$CANDIDATE_SHA^")" = "$BEFORE_SHA"
+          mkdir -p .artifacts/before-capacity
+          printf 'candidate=%s\nbefore=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$CANDIDATE_SHA" "$BEFORE_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/before-capacity/identity.txt
+          for path in src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs; do
+            git show "$CANDIDATE_SHA:$path" > "$path"
+            test "$(git hash-object "$path")" = "$(git rev-parse "$CANDIDATE_SHA:$path")"
+          done
+          printf '%s\n' src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs > .artifacts/before-capacity/expected-overlay.txt
+          git diff --name-only | LC_ALL=C sort > .artifacts/before-capacity/actual-overlay.txt
+          diff -u .artifacts/before-capacity/expected-overlay.txt .artifacts/before-capacity/actual-overlay.txt
+          git diff --exit-code -- src/agents/code-mode-execution.ts src/agents/code-mode-state.ts
+          git diff --binary > .artifacts/before-capacity/overlay.patch
+          sha256sum src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs src/agents/code-mode-execution.ts src/agents/code-mode-state.ts > .artifacts/before-capacity/source-sha256.txt
+      - uses: ./.github/actions/setup-node-env
+        with:
+          semantic-checks: "true"
+          install-bun: "false"
+          cache-mode: "restore"
+      - uses: ./.github/actions/setup-test-bun
+      - name: Execute unchanged native capacity regression on BEFORE owners
+        id: regression
+        env:
+          OPENCLAW_TEST_FILE_LOG: "1"
+          OPENCLAW_LOG_LEVEL: error
+        run: |
+          set -uo pipefail
+          set +e
+          node scripts/test-projects.mts src/agents/code-mode.catalog-lifetime.test.ts -- --maxWorkers=1 --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/before-capacity/tests.json" 2>&1 | tee .artifacts/before-capacity/tests.log
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          test "${pipeline_status[1]}" -eq 0
+          status=${pipeline_status[0]}
+          printf '%s\n' "$status" > .artifacts/before-capacity/exit-code.txt
+          # The classifier below alone admits the specific expected assertion failure.
+          exit 0
+      - name: Require named native capacity failure, never generic failure
+        if: always()
+        env:
+          REGRESSION_OUTCOME: ${{ steps.regression.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const root = '.artifacts/before-capacity/';
+          fs.mkdirSync(root, { recursive: true });
+          const result = { classification: 'failed', before: process.env.BEFORE_SHA, candidate: process.env.CANDIDATE_SHA };
+          try {
+            assert.equal(process.env.REGRESSION_OUTCOME, 'success', 'Regression command did not complete');
+            const exitCode = Number(fs.readFileSync(root + 'exit-code.txt', 'utf8').trim());
+            assert.equal(exitCode, 1, 'Expected ordinary assertion exit 1, not pass or infrastructure failure');
+            const report = JSON.parse(fs.readFileSync(root + 'tests.json', 'utf8'));
+            assert.equal(report.numFailedTests, 1);
+            assert.equal(report.numTotalTests, 1);
+            assert.equal(report.testResults.length, 1);
+            const suite = report.testResults[0];
+            assert(suite.name.replaceAll('\\', '/').endsWith('/src/agents/code-mode.catalog-lifetime.test.ts'));
+            assert.equal(suite.assertionResults.length, 1);
+            const test = suite.assertionResults[0];
+            assert.equal(test.title, 'keeps the suspension limit while required observers collect existing process results');
+            assert.equal(test.status, 'failed');
+            const failure = test.failureMessages.join('\n');
+            // Native toMatchObject output may omit received fields outside the expected subset.
+            // Read the frozen product's existing structured diagnostic, not a generic log match.
+            const diagnostics = [];
+            for (const name of fs.readdirSync('.artifacts/test-logs')) {
+              if (!name.endsWith('.log')) continue;
+              for (const line of fs.readFileSync('.artifacts/test-logs/' + name, 'utf8').split('\n').filter(Boolean)) {
+                const record = JSON.parse(line);
+                const fields = Object.values(record).find((value) => value && typeof value === 'object' && value.toolCallId === 'required-observer');
+                if (record.message === 'Code Mode execution failed' && fields && fields.error === 'too many suspended code mode runs.' && fields.bridgeDispatchStarted === false) {
+                  diagnostics.push({ toolCallId: fields.toolCallId, error: fields.error, failurePhase: fields.failurePhase, bridgeDispatchStarted: fields.bridgeDispatchStarted });
+                }
+              }
+            }
+            assert(diagnostics.length > 0, 'Missing producer diagnostic: required-observer rejected at capacity before dispatch');
+            result.diagnostics = diagnostics;
+            assert(failure.includes('benchmark-result'), 'Failure was not the required native-result collection assertion');
+            assert(failure.includes('completed') && failure.includes('failed'), 'Missing completion-versus-rejection assertion');
+            result.classification = 'expected-capacity-failure';
+            result.exitCode = exitCode;
+            result.suite = suite.name;
+            result.test = test.title;
+            result.failureMessages = test.failureMessages;
+          } catch (error) {
+            result.reason = String(error);
+            process.exitCode = 1;
+          }
+          fs.writeFileSync(root + 'classification.json', JSON.stringify(result, null, 2) + '\n');
+          console.log(JSON.stringify(result));
+          NODE
+      - name: Record BEFORE artifact hashes
+        if: always()
+        run: |
+          if test -d .artifacts/before-capacity; then
+            (cd .artifacts/before-capacity && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: required-backports-before-capacity-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/before-capacity/
           if-no-files-found: error
           retention-days: 14
