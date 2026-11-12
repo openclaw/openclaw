@@ -28,6 +28,7 @@ const dispatch = vi.hoisted(() =>
 );
 // mock-isolation: Keep real exec settlement and event custody; stop at the model dispatch boundary.
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ spawn }) }));
+// mock-isolation: Observe admission and cancellation without starting a model turn.
 vi.mock("../auto-reply/dispatch.js", () => ({
   dispatchInboundMessageWithRoutedChannelDispatcher: dispatch,
 }));
