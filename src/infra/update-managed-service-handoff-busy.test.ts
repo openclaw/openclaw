@@ -64,10 +64,16 @@ it.each([false, true])(
       const source = `
         import { prepareManagedHandoffLeaseDatabaseIdentity } from ${JSON.stringify(new URL("./update-managed-service-handoff-database.ts", import.meta.url).href)};
         import { createManagedHandoffLeaseStore, resolveManagedUpdateLeaseDatabasePath } from ${JSON.stringify(new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href)};
+        const phase = (name) => process.stderr.write("[small4-busy] " + JSON.stringify({ phase: name, atMs: performance.now() }) + "\\n");
+        phase("imports.complete");
+        process.once("exit", () => phase("process.exit"));
         if (resolveManagedUpdateLeaseDatabasePath() !== ${JSON.stringify(databasePath)}) throw new Error("Private handoff binding changed");
+        phase("store.prepare.start");
         const store = createManagedHandoffLeaseStore({ databasePath: ${JSON.stringify(databasePath)}, existingIdentity: await prepareManagedHandoffLeaseDatabaseIdentity(${JSON.stringify(databasePath)}), serviceManagerEnv: process.env, originalUpdateKey: ${JSON.stringify(install)} });
+        phase("store.prepare.end");
         const held = store.acquire(${JSON.stringify(install)}, "previous-update-owner", { kind: "update" });
         if (held.kind !== "acquired" || !store.cancelUpdate(held.lease)) throw new Error("Cancellation fixture failed");
+        phase("lease.cancelled");
       `;
       const child = spawnSync(
         resolveTestNodeExecPath(),

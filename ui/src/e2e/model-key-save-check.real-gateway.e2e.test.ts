@@ -17,6 +17,12 @@ const STATUS_BY_KEY: Record<string, [number, string]> = {
   "sk-synthetic-noaccess": [403, "This key has no access to the requested model"],
   "sk-synthetic-servererror": [500, "Internal server error"],
 };
+const phaseReceipts: Array<Record<string, string | number | boolean>> = [];
+const phaseReceipt = (phase: string, fields: Record<string, string | number | boolean> = {}) => {
+  if (phaseReceipts.length < 512) {
+    phaseReceipts.push({ phase, at: Date.now(), ...fields });
+  }
+};
 let instance: OpenClawTestInstance;
 const suite = createControlUiE2eSuite({
   name: "Saving an API key checks it against the provider",
@@ -26,7 +32,9 @@ const suite = createControlUiE2eSuite({
       offsets: [0],
       createListener: () =>
         createServer((request, response) => {
+          phaseReceipt("upstream-request", { models: request.url === "/v1/models" });
           if (request.url === "/v1/models") {
+            phaseReceipt("upstream-response", { status: 200 });
             request.resume();
             response.writeHead(200, { "content-type": "application/json" });
             response.end(JSON.stringify({ data: [{ id: "hy4-preview" }, { id: "current" }] }));
@@ -36,6 +44,7 @@ const suite = createControlUiE2eSuite({
             const key = (request.headers.authorization ?? "").replace(/^Bearer /u, "");
             const failure = STATUS_BY_KEY[key];
             if (failure) {
+              phaseReceipt("upstream-response", { status: failure[0] });
               response.writeHead(failure[0], { "content-type": "application/json" });
               response.end(JSON.stringify({ error: { message: failure[1], code: failure[0] } }));
               return;
@@ -113,15 +122,85 @@ const SETTLED = /API key saved|Added|verified|rejected|failed|no access|overload
 
 /** Saves through `save` and returns the message shown, with how long it took. */
 async function saveAndRead(scope: Locator, save: () => Promise<void>) {
+  await scope.evaluate((element) => {
+    const receipts: Array<{ phase: string; at: number; checking?: boolean; settled?: boolean }> =
+      [];
+    let armed = false;
+    let last = "";
+    const record = (phase: string) => {
+      const checking = /Checking/u.test(element.textContent ?? "");
+      const settled = [
+        ...element.querySelectorAll(".settings-message, [role='alert'], [role='status']"),
+      ].some(
+        (message) =>
+          /API key saved|Added|verified|rejected|failed|no access|overloaded|error/i.test(
+            message.textContent ?? "",
+          ) && message.getClientRects().length > 0,
+      );
+      const state = `${checking}:${settled}`;
+      if (receipts.length < 32 && (phase !== "ui-state" || state !== last)) {
+        receipts.push({ phase, at: Date.now(), checking, settled });
+        last = state;
+      }
+    };
+    const click = (event: Event) => {
+      const button = event.target instanceof Element ? event.target.closest("button") : null;
+      if (button && /^(Save|Save provider)$/u.test(button.textContent?.trim() ?? "")) {
+        armed = true;
+        record("browser-click");
+      }
+    };
+    const submit = () => {
+      if (armed) {
+        record("browser-submit");
+      }
+    };
+    element.addEventListener("click", click, true);
+    element.addEventListener("submit", submit, true);
+    const observer = new MutationObserver(() => {
+      if (armed) {
+        record("ui-state");
+      }
+    });
+    observer.observe(element, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+    });
+    (window as typeof window & { keySavePhase?: () => typeof receipts }).keySavePhase = () => {
+      observer.disconnect();
+      element.removeEventListener("click", click, true);
+      element.removeEventListener("submit", submit, true);
+      return receipts;
+    };
+  });
+  phaseReceipts.length = 0;
   const started = Date.now();
+  phaseReceipt("node-before-click");
   await save();
+  phaseReceipt("node-click-return");
   const message = scope.locator(".settings-message, [role='alert'], [role='status']").filter({
     hasText: SETTLED,
   });
   await message.first().waitFor({ timeout: 30_000 });
+  phaseReceipt("node-message-observed");
   // Let a check that follows the save finish before reading the final message.
   await expect.poll(async () => scope.getByText(/Checking/u).count(), { timeout: 30_000 }).toBe(0);
-  return { text: (await scope.textContent()) ?? "", ms: Date.now() - started };
+  phaseReceipt("node-checking-settled");
+  const text = (await scope.textContent()) ?? "";
+  const ms = Date.now() - started;
+  phaseReceipt("node-text-read");
+  const browser = await scope.evaluate(() => {
+    const holder = window as typeof window & { keySavePhase?: () => unknown };
+    const result = holder.keySavePhase?.();
+    delete holder.keySavePhase;
+    return result;
+  });
+  console.error(
+    "KEY_SAVE_PHASE " + JSON.stringify({ started, ms, browser, receipts: phaseReceipts }),
+  );
+  return { text, ms };
 }
 
 suite.define(() => {
@@ -129,6 +208,46 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
+        page.on("websocket", (socket) => {
+          const methods = new Map<string, string>();
+          const allowed = new Set([
+            "models.authSetApiKey",
+            "models.probe",
+            "models.authStatus",
+            "models.list",
+            "config.get",
+            "config.schema",
+            "config.schema.lookup",
+            "config.applyStatus",
+          ]);
+          socket.on("framesent", ({ payload }) => {
+            try {
+              const frame = JSON.parse(String(payload));
+              if (
+                frame.type === "req" &&
+                allowed.has(frame.method) &&
+                typeof frame.id === "string"
+              ) {
+                methods.set(frame.id, frame.method);
+                phaseReceipt("rpc-request", { method: frame.method });
+              }
+            } catch {
+              /* Non-JSON protocol frames carry no diagnostic evidence. */
+            }
+          });
+          socket.on("framereceived", ({ payload }) => {
+            try {
+              const frame = JSON.parse(String(payload));
+              const method = methods.get(frame.id);
+              if (frame.type === "res" && method) {
+                methods.delete(frame.id);
+                phaseReceipt("rpc-response", { method, ok: frame.ok === true });
+              }
+            } catch {
+              /* Retain no response payloads or error strings. */
+            }
+          });
+        });
         await page.goto(await open("settings/model-providers"));
         await waitForControlUiGatewayReady(page);
         const row = await expandProvider(page, "fixture");

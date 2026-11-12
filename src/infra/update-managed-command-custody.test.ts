@@ -228,7 +228,10 @@ describe.skipIf(process.platform === "win32")("managed command process custody",
         `
 import { createManagedCommandProcessCustody } from ${JSON.stringify(new URL("./update-managed-command-custody.ts", import.meta.url).href)};
 import { createManagedHandoffLeaseStore } from ${JSON.stringify(new URL("./update-managed-service-handoff-lease.ts", import.meta.url).href)};
+const phase = (name) => process.stderr.write("[small4-custody] " + JSON.stringify({ phase: name, atMs: performance.now() }) + "\\n");
+phase("imports.complete");
 const store = createManagedHandoffLeaseStore();
+phase("store.created");
 const parents = [];
 const delegated = [];
 for (const root of ${JSON.stringify(f.roots.slice(0, -1))}) {
@@ -239,14 +242,18 @@ for (const root of ${JSON.stringify(f.roots.slice(0, -1))}) {
   if (child.kind !== "acquired") throw new Error("Delegated fixture failed");
   delegated.push(child.lease);
 }
+phase("custody.create.start");
 const command = await createManagedCommandProcessCustody({ roots: ${JSON.stringify(namespaces)}, parents: delegated, runId: "tracked-owner", assertCurrent() {
   if (parents.some((lease) => !store.owns(lease, "executor"))) throw new Error("Fixture authority changed");
 } });
+phase("custody.create.end");
 command.custody.reserve([process.execPath, "-e", "process.stdin.resume()"]).spawned({pid: ${holder.pid}, startedAt: null});
+phase("command.bound");
 // Reopen an orphan produced before canonical anchors existed, without using the new producer.
 const orphan = store.acquire(${JSON.stringify(`${f.roots.at(-1)!}/.openclaw-update-child-historical-command`)}, "tracked-owner", {kind:"update", custody:"reserved"});
 if (orphan.kind !== "acquired" || !store.bindUpdateChildren([orphan.lease], store.processIdentity(${holder.pid}))) throw new Error("Historical orphan fixture failed");
 (await createManagedCommandProcessCustody({ roots: [${JSON.stringify(pendingRoot)}], runId: "pending-owner", databaseIdentity: command.databaseIdentity })).custody.reserve([process.execPath]);
+phase("pending.reserved.self-kill");
 process.kill(process.pid, "SIGKILL");
 `,
       );

@@ -548,6 +548,91 @@ suite.define(() => {
         await layoutAndWait(paneHeader, /^(Side panel|Minimize side panel)$/, dashboard);
         await expectContinuity();
         await chat.evaluate((element) => {
+          // Proof-only UI5 diagnostic; the existing failure artifact retains this console ring.
+          const region = element.closest(".sidebar-region")!;
+          const identities = new WeakMap<Element, number>();
+          let nextIdentity = 0;
+          let sequence = 0;
+          let lastMenu: Element | null = null;
+          const nodeIdentity = (node: Element | null) => {
+            if (!node) {
+              return null;
+            }
+            let value = identities.get(node);
+            if (value === undefined) {
+              value = ++nextIdentity;
+              identities.set(node, value);
+            }
+            return value;
+          };
+          const record = (event: Event, phase: "capture" | "bubble") => {
+            const target = event.target instanceof Element ? event.target : null;
+            const wrapper = target?.closest(".chat-dashboard-menu");
+            const openMenu = document.querySelector(
+              '.chat-dashboard-menu .oc-menu[data-state="open"]',
+            );
+            const geometry = event.type === "openclaw-sidebar-geometry-commit";
+            if (
+              !wrapper &&
+              !openMenu &&
+              !(geometry && target?.closest(".sidebar-region") === region)
+            ) {
+              return;
+            }
+            const menu = wrapper?.querySelector(".oc-menu") ?? openMenu ?? lastMenu;
+            lastMenu = menu;
+            const row = target?.closest("[data-value]") ?? null;
+            const value = row?.getAttribute("data-value");
+            const dashboardElement = region.querySelector('[data-panel-slot="dashboard"]');
+            console.info(
+              "[ui5-menu-dom]",
+              JSON.stringify({
+                sequence: ++sequence,
+                event: event.type,
+                phase,
+                defaultPrevented: event.defaultPrevented,
+                target: nodeIdentity(target),
+                row: nodeIdentity(row),
+                item: value === "dashboard-expand" || value === "dashboard-swap" ? value : null,
+                targetKind: row
+                  ? "item"
+                  : target?.closest(".chat-dashboard-menu__trigger")
+                    ? "trigger"
+                    : target === menu
+                      ? "menu"
+                      : "other",
+                menu: nodeIdentity(menu),
+                menuConnected: menu?.isConnected ?? false,
+                menuState: menu?.getAttribute("data-state"),
+                menuPhase: menu?.getAttribute("data-phase"),
+                expanded: region.classList.contains("sidebar-region--expanded"),
+                dashboardRegion: dashboardElement?.getAttribute("data-region"),
+                dashboardHidden: dashboardElement?.hasAttribute("hidden"),
+                chatRegion: element.getAttribute("data-region"),
+                chatHidden: element.hasAttribute("hidden"),
+              }),
+            );
+          };
+          // Observe existing dispatch only: no owner getters, layout reads, actions, or new waits.
+          for (const type of [
+            "pointerdown",
+            "pointerup",
+            "click",
+            "menu-select",
+            "overlay-show",
+            "overlay-after-show",
+            "overlay-hide",
+            "overlay-after-hide",
+            "openclaw-sidebar-geometry-commit",
+          ]) {
+            document.addEventListener(type, (event) => record(event, "capture"), {
+              capture: true,
+              passive: true,
+            });
+          }
+          for (const type of ["click", "menu-select", "overlay-show", "overlay-hide"]) {
+            document.addEventListener(type, (event) => record(event, "bubble"), { passive: true });
+          }
           const initialWidth = element.getBoundingClientRect().width;
           element.parentElement!.addEventListener("openclaw-sidebar-geometry-commit", (event) => {
             if (element.getBoundingClientRect().width !== initialWidth) {

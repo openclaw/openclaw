@@ -7,8 +7,8 @@ import { handleControlUiHttpRequest } from "../../../src/gateway/control-ui.ts";
 import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
+import { buildProductionControlUiE2e } from "../test-helpers/control-ui-e2e-build.ts";
 import {
-  buildProductionControlUiE2e,
   captureControlUiE2eFailureDiagnostics,
   installMockGateway,
   waitForControlUiRoute,

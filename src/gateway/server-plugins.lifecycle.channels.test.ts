@@ -48,6 +48,76 @@ installInstanceBindingConfigIo();
 
 async function useGatewayGraphPluginRuntime(): Promise<void> {
   // Keep the real lazy runtime on this server fixture's mocked Vitest graph.
+  const transport = await import("./server-http.js");
+  const createServer = transport.createGatewayHttpServer;
+  const events: unknown[] = [];
+  const startedAt = performance.now();
+  let dropped = 0;
+  let nextSocket = 0;
+  const socketIds = new WeakMap<object, number>();
+  const restorers: Array<() => void> = [];
+  const record = (event: string, details: object = {}) => {
+    if (events.length < 240) {
+      events.push({ ms: performance.now() - startedAt, event, ...details });
+    } else {
+      dropped++;
+    }
+  };
+  const createSpy = vi.spyOn(transport, "createGatewayHttpServer").mockImplementation((options) => {
+    const listener = createServer(options);
+    const emit = listener.emit.bind(listener);
+    const emitSpy = vi.spyOn(listener, "emit").mockImplementation((event, ...args) => {
+      if (event === "connection") {
+        const socket = args[0];
+        const id = ++nextSocket;
+        socketIds.set(socket, id);
+        record("connection", { id, localPort: socket.localPort, remotePort: socket.remotePort });
+        const socketEmit = socket.emit.bind(socket);
+        const socketSpy = vi.spyOn(socket, "emit").mockImplementation((kind, ...values) => {
+          if (["timeout", "close", "end", "error"].includes(String(kind))) {
+            record(`socket:${String(kind)}`, {
+              id,
+              destroyed: socket.destroyed,
+              writableEnded: socket.writableEnded,
+              timeout: socket.timeout,
+            });
+          }
+          return socketEmit(kind, ...values);
+        });
+        restorers.push(() => socketSpy.mockRestore());
+      }
+      if (event === "request") {
+        const [request, response] = args;
+        const id = socketIds.get(request.socket);
+        record("request", {
+          id,
+          path: request.url,
+          method: request.method,
+          shutdown: options.httpRequestLifetime?.requestEntryLifetime?.signal.aborted,
+        });
+        response.once("finish", () =>
+          record("finish", {
+            id,
+            path: request.url,
+            status: response.statusCode,
+            connection: response.getHeader("connection"),
+            keepAlive: response.getHeader("keep-alive"),
+          }),
+        );
+      }
+      if (["timeout", "close", "clientError"].includes(String(event))) {
+        record(`server:${String(event)}`);
+      }
+      return emit(event, ...args);
+    });
+    restorers.push(() => emitSpy.mockRestore());
+    return listener;
+  });
+  onTestFinished(() => {
+    createSpy.mockRestore();
+    restorers.toReversed().forEach((restore) => restore());
+    process.stderr.write(`[webhook-transport] ${JSON.stringify({ events, dropped })}\n`);
+  });
   const runtimeModule = await import("../plugins/runtime/index.js");
   const nativeModule = await import("../plugins/native-module-require.js");
   const nativeLoad = nativeModule.tryNativeRequireModule;
@@ -381,8 +451,17 @@ it.each([false, true])(
     server = started.server;
     const port = started.port;
     await server.startupSettled;
+    process.stderr.write(
+      `[webhook-phase] ${JSON.stringify({ teardownFails, phase: "before-startupz", at: performance.now(), port })}\n`,
+    );
     await waitForGatewayStartup(port);
+    process.stderr.write(
+      `[webhook-phase] ${JSON.stringify({ teardownFails, phase: "after-startupz", at: performance.now(), port })}\n`,
+    );
     await maintenance.settled;
+    process.stderr.write(
+      `[webhook-phase] ${JSON.stringify({ teardownFails, phase: "after-maintenance", at: performance.now(), port })}\n`,
+    );
     const probe = async (accountId: string) => {
       const before = handledRequests.get(accountId) ?? 0;
       let phase = "fetch";

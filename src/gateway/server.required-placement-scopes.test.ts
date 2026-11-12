@@ -209,8 +209,20 @@ test("required placement survives disconnect but stops setup when committed call
       const resume = createDeferredCore();
       hold = { committed, resume: resume.promise, afterAck };
       settled = { remaining: 2, done: createDeferredCore() };
+      const requestedAt = performance.now();
       const created = gateway.rpcReq(ws, "sessions.create", {});
-      void created.catch(() => {});
+      void created.catch(() => {
+        if (!afterAck) {
+          return;
+        }
+        console.error("[small4-placement]", {
+          phase: "sessions.create.failed",
+          elapsedMs: performance.now() - requestedAt,
+          afterAck,
+          placementReached: hold === undefined,
+          setupCallCount: setupCalls.length,
+        });
+      });
       try {
         if (afterAck) {
           const response = await created;
