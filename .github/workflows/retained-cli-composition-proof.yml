@@ -1,4 +1,4 @@
-name: Release runtime custody and input fixture recovery proof
+name: Release service startup custody recovery proof
 'on':
   workflow_dispatch:
     inputs:
@@ -6,11 +6,11 @@ name: Release runtime custody and input fixture recovery proof
         required: true
         type: string
         description: Exact frozen candidate SHA; prerequisite diagnostic, not final FRV
-        default: 39790f9682ffa8d1afb25df1a30e616c5fcb7d4e
+        default: 162e7c2210c065ffdf61fdb94ec9672b4aebef1a
 permissions:
   contents: read
 concurrency:
-  group: release-114-custody-recovery-39790f9682ffa8d1afb25df1a30e616c5fcb7d4e
+  group: release-114-custody-recovery-162e7c2210c065ffdf61fdb94ec9672b4aebef1a
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -21,9 +21,9 @@ env:
   PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
   CAPACITY_PROOF_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
   PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  CANDIDATE_SHA: 39790f9682ffa8d1afb25df1a30e616c5fcb7d4e
-  SOURCE_TREE: fc7ef8c1fc13f0865c9c0c3029eee93ceb7f9746
-  PATHS_SHA256: 3cf57f4e09f1fcd9a5ef0f22ea38449996ba570cfc2f52f14b129ab864a63851
+  CANDIDATE_SHA: 162e7c2210c065ffdf61fdb94ec9672b4aebef1a
+  SOURCE_TREE: 955f2b5a0dde828862fac84ce862d5c56d7694ba
+  PATHS_SHA256: ea413895f8724490a2f93b5bd094e05e3de3738b6c27af14bc37d7ac36c4932c
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
   tests:
@@ -131,6 +131,9 @@ jobs:
           tests_json: '["src/gateway/server-methods/config.shared-auth.test.ts", "src/gateway/server-methods/config-write-flow.test.ts"]'
         - lane: worker-context
           tests_json: '["src/gateway/worker-environments/worker-turn-context-engine.test.ts", "src/gateway/worker-environments/worker-turn-detached-context.test.ts"]'
+        - lane: service-context
+          tests_json: '["src/plugins/services.test.ts", "src/plugins/services.scheduler-context.test.ts", "src/plugins/services.nodes.test.ts",
+            "src/plugins/plugin-instance-registry.test.ts"]'
     env:
       TESTS_JSON: ${{ matrix.tests_json }}
       OPENCLAW_SESSION_EXPORT_STRESS: '1'
@@ -194,11 +197,12 @@ jobs:
         ( node scripts/run-oxlint.mjs --tsconfig tsconfig.json src/gateway/config-reload-plugin-drain.ts src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts
         src/gateway/server-methods/config.shared-auth.test.ts src/gateway/server-plugin-reload.prepared-borrow.test.ts
         src/gateway/server-plugin-reload.recovery.test-support.ts src/gateway/worker-environments/worker-turn-context-engine.test.ts
-        && pnpm exec oxfmt --check --no-error-on-unmatched-pattern -- src/gateway/config-reload-plugin-drain.ts
-        src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts src/gateway/server-methods/config.shared-auth.test.ts
-        src/gateway/server-plugin-reload.prepared-borrow.test.ts src/gateway/server-plugin-reload.recovery.test-support.ts
-        src/gateway/worker-environments/worker-turn-context-engine.test.ts && node scripts/run-tsgo-core-test-shards.mjs
-        --ci-graphs-json ''["core","core-test-gateway-other","core-test-gateway-root","core-test-gateway-server"]''
+        src/plugins/services.ts src/plugins/services.scheduler-context.test.ts && pnpm exec oxfmt --check --no-error-on-unmatched-pattern
+        -- src/gateway/config-reload-plugin-drain.ts src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts
+        src/gateway/server-methods/config.shared-auth.test.ts src/gateway/server-plugin-reload.prepared-borrow.test.ts
+        src/gateway/server-plugin-reload.recovery.test-support.ts src/gateway/worker-environments/worker-turn-context-engine.test.ts
+        src/plugins/services.ts src/plugins/services.scheduler-context.test.ts && node scripts/run-tsgo-core-test-shards.mjs
+        --ci-graphs-json ''["core","core-test-gateway-other","core-test-gateway-root","core-test-gateway-server","core-test-plugins-platform"]''
         ) 2>&1 | tee .artifacts/final-ci/static.log
 
         git diff --exit-code
