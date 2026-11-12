@@ -27,6 +27,8 @@ it("keeps admitted session ownership when transformed plugins import the native 
     export { replaceSessionEntrySync } from ${source("src/config/sessions/session-accessor.sqlite-entry.ts")};
     export { closeOpenClawAgentDatabasesAsync } from ${source("src/state/openclaw-agent-db.ts")};
     export { closeOpenClawStateDatabaseAsync } from ${source("src/state/openclaw-state-db.ts")};
+    export { flushLogger } from ${source("src/logging/logger.ts")};
+    export { drainGlobalSingletonLifecycleState } from ${source("src/shared/global-singleton.ts")};
   `;
   try {
     fs.mkdirSync(dist);
@@ -40,8 +42,8 @@ it("keeps admitted session ownership when transformed plugins import the native 
     );
     writeFixture("admission-runtime.ts", ownerExports);
     writeFixture("plugin.ts", 'export * from "openclaw/plugin-sdk/admission-fixture";\n');
-    // Admission uses the real history worker and its cleanup owner. Borrow the maintained
-    // subprocess generation; keep unrelated recovery/archival graphs deferred.
+    // Admission uses real history and logger workers with their cleanup owners. Borrow the
+    // maintained subprocess generation; keep unrelated recovery/archival graphs deferred.
     await build({
       plugins: [
         {
@@ -59,7 +61,9 @@ it("keeps admitted session ownership when transformed plugins import the native 
               options.kind !== "dynamic-import" ||
               filename ===
                 path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts") ||
-              filename === path.join(repo, "src/infra/temp-artifact-cleanup.ts")
+              filename === path.join(repo, "src/infra/temp-artifact-cleanup.ts") ||
+              filename === path.join(repo, "src/logging/logger-file-worker.ts") ||
+              filename === path.join(repo, "src/state/openclaw-state-db-cache.ts")
             ) {
               return resolved;
             }
@@ -169,6 +173,8 @@ it("keeps admitted session ownership when transformed plugins import the native 
         } finally {
           for (const runtime of [transformed, host]) await runtime?.closeOpenClawAgentDatabasesAsync();
           for (const runtime of [transformed, host]) await runtime?.closeOpenClawStateDatabaseAsync();
+          await host?.flushLogger();
+          await host?.drainGlobalSingletonLifecycleState();
           hooks.deregister();
         }
         assert.deepEqual(unexpectedImports, [], "all exercised runtime must stay in the fixture graph");

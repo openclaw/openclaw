@@ -15,9 +15,11 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Images pass through if the CLI accepts image paths.
 
 With Claude CLI, a successful `sessions_yield` closes the current subprocess after
-its tool result is consumed and suppresses later reply text. The next child-completion
-turn resumes the same saved Claude session in a new subprocess. This avoids recording
-the yield as a user interruption; it adds process startup time after a yield.
+its tool result is consumed and suppresses later reply text. A confirmed final
+`message` reply to the current conversation ends the turn the same way, so the chat
+shows that reply without a second native conclusion. The next turn resumes the same
+saved Claude session in a new subprocess. This avoids recording the yield or final
+reply as a user interruption; it adds process startup time to the next turn.
 An intentional yield is not a failed completion and does not trigger model fallback,
 even when it has no final answer. Genuine CLI failures remain eligible for fallback.
 
@@ -377,6 +379,11 @@ executable over its structured stdio protocol. Claude Code owns its existing loc
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
 refreshes, or forwards native tokens, or sends synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
+Agent turns send OpenClaw's system prompt as Claude Code's replacement system
+prompt, so they run under OpenClaw's prompt and workspace identity instead of
+Claude Code's default coding-CLI prompt. Claude Code still adds its short SDK
+identity line. One-shot side completions, such as
+session recaps, keep the `--append-system-prompt-file` argv.
 Gateway shutdown closes these warm subprocesses and waits for their process trees
 and retained runtime resources to finish cleanup.
 A changed model, system prompt, or configured tool surface starts a
@@ -392,7 +399,7 @@ cross-provider fallback preludes do not copy private hook attachments.
 
 Local plugin-managed Claude turns also receive the renderer-owned Runtime facts
 through this private hook context on every turn. Session identity stays out of the
-appended system prompt, so otherwise identical conversations can share its stable
+system prompt, so otherwise identical conversations can share its stable
 prefix. Policy and workspace instructions remain in the system prompt; process
 and paired-node transports keep their existing Runtime delivery.
 A hook that replaces the entire system prompt still replaces its Runtime facts;

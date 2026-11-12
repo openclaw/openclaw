@@ -38,7 +38,7 @@ export function cronRunResultEvent(
     delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
-    runId: result.request?.runId,
+    runId: result.request?.runId ?? result.taskRunId,
     runAtMs: result.startedAt,
     durationMs: Math.max(0, result.endedAt - result.startedAt),
     nextRunAtMs: job.state.nextRunAtMs,
