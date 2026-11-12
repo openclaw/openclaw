@@ -31,6 +31,7 @@ import {
 } from "./ask-user-tool.js";
 import type { GatewayQuestionCall } from "./gateway-question-lifecycle.js";
 import * as gatewayTransport from "./gateway.js";
+import type { QuestionPromptSend } from "./question-prompt-send.js";
 import { createSecretsTool, normalizeSecretsRequestParams } from "./secrets-tool.js";
 
 type GatewayCall = GatewayQuestionCall;
@@ -227,11 +228,7 @@ function expectStoredDetails(details: unknown, currentPolicy: unknown, provider 
   });
 }
 
-function promptOptions(
-  sessionKey: string,
-  send: NonNullable<Parameters<typeof createSecretsTool>[0]["questionPrompt"]>["send"],
-  messageChannel = "telegram",
-) {
+function promptOptions(sessionKey: string, send: QuestionPromptSend, messageChannel = "telegram") {
   return {
     config: { gateway: { publicOrigin: "https://ops.example.test" } },
     sessionKey,

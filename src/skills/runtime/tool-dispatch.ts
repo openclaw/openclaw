@@ -39,6 +39,7 @@ type SkillDispatchMessageContext = {
   senderName?: string;
   senderUsername?: string;
   senderE164?: string;
+  senderIsBot?: boolean;
   originatingTo?: string;
   to?: string;
   nativeChannelId?: string;
@@ -166,6 +167,7 @@ export async function resolveSkillDispatchTools(params: {
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
+    senderIsBot: params.message.senderIsBot,
     questionInputMode: resolveConversationQuestionInputMode({
       messageChannel: params.message.surface ?? params.message.provider,
     }),

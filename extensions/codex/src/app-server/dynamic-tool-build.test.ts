@@ -172,7 +172,11 @@ it.each<[string, string | undefined, string | undefined, string | undefined, boo
       send: onToolResult,
       messageChannel: expectedChannel,
     });
-    await expectDefined(question, "question prompt").send({ text: "Question for you:" });
+    const delivery = expectDefined(question, "question prompt");
+    if (!("send" in delivery)) {
+      throw new Error("expected the conversation's own question delivery");
+    }
+    await delivery.send({ text: "Question for you:" });
     expect(onToolResult).toHaveBeenCalledExactlyOnceWith({ text: "Question for you:" });
   },
 );

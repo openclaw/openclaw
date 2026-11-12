@@ -1,0 +1,141 @@
+title: Without a Control UI page, a bot sender's question is cancelled and a person's question is unchanged
+
+scenario:
+  id: runtime-tool-ask-user-bot-sender-no-answer-page
+  surface: runtime-tool
+  coverage:
+    primary:
+      - agent-runtime.tool-ask-user
+    secondary:
+      - channels.qa-channel-outbound
+  objective: Verify an existing setup without gateway.publicOrigin keeps a person's ask_user flow as before, while a question from a bot sender's turn is cancelled instead of reaching the bot or an owner who could not answer it.
+  gatewayConfigPatch:
+    commands:
+      ownerAllowFrom: [alice]
+  successCriteria:
+    - A bot sender's question is cancelled, ask_user reports the failed delivery, and no conversation receives the prompt.
+    - A person's question reaches that person's own conversation with its usual reply guidance, and their answer resumes the run.
+  docsRefs:
+    - docs/tools/ask-user.md
+  codeRefs:
+    - src/agents/tools/question-prompt-send.ts
+  execution:
+    kind: flow
+    summary: With ownerAllowFrom set and no gateway.publicOrigin, send a bot sender's ask_user turn and verify its cancellation, then send a person's ask_user turn and verify the unchanged prompt and answer.
+    config:
+      requiredProviderMode: mock-openai
+      requiredProvider: mock-openai
+      peerConversationId: qa-no-page-peer-agent
+      personConversationId: qa-no-page-person
+      botPromptNeedle: Which checks should run?
+      botPrompt: >-
+        Structured question QA check from a peer agent. Call ask_user exactly once with the
+        checks question, then reply with the selected values.
+        ask_user_fixture=multi
+        QA routing marker: tool search qa check target=ask_user.
+      personPromptNeedle: Where should this deploy?
+      personPrompt: >-
+        Structured question QA check. Call ask_user exactly once with the deploy_target
+        question, then reply with the selected value.
+        ask_user_fixture=single
+        QA routing marker: tool search qa check target=ask_user.
+
+flow:
+  steps:
+    - name: cancels the bot sender's question
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.peerConversationId
+              kind: direct
+            senderId:
+              ref: config.peerConversationId
+            senderName: Peer Agent
+            senderIsBot: true
+            text:
+              ref: config.botPrompt
+        - call: waitForCondition
+          saveAs: cancelledRequest
+          args:
+            - lambda:
+                async: true
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.toolOutput ?? '').includes('ask_user prompt delivery failed'))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "!state.getSnapshot().messages.slice(startIndex).some((candidate) => candidate.direction === 'outbound' && candidate.text.includes(config.botPromptNeedle))"
+            message: a question nobody could answer was still delivered
+      detailsExpr: "`the bot sender's question was cancelled and ask_user reported the failed delivery`"
+    - name: keeps a person's question in their own conversation
+      actions:
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.personConversationId
+              kind: direct
+            senderId:
+              ref: config.personConversationId
+            senderName: Requester
+            text:
+              ref: config.personPrompt
+        - call: waitForCondition
+          saveAs: pendingQuestion
+          args:
+            - lambda:
+                async: true
+                expr: "(await env.gateway.call('question.list', {})).questions.find((question) => question.status === 'pending' && question.questions.some((entry) => entry.question === config.personPromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - call: waitForCondition
+          saveAs: promptMessage
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.slice(startIndex).find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.personConversationId && candidate.text.includes(config.personPromptNeedle))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+        - assert:
+            expr: "promptMessage.text.includes('Reply with the number, the option text, or your own answer.')"
+            message:
+              expr: "`the person's prompt changed: ${JSON.stringify(promptMessage.text)}`"
+        - set: resolution
+          value:
+            expr: >-
+              env.gateway.call('question.resolve', {
+                id: pendingQuestion.id,
+                answers: { answers: { deploy_target: ['Production'] } },
+                resolvedBy: 'qa-lab',
+              })
+        - assert:
+            expr: "resolution.status === 'answered'"
+            message:
+              expr: "`the person's answer was not accepted: ${JSON.stringify(resolution)}`"
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.toolOutput ?? '').includes('Deploy: Production'))"
+            - expr: liveTurnTimeoutMs(env, 45000)
+            - 100
+      detailsExpr: "`the person's question reached ${promptMessage.conversation.id} unchanged and their answer resumed the run`"

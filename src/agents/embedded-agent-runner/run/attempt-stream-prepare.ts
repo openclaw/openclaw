@@ -339,6 +339,7 @@ function prepareStream(
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
     hasRepliedRef: attempt.hasRepliedRef,
+    senderIsBot: attempt.senderIsBot,
     internalEvents: attempt.internalEvents,
     compactionCountOwner: attempt.compactionCountOwner,
     onContextAccountingEvent: attempt.onContextAccountingEvent,
@@ -452,7 +453,6 @@ function prepareStream(
     registration?.toolAuthority?.assertActive();
     return isCurrentRegistration();
   };
-  const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
   const instance = attempt.admittedRunContext?.operationalRunInstance;
   const runContext = getAgentRunContext(attempt.runId);
   const supportsUserReplyPromotion =
@@ -481,7 +481,7 @@ function prepareStream(
   >;
   const composeInjectionGuard = (assertCurrent?: () => void) => () => {
     assertCurrent?.();
-    return canInject();
+    return isSteeringAdmissionOpen() && hasCurrentRegistration();
   };
   const questionAuthority = (
     assertCurrent: (() => void) | undefined,

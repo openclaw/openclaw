@@ -318,6 +318,7 @@ export async function handleInlineActions(
           senderName: ctx.SenderName,
           senderUsername: ctx.SenderUsername,
           senderE164: ctx.SenderE164,
+          senderIsBot: ctx.SenderIsBot,
           originatingTo: ctx.OriginatingTo,
           to: ctx.To,
           nativeChannelId: ctx.NativeChannelId,
