@@ -18,7 +18,10 @@ import {
   type SlashMenu as SlashMenuState,
   type SlashMenuHost,
 } from "./chat-composer-slash-menu-state.ts";
-import { slashMenuCurrentValues } from "./chat-composer-slash-menu-values.ts";
+import {
+  createSlashMenuCurrentValues,
+  type SlashMenuModel,
+} from "./chat-composer-slash-menu-values.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 const SlashMenuOptions = lazy(() => import("./chat-composer-slash-menu-options.tsx"), {
@@ -32,10 +35,10 @@ export function SlashMenu(props: {
   menu: SlashMenuState;
   host: SlashMenuHost;
   draft: string;
-  model?: Parameters<typeof slashMenuCurrentValues>[0];
+  model?: SlashMenuModel;
 }) {
   const state = () => props.menu.state;
-  const currentValues = createMemo(() => slashMenuCurrentValues(props.model));
+  const currentValues = createSlashMenuCurrentValues(() => props.model);
   const mode = () =>
     isSlashMenuVisible(state()) ? (state().slashMenuMode === "args" ? "args" : "command") : null;
   const grouped = createMemo(() => {

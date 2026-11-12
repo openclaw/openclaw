@@ -356,6 +356,14 @@ function getSlashCommandRelevance(command: SlashCommandDef, filter: string): num
   if (names.some((name) => name.includes(filter))) {
     return 2;
   }
+  if (
+    command.source === "skill" &&
+    normalizeLowercaseStringOrEmpty(getSkillDisplayName(command))
+      .normalize("NFC")
+      .includes(filter.normalize("NFC"))
+  ) {
+    return 2;
+  }
   return normalizeLowercaseStringOrEmpty(getSlashCommandDescription(command)).includes(filter)
     ? 3
     : NON_MATCHING_COMMAND_RANK;

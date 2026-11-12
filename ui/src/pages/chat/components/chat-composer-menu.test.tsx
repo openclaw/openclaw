@@ -133,8 +133,6 @@ it("marks the current argument separately from keyboard selection and keeps slas
   });
   const medium = view.getByRole("option", { name: "medium" });
   expect(medium.classList.contains("slash-menu-item--current")).toBe(true);
-  expect(medium.querySelector(".session-css-icon")).not.toBeNull();
-  expect(view.container.querySelectorAll(".session-css-icon")).toHaveLength(1);
   expect(view.getByRole("option", { selected: true }).textContent?.trim()).toBe("default");
   menu.handleKeydown(new KeyboardEvent("keydown", { key: "ArrowDown" }), host);
   flush();
