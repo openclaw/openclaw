@@ -390,7 +390,7 @@ suite.define(() => {
       if (captureProofEnabled) {
         await page.waitForTimeout(400);
       }
-      await composer.press("Control+Shift+Enter");
+      await composer.press("Control+Enter");
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { agentId: "main", message: `run this separately on ${label}` },
@@ -486,7 +486,7 @@ suite.define(() => {
     await page.getByRole("link", { name: "New session" }).first().click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await page.locator(".new-session-page__message").fill("verify another default mock");
-    await page.locator(".new-session-page__message").press("Control+Enter");
+    await page.locator(".new-session-page__message").press("Enter");
     await waitForRequestCount(gateway, 2, "sessions.create");
     expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
       params: { agentId: "main", message: "verify another default mock" },
