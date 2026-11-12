@@ -384,6 +384,7 @@ const runtimeConsumers = [
     "src/gateway/github-publication-draft.test.ts",
     "src/gateway/github-publication-requester-aliases.test.ts",
     "src/gateway/github-publication-requester.test.ts",
+    "src/gateway/github-publication-requester.members.test.ts",
   ].map((file) => ({
     file,
     configs: [
