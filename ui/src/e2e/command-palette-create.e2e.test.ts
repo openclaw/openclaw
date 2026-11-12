@@ -173,16 +173,13 @@ suite.define(() => {
           expect(await remember.isVisible()).toBe(true);
           const workspaceButton = popup.locator(".palette-session-settings__workspace");
           const search = popup.getByRole("searchbox", { name: "Search", exact: true });
-          const searchToggle = popup.locator(".header-search__toggle");
           await workspaceButton.click();
-          await searchToggle.waitFor({ state: "visible" });
+          await search.waitFor({ state: "visible" });
           await expectPaletteProjectGrouping(popup);
           expect.soft(await remember.count()).toBe(0);
-          // Pointer entry keeps focus inside the nested view without summoning a
-          // text caret (or a touch keyboard). Tab still reaches its search control.
-          await page.keyboard.press("Tab");
+          // The nested view opens in its search field, by pointer or by keyboard.
           expect
-            .soft(await searchToggle.evaluate((element) => document.activeElement === element))
+            .soft(await search.evaluate((element) => document.activeElement === element))
             .toBe(true);
           await page.keyboard.press("Escape");
           expect(await remember.isVisible()).toBe(true);
@@ -190,18 +187,14 @@ suite.define(() => {
             await workspaceButton.evaluate((element) => document.activeElement === element),
           ).toBe(true);
           await workspaceButton.press("Enter");
-          await searchToggle.waitFor({ state: "visible" });
-          expect(await searchToggle.evaluate((element) => document.activeElement === element)).toBe(
-            true,
-          );
-          await page.keyboard.type("no-such-workspace");
           await search.waitFor({ state: "visible" });
           expect(await search.evaluate((element) => document.activeElement === element)).toBe(true);
+          await page.keyboard.type("no-such-workspace");
           expect(await popup.locator("[data-machine]").count()).toBe(0);
           await popup.getByRole("button", { name: "Back", exact: true }).click();
           expect(await remember.isVisible()).toBe(true);
           await workspaceButton.press("Enter");
-          expect(await search.count()).toBe(0);
+          expect(await search.inputValue()).toBe("");
           await popup.locator('[data-machine="local"][data-project=""]').click();
           expect(await remember.isVisible()).toBe(true);
         },
@@ -308,7 +301,6 @@ suite.define(() => {
             await gateway.waitForRequest("environments.list");
             const workspaceChoice = settings.locator(".palette-session-settings__workspace");
             await workspaceChoice.click();
-            await settings.locator(".header-search__toggle").click();
             const search = settings.getByRole("searchbox");
             await search.fill("Palette runner");
             await search.press("Escape");

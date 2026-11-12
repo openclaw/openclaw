@@ -243,7 +243,10 @@ it.each([true, false])(
       idempotencyKey: `${runId}:user`,
     });
     const evidence = tool("read-file", 2, { runId });
-    const answer = message("assistant", "File inspected", 3, { runId });
+    const answer = message("assistant", "File inspected", 3, {
+      runId,
+      __openclaw: { recordTimestampMs: 322 },
+    });
     const queuedMessage = nativeMessage("user", "Queued follow-up", 4, {
       idempotencyKey: "queued-run:user",
     });
@@ -583,11 +586,13 @@ it.each([
 
 it("times completed work only against the run that owns it", () => {
   const messages = [
-    message("user", "Start two subagents", 1_000),
+    nativeMessage("user", "Start two subagents", 1_000, { idempotencyKey: "run-user:user" }),
     toolResult("spawn", "sessions_spawn", "accepted", 2_000, {
       __openclaw: { importedFrom: "claude-cli" },
     }),
-    message("assistant", "Both started.", 3_000, { __openclaw: { runId: "run-user" } }),
+    message("assistant", "Both started.", 3_000, {
+      __openclaw: { runId: "run-user", recordTimestampMs: 8_000 },
+    }),
     message("assistant", "Child A finished.", 4_000, {
       __openclaw: { runId: "announce:v1:child-a" },
     }),
@@ -600,5 +605,5 @@ it("times completed work only against the run that owns it", () => {
     }).find((item) => item.kind === "work-group")?.durationMs;
   // The rollup belongs to the user's run; a later completion run's runtime is not its time.
   expect(durationFor("run-user")).toBe(7_000);
-  expect(durationFor("announce:v1:child-a")).toBeNull();
+  expect(durationFor("announce:v1:child-a")).toBe(7_000);
 });

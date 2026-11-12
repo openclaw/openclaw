@@ -1,7 +1,7 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
 import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { hasOwedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -320,7 +320,8 @@ export async function finalizeCronRun(params: {
       ...telemetry,
     });
   };
-  const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
+  // Only a child that owes this run a completion or awaits collection makes it a handoff.
+  const acceptedSessionSpawn = hasOwedSessionSpawn(finalRunResult.acceptedSessionSpawns);
   const quietResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&

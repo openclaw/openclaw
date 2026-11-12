@@ -25,6 +25,7 @@ type ToolDisplay = {
   title: string;
   label: string;
   detail?: string;
+  progress?: { label: string; detail?: string };
 };
 
 const FALLBACK = TOOL_DISPLAY_CONFIG.fallback;
@@ -61,6 +62,8 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
+  const action = normalizeOptionalString(asOptionalObjectRecord(call.args)?.action);
+  const progressSpec = (action ? spec?.actions?.[action]?.progress : undefined) ?? spec?.progress;
   const detail = resolveToolDetailForArgs({
     toolKey: key,
     args: call.args,
@@ -77,6 +80,20 @@ export function resolveToolDisplay(params: {
     title,
     label,
     detail: detail ? shortenHomeInString(detail) : detail,
+    ...(progressSpec
+      ? {
+          progress: {
+            label: progressSpec.label,
+            detail: resolveToolDetailForArgs({
+              toolKey: key,
+              args: call.args,
+              spec: progressSpec,
+              detailMode: "summary",
+              detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
+            }),
+          },
+        }
+      : {}),
   };
 }
 

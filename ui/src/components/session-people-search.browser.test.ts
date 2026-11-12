@@ -81,17 +81,14 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       name: members ? "Search people…" : "Search people and agents…",
     });
     const sharingSearch = page.getByRole("button", { name: "Search people…", exact: true });
-    const assignmentSearch = page.getByRole("button", {
-      name: "Search people and agents…",
-      exact: true,
-    });
     if (members) {
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
     } else {
-      await expect.element(assignmentSearch).toBeVisible();
+      // Assignment search is a visible field, not a collapsed action.
+      await expect.element(input).toBeVisible();
     }
     if (surface === "assignment") {
-      const style = getComputedStyle(assignmentSearch.element().closest('[role="menu"]')!);
+      const style = getComputedStyle(input.element().closest('[role="menu"]')!);
       expect(style).toMatchObject({ width: "320px", maxHeight: "420px", overflowY: "auto" });
     }
     const selector = !members
@@ -119,7 +116,7 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       await expect.element(input).toBeVisible();
       await userEvent.click(input);
     }
-    // Assignment typing must open the search without a separate click.
+    // Assignment typing must reach the search without a separate click.
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();
     await expect.element(input).toHaveValue("pc");
@@ -138,10 +135,8 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
       expect(document.activeElement).toBe(sharingSearch.element());
       await userEvent.click(sharingSearch);
-    } else {
-      expect(document.activeElement).toBe(assignmentSearch.element());
-      await userEvent.keyboard("{Enter}");
     }
+    // Assignment Escape clears the query and keeps the field focused for the next search.
     await expect.element(input).toHaveValue("");
     await expect.element(input).toBeVisible();
     expect(document.activeElement).toBe(input.element());

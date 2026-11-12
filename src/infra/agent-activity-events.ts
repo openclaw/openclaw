@@ -7,11 +7,7 @@ import {
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
-import {
-  inferToolMetaFromArgsCore,
-  isCommandBearingToolCall,
-  resolveToolDisplay,
-} from "../agents/tool-display.js";
+import { isCommandBearingToolCall, resolveToolDisplay } from "../agents/tool-display.js";
 import { isToolResultError } from "../agents/tool-result-error.js";
 import type { ToolCallIdentity } from "../chat/tool-call-grouping.js";
 import {
@@ -94,8 +90,9 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
     unwrapped === input && tool.presentationName
       ? { name: tool.presentationName, args: tool.args }
       : unwrapped;
-  const meta = tool.meta ?? inferToolMetaFromArgsCore(call.name, call.args);
-  const label = resolveToolDisplay(call).label;
+  const display = resolveToolDisplay(call);
+  const meta = display.progress ? display.progress.detail : (tool.meta ?? display.detail);
+  const label = display.progress?.label ?? display.label;
   const details = asOptionalRecord(asOptionalRecord(tool.result)?.details);
   const approval =
     tool.phase === "result" &&
@@ -123,7 +120,7 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
       name: tool.name,
       kind: "tool",
       phase: tool.phase === "result" ? "end" : tool.phase,
-      title: meta ? `${label} ${meta}` : label,
+      title: label,
       ...(status ? { status } : { summary: "Outcome unknown" }),
       ...(approval
         ? {
