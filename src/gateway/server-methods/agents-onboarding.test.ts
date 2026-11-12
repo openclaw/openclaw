@@ -242,6 +242,19 @@ it("starts one normal Template personality greeting without the four-role questi
   expect(release).toHaveBeenCalledOnce();
 });
 
+it("runs a chat-based Template opening hidden, under the agent's own tool policy", async () => {
+  sendInternalChat.mockReset().mockImplementation(async (request: GatewayRequestHandlerOptions) => {
+    request.respond(true, { status: "started" });
+  });
+  await startAgentOnboardingConversation(invocation(), "scout", "agent:scout:home", "template", {
+    failures: [],
+    mcpServers: [],
+  });
+  const [, , internal] = sendInternalChat.mock.calls[0]!;
+  // No runtime allowlist: an empty one would remove automations, plugins and message.
+  expect(internal).toEqual({ transcript: { display: false }, deferWorkspaceBootstrap: true });
+});
+
 it("reports failed transcript admission without changing the already-created agent receipt", async () => {
   const options = invocation();
   options.hasCurrentClientAuthority = () => false;

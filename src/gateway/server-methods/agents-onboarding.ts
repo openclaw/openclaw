@@ -384,7 +384,9 @@ export async function startAgentOnboardingConversation(
         undefined,
         {
           transcript: { display: false },
-          toolsAllow: [],
+          // An empty runtime allowlist removes every tool. The setup turn needs the
+          // agent's own tool policy, so that turn passes no runtime allowlist at all.
+          ...(opening === "template" && templateSetup ? {} : { toolsAllow: [] }),
           ...(opening === "template" ? { deferWorkspaceBootstrap: true as const } : {}),
         },
       ),
