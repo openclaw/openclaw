@@ -8,12 +8,15 @@ scripts=$(cd "$(dirname "$0")" && pwd)
 node=$(command -v node)
 [[ "$("$node" -p process.version)" == v24.22.1 ]]
 [[ $package != *' '* && $scripts != *' '* && $output != *' '* ]]
-unit="openclaw-profile-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.service"
+profile="allocation-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+state="$HOME/.openclaw-$profile"
+unit="openclaw-gateway-$profile.service"
 base="$HOME/.config/systemd/user/$unit"
 drop="$base.d"
 private=$(mktemp -d "$RUNNER_TEMP/managed-allocation.XXXXXXXX")
-mkdir -p "$output" "$private/home" "$private/state" "$private/tools"
-chmod 700 "$private" "$private/home" "$private/state" "$private/tools" "$output"
+[[ ! -e $state ]]
+mkdir -p "$state" "$output" "$private/home" "$private/tools"
+chmod 700 "$state" "$private" "$private/home" "$private/tools" "$output"
 # No existing label, service, drop-in, or previous attempt may be adopted.
 [[ ! -e $base && ! -e $drop && ! -e $base.bak ]]
 [[ "$(systemctl --user show "$unit" -p LoadState --value)" == not-found ]]
@@ -32,7 +35,7 @@ cleanup() {
     rm -f -- "$base" "$base.bak" "$drop/90-allocation.conf"
     rmdir -- "$drop" 2>/dev/null || true
     systemctl --user daemon-reload
-    rm -rf -- "$private"
+    rm -rf -- "$private" "$state"
   else
     echo '::error::Owned service cleanup incomplete; do not interpret capture as complete'
     code=1
@@ -43,14 +46,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 cp "$scripts/preload.cjs" "$scripts/launch.py" "$private/tools/"
-export DIAG_PRIVATE="$private" DIAG_OUTPUT="$output" DIAG_PACKAGE="$package" DIAG_NODE="$node" DIAG_UNIT="$unit"
+export DIAG_PRIVATE="$private" DIAG_OUTPUT="$output" DIAG_PACKAGE="$package" DIAG_NODE="$node" DIAG_UNIT="$unit" DIAG_STATE="$state"
 "$node" --input-type=module - <<'NODE'
 import fs from 'node:fs';
 const e=process.env, root=e.DIAG_PRIVATE, out=e.DIAG_OUTPUT;
 const pkg=JSON.parse(fs.readFileSync(e.DIAG_PACKAGE+'/package.json'));
 const info=JSON.parse(fs.readFileSync(e.DIAG_PACKAGE+'/dist/build-info.json'));
 if(pkg.version!=='2026.11.4' || info.commit!=='a233af0b84e093845c62e88c2702cbd9b297f22c') throw Error('wrong package identity');
-fs.writeFileSync(root+'/state/openclaw.json', JSON.stringify({gateway:{mode:'local',bind:'loopback',auth:{mode:'token',token:'isolated-ci-diagnostic-not-a-live-credential'}}}));
+fs.writeFileSync(e.DIAG_STATE+'/openclaw.json', JSON.stringify({gateway:{mode:'local',bind:'loopback',auth:{mode:'token',token:'isolated-ci-diagnostic-not-a-live-credential'}}}));
 fs.writeFileSync(root+'/tools/profile-config.json',JSON.stringify({candidate:info.commit, output:out, ready:out+'/ready.json',
   hardEndAt:Date.now()+120000, node:e.DIAG_NODE, package:e.DIAG_PACKAGE, port:19789, unit:e.DIAG_UNIT, home:root+'/home'}));
 fs.writeFileSync(out+'/package-identity.json',JSON.stringify({packageVersion:pkg.version,buildInfo:info},null,2));
@@ -73,7 +76,7 @@ collector=$!
 set +e
 timeout --signal=TERM --kill-after=10s 150 env -i HOME="$HOME" USER="$(id -un)" LOGNAME="$(id -un)" PATH="$PATH" \
   XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
-  OPENCLAW_STATE_DIR="$private/state" OPENCLAW_CONFIG_PATH="$private/state/openclaw.json" \
+  OPENCLAW_PROFILE="$profile" OPENCLAW_STATE_DIR="$state" OPENCLAW_CONFIG_PATH="$state/openclaw.json" \
   OPENCLAW_SYSTEMD_UNIT="$unit" NODE_OPTIONS='' \
   "$node" "$package/openclaw.mjs" gateway install --runtime node --runtime-path "$node" --port 19789 --json \
   > "$private/install.log" 2>&1

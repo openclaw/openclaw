@@ -26,7 +26,7 @@ allowed = {"PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TZ", "TMPDIR",
            "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "INVOCATION_ID",
            "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "OPENCLAW_SYSTEMD_UNIT",
            "OPENCLAW_SERVICE_MARKER", "OPENCLAW_SERVICE_KIND", "OPENCLAW_SERVICE_VERSION",
-           "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWAY_PORT"}
+           "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWAY_PORT"}
 env = {k: v for k, v in os.environ.items() if k in allowed}
 env["HOME"] = config["home"]
 # Empty NODE_OPTIONS is intentional; no ambient flags or secrets enter the gateway.
