@@ -212,6 +212,9 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 
 Markdown bullet fields and frontmatter keys are terminal: `name.absent` cannot
 match a `name` field or key.
+For concrete frontmatter writes, `name/absent` is likewise unresolved.
+Insert keys directly into `[frontmatter]` with `+key`; insertion below a key,
+such as `name/+added`, is not writable. Rejected writes leave the file unchanged.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
 Union alternatives keep their selector semantics: `{missing,*}` and
@@ -228,6 +231,8 @@ Markdown frontmatter string reads decode YAML quoting and inline comments:
 `key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
 `a#b` remains part of the string, and non-string scalar spelling such as
 `00123` is preserved. Reads leave the source bytes unchanged.
+Block-style lists and maps resolve to YAML text, and multi-line string scalars
+retain YAML folding and chomping. Cross-key aliases remain alias text.
 
 ## Mutation contract
 

@@ -47,6 +47,7 @@ import {
   EXEC_APPROVALS_STDIN_MAX_BYTES,
   formatCliError,
   readStdin,
+  renderEffectivePolicyTable,
   runApprovalsAction,
 } from "./exec-approvals-cli.shared.js";
 import { loadSnapshotLocal, saveSnapshotLocal } from "./exec-approvals-local.js";
@@ -1034,26 +1035,7 @@ export function registerExecApprovalsCli(program: Command) {
           defaultRuntime.log(policyMuted(effectivePolicy.note));
           return;
         }
-        const rows = effectivePolicy.scopes.map((summary) => ({
-          Scope: summary.scopeLabel,
-          Requested: `security=${summary.security.requested} (${summary.security.requestedSource})\nask=${summary.ask.requested} (${summary.ask.requestedSource})`,
-          Host: `security=${summary.security.host} (${summary.security.hostSource})\nask=${summary.ask.host} (${summary.ask.hostSource})\naskFallback=${summary.askFallback.effective} (${summary.askFallback.source})`,
-          Effective: `security=${summary.security.effective}\nask=${summary.ask.effective}`,
-          Notes: `${summary.security.note}; ${summary.ask.note}`,
-        }));
-        defaultRuntime.log(
-          renderTerminalSafeTable({
-            width: getTerminalTableWidth(),
-            columns: [
-              { key: "Scope", header: "Scope", minWidth: 12 },
-              { key: "Requested", header: "Requested", minWidth: 24, flex: true },
-              { key: "Host", header: "Host", minWidth: 24, flex: true },
-              { key: "Effective", header: "Effective", minWidth: 16 },
-              { key: "Notes", header: "Notes", minWidth: 20, flex: true },
-            ],
-            rows,
-          }).trimEnd(),
-        );
+        defaultRuntime.log(renderEffectivePolicyTable(effectivePolicy.scopes));
         defaultRuntime.log("");
         defaultRuntime.log(policyMuted(`Precedence: ${effectivePolicy.note}`));
       });

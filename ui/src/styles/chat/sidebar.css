@@ -244,7 +244,8 @@
   color: var(--hljs-attribute);
 }
 
-:is(.file-view, .code-highlight) :where(.tok-link, .tok-url) {
+:is(.file-view, .code-highlight) :where(.tok-link),
+:is(.file-view, .code-highlight) :where(.tok-url) {
   color: var(--accent-2);
 }
 

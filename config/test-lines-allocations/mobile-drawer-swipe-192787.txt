@@ -1,2 +1,0 @@
-# Existing behavior regressions cover swipe target eligibility, horizontal scroll boundaries, and ordinary taps.
-58

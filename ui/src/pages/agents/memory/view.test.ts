@@ -811,7 +811,7 @@ describe("dreaming view", () => {
     openReviewPanel("dailyLog");
     const onResetGroundedShortTerm = vi.fn();
     const container = renderInto(buildProps({ onResetGroundedShortTerm }));
-    expect(container.querySelectorAll(".settings-section__actions .btn")).toHaveLength(1);
+    expect(container.querySelectorAll(".settings-section__actions button")).toHaveLength(1);
     expect(
       container.querySelector(".dreams-review__entry .dreams-review__snippet")?.textContent,
     ).toBe("Emma prefers shorter, lower-pressure check-ins.");

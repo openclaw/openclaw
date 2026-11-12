@@ -1,2 +1,0 @@
-# Real sealed-source command recovery, tampered checkpoint rejection, no grants and conflict-safe replay.
-256

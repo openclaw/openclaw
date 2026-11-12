@@ -5,5 +5,5 @@ const PHONE_SHEET_QUERY =
 
 /** Phone layouts open form-like filters as a sheet; everywhere else they stay popovers. */
 export function createPhoneSheetLayout() {
-  return createMediaQuery(PHONE_SHEET_QUERY, globalThis.matchMedia?.(PHONE_SHEET_QUERY).matches);
+  return createMediaQuery(PHONE_SHEET_QUERY, globalThis.matchMedia(PHONE_SHEET_QUERY).matches);
 }

@@ -1,2 +1,0 @@
-142
-# Preserve persisted context digest bytes and mutable getter ordering, and prove frozen reasoning avoids repeat serialization.

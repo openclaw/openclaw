@@ -17,7 +17,7 @@ const models = [
 ];
 
 suite.define(() => {
-  it("keeps model versions and custom aliases visible in the chat picker", async () => {
+  it("keeps model versions visible without redundant family aliases", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["models.list", "chat.startup", "sessions.patch"],
@@ -34,7 +34,7 @@ suite.define(() => {
         main.locator(`[data-chat-model-option="${ref}"] .chat-controls__model-option-name`);
       const opus = option("anthropic/claude-opus-4-8");
       await revealChatModelOption(main, "anthropic/claude-opus-4-8");
-      await expect.poll(() => opus.textContent()).toBe("Opus 4.8 · opus");
+      await expect.poll(() => opus.textContent()).toBe("Opus 4.8");
 
       const nvidia = option("nvidia/moonshotai/kimi-k2.5");
       await revealChatModelOption(main, "nvidia/moonshotai/kimi-k2.5");

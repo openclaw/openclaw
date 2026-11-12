@@ -34,17 +34,18 @@ type EmbeddedAgentActiveSessionSteerTarget = {
 
 /** Control only the queued input held by this exact active session. */
 export function createPendingSteerToolControl(
-  activeSession: AgentSession,
+  activeSession: Pick<AgentSession, "agent">,
   isCurrent: () => boolean,
 ): NonNullable<ReplyBackendMessageInjectionV2["steerNow"]> {
-  const isPending = (queueIdentity: string) =>
+  const isPending = (queueIdentity: string, queuedFollowup?: boolean) =>
     isCurrent() &&
-    activeSession.agent.hasPendingSteeringMessage(
-      (message) => getSteeringMessageIdentity(message) === queueIdentity,
-    );
+    (queuedFollowup ||
+      activeSession.agent.hasPendingSteeringMessage(
+        (message) => getSteeringMessageIdentity(message) === queueIdentity,
+      ));
   return {
-    read: (queueIdentity) => {
-      if (!isPending(queueIdentity)) {
+    read: (queueIdentity, queuedFollowup) => {
+      if (!isPending(queueIdentity, queuedFollowup)) {
         return undefined;
       }
       const { interruptible, blocked } = activeSession.agent.getToolInterruptionStatus();

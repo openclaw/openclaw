@@ -11,57 +11,73 @@ import {
 } from "./project-preparation.js";
 import {
   createProjectPreparationFixture,
+  prepareRefreshFixture,
+  prepareProjectFixture as prepare,
+  expectSetupProcessStopped,
+  preparedPath,
+  snapshot,
+  manifestFiles,
+  readManifest,
   runProjectScriptWithGitProbe,
 } from "./project-preparation.test-support.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
-import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 import { workspaceStatIdentity } from "./workspace-hash-memo.js";
-import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const readText = (root: string, ...parts: string[]) =>
   fs.readFile(path.join(root, ...parts), "utf8");
 
-function expectSetupProcessStopped(pid: number) {
-  expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-  const result = spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" });
-  expect(result.error).toBeUndefined();
-  expect([0, 1]).toContain(result.status);
-  const state = result.stdout.trim();
-  expect(state === "" || state.startsWith("Z")).toBe(true);
-}
-
 function fixture(setup?: string, symlink = false) {
   return createProjectPreparationFixture(tempDirs.make("project-preparation-"), setup, symlink);
 }
 
-async function prepare(
-  f: Awaited<ReturnType<typeof fixture>>,
-  options?: Parameters<typeof f.preparedOperation>[1],
-) {
-  const operation = await f.preparedOperation(undefined, options);
-  try {
-    return await operation.project.prepare(f);
-  } finally {
-    operation.close();
-  }
-}
-
-const preparedPath = (home: string, ...parts: string[]) =>
-  path.join(home, ".openclaw-worker", "prepared", "gateway", "c".repeat(64), ...parts);
-const snapshot = async (localPath: string) =>
-  (await prepareWorkerProjectSnapshot({ localPath, namespace: "gateway" }))!;
-const manifestFiles = async (home: string) =>
-  (await fs.readdir(path.join(home, ".openclaw-worker", "manifests"))).filter((file) =>
-    file.endsWith(".json"),
-  );
-const readManifest = async (home: string, ref: string) =>
-  parseWorkerWorkspaceManifest(
-    await readText(home, ".openclaw-worker", "manifests", `${ref.slice(7)}.json`),
-    ref,
-  );
-
 describe("project checkout preparation", () => {
+  it.each(["public", "private", "unpacked"] as const)(
+    "refreshes %s sources with one seed transfer and budgeted setup",
+    async (source) => {
+      const f = await fixture('#!/bin/sh\ncat input.txt >> "$HOME/count"\n');
+      const {
+        initial,
+        result,
+        runs,
+        budgets,
+        workspaceFetches,
+        seed,
+        originalPacks,
+        reportedPhases,
+      } = await prepareRefreshFixture(f, source);
+      expect.soft(runs).toBe(source === "public" ? 1 : 2);
+      expect(budgets).toBe(1);
+      expect(result.recipePreparation?.phaseDurationsMs).toEqual(reportedPhases);
+      expect(result.preparedWorkspace?.workspaceDir).toBe(initial.workspaceDir);
+      expect(await readText(initial.homeDir, "count")).toBe("prepared base\nrefreshed\n");
+      expect(result.recipePreparation?.phaseDurationsMs).toMatchObject({
+        retainedManifest: expect.any(Number),
+        seedTransfer: expect.any(Number),
+        gitUpdate: expect.any(Number),
+        onCreate: expect.any(Number),
+      });
+      await requireGit(initial.workspaceDir, ["fsck", "--connectivity-only"]);
+      const packs = (await fs.readdir(path.join(seed, ".git/objects/pack"))).filter((file) =>
+        file.endsWith(".pack"),
+      );
+      if (source === "unpacked") {
+        expect(packs).toHaveLength(0);
+        expect(workspaceFetches).toBe(1);
+      } else {
+        expect(packs.length).toBeGreaterThan(0);
+        for (const file of packs.filter((name) => !originalPacks.has(name))) {
+          const donor = await fs.stat(path.join(seed, ".git/objects/pack", file));
+          const linked = await fs.stat(path.join(initial.workspaceDir, ".git/objects/pack", file));
+          expect(linked.ino).toBe(donor.ino);
+          expect(linked.nlink).toBeGreaterThan(1);
+        }
+        expect(workspaceFetches).toBe(0);
+      }
+    },
+  );
   it("bounds retained checkouts and abandoned staging while preserving the current project", async () => {
     const f = await fixture();
     const namespace = path.dirname(f.seed);
@@ -410,8 +426,10 @@ printf 'setup\\n' >> "$HOME/count"
     ).toBeUndefined();
   });
 
-  it("updates A to B to A with thin transfers and stable build and HOME paths", async () => {
-    const f = await fixture(`#!/bin/sh
+  it.each([false, true])(
+    "updates A to B to A with thin transfers and stable paths (ignored outputs: %s)",
+    async (ignoredOutputs) => {
+      const f = await fixture(`#!/bin/sh
 set -eu
 mkdir -p build
 test -e build/original-path || printf '%s' "$PWD" > build/original-path
@@ -426,86 +444,280 @@ else
 fi
 cat input.txt >> "$HOME/count"
 `);
-    await fs.writeFile(path.join(f.repository, ".gitignore"), "build/\ngenerated/cache/\n");
-    await fs.writeFile(path.join(f.repository, "bulk.bin"), randomBytes(2 * 1024 * 1024));
+      await fs.writeFile(
+        path.join(f.repository, ".gitignore"),
+        ignoredOutputs ? "build/\ngenerated/\n" : "build/\ngenerated/cache/\n",
+      );
+      await fs.writeFile(path.join(f.repository, "bulk.bin"), randomBytes(2 * 1024 * 1024));
+      await requireGit(f.repository, ["add", "."]);
+      await requireGit(f.repository, ["commit", "--quiet", "-m", "bulk A"]);
+      const a = await snapshot(f.repository);
+      const preparedA = (await prepare(f, { project: a })).preparedWorkspace!;
+      expect(preparedA.sourceManifestRef === preparedA.preparedManifestRef).toBe(ignoredOutputs);
+      // The copied index must match the copied files, or the next forced checkout rewrites all of them.
+      await requireGit(preparedA.workspaceDir, ["diff-files", "--quiet"]);
+      const unchangedFile = path.join(preparedA.workspaceDir, "bulk.bin");
+      const unchangedIdentity = await fs.stat(unchangedFile);
+      const seedFile = (project: typeof a) =>
+        path.join(
+          f.home,
+          ".openclaw-worker/git-seeds/gateway",
+          workerProjectSeedKey(project),
+          "bulk.bin",
+        );
+      const seedIdentity = await fs.stat(seedFile(a));
+      await fs.writeFile(path.join(preparedA.workspaceDir, "build/retained"), "retained-build-A");
+      await fs.writeFile(path.join(preparedA.homeDir, "cached"), "retained-home-A");
+      await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
+      await fs.writeFile(path.join(f.repository, "generated"), "tracked B\n");
+      await requireGit(f.repository, ["add", "generated"]);
+      await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
+      const b = await snapshot(f.repository);
+      const retainedChecks: string[] = [];
+      const hashedBulk: string[] = [];
+      f.runScript.mockImplementation((script) =>
+        runProjectScriptWithGitProbe(
+          script,
+          f.home,
+          (args) => {
+            if (args[1] === preparedA.workspaceDir && args[2] === "fsck") {
+              retainedChecks.push(args.at(-1)!);
+            }
+            return undefined;
+          },
+          (args, options) => {
+            // Advance only the manifest clock past its ctime safety window; observe real file reads.
+            const instrumented = `Date.now = () => ${Date.now() + 60_000};
+const fsp = require("node:fs").promises, open = fsp.open;
+fsp.open = async (...args) => {
+  const handle = await open(...args), stream = handle.createReadStream.bind(handle);
+  handle.createReadStream = (...options) => {
+    if (args[0].endsWith("/bulk.bin")) process.stderr.write("HASHED_BULK\\n");
+    return stream(...options);
+  };
+  return handle;
+};\n`;
+            const result = spawnSync(
+              process.execPath,
+              [args[0]!, instrumented + args[1], ...args.slice(2)],
+              options,
+            );
+            if (result.stderr.includes("HASHED_BULK")) {
+              hashedBulk.push(args[2]!);
+            }
+            return result;
+          },
+        ),
+      );
+      const preparedB = (await prepare(f, { project: b, key: "b".repeat(64) })).preparedWorkspace!;
+      expect(retainedChecks).toEqual([]);
+      expect(preparedB).toMatchObject({
+        workspaceDir: preparedA.workspaceDir,
+        homeDir: preparedA.homeDir,
+        cacheKey: preparedA.cacheKey,
+      });
+      expect(preparedB.preparationKey).not.toBe(preparedA.preparationKey);
+      expect(preparedB.sourceManifestRef).not.toBe(preparedA.sourceManifestRef);
+      expect(await requireGit(preparedB.workspaceDir, ["rev-parse", "HEAD"])).toBe(b.baseCommit);
+      expect((await fs.stat(unchangedFile)).ino).toBe(unchangedIdentity.ino);
+      expect((await fs.stat(seedFile(b))).ino).toBe(seedIdentity.ino);
+      expect(hashedBulk).toEqual([]);
+      const coldHome = path.join(f.home, "full-hash");
+      const coldManifests = path.join(coldHome, ".openclaw-worker/manifests");
+      await fs.mkdir(coldManifests, { recursive: true });
+      const sourceName = preparedB.sourceManifestRef.slice(7) + ".json";
+      await fs.copyFile(
+        path.join(f.home, ".openclaw-worker/manifests", sourceName),
+        path.join(coldManifests, sourceName),
+      );
+      expect(
+        execFileSync(
+          process.execPath,
+          [
+            "-e",
+            REMOTE_WORKSPACE_MANIFEST_JS,
+            preparedB.workspaceDir,
+            b.baseCommit,
+            "eligible",
+            preparedB.sourceManifestRef.slice(7),
+          ],
+          { env: { ...process.env, HOME: coldHome }, encoding: "utf8" },
+        ).trim(),
+      ).toBe(preparedB.preparedManifestRef);
+      await requireGit(preparedB.workspaceDir, ["diff-files", "--quiet"]);
+      expect(await readText(preparedB.workspaceDir, "input.txt")).toBe("changed B\n");
+      expect(await readText(preparedB.workspaceDir, "generated")).toBe("tracked B\n");
+      expect(await readText(preparedB.workspaceDir, "build/retained")).toBe("retained-build-A");
+      expect(await readText(preparedB.homeDir, "cached")).toBe("retained-home-A");
+      expect(f.uploadBytes).toHaveLength(2);
+      expect(f.uploadBytes[0]).toBeGreaterThan(2 * 1024 * 1024);
+      expect(f.uploadBytes[1]).toBeLessThan(f.uploadBytes[0]! / 100);
+      const coldB = (
+        await prepare(f, { project: b, key: "b".repeat(64), cacheKey: "d".repeat(64) })
+      ).preparedWorkspace!;
+      expect(coldB.workspaceDir).not.toBe(preparedB.workspaceDir);
+      expect(await readText(coldB.workspaceDir, "generated")).toBe("tracked B\n");
+      expect(await readText(coldB.homeDir, "count")).toBe("changed B\n");
+      expect((await prepare(f, { project: a })).preparedWorkspace).toEqual(preparedA);
+      expect(retainedChecks).toEqual([]);
+      expect(f.uploadBytes).toHaveLength(3);
+      expect(f.uploadBytes[2]).toBeLessThan(f.uploadBytes[0]! / 100);
+      expect(await readText(preparedA.homeDir, "count")).toBe(
+        "prepared base\nchanged B\nprepared base\n",
+      );
+      expect(await readText(preparedA.homeDir, "cached")).toBe("retained-home-A");
+      expect(await readText(preparedA.workspaceDir, "build/retained")).toBe("retained-build-A");
+      expect(await readText(preparedA.workspaceDir, "build/original-path")).toBe(
+        preparedA.workspaceDir,
+      );
+      expect((await manifestFiles(preparedA.homeDir)).toSorted()).toEqual(
+        [...new Set([preparedA.sourceManifestRef, preparedA.preparedManifestRef])]
+          .map((ref) => `${ref.slice(7)}.json`)
+          .toSorted(),
+      );
+      await fs.rename(f.repository, `${f.repository}-offline`);
+      await fs.rename(
+        path.join(f.home, ".openclaw-worker", "git-seeds"),
+        path.join(f.home, "seeds-offline"),
+      );
+      expect(await requireGit(preparedA.workspaceDir, ["remote"])).toBe("");
+      await requireGit(preparedA.workspaceDir, [
+        "fsck",
+        "--full",
+        "--strict",
+        "--no-reflogs",
+        a.baseCommit,
+      ]);
+      expect(await readText(preparedA.workspaceDir, "input.txt")).toBe("prepared base\n");
+    },
+  );
+
+  it("skips detected installs only for refreshes without dependency input changes", async () => {
+    const f = await fixture();
+    await fs.writeFile(path.join(f.repository, "package-lock.json"), "{}");
     await requireGit(f.repository, ["add", "."]);
-    await requireGit(f.repository, ["commit", "--quiet", "-m", "bulk A"]);
-    const a = await snapshot(f.repository);
-    const preparedA = (await prepare(f, { project: a })).preparedWorkspace!;
-    // The copied index must match the copied files, or the next forced checkout rewrites all of them.
-    await requireGit(preparedA.workspaceDir, ["diff-files", "--quiet"]);
-    const unchangedFile = path.join(preparedA.workspaceDir, "bulk.bin");
-    const unchangedIdentity = await fs.stat(unchangedFile);
-    await fs.writeFile(path.join(preparedA.workspaceDir, "build/retained"), "retained-build-A");
-    await fs.writeFile(path.join(preparedA.homeDir, "cached"), "retained-home-A");
-    await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
-    await fs.writeFile(path.join(f.repository, "generated"), "tracked B\n");
-    await requireGit(f.repository, ["add", "generated"]);
-    await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
-    const b = await snapshot(f.repository);
-    const retainedChecks: string[] = [];
-    f.runScript.mockImplementation((script) =>
-      runProjectScriptWithGitProbe(script, f.home, (args) => {
-        if (args[1] === preparedA.workspaceDir && args[2] === "fsck") {
-          retainedChecks.push(args.at(-1)!);
-        }
-        return undefined;
-      }),
-    );
-    const preparedB = (await prepare(f, { project: b, key: "b".repeat(64) })).preparedWorkspace!;
-    expect(retainedChecks).toEqual([]);
-    expect(preparedB).toMatchObject({
-      workspaceDir: preparedA.workspaceDir,
-      homeDir: preparedA.homeDir,
-      cacheKey: preparedA.cacheKey,
-    });
-    expect(preparedB.preparationKey).not.toBe(preparedA.preparationKey);
-    expect(preparedB.sourceManifestRef).not.toBe(preparedA.sourceManifestRef);
-    expect(await requireGit(preparedB.workspaceDir, ["rev-parse", "HEAD"])).toBe(b.baseCommit);
-    expect((await fs.stat(unchangedFile)).ino).toBe(unchangedIdentity.ino);
-    expect(await readText(preparedB.workspaceDir, "input.txt")).toBe("changed B\n");
-    expect(await readText(preparedB.workspaceDir, "generated")).toBe("tracked B\n");
-    expect(await readText(preparedB.workspaceDir, "build/retained")).toBe("retained-build-A");
-    expect(await readText(preparedB.homeDir, "cached")).toBe("retained-home-A");
-    expect(f.uploadBytes).toHaveLength(2);
-    expect(f.uploadBytes[0]).toBeGreaterThan(2 * 1024 * 1024);
-    expect(f.uploadBytes[1]).toBeLessThan(f.uploadBytes[0]! / 100);
-    const coldB = (await prepare(f, { project: b, key: "b".repeat(64), cacheKey: "d".repeat(64) }))
-      .preparedWorkspace!;
-    expect(coldB.workspaceDir).not.toBe(preparedB.workspaceDir);
-    expect(await readText(coldB.workspaceDir, "generated")).toBe("tracked B\n");
-    expect(await readText(coldB.homeDir, "count")).toBe("changed B\n");
-    expect((await prepare(f, { project: a })).preparedWorkspace).toEqual(preparedA);
-    expect(retainedChecks).toEqual([]);
-    expect(f.uploadBytes).toHaveLength(2);
-    expect(await readText(preparedA.homeDir, "count")).toBe(
-      "prepared base\nchanged B\nprepared base\n",
-    );
-    expect(await readText(preparedA.homeDir, "cached")).toBe("retained-home-A");
-    expect(await readText(preparedA.workspaceDir, "build/retained")).toBe("retained-build-A");
-    expect(await readText(preparedA.workspaceDir, "build/original-path")).toBe(
-      preparedA.workspaceDir,
-    );
-    expect((await manifestFiles(preparedA.homeDir)).toSorted()).toEqual(
-      [preparedA.sourceManifestRef, preparedA.preparedManifestRef]
-        .map((ref) => `${ref.slice(7)}.json`)
-        .toSorted(),
-    );
-    await fs.rename(f.repository, `${f.repository}-offline`);
-    await fs.rename(
-      path.join(f.home, ".openclaw-worker", "git-seeds"),
-      path.join(f.home, "seeds-offline"),
-    );
-    expect(await requireGit(preparedA.workspaceDir, ["remote"])).toBe("");
-    await requireGit(preparedA.workspaceDir, [
-      "fsck",
-      "--full",
-      "--strict",
-      "--no-reflogs",
-      a.baseCommit,
-    ]);
-    expect(await readText(preparedA.workspaceDir, "input.txt")).toBe("prepared base\n");
+    await requireGit(f.repository, ["commit", "--quiet", "-m", "dependencies"]);
+    const run = async () => {
+      const project = await snapshot(f.repository);
+      const recipe = await readWorkerProjectEnvironmentRecipe(project);
+      const operation = createWorkerProjectPreparation({
+        project,
+        namespace: "gateway",
+        setupAuthorized: true,
+        requireCurrent: () => {},
+        preparation: {
+          key: "a".repeat(64),
+          cacheKey: "c".repeat(64),
+          purpose: "session",
+          demandAtMs: 1,
+          setupRecipe: recipe.identity,
+          recipe: {
+            ...recipe,
+            detectedInstall: [
+              "sh",
+              "-c",
+              'printf "install\\n" >> "$HOME/count"; printf generated > generated.txt',
+            ],
+          },
+        },
+      });
+      try {
+        return await operation.project.prepare(f);
+      } finally {
+        operation.close();
+      }
+    };
+    const initial = await run();
+    let installs = 1;
+    const changes = [
+      "input.txt",
+      "nested/package.json",
+      "nested/pnpm-lock.yaml",
+      "nested/pnpm-workspace.yaml",
+      "nested/.npmrc",
+      "nested/.pnpmfile.cjs",
+      "nested/yarn.lock",
+      "nested/.yarnrc.yml",
+      "nested/.yarnrc",
+      "nested/.yarn/plugins/custom.cjs",
+      "nested/.yarn/releases/yarn.cjs",
+      "nested/package-lock.json",
+      "nested/npm-shrinkwrap.json",
+      "nested/bun.lock",
+      "nested/bun.lockb",
+      "nested/patches/fix.patch",
+      ".nvmrc",
+      "nested/.node-version",
+      "nested/.tool-versions",
+      "nested/mise.toml",
+      "renamed-lock.txt",
+      "content.txt",
+    ];
+    for (const file of changes) {
+      await fs.mkdir(path.dirname(path.join(f.repository, file)), { recursive: true });
+      if (file === "renamed-lock.txt") {
+        await requireGit(f.repository, ["mv", "nested/bun.lockb", file]);
+      } else {
+        await fs.writeFile(
+          path.join(f.repository, file),
+          file === ".nvmrc" ? "system\n" : "changed\n",
+        );
+      }
+      await requireGit(f.repository, ["add", "."]);
+      await requireGit(f.repository, ["commit", "--quiet", "-m", file]);
+      const result = await run();
+      const contentOnly = file === "input.txt" || file === "content.txt";
+      if (contentOnly) {
+        expect(result.recipePreparation?.note).toContain("no dependency inputs changed");
+        expect(result.recipePreparation?.phaseDurationsMs?.detectedInstall).toBeUndefined();
+      } else {
+        installs++;
+        expect(result.recipePreparation?.phaseDurationsMs?.detectedInstall).toEqual(
+          expect.any(Number),
+        );
+      }
+      expect(await readText(initial.preparedWorkspace!.homeDir, "count")).toBe(
+        "install\n".repeat(installs),
+      );
+      expect(await readText(initial.preparedWorkspace!.workspaceDir, "generated.txt")).toBe(
+        "generated",
+      );
+    }
   });
+
+  it.each(["missing", "dirty", "wrong HEAD"])(
+    "refreshes with a fresh seed when the retained seed is %s",
+    async (state) => {
+      const f = await fixture();
+      const initial = (await prepare(f)).preparedWorkspace!;
+      if (state === "missing") {
+        await fs.rm(f.seed, { recursive: true });
+      } else if (state === "dirty") {
+        await fs.writeFile(path.join(f.seed, "input.txt"), "dirty\n");
+      } else {
+        await requireGit(f.seed, [
+          "-c",
+          "user.name=Fixture",
+          "-c",
+          "user.email=fixture@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "--quiet",
+          "--allow-empty",
+          "-m",
+          "different HEAD",
+        ]);
+      }
+      await fs.writeFile(path.join(f.repository, "input.txt"), "new content\n");
+      await requireGit(f.repository, ["commit", "--quiet", "-am", "refresh"]);
+      const result = (await prepare(f, { project: await snapshot(f.repository) }))
+        .preparedWorkspace!;
+      expect(result.workspaceDir).toBe(initial.workspaceDir);
+      expect(await readText(result.workspaceDir, "input.txt")).toBe("new content\n");
+      await requireGit(result.workspaceDir, ["diff-files", "--quiet"]);
+    },
+  );
 
   it("refreshes a prepared checkout after the Gateway garbage-collects rewritten history", async () => {
     const f = await fixture(`#!/bin/sh
@@ -813,16 +1025,5 @@ ${action}
     expect(
       await fs.stat(path.join(f.home, ".openclaw-worker", "prepared")).catch(() => undefined),
     ).toBeUndefined();
-  });
-
-  it("requires a budgeted transport before transferring a new prepared workspace", async () => {
-    const f = await fixture();
-    const operation = await f.preparedOperation();
-    await expect(
-      operation.project.prepare({ runScript: f.runScript, upload: f.upload }),
-    ).rejects.toThrow("Prepared workspaces require a provider command budget");
-    operation.close();
-    expect(f.runScript).not.toHaveBeenCalled();
-    expect(f.upload).not.toHaveBeenCalled();
   });
 });

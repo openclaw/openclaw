@@ -31,6 +31,9 @@ it.each(["ready", "rejected", "aborted"] as const)(
     Object.assign(api.session.controls, { registerControlUiDescriptor: vi.fn() });
     plugin.register?.(api);
     const service = registered.mock.calls[0]?.[0];
+    if (service?.apiVersion !== 2) {
+      throw new Error("Expected service API version 2");
+    }
     assert(service);
     const clock = createGatewaySchedulerClock(1_000);
     const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));

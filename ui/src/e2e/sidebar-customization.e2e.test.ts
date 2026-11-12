@@ -1,14 +1,15 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionPath,
-  installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
@@ -46,7 +47,7 @@ suite.define(() => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 954, width: 1105 } },
         async ({ page }) => {
-          await installMockGateway(page, {
+          await installNativePluginMockGateway(page, {
             sessions: Array.from({ length: 40 }, (_, index) => ({
               key: `agent:main:divider-session-${index}`,
               label: `Project checkpoint ${index + 1}`,
@@ -89,7 +90,8 @@ suite.define(() => {
           expect(
             await page.locator("main.content").evaluate((element, pageDirection) => {
               const rect = element.getBoundingClientRect();
-              const x = pageDirection === "rtl" ? rect.right - 8 : rect.left + 8;
+              const left = rect.left + element.clientLeft;
+              const x = pageDirection === "rtl" ? left + element.clientWidth - 8 : left + 8;
               const hit = document.elementFromPoint(x, rect.top + 50);
               return hit !== null && element.contains(hit);
             }, direction),
@@ -143,7 +145,7 @@ suite.define(() => {
             { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
             { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
           ];
-          await installMockGateway(page, {
+          await installNativePluginMockGateway(page, {
             ...workboardUi,
             methodResponses: {
               "workboard.boards.list": { boards },
@@ -271,7 +273,7 @@ suite.define(() => {
       key: hiddenSessionCatalogsStorageKey,
       value: ["claude", "offline-catalog"],
     });
-    const gateway = await installMockGateway(page, {
+    const gateway = await installNativePluginMockGateway(page, {
       featureMethods: ["sessions.catalog.list"],
       methodResponses: {
         "sessions.catalog.list": {
@@ -320,8 +322,9 @@ suite.define(() => {
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    await installNativePluginMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      featureMethods: [...defaultControlUiFeatureMethods, "config.get", "agents.list"],
       methodResponses: {
         "config.get": {
           config: {},
@@ -546,10 +549,10 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--onboarding");
-      // Ask OpenClaw is a settings-takeover page (#111686): the settings
-      // sidebar owns navigation there, not the app sidebar.
+      // Settings replaces the session panel while retaining the desktop navigation rail.
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
+      await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
+      await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
@@ -704,7 +707,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
+        await installNativePluginMockGateway(page, {
           sessions: [
             { hasActiveRun: true, key: "main", kind: "direct", status: "running", updatedAt: 100 },
           ],
@@ -800,7 +803,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           methodResponses: {
             "cron.list": {
               jobs: [

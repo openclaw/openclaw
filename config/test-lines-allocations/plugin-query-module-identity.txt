@@ -1,2 +1,0 @@
-23
-# Preserve plugin URL query/fragment identity across captured paths and generations.

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
+import type { ControlUiAllocationProfile } from "./control-ui-allocation-profile.ts";
 
-export type ControlUiEngine = "chromium" | "webkit";
+export type ControlUiEngine = "chromium" | "webkit" | "firefox";
 
 export type EngineMetrics = {
   collection: "cdp-performance" | "webkit-inspector" | "untraced";
@@ -57,6 +58,7 @@ export type EngineMeasurement = {
   metrics: EngineMetrics;
   timeline?: unknown[];
   profile?: unknown;
+  allocations?: ControlUiAllocationProfile;
   cpuSamples?: WebKitCpuEvent[];
 };
 
@@ -65,6 +67,7 @@ type MeasurementOptions = {
   cpuOnly?: boolean;
   cpuProfile?: boolean;
   nativeAudit?: boolean;
+  allocations?: boolean;
 };
 
 /** Union nested same-category records so recursive calls are counted once. */
@@ -258,8 +261,18 @@ export async function startEngineMeasurement(
   engine: ControlUiEngine,
   options: MeasurementOptions,
 ) {
-  if (engine === "webkit") {
-    if (!options.trace && !options.cpuOnly) {
+  if (engine !== "chromium") {
+    if (engine === "firefox" || (!options.trace && !options.cpuOnly)) {
+      if (
+        engine === "firefox" &&
+        (options.trace ||
+          options.cpuOnly ||
+          options.cpuProfile ||
+          options.nativeAudit ||
+          options.allocations)
+      ) {
+        throw new Error("Firefox exposes no CPU counters or native profiler through this harness");
+      }
       // Inspector instrumentation has measurable cost. Keep cross-engine wall
       // comparisons untraced; collect attribution in a separate --trace run.
       return {
@@ -277,7 +290,9 @@ export async function startEngineMeasurement(
               jsHeapUsedBytes: null,
               cpuMs: null,
               notes: [
-                "WebKit has no public untraced script/layout/heap counters. Use a separate --trace run for Inspector attribution; these missing metrics are not zero.",
+                engine === "firefox"
+                  ? "Firefox supports browser-local application elapsed time, not CPU, script/layout, heap counters or native traces in this harness. Missing metrics are not zero."
+                  : "WebKit has no public untraced script/layout/heap counters. Use a separate --trace run for Inspector attribution; these missing metrics are not zero.",
               ],
             },
           };
@@ -288,13 +303,14 @@ export async function startEngineMeasurement(
   }
   const session = await page.context().newCDPSession(page);
   const timeline: unknown[] = [];
+  const scriptUrls = new Map<string, string>();
   try {
     await session.send("Performance.enable", { timeDomain: "threadTicks" });
     if (options.trace || options.nativeAudit) {
       session.on("Tracing.dataCollected", ({ value }) => timeline.push(...value));
       await session.send("Tracing.start", {
         categories: options.nativeAudit
-          ? "toplevel,blink,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.invalidationTracking,v8,disabled-by-default-v8.gc,cc"
+          ? "toplevel,blink,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.timeline.invalidationTracking,v8,disabled-by-default-v8.gc,cc,accessibility"
           : "toplevel,blink.user_timing,devtools.timeline",
         transferMode: "ReportEvents",
       });
@@ -308,10 +324,30 @@ export async function startEngineMeasurement(
       return Object.fromEntries(metrics.map(({ name, value }) => [name, value]));
     };
     const before = await read();
+    if (options.allocations) {
+      // HeapProfiler omits sourceURL for evaluated scripts; Debugger retains it.
+      session.on("Debugger.scriptParsed", ({ scriptId, url }) => scriptUrls.set(scriptId, url));
+      await session.send("Debugger.enable");
+      await session.send("HeapProfiler.startSampling", {
+        samplingInterval: 4096,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
+    }
     return {
       async stop(): Promise<EngineMeasurement> {
         try {
           const after = await read();
+          const allocations = options.allocations
+            ? (await session.send("HeapProfiler.stopSampling")).profile
+            : undefined;
+          if (allocations) {
+            const restoreUrl = (node: typeof allocations.head) => {
+              node.callFrame.url ||= scriptUrls.get(node.callFrame.scriptId) ?? "";
+              node.children.forEach(restoreUrl);
+            };
+            restoreUrl(allocations.head);
+          }
           const delta = (key: string, factor = 1_000) => {
             const previous = before[key];
             const current = after[key];
@@ -360,6 +396,7 @@ export async function startEngineMeasurement(
             },
             ...(options.trace || options.nativeAudit ? { timeline } : {}),
             ...(options.trace || options.cpuProfile || options.nativeAudit ? { profile } : {}),
+            ...(allocations ? { allocations } : {}),
           };
         } finally {
           await session.detach();

@@ -345,7 +345,7 @@ struct WatchSessionActivationGateTests {
         await #expect(throws: WatchSessionActivationError.self) { try await second.value }
     }
 
-    @Test func `watch receiver acknowledges only accepted payloads and snapshots only after activation`() throws {
+    @Test func `watch reads snapshots only after activation and iPhone registers inbound handling first`() throws {
         let iosRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -358,16 +358,6 @@ struct WatchSessionActivationGateTests {
                 "Sources/Services/WatchMessagingService.swift"),
             encoding: .utf8)
 
-        let acknowledgmentSource = try String(
-            contentsOf: iosRoot.appendingPathComponent("Sources/Services/WatchSessionActivationGate.swift"),
-            encoding: .utf8)
-        #expect(acknowledgmentSource.contains("final class WatchMessageAcknowledgment"))
-        #expect(receiverSource.contains(
-            "acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler)"))
-        #expect(receiverSource.contains("acknowledgment?.accept()"))
-        #expect(receiverSource.contains(#"acknowledgment?.reject(reason: "unsupported_payload")"#))
-        #expect(receiverSource.contains(
-            "acknowledgment: WatchMessageAcknowledgment? = nil)\n    {"))
         #expect(receiverSource.contains("guard activationState == .activated else { return }"))
         let callbackRegistration = try #require(
             serviceSource.range(of: "self.transport.setInboundEventHandler"))

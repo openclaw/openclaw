@@ -4,11 +4,11 @@ import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resoluti
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import {
   prepareSystemRunMutableFileBinding,
-  revalidateSystemRunMutableFileBindingSync,
+  revalidateSystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
 import {
   APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  captureApprovedCwdSnapshotSync,
+  captureApprovedCwdSnapshot,
   revalidateApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
 
@@ -16,16 +16,16 @@ import {
 export async function prepareCronStreamExecutionBinding(params: {
   argv: readonly string[];
   cwd?: string;
-}): Promise<{ assertCurrent: () => void }> {
+}): Promise<{ assertCurrent: () => void; revalidate: () => Promise<void> }> {
   const argv = [...params.argv];
   const requestedCwd = path.resolve(params.cwd ?? process.cwd());
-  const capturedCwd = captureApprovedCwdSnapshotSync(requestedCwd);
+  const capturedCwd = await captureApprovedCwdSnapshot(requestedCwd);
   if (!capturedCwd.ok) {
     throw new Error(capturedCwd.message);
   }
   const cwd = capturedCwd.snapshot.cwd;
   const env = { ...process.env };
-  const resolution = resolveCommandResolutionFromArgv(argv, cwd, env, process.platform, {
+  const resolution = await resolveCommandResolutionFromArgv(argv, cwd, env, process.platform, {
     useCache: false,
   });
   if (!resolution?.execution.resolvedPath && !resolution?.execution.resolvedRealPath) {
@@ -43,23 +43,31 @@ export async function prepareCronStreamExecutionBinding(params: {
   if (!prepared.ok) {
     throw new Error(prepared.message);
   }
+  const assertCurrent = () => {
+    if (path.resolve(params.cwd ?? process.cwd()) !== requestedCwd) {
+      throw new CronStreamPolicyDeniedError(APPROVAL_CWD_DRIFT_DENIED_MESSAGE);
+    }
+    if (
+      resolveEnvironmentValue(process.env, "PATH") !== resolveEnvironmentValue(env, "PATH") ||
+      resolveEnvironmentValue(process.env, "PATHEXT") !== resolveEnvironmentValue(env, "PATHEXT")
+    ) {
+      throw new CronStreamPolicyDeniedError(
+        "SYSTEM_RUN_DENIED: approval executable search environment changed",
+      );
+    }
+  };
   return {
-    assertCurrent() {
-      if (
-        path.resolve(params.cwd ?? process.cwd()) !== requestedCwd ||
-        !revalidateApprovedCwdSnapshot(capturedCwd.snapshot)
-      ) {
+    assertCurrent,
+    async revalidate() {
+      assertCurrent();
+      if (!(await revalidateApprovedCwdSnapshot(capturedCwd.snapshot))) {
         throw new CronStreamPolicyDeniedError(APPROVAL_CWD_DRIFT_DENIED_MESSAGE);
       }
-      if (
-        resolveEnvironmentValue(process.env, "PATH") !== resolveEnvironmentValue(env, "PATH") ||
-        resolveEnvironmentValue(process.env, "PATHEXT") !== resolveEnvironmentValue(env, "PATHEXT")
-      ) {
-        throw new CronStreamPolicyDeniedError(
-          "SYSTEM_RUN_DENIED: approval executable search environment changed",
-        );
-      }
-      const current = revalidateSystemRunMutableFileBindingSync({ binding: prepared.binding, cwd });
+      const current = await revalidateSystemRunMutableFileBinding({
+        binding: prepared.binding,
+        cwd,
+      });
+      assertCurrent();
       if (!current.ok) {
         throw new CronStreamPolicyDeniedError(current.message);
       }

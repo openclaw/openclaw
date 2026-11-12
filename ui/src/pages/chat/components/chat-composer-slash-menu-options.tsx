@@ -45,7 +45,7 @@ export function SlashMenuOptions(props: {
             ) : null}
           </>
         }
-        description={getSlashCommandDescription(childProps.command)}
+        description={getSlashCommandDescription(childProps.command).replace(/(?<!\.)\.$/u, "")}
       />
     );
   }
