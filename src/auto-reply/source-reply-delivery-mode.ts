@@ -38,15 +38,11 @@ export function buildHarnessVisibleReplyGuidance(params: {
     params.messageToolAvailable && params.requireExplicitMessageTarget !== undefined
       ? buildMessageToolTargetGuidance(params.requireExplicitMessageTarget)
       : undefined;
-  const pendingReplyGuidance = params.messageToolAvailable
-    ? "Commentary is optional progress and may be hidden. Answer user questions or status requests received during ongoing work with `message(action=send, final=false)`, then continue the task. Before finishing, deliver every still-pending answer through this turn's visible-reply route. Do not repeat answers already delivered."
-    : !messageToolOwnsVisibleReply(params)
-      ? "Commentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response."
-      : undefined;
+  // A message-tool send persists in chat even with final=false. Do not prescribe it
+  // for mid-turn progress: channels can already present commentary as a temporary preview.
   return [
     deliveryGuidance,
     targetGuidance,
-    pendingReplyGuidance,
     params.uiPresentation ? buildUiPresentationPrompt(params.uiPresentation) : undefined,
   ]
     .filter(Boolean)
