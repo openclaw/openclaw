@@ -3,7 +3,6 @@ import "./make-reachable-dialog.css";
 import {
   createMemo,
   createSignal,
-  createUniqueId,
   Errored,
   For,
   Loading,
@@ -15,7 +14,6 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
-import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { requestOpenClawIdLinkCode } from "../../lib/openclaw-id/account.ts";
 import {
   announceOwnerDeviceKey,
@@ -38,110 +36,29 @@ import type {
 } from "../../lib/openclaw-id/types.ts";
 import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { showConfirmDialog } from "../confirm-dialog.ts";
 import { handleCopyButton } from "../copy-button-state.ts";
-import { createOverlay } from "../overlay-lifecycle.ts";
 import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { DialogHeader } from "../solid/dialog-header.tsx";
 import { Icon } from "../solid/icon.tsx";
+import { Tooltip } from "../solid/tooltip.tsx";
 import { clawNameFromHostname } from "./claw-name.ts";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 import { RecoveryKitForm } from "./recovery-kit-form.tsx";
 import { RecoveryKitPanel } from "./recovery-kit-panel.tsx";
 import { createSetupMotion } from "./setup-motion.ts";
 
-/** Keep rich details in the top layer, including during the dialog's height animation. */
 function StepTooltip(props: { error: OpenClawIdUiError; failed: boolean }) {
-  const id = createUniqueId();
-  const [open, setOpen] = createSignal(false);
-  let trigger!: HTMLButtonElement;
-  let surface!: HTMLDivElement;
-  let pinned = false;
-  let returningFocus = false;
-  const overlay = createOverlay(id, undefined, {
-    exclusiveGroup: "tooltip",
-    reflectTriggerExpanded: false,
-    dismissOutsideFocus: false,
-    acquireOcclusion: acquireNativeOverlaySurface,
-    onEscape: () => {
-      // The overlay restores trigger focus synchronously when Escape closes it.
-      returningFocus = true;
-      queueMicrotask(() => (returningFocus = false));
-      return false;
-    },
-  });
-  const anchor = createAnchoredOverlay(
-    overlay,
-    () => trigger,
-    () => ({ placement: "top-end" }),
-    {
-      sameRoot: true,
-    },
-  );
-  onSettled(() => {
-    overlay.bindSurface(surface);
-    const disconnect = anchor.connect();
-    const unsubscribe = overlay.subscribe((open) => {
-      setOpen(open);
-      if (!open) {
-        pinned = false;
-      }
-    });
-    return () => {
-      unsubscribe();
-      disconnect();
-      overlay.dispose();
-    };
-  });
-  const show = () => overlay.request(true);
-  const leave = (event: PointerEvent | FocusEvent) => {
-    if (
-      pinned ||
-      (event.relatedTarget instanceof Node && overlay.contains(event.relatedTarget)) ||
-      trigger.matches(":hover, :focus-visible") ||
-      surface.matches(":hover, :focus-within")
-    ) {
-      return;
-    }
-    overlay.request(false);
-  };
   return (
-    <>
+    <Tooltip class="openclaw-id-steps__tooltip" placement="top-end" openOnClick>
       <button
-        ref={(element) => (trigger = element)}
         type="button"
-        class={["openclaw-id-steps__info", { "is-open": open() }]}
+        class="openclaw-id-steps__info"
         aria-label={props.failed ? t("openclawId.technicalDetails") : props.error.message}
-        aria-describedby={id}
-        onPointerEnter={show}
-        onPointerLeave={leave}
-        onFocus={() => {
-          if (!returningFocus) {
-            show();
-          }
-        }}
-        onBlur={leave}
-        onClick={() => {
-          if (pinned) {
-            overlay.request(false);
-          } else {
-            pinned = overlay.request(true);
-          }
-        }}
       >
         <Icon name={props.failed ? "circleAlert" : "info"} />
       </button>
-      <div
-        ref={(element) => (surface = element)}
-        id={id}
-        class="oc-overlay openclaw-id-steps__tip"
-        popover="manual"
-        role="tooltip"
-        onPointerEnter={show}
-        onPointerLeave={leave}
-        onBlur={leave}
-      >
+      <span slot="content" class="openclaw-id-steps__tip">
         <Show when={!props.failed}>
           <span>{props.error.message}</span>
         </Show>
@@ -150,8 +67,8 @@ function StepTooltip(props: { error: OpenClawIdUiError; failed: boolean }) {
             {props.error.detail}
           </code>
         </Show>
-      </div>
-    </>
+      </span>
+    </Tooltip>
   );
 }
 

@@ -148,7 +148,6 @@ describe("Make reachable publication outcome", () => {
       );
       expect(warning?.getAttribute("aria-label")).toContain(expected);
       const tooltip = document.getElementById(warning!.getAttribute("aria-describedby")!);
-      expect(tooltip?.getAttribute("role")).toBe("tooltip");
       expect(tooltip?.textContent).toContain("HTTP 503");
       expect(document.body.textContent).not.toMatch(/add an enrollment code/i);
       await click("Close");

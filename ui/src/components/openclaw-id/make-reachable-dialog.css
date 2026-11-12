@@ -297,7 +297,7 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 
 .openclaw-id-steps__info:hover,
 .openclaw-id-steps__info:focus-visible,
-.openclaw-id-steps__info.is-open {
+.openclaw-id-steps__tooltip[open] .openclaw-id-steps__info {
   background: color-mix(in srgb, currentColor 13%, transparent);
 }
 
@@ -306,46 +306,22 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   outline-offset: 1px;
 }
 
-.openclaw-id-steps__tip[data-placement] {
+.openclaw-id-steps__tooltip {
+  --openclaw-tooltip-max-width: min(292px, calc(100dvw - 16px));
+  --openclaw-tooltip-padding: 8px 10px;
+  --openclaw-tooltip-border-radius: 10px;
+  --openclaw-tooltip-background-color: var(--popover);
+  --openclaw-tooltip-shadow: 0 0 0 1px var(--border), 0 10px 28px rgba(0, 0, 0, 0.14);
+}
+
+.openclaw-id-steps__tip {
+  display: grid;
   gap: 5px;
-  width: max-content;
-  max-width: min(292px, calc(100dvw - 16px));
-  margin: 0 -2px 2px 0;
-  padding: 9px 11px;
-  overflow: visible;
-  border: 0;
-  border-radius: 10px;
-  background: var(--popover);
-  box-shadow:
-    0 0 0 1px var(--border),
-    0 10px 28px rgba(0, 0, 0, 0.14);
   color: var(--text);
   font-size: var(--control-ui-text-xs);
   font-weight: 400;
   line-height: 17px;
   text-wrap: pretty;
-  opacity: 0;
-  translate: 0 3px;
-  transition:
-    opacity 130ms ease,
-    translate 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.openclaw-id-steps__tip:popover-open {
-  display: grid;
-}
-
-.openclaw-id-steps__tip:popover-open:where(:not([data-phase="closing"])) {
-  opacity: 1;
-  translate: 0 0;
-}
-
-/* Bridge the small visual gap so the pointer can enter and scroll the details. */
-.openclaw-id-steps__tip::after {
-  position: absolute;
-  inset: 100% 0 auto;
-  height: 8px;
-  content: "";
 }
 
 .openclaw-id-steps__tip code {
@@ -418,8 +394,7 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .openclaw-id-setup .oc-dialog__close,
-  .openclaw-id-steps__tip {
+  .openclaw-id-setup .oc-dialog__close {
     transition-duration: 0.01ms !important;
     transition-delay: 0.01ms !important;
   }
