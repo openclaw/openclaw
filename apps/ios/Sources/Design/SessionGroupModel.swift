@@ -136,7 +136,8 @@ final class SessionGroupModel {
                     }
                     // Same read-modify-write boundary as ChatViewModel.createSessionGroup.
                     let fresh: OpenClawChatSessionGroupsResponse = try await connection.read("sessions.groups.list")
-                    let names = OpenClawChatSessionGroupCatalog.names(catalog: fresh.groups, local: [], sessions: sessions)
+                    let names = OpenClawChatSessionGroupCatalog.names(
+                        catalog: fresh.groups, local: [], sessions: sessions)
                     request = OpenClawChatGatewayRequests.sessionGroupsPut(names: catalogNames(names))
                 }
                 let response = try await JSONDecoder().decode(
