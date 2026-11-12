@@ -9,7 +9,6 @@ import SwiftUI
 final class GatewayConnectionController {
     struct AutoConnectSuppressionLease {
         fileprivate let generation: UInt64
-        fileprivate let previousAutoReconnectEnabled: Bool
         fileprivate let restoresAutoReconnect: Bool
         fileprivate let suspendedConfig: GatewayConnectConfig?
     }
@@ -790,14 +789,12 @@ extension GatewayConnectionController {
     private func beginAutoConnectSuppression(restoresAutoReconnect: Bool) -> AutoConnectSuppressionLease {
         let lease = AutoConnectSuppressionLease(
             generation: self.connectAttemptGeneration &+ 1,
-            // User intent, unless the node itself is paused. An operator-only pause (scope approval)
-            // must not strand the route Offline after the review is cancelled.
-            previousAutoReconnectEnabled: self.autoConnectSuppression?.previousAutoReconnectEnabled ??
-                (self.appModel.map { $0.gatewayAutoReconnectEnabled && $0.connection.node.pausedProblem == nil } ??
-                    false),
             restoresAutoReconnect: self.autoConnectSuppression?.restoresAutoReconnect == true || restoresAutoReconnect,
+            // Teardown resets the phases, so a node-paused route records nothing to restore. A
+            // user-disconnected route has no config. An operator-only pause (scope approval) restores.
             suspendedConfig: self.autoConnectSuppression?.suspendedConfig ??
-                (restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil))
+                (restoresAutoReconnect && self.appModel?.connection.node.pausedProblem == nil
+                    ? self.appModel?.activeGatewayConnectConfig : nil))
         self.connectAttemptGeneration &+= 1
         self.preconnectRetryContext = nil
         self.autoConnectSuppression = lease
@@ -809,16 +806,11 @@ extension GatewayConnectionController {
         // A dismissed older target must not release suppression owned by its replacement.
         guard self.autoConnectSuppression?.generation == lease.generation else { return }
         self.clearAutoConnectSuppression(generation: lease.generation)
-        if lease.restoresAutoReconnect {
-            let currentPreference = UserDefaults.standard.bool(forKey: "gateway.autoconnect")
-            if lease.previousAutoReconnectEnabled,
-               currentPreference,
-               let suspendedConfig = lease.suspendedConfig
-            {
-                self.appModel?.resumeGatewayAfterTargetReview(suspendedConfig)
-                return
-            }
-            self.appModel?.gatewayAutoReconnectEnabled = lease.previousAutoReconnectEnabled && currentPreference
+        // Restore only by reapplying the suspended route. Otherwise reconnectAllowed stays as target
+        // review or a later user Disconnect left it.
+        if UserDefaults.standard.bool(forKey: "gateway.autoconnect"), let suspendedConfig = lease.suspendedConfig {
+            self.appModel?.resumeGatewayAfterTargetReview(suspendedConfig)
+            return
         }
         self.attemptAutoReconnectIfNeeded()
     }
