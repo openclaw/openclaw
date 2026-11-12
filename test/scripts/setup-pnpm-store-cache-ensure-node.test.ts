@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readCiWorkflow, type WorkflowStep } from "./ci-workflow.test-support.js";
 
 const ensureNodeScript = resolve(".github/actions/setup-pnpm-store-cache/ensure-node.sh");
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -103,6 +104,69 @@ function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.Process
 }
 
 describe("setup-pnpm-store-cache ensure-node", () => {
+  it.skipIf(process.platform === "win32").each(["toolcache", "unavailable"] as const)(
+    "runs the screenshot reducer's Node-only setup with %s version selection",
+    (selection) => {
+      const workflow = readCiWorkflow();
+      const setup = workflow.jobs["ios-screenshot-evidence"].steps.find(
+        (step: WorkflowStep) => step.name === "Setup screenshot evidence Node",
+      ) as WorkflowStep;
+      expect(setup.env).toEqual({
+        REQUESTED_NODE_VERSION: "${{ env.IOS_SCREENSHOT_NODE_VERSION }}",
+      });
+      expect(setup.uses).toBeUndefined();
+      expect(typeof setup.run).toBe("string");
+
+      const root = temps.make("openclaw-screenshot-node-");
+      const helper = join(
+        root,
+        ".ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh",
+      );
+      mkdirSync(join(root, ".ci-harness/.github/actions/setup-pnpm-store-cache"), {
+        recursive: true,
+      });
+      writeFileSync(helper, readFileSync(ensureNodeScript));
+      const activeBin = join(root, "active");
+      writeFakeNode(activeBin, "20.20.0");
+      const toolcache = join(root, "toolcache");
+      const requested = String(workflow.env.IOS_SCREENSHOT_NODE_VERSION);
+      const cachedBin = join(toolcache, "node", requested, "x64", "bin");
+      writeFakeNode(cachedBin, requested);
+      const poisonBin = join(root, "poison");
+      const forbiddenLog = join(root, "package-manager.log");
+      for (const command of ["pnpm", "npm", "npx", "corepack"]) {
+        writeExecutable(poisonBin, command, 'echo invoked >> "$FORBIDDEN_LOG"; exit 97');
+      }
+      writeExecutable(poisonBin, "curl", "exit 98");
+      const result = spawnSync(
+        "/bin/bash",
+        ["-c", `${setup.run}\nnode -p 'process.versions.node'`],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            PATH: `${activeBin}:${poisonBin}:/usr/bin:/bin`,
+            REQUESTED_NODE_VERSION: selection === "toolcache" ? requested : "99.99.99",
+            RUNNER_TOOL_CACHE: toolcache,
+            RUNNER_TEMP: root,
+            OPENCLAW_NODE_TOOLCHAIN_ROOT: join(root, "downloaded", "node"),
+            OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing-container"),
+            GITHUB_PATH: join(root, "github-path"),
+            FORBIDDEN_LOG: forbiddenLog,
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(selection === "toolcache" ? 0 : 1);
+      expect(existsSync(forbiddenLog)).toBe(false);
+      if (selection === "toolcache") {
+        expect(result.stdout.trim().endsWith(requested)).toBe(true);
+        expect(readFileSync(join(root, "github-path"), "utf8").trim()).toBe(cachedBin);
+      } else {
+        expect(result.stdout).toContain("Expected Node '99.99.99'");
+      }
+    },
+  );
+
   it("handles missing toolcache roots under nounset", () => {
     const root = temps.make("openclaw-ensure-node-");
     const result = runShell(["set -euo pipefail", `openclaw_find_toolcache_node "99.99.99"`], {
