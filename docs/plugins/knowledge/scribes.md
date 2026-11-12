@@ -117,13 +117,13 @@ Turning on **Knowledge Consolidation** with the weekly default sends:
 ````text
 Set up the Knowledge scribe "Knowledge Consolidation" in this conversation. Don't ask questions: nobody is watching this turn.
 
-This scribe consolidates Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State. The knowledge-claim-consolidation skill does the work on each run.
+This scribe keeps Knowledge consolidated: it files each claim that names no page on the right page (creating pages for subjects that deserve one), retires duplicates and replaced claims, retires written Timelines, and reviews a few pages each run, folding outcomes into page State. The knowledge-claim-consolidation skill does the work on each run.
 
 Settings:
 - Runs weekly, Sundays at 3:45 AM America/Los_Angeles (cron `45 3 * * 0`).
 
 Steps:
-1. Call knowledge_status. Go on when the scope is private and writes are enabled, or the store is unprovisioned (...). Otherwise stop: ...
+1. Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: ...
 2. With the automations tool, list automations including disabled ones and take those with declaration key `knowledge:scribe:claim-consolidation`. Remove each one owned by another conversation, ...
 3. Add the automation with the automations tool:
    - name: Knowledge scribe · Knowledge Consolidation
@@ -146,8 +146,8 @@ Scheduled run of the Knowledge scribe "Knowledge Consolidation". Don't ask quest
 
 Steps:
 1. Call knowledge_status. ...
-2. Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide. ...
-3. End your reply with one line: `Scribe status: on — <one sentence with counts: claims examined, linked, superseded, withdrawn and left>`.
+2. Follow every step of the "Scribe runs" section of the knowledge-claim-consolidation skill: link and retire unlinked claims, retire written Timelines, and review pages. Do each step even when no claim is left to link. ...
+3. End your reply with one line: `Scribe status: on — <one sentence with counts: claims examined, linked, superseded, withdrawn and left; Timelines retired and left; pages reviewed, changed and left unchanged>`.
 ...
 ```
 ````

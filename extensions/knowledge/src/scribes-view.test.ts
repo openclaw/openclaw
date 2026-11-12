@@ -460,10 +460,13 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
 
 it("asks an earlier scribe's conversation to update it once and offers an edited one the current message", async () => {
   const runMessage = setupPrompt(reviewSetup).match(/```text\n([\s\S]+)\n```$/)![1]!;
-  const earlier = runMessage.replace(
-    /writes are enabled; a never-written store [^.]+\./,
-    "writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write).",
-  );
+  // The claims-only consolidation message an earlier version generated.
+  const earlier = runMessage
+    .replace(
+      /Follow every step of [^\n]+ even when no claim is left to link\./,
+      'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
+    )
+    .replace("; Timelines retired and left; pages reviewed, changed and left unchanged", "");
   const legacy = { ...reviewJob, sessionKey: "s-review", payload: { kind: "agentTurn" } };
   const unedited = fixture({
     sessions: reviewSession,

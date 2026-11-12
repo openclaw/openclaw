@@ -226,7 +226,7 @@ function workSettings(setup: ScribeSetup) {
 // What the scribe does, and the skill that does the work.
 const PURPOSE: Record<ScribeId, string> = {
   "claim-consolidation":
-    "This scribe consolidates Knowledge claims that name no page: it files each one on the right page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds the outcomes into page State.",
+    "This scribe keeps Knowledge consolidated: it files each claim that names no page on the right page (creating pages for subjects that deserve one), retires duplicates and replaced claims, retires written Timelines, and reviews a few pages each run, folding outcomes into page State.",
   conversations:
     "This scribe reads the owner's conversations and saves the decisions, preferences, commitments and lessons in them to Knowledge.",
   granola:
@@ -238,7 +238,7 @@ const PURPOSE: Record<ScribeId, string> = {
 // The work step: the skill section that does it, applied to the settings.
 const WORK: Record<ScribeId, string> = {
   "claim-consolidation":
-    'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
+    'Follow every step of the "Scribe runs" section of the knowledge-claim-consolidation skill: link and retire unlinked claims, retire written Timelines, and review pages. Do each step even when no claim is left to link.',
   conversations:
     'Follow "Learn from conversations" in the "Scribe runs" section of the knowledge-ingest skill, for the conversations in the settings.',
   granola:
@@ -249,7 +249,8 @@ const WORK: Record<ScribeId, string> = {
 
 // What the closing sentence counts after the work.
 const COUNTS: Record<ScribeId, string> = {
-  "claim-consolidation": "claims examined, linked, superseded, withdrawn and left",
+  "claim-consolidation":
+    "claims examined, linked, superseded, withdrawn and left; Timelines retired and left; pages reviewed, changed and left unchanged",
   conversations: "conversations learned and skipped, claims and pages written",
   granola:
     "meetings ingested, already in Knowledge, left pending and without a transcript, pages and claims written",
@@ -258,8 +259,28 @@ const COUNTS: Record<ScribeId, string> = {
 
 const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
 
-/** Wording a run message is generated from; earlier releases generated some of it differently. */
-type RunWording = { access: string };
+/**
+ * Wording a run message is generated from; earlier releases generated some of it differently.
+ * `work` and `counts` replace a scribe's current work step and closing counts.
+ */
+type RunWording = {
+  access: string;
+  work?: Partial<Record<ScribeId, string>>;
+  counts?: Partial<Record<ScribeId, string>>;
+};
+
+const ACCESS_UNPROVISIONED =
+  "Call knowledge_status. Go on when the scope is private and writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write). Otherwise stop: this conversation lacks the owner's private Knowledge access.";
+const ACCESS_NEVER_WRITTEN =
+  'Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: this conversation lacks the owner\'s private Knowledge access.';
+// Consolidation framed as claim filing only, before runs followed every step of its skill.
+const CLAIMS_ONLY = {
+  work: {
+    "claim-consolidation":
+      'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
+  },
+  counts: { "claim-consolidation": "claims examined, linked, superseded, withdrawn and left" },
+};
 
 /**
  * Every wording a released run message was generated from, oldest first; the last is current.
@@ -267,14 +288,16 @@ type RunWording = { access: string };
  * page can recognize an unedited earlier message and upgrade it.
  */
 const RUN_WORDINGS: readonly RunWording[] = [
-  {
-    access:
-      "Call knowledge_status. Go on when the scope is private and writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write). Otherwise stop: this conversation lacks the owner's private Knowledge access.",
-  },
-  {
-    access:
-      'Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: this conversation lacks the owner\'s private Knowledge access.',
-  },
+  { access: ACCESS_UNPROVISIONED, ...CLAIMS_ONLY },
+  { access: ACCESS_NEVER_WRITTEN, ...CLAIMS_ONLY },
+  { access: ACCESS_NEVER_WRITTEN },
+];
+
+// The access step, work step and closing counts a wording generates for one scribe.
+const wordingParts = (id: ScribeId, wording: RunWording) => [
+  wording.access,
+  wording.work?.[id] ?? WORK[id],
+  wording.counts?.[id] ?? COUNTS[id],
 ];
 const CURRENT_WORDING = RUN_WORDINGS.at(-1)!;
 
@@ -333,8 +356,11 @@ function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING) {
     "Steps:",
     ...numbered([
       accessStep("A repair from the Scribes page fixes it.", wording),
-      `${WORK[scribe.id]} This run can't change automations: if its setup looks broken, say a repair is needed.`,
-      endStep("on", `one sentence with counts: ${COUNTS[scribe.id]}`),
+      `${wording.work?.[scribe.id] ?? WORK[scribe.id]} This run can't change automations: if its setup looks broken, say a repair is needed.`,
+      endStep(
+        "on",
+        `one sentence with counts: ${wording.counts?.[scribe.id] ?? COUNTS[scribe.id]}`,
+      ),
     ]),
     "",
     FAILED,
@@ -443,12 +469,15 @@ export function checkRunMessage(id: ScribeId, message: string): RunMessageCheck 
       return { state: "outdated", current: generate(options) };
     }
   }
-  const earlier = RUN_WORDINGS.slice(0, -1).flatMap((wording) =>
-    (Object.keys(wording) as (keyof RunWording)[]).flatMap((part) =>
-      wording[part] === CURRENT_WORDING[part] ? [] : [wording[part]],
+  // A replaced part counts only where the message lacks its current text (which may contain it).
+  const current = wordingParts(id, CURRENT_WORDING);
+  const replaced = RUN_WORDINGS.slice(0, -1).some((wording) =>
+    wordingParts(id, wording).some(
+      (text, part) =>
+        text !== current[part] && message.includes(text) && !message.includes(current[part]!),
     ),
   );
-  if (!earlier.some((text) => message.includes(text))) {
+  if (!replaced) {
     return { state: "custom" };
   }
   // An edited message keeps its settings when it still names a generated settings line.

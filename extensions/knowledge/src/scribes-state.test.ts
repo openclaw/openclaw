@@ -129,11 +129,35 @@ describe("scribes catalog", () => {
         /writes are enabled; a never-written store [^.]+\./,
         "writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write).",
       );
+    // Consolidation as claim filing only, before runs followed every step of its skill.
+    const claimsOnly = (message: string) =>
+      message
+        .replace(
+          /Follow every step of [^\n]+ even when no claim is left to link\./,
+          'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
+        )
+        .replace(
+          "withdrawn and left; Timelines retired and left; pages reviewed, changed and left unchanged",
+          "withdrawn and left",
+        );
     const current = runMessage("claim-consolidation", defaultOptions("claim-consolidation"));
-    const earlier = earlierOf(current);
-    expect(earlier).not.toBe(current);
+    expect(current).toContain("Timelines retired and left; pages reviewed, changed");
+    const earlier = claimsOnly(earlierOf(current));
     expect(checkRunMessage("claim-consolidation", current)).toEqual({ state: "current" });
-    expect(checkRunMessage("claim-consolidation", earlier)).toEqual({ state: "outdated", current });
+    for (const message of [earlier, claimsOnly(current)]) {
+      expect(message).not.toBe(current);
+      expect(checkRunMessage("claim-consolidation", message)).toEqual({
+        state: "outdated",
+        current,
+      });
+    }
+    expect(checkRunMessage("claim-consolidation", `${claimsOnly(current)}\nTidy titles.`)).toEqual({
+      state: "edited",
+      current,
+    });
+    expect(checkRunMessage("claim-consolidation", `${current}\nTidy titles.`)).toEqual({
+      state: "custom",
+    });
     const granola = runMessage("granola", { meetings: "all", since: "today" });
     const edited = earlierOf(granola).replace("left pending", "skipped and left for later");
     expect(checkRunMessage("granola", edited)).toEqual({ state: "edited", current: granola });
