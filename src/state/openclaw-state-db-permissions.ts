@@ -1,8 +1,19 @@
-import { existsSync, mkdirSync } from "node:fs";
+import {
+  type BigIntStats,
+  closeSync,
+  constants as fsConstants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+} from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../config/state-dir.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { applyPrivateModeSync } from "../infra/private-mode.js";
+import { applyPrivateModeSync, applyPrivateModeToFdSync } from "../infra/private-mode.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -68,5 +79,64 @@ export function ensureOpenClawStatePermissions(
         }
       }
     }
+  }
+}
+
+/** Restore only the existing capture root after Doctor has admitted its repair owner. */
+export function restorePrivateUpdateCaptureRootMode(env: NodeJS.ProcessEnv): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  // Never traverse the state tree or change the shared state root. The snapshot
+  // owner still checks ancestors, aliases and ownership before capturing data.
+  const target = resolveUpdateCaptureRoot(path.resolve(resolveStateDir(env)));
+  let fd: number;
+  try {
+    fd = openSync(target, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_DIRECTORY);
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return;
+    }
+    if (
+      hasErrnoCode(error, "ELOOP") ||
+      hasErrnoCode(error, "EMLINK") ||
+      hasErrnoCode(error, "EACCES") ||
+      hasErrnoCode(error, "EPERM")
+    ) {
+      if (!chmodWarnedTargets.check(target)) {
+        stateDbLog.warn(`skipped permission restore for ${target}: ${String(error)}`);
+      }
+      return;
+    }
+    throw error;
+  }
+  try {
+    const opened = fstatSync(fd, { bigint: true });
+    let named: BigIntStats;
+    try {
+      named = lstatSync(target, { bigint: true });
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+        return;
+      }
+      throw error;
+    }
+    const uid = process.getuid?.();
+    if (
+      !opened.isDirectory() ||
+      opened.dev !== named.dev ||
+      opened.ino !== named.ino ||
+      (uid !== undefined && opened.uid !== BigInt(uid)) ||
+      (opened.mode & 0o007n) !== 0n ||
+      (opened.mode & 0o7070n) === 0n
+    ) {
+      return;
+    }
+    const result = applyPrivateModeToFdSync(fd, target, OPENCLAW_STATE_DIR_MODE);
+    if (!result.applied && !chmodWarnedTargets.check(target)) {
+      stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
+    }
+  } finally {
+    closeSync(fd);
   }
 }

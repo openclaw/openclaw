@@ -174,6 +174,20 @@ To expose the gateway through an Ingress or load balancer:
 - Keep gateway auth enabled and use a proper TLS-terminated entrypoint.
 - Configure the Control UI for remote access using the supported web security model (for example HTTPS/Tailscale Serve and explicit allowed origins when needed).
 
+### Private recovery capture permissions
+
+A volume remount with `fsGroup` can add group permissions and a setgid bit to
+existing directories. Before an admitted Doctor repair takes its original-state
+capture, OpenClaw restores the existing, installation-owned
+`<state-dir>.update-captures` root to private mode. It does not walk the capture
+tree or change the state root, ownership, or shared-volume layout.
+
+Symlinked roots, foreign-owned roots, and roots carrying world permission bits
+are not repaired automatically. The capture owner still refuses unsafe mount
+ancestry; mode repair does not make a shared or replaceable ancestor trusted.
+If Doctor reports that its original-state capture is unavailable, take a verified
+backup and correct the reported storage layout before retrying.
+
 ## Re-deploy
 
 ```bash

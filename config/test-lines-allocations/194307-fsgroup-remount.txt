@@ -1,0 +1,2 @@
+207
+# Stable capture-root-only remount repair: descriptor admission, no child/shared-root changes, diagnostics unchanged, cancelled/revoked maintenance stays read-only.

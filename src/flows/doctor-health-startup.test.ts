@@ -1,7 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { prepareDoctorHealthFlow } from "./doctor-health-startup.js";
+
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   config: vi.fn<() => Promise<OpenClawConfig>>(),
@@ -38,6 +43,24 @@ async function startDoctor() {
 }
 
 describe("Doctor startup dependencies", () => {
+  it.skipIf(process.platform === "win32")(
+    "does not repair capture-root permissions before maintenance consent",
+    async () => {
+      const parent = dirs.make("doctor-readonly-capture-");
+      const stateDir = path.join(parent, "state");
+      const root = `${stateDir}.update-captures`;
+      fs.mkdirSync(root);
+      fs.chmodSync(root, 0o2770);
+      const before = fs.lstatSync(root, { bigint: true });
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      mocks.command.mockResolvedValue({ code: 0, stdout: '{"BackendState":"Running"}' });
+      await startDoctor();
+      const after = fs.lstatSync(root, { bigint: true });
+      expect(after.mode).toBe(before.mode);
+      expect(after.ctimeNs).toBe(before.ctimeNs);
+    },
+  );
+
   it("continues published-updater Doctor without invoking unsupported config reads", async () => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     mocks.config.mockRejectedValue(

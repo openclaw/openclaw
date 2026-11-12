@@ -56,6 +56,12 @@ export function createDoctorOriginalCaptureHook(
         );
       }
     }
+    const { restorePrivateUpdateCaptureRootMode } =
+      await import("../state/openclaw-state-db-permissions.js");
+    signal.throwIfAborted();
+    scope.assertOwnerCurrent();
+    params.writeAuthority?.assertCurrent();
+    restorePrivateUpdateCaptureRootMode(env);
     await measureGatewayBootstrapStep("doctor.maintenance.preserve-original-state", () =>
       preserveDoctorOriginalState({
         root: params.root,
