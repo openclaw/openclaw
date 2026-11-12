@@ -464,13 +464,13 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     return choices;
   });
 
-  // Discovery reports on the heading line, so the rows below it never move.
+  // A reserved notice line keeps discovery feedback separate from the heading.
   const catalogProgress = <CatalogProgress {...props} />;
   return (
     <SettingsSection
       title={t("modelProviders.defaults.title")}
       description={t("modelProviders.defaults.subtitle")}
-      actions={catalogProgress}
+      notice={catalogProgress}
     >
       <div class="model-providers__defaults">
         <SettingsRow

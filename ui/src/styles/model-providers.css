@@ -1,25 +1,10 @@
 /* Provider usage panels own provider-usage.css; structural surfaces come from
    settings.css and shared brand icons from components.css. */
 
-/* Discovery sits on the section's heading line, so nothing moves when it comes and goes. */
-.settings-section__header:has(.model-providers__catalog-feedback) {
-  position: relative;
-}
-
-.settings-section__actions:has(.model-providers__catalog-feedback) {
-  position: absolute;
-  inset-block-start: 0;
-  inset-inline-end: 0;
-}
-
-/* A failure has to be read and retried, so it takes a line of its own. */
-.settings-section__header:has(.model-providers__catalog-progress[role="alert"]) {
-  flex-wrap: wrap;
-}
-
-.settings-section__actions:has(.model-providers__catalog-progress[role="alert"]) {
-  position: static;
-  flex-basis: 100%;
+/* Keep normal discovery transitions still; longer errors can grow around Retry. */
+.model-providers__catalog-feedback {
+  min-width: 0;
+  min-block-size: 1lh;
 }
 
 .model-providers__installed-agent .settings-row__desc {
