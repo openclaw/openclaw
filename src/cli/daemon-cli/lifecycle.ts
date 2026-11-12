@@ -462,7 +462,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
   let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
-    assertGatewayServiceMutationAllowed("restart the gateway");
+    assertGatewayServiceActionAllowed("restart", "restart the gateway");
   }
   assertNativeRestartFlags(opts);
   if (isGatewayExternallySupervised()) {
