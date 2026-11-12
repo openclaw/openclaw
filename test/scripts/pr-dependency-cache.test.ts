@@ -1071,7 +1071,7 @@ describePosix("PR cache anchor lifetime", () => {
     },
   );
 
-  it.for(["normal release", "replaced cache"])(
+  it.for(["normal release", "replaced cache", "missing cache"])(
     "waits for metadata handoff: %s",
     async (fault, { signal }) => {
       const f = fixture();
@@ -1084,9 +1084,11 @@ describePosix("PR cache anchor lifetime", () => {
         await holder.ready("held", signal);
         waiter = metadataWorker(f, 'withDependencyCacheLock(cache, () => report("acquired"));');
         await waiter.ready("contended", signal);
-        if (fault === "replaced cache") {
+        if (fault !== "normal release") {
           renameSync(f.cache, `${f.cache}.retained`);
-          mkdirSync(f.cache, { mode: 0o700 });
+          if (fault === "replaced cache") {
+            mkdirSync(f.cache, { mode: 0o700 });
+          }
         }
         holder.release();
         if (fault === "normal release") {
@@ -1103,7 +1105,11 @@ describePosix("PR cache anchor lifetime", () => {
           expect(status).not.toBe(0);
           expect(waiter.errors()).toContain("PR dependency cache directory changed");
           expect(holderStatus).not.toBe(0);
-          expect(readdirSync(f.cache)).toEqual([]);
+          if (fault === "missing cache") {
+            expect(existsSync(f.cache)).toBe(false);
+          } else {
+            expect(readdirSync(f.cache)).toEqual([]);
+          }
           expect(readdirSync(join(`${f.cache}.retained`, ".metadata-lock"))).toHaveLength(2);
         }
       } finally {
