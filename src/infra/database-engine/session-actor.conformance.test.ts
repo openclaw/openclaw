@@ -8,6 +8,10 @@ import {
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import {
+  bindSessionPendingInputSources,
+  stageSessionPendingInput,
+} from "../../config/sessions/session-accessor.pending-inputs.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import type { SessionActorAuthority } from "../../config/sessions/session-actor-contract.js";
 import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
@@ -43,6 +47,87 @@ describe
   "$agentEngine durable session actor",
   ({ stateEngine, agentEngine }) => {
     const pair = useMixedAgentPair(stateEngine, agentEngine);
+
+    it("retains consumed source receipts without hydrating them into actors", async () => {
+      const options = { agentId: "main", env: process.env };
+      const database = openMainDatabase();
+      const scope = {
+        ...options,
+        storePath: database.path,
+        sessionKey: "agent:main:consumed",
+        sessionId: "consumed",
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const message = {
+        role: "user" as const,
+        content: "Synthetic accepted source",
+        timestamp: 1,
+        idempotencyKey: "source:user",
+      };
+      const stage = () =>
+        stageSessionPendingInput(scope, { runId: "source", message, assertCurrent() {} });
+      const source = await stage();
+      assert(source);
+      const aggregate = bindSessionPendingInputSources([source], {
+        ...message,
+        idempotencyKey: "aggregate:user",
+      });
+      assert(aggregate);
+      const read = async () => {
+        const identity = readOpenClawAgentDatabaseIdentity(database);
+        const actor = await createSessionActorFactory({ ...options, path: database.path }).acquire(
+          {
+            sessionKey: scope.sessionKey,
+            database: {
+              kind: "file",
+              physicalIdentity: identity.identity,
+              birthtime: identity.birthtime,
+              nativeLocation: database.path,
+            },
+          },
+          { assertCurrent() {}, assertReadable() {} },
+        );
+        try {
+          return (await actor.read(authority)).pendingInputs;
+        } finally {
+          await actor.release();
+        }
+      };
+      try {
+        expect(await read()).toHaveLength(1);
+        await aggregate.run(() => appendTranscriptMessage(scope, { message: aggregate.message }));
+        expect(await read()).toEqual([]);
+        const replay = await stage();
+        assert(replay);
+        try {
+          expect(replay).toMatchObject({
+            state: "consumed",
+            inputId: source.inputId,
+            message: source.message,
+          });
+          expect(() => replay.run(() => {})).toThrow("already been consumed");
+          expect(await read()).toEqual([]);
+          const retained = withEngineStoreAdmission(() =>
+            database.db
+              .prepare(
+                "SELECT message_json, consumed_event_id FROM session_pending_inputs WHERE input_id = ?",
+              )
+              .get(source.inputId),
+          );
+          expect(retained).toEqual({
+            message_json: JSON.stringify(source.message),
+            consumed_event_id: aggregate.inputId,
+          });
+        } finally {
+          replay.finish("interrupted");
+          await replay.settled?.();
+        }
+      } finally {
+        aggregate.finish("interrupted");
+        source.finish("interrupted");
+        await Promise.all([aggregate.settled?.(), source.settled?.()]);
+      }
+    });
 
     it("protects admitted session keys and their previous generations during reclamation", async () => {
       const database = openMainDatabase();
