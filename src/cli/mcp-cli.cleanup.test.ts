@@ -33,8 +33,7 @@ let endpoint: string;
 let closeFixture: () => Promise<void>;
 let deleteStatus = 400;
 let failCatalog = false;
-type HeaderValue = string | string[] | undefined;
-const deleteHeaders: Array<{ session: HeaderValue; protocol: HeaderValue }> = [];
+const deleteHeaders: Array<Record<"session" | "protocol", string | string[] | undefined>> = [];
 
 beforeAll(async () => {
   const fixture = await reserveTestPortListener({
@@ -60,7 +59,6 @@ beforeAll(async () => {
           if (message.method === "initialize") {
             response.setHeader("mcp-session-id", SESSION_ID);
           }
-          const result = rpcResults[message.method];
           if (!Object.hasOwn(rpcResults, message.method)) {
             response.writeHead(400).end();
             return;
@@ -72,7 +70,7 @@ beforeAll(async () => {
               id: message.id,
               ...(message.method === "tools/list" && failCatalog
                 ? { error: { code: -32603, message: CATALOG_ERROR } }
-                : { result }),
+                : { result: rpcResults[message.method] }),
             }),
           );
         })().catch((error: unknown) =>
@@ -105,10 +103,9 @@ aroundEach(async (runTest) => {
 });
 afterEach(cleanupMcpCliTestState);
 
-const run = (...args: string[]) => runMcpCommand(["mcp", ...args]);
-async function probe(args: string[]) {
+async function runMcp(...args: string[]) {
   await runCliWithExitFinalization({
-    run: () => run("probe", "docs", ...args),
+    run: () => runMcpCommand(["mcp", ...args]),
     onError: (error) => {
       throw error;
     },
@@ -125,19 +122,22 @@ function expectCleanup(exitCode?: number) {
 
 it.each([204, 400])("succeeds after DELETE %s", async (status) => {
   deleteStatus = status;
-  await probe(["--json"]);
+  await runMcp("probe", "docs", "--json");
   expect(JSON.parse(lastLogLine())).not.toHaveProperty("cleanupError");
   expectCleanup();
 });
 
 it("preserves the discovery failure when DELETE is unconfirmed", async () => {
   failCatalog = true;
-  await probe(["--json"]);
+  await runMcp("probe", "docs", "--json");
   const result = JSON.parse(lastLogLine());
   expect(result).toMatchObject({
     diagnostics: [{ serverName: "docs", message: expect.stringContaining(CATALOG_ERROR) }],
   });
   expect(result).not.toHaveProperty("cleanupError");
-  expect(errors()).toContain(CATALOG_ERROR);
   expectCleanup(1);
+  await runMcp("add", "more", "--url", endpoint, "--transport", "streamable-http");
+  expect(errors()).toMatch(
+    /unavailable.*\nMCP check failed for "more".*\nConfiguration was not saved/u,
+  );
 });

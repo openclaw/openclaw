@@ -31,6 +31,7 @@ const registry = (value = publication()) =>
   });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -84,6 +85,27 @@ describe("gateway publication notification", () => {
       });
       expect(fetchMock.mock.calls[index * 2]?.[1]?.headers).toBeUndefined();
     }
+  });
+
+  it.each([true, false])("polls npm replication 404s (version appears: %s)", async (appears) => {
+    vi.useFakeTimers();
+    const missing = () => Promise.resolve(new Response(null, { status: 404 }));
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(missing);
+    if (appears) {
+      fetchMock
+        .mockImplementationOnce(missing)
+        .mockResolvedValueOnce(registry())
+        .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    }
+    vi.stubGlobal("fetch", fetchMock);
+    const outcome = notifyPublications([publication()], token).then(
+      () => "dispatched",
+      (error: unknown) => String(error),
+    );
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(await outcome).toMatch(appears ? /^dispatched$/u : /HTTP 404/u);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toMatch(appears ? /dispatches$/u : /registry/u);
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(2);
   });
 
   it.each(["invalid identity", "missing auth"])("rejects %s before I/O", async (fault) => {

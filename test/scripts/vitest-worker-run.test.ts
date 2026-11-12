@@ -1,10 +1,12 @@
 import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { createDeferred, nextEventLoopTurn, withinTest } from "../helpers/promise.js";
+import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
 
 it.for(["before-ready", "success", "failure"] as const)(
   "joins a managed borrower through %s",
@@ -106,6 +108,45 @@ it.for(["before-ready", "success", "failure"] as const)(
         expect(result.value).toBe(value);
         expect(result.error).toBeUndefined();
       }
+    } finally {
+      await lifetime.cleanup();
+    }
+  },
+);
+
+it.for(["full", "runtime", "tooling"] as const)(
+  "preserves the %s preset through a private child bootstrap",
+  async (preset, { signal }) => {
+    const lifetime = createFixtureLifetime();
+    try {
+      const { owner } = await lifetime.acquire(async () => {
+        const acquiredOwner = createVitestWorkerRun({}, undefined, preset);
+        return { owner: acquiredOwner, cleanup: () => acquiredOwner.dispose() };
+      });
+      const fixture = path.join(lifetime.createTempDir("worker-descriptor-"), "descriptor.mts");
+      fs.writeFileSync(
+        fixture,
+        `const { getVitestWorkerDescriptor } = await import(process.argv[2]);
+process.stdout.write(JSON.stringify({ descriptor: getVitestWorkerDescriptor(), args: process.argv.slice(3) }));`,
+      );
+      const result = await lifetime.track(
+        runVitestShutdownCommand({
+          workerRun: owner,
+          args: [
+            fixture,
+            pathToFileURL(
+              path.resolve(import.meta.dirname, "../../scripts/lib/vitest-worker-descriptor.mts"),
+            ).href,
+            "fixture-argument",
+          ],
+          signal,
+        }),
+      );
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        descriptor: owner.descriptor,
+        args: ["fixture-argument"],
+      });
     } finally {
       await lifetime.cleanup();
     }

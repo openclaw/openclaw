@@ -266,7 +266,7 @@ describe("canonical transcript archive batch transactions", () => {
         "UPDATE session_transcript_archives SET archive_sha256 = 'invalid' WHERE session_id = 's00002'",
       )
       .run();
-    await expect(f.migrate()).rejects.toThrow(/archive-2\.jsonl.*is corrupt/);
+    await expect(f.migrate()).rejects.toThrow(/is corrupt \[.*archive-2\.jsonl/);
     expect(f).toMatchObject({ progress: "start", transactions: 0 });
   });
 

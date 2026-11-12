@@ -39,6 +39,8 @@ const actionButton = (host: HTMLElement) =>
 const pinButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>("[data-pin-widget]");
 const pinState = (button: HTMLButtonElement | null, label: string, disabled: boolean) =>
   expect(button).toMatchObject({ disabled, ariaLabel: label });
+const pinFailure = "Couldn’t pin to dashboard. Try again.";
+const pinTooltip = (button: HTMLButtonElement) => button.closest("openclaw-tooltip")?.content;
 const menuLabels = (host: HTMLElement) =>
   Array.from(host.querySelectorAll('[role="menuitem"]'), (item) => item.textContent?.trim());
 const widgetPorts: MessagePort[] = [];
@@ -572,19 +574,17 @@ describe("widget-card", () => {
 
     mountWidget({ ...preview, title: "Updated release status" }, { boardProvider: provider }, host);
     expect(pinButton(host)).toBe(button);
-    expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…", title: "Pinning…" });
+    pinState(button, "Pinning…", true);
+    expect(pinTooltip(button)).toBe("Pinning…");
 
     first.reject(new Error("Synthetic pin failure"));
-    await waitForSolid(() =>
-      expect(button).toMatchObject({
-        disabled: false,
-        ariaLabel: "Pin to dashboard",
-        title: "Could not pin to dashboard. Try again.",
-      }),
-    );
+    await waitForSolid(() => {
+      pinState(button, "Pin to dashboard", false);
+      expect(pinTooltip(button)).toBe(pinFailure);
+    });
     mountWidget({ ...preview, title: "Retained failure" }, { boardProvider: provider }, host);
     expect(pinButton(host)).toBe(button);
-    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(pinTooltip(button)).toBe(pinFailure);
     button.click();
     await waitForSolid(() => pinState(button, "Pinning…", true));
     expect(pinWidget).toHaveBeenLastCalledWith({
@@ -623,24 +623,25 @@ describe("widget-card", () => {
     button.focus();
     button.click();
     pending.reject(new Error("Synthetic pin failure"));
-    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    await waitForSolid(() => expect(pinTooltip(button)).toBe(pinFailure));
     expect(pinButton(root.container)).toBe(button);
     expect(document.activeElement).toBe(button);
     expect(showToast).toHaveBeenCalledExactlyOnceWith({
-      message: "Could not pin to dashboard. Try again.",
+      severity: "error",
+      message: pinFailure,
     });
 
     setTitle("Updated chart");
     flush();
     expect(pinButton(root.container)).toBe(button);
     expect(document.activeElement).toBe(button);
-    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(pinTooltip(button)).toBe(pinFailure);
     expect(showToast).toHaveBeenCalledTimes(1);
 
     snapshot.set({ widgets: [{ name: "widget" }] });
-    await waitForSolid(() => expect(button.title).toBe("Pinned"));
+    await waitForSolid(() => expect(pinTooltip(button)).toBe("Pinned"));
     snapshot.set({ widgets: [] });
-    await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
+    await waitForSolid(() => expect(pinTooltip(button)).toBe("Pin to dashboard"));
     expect(showToast).toHaveBeenCalledTimes(1);
   });
 

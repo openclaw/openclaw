@@ -7,6 +7,7 @@ import { createBackupResourcePlan } from "../commands/backup-resource-inventory.
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { verifyBackupArchive } from "../commands/backup-verify.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { loadPluginManifest } from "../plugins/manifest.js";
 import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import { createBackupArchive } from "./backup-create.js";
 import { withIsolatedBackupState } from "./backup-create.test-support.js";
@@ -27,7 +28,7 @@ vi.mock("../snapshot/database-backup.js", async (original) => ({
   capturePostgresBackup: mocks.exportPostgres,
 }));
 
-it("captures companion anchors and fixed-local credentials without exporting PostgreSQL rows", async () => {
+it("combines companion and template exclusions without exporting PostgreSQL rows", async () => {
   await withIsolatedBackupState({ layout: "state-only", scenario: "empty" }, async (state) => {
     const shared = state.statePath("state/openclaw.sqlite");
     const agent = state.statePath("agents/retained/agent/openclaw-agent.sqlite");
@@ -59,42 +60,87 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     mocks.exportPostgres.mockImplementation(() => {
       throw new Error("Companion capture must not export database rows");
     });
-    const resources = await createBackupResourcePlan({
+    const codexHome = path.join(path.dirname(agent), "codex-home");
+    await fs.mkdir(path.join(codexHome, "sessions"), { recursive: true });
+    const diagnostics = [
+      "logs_2.sqlite",
+      "logs_2.sqlite-wal",
+      "logs_2.sqlite-shm",
+      "logs_2.sqlite-journal",
+    ];
+    const durable = [
+      "state_5.sqlite",
+      "auth.json",
+      "sessions/rollout.jsonl",
+      "logs_2.sqlite.backup",
+    ];
+    for (const relative of [...diagnostics, ...durable]) {
+      await fs.writeFile(path.join(codexHome, relative), `synthetic ${relative}`);
+    }
+    const template = state.statePath("worktrees/template-generation");
+    const templateCache = path.join(template, "cache.bin");
+    await fs.mkdir(template, { recursive: true });
+    await fs.writeFile(templateCache, "regenerable template");
+    const unrelatedLog = state.statePath("logs_2.sqlite");
+    await fs.writeFile(unrelatedLog, "unrelated user database");
+    const codex = loadPluginManifest(path.resolve("extensions/codex"));
+    expect(codex.ok).toBe(true);
+    if (!codex.ok) {
+      throw new Error(codex.error);
+    }
+    const resourceInput = {
       stateDir: state.stateDir,
       configPaths: [],
       oauthDirs: [],
       workspaceDirs: [],
       excludedWorkspaceDirs: [],
-      agentRoots: [],
-      pluginResources: [],
+      agentRoots: [{ agentId: "retained", sourcePath: path.dirname(agent), databasePath: agent }],
+      pluginResources: (codex.manifest.backupResources ?? []).map((resource) =>
+        Object.assign({}, resource, { pluginId: "codex" }),
+      ),
       pluginRoots: [],
-    });
+    };
+    const fullResources = await createBackupResourcePlan(resourceInput);
+    for (const relative of diagnostics) {
+      expect(fullResources.isIncluded(path.join(codexHome, relative))).toBe(true);
+    }
     const nowMs = Date.parse("2026-10-16T00:00:00Z");
     const { buildBackupArchiveRoot } = await import("../commands/backup-shared.js");
     const archiveRoot = buildBackupArchiveRoot(nowMs);
-    mocks.plan.mockResolvedValue({
-      resources,
-      stateDir: state.stateDir,
-      configPath: state.configPath,
-      oauthDir: state.statePath("credentials"),
-      workspaceDirs: [],
-      skipped: [],
-      included: [
-        {
-          kind: "state",
-          sourcePath: state.stateDir,
-          displayPath: state.stateDir,
-          archivePath: buildBackupArchivePath(archiveRoot, state.stateDir),
+    mocks.plan.mockImplementation(
+      async (
+        options: Parameters<
+          typeof import("../commands/backup-shared.js").resolveBackupPlanFromDisk
+        >[0] = {},
+      ) => ({
+        resources: await createBackupResourcePlan({
+          ...resourceInput,
+          localCompanion: options.localCompanion,
+          excludedWorktreeTemplateDirs: options.excludeWorktreeTemplates ? [template] : [],
+        }),
+        stateDir: state.stateDir,
+        configPath: state.configPath,
+        oauthDir: state.statePath("credentials"),
+        workspaceDirs: [],
+        skipped: [],
+        included: [
+          {
+            kind: "state",
+            sourcePath: state.stateDir,
+            displayPath: state.stateDir,
+            archivePath: buildBackupArchivePath(archiveRoot, state.stateDir),
+          },
+        ],
+        databaseSelection: {
+          effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+          postgres: { connection: "postgresql://synthetic-unreachable", schemaPrefix: "synthetic" },
         },
-      ],
-      databaseSelection: {
-        effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-        postgres: { connection: "postgresql://synthetic-unreachable", schemaPrefix: "synthetic" },
-      },
-    });
+      }),
+    );
     const result = await createBackupArchive({
       output: state.path("companion.tar.gz"),
       localCompanion: true,
+      excludeWorktreeTemplates: true,
       nowMs,
     });
     await expect(verifyBackupArchive(result.archivePath)).resolves.toMatchObject({
@@ -119,6 +165,31 @@ it("captures companion anchors and fixed-local credentials without exporting Pos
     );
     expect(manifest.postgresAnchors).toHaveLength(2);
     expect(mocks.exportPostgres).not.toHaveBeenCalled();
+    await expect(
+      fs.stat(path.join(target, buildBackupArchivePath(archiveRoot, templateCache))),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(templateCache, "utf8")).toBe("regenerable template");
+    for (const relative of diagnostics) {
+      const source = path.join(codexHome, relative);
+      await expect(
+        fs.stat(path.join(target, buildBackupArchivePath(archiveRoot, source))),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(source, "utf8")).toBe(`synthetic ${relative}`);
+    }
+    for (const relative of durable) {
+      expect(
+        await fs.readFile(
+          path.join(target, buildBackupArchivePath(archiveRoot, path.join(codexHome, relative))),
+          "utf8",
+        ),
+      ).toBe(`synthetic ${relative}`);
+    }
+    expect(
+      await fs.readFile(
+        path.join(target, buildBackupArchivePath(archiveRoot, unrelatedLog)),
+        "utf8",
+      ),
+    ).toBe("unrelated user database");
     const entries: string[] = [];
     await tar.t({
       file: result.archivePath,

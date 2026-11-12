@@ -146,8 +146,7 @@ export async function startFaceTimeTalkDriver(params: {
         if (!stopped && !mediaSuspended && activated && providerReady) {
           bridge?.triggerGreeting(FACETIME_INITIAL_GREETING);
         }
-      }, FACETIME_GREETING_MEDIA_SETTLE_MS);
-      timer.unref?.();
+      }, FACETIME_GREETING_MEDIA_SETTLE_MS).unref();
     },
     cancel() {
       dismissed = true;

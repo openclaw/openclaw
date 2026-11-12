@@ -61,6 +61,19 @@ of all workers. Startup logging never requests new worker samples.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
 
+Default-directory safety checks, file writes, and rotation run in a lazily started worker, preserving queued record
+order without blocking the Gateway main thread on filesystem checks. Normal
+shutdown drains queued writes; forced process exit retains a synchronous rescue
+for records that have not started writing.
+
+Silent logging does not prepare a file. Requests that report or tail the log path
+wait for its directory to pass the same ownership, permission, and ancestor checks
+used by writes; they never report an unqualified fallback path.
+
+By default, logging retains runtime call-site metadata without probing source-map
+files. The existing `TSLOG_SOURCE_MAPS=on` diagnostic override remains available;
+it enables tslog's synchronous source-map lookups.
+
 With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 `logging.maxFileBytes` apply to the next log record, including records from
 long-lived channel loggers. Queued records finish writing to their original file.
@@ -101,6 +114,11 @@ preparations, and model calls independently of log levels.
 
 Per-request GitHub API timing records also use `debug`, including fetches over
 500 ms. Transport failures and rate-limit errors retain their normal handling.
+
+Slow SQLite holds for `session.transcript.append-turn` include `context.messages`,
+the number of messages submitted to that write transaction. This count includes
+replays and messages later skipped by a predicate; it is not a transcript length
+or committed-message count. It contains no message content or identities.
 
 Plugin host cleanup failures during session reset or deletion emit one
 `plugins/cleanup` warning per failure, including the operation, plugin, hook, and

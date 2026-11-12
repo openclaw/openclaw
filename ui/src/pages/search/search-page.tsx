@@ -19,6 +19,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
@@ -63,8 +64,8 @@ import {
   SearchTestStatus,
   type SearchTestOutcomeProps,
 } from "./search-results.tsx";
-import { AdvancedSearchSettings, SearchProviderRow } from "./search-setup.tsx";
 import "./search-page.css";
+import { AdvancedSearchSettings, SearchProviderRow } from "./search-setup.tsx";
 
 registerRouteSubtitlesEnglish();
 
@@ -448,10 +449,10 @@ export function SearchPage() {
               <Errored
                 fallback={(error) =>
                   gateway.connected ? (
-                    <div role="alert" class="callout danger">
+                    <InlineAlert tone="danger" role="alert">
                       {formatUiError(error())}
                       <RetryAction onRetry={() => void load()} />
-                    </div>
+                    </InlineAlert>
                   ) : undefined
                 }
               >
@@ -465,10 +466,10 @@ export function SearchPage() {
             )}
           </Show>
           {configState().lastError ? (
-            <div role="alert" class="callout danger">
+            <InlineAlert tone="danger" role="alert">
               {configState().lastError}
               <RetryAction onRetry={() => void retryConfig(gateway.capture())} />
-            </div>
+            </InlineAlert>
           ) : undefined}
           <Loading>
             <Show when={result()}>

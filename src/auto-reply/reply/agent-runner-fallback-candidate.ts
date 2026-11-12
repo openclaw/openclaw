@@ -314,7 +314,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
-        turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
+        turn.opts?.onModelSelected?.({
+          provider,
+          model,
+          thinkLevel: candidateThinkLevel,
+          agentRuntime: candidateAgentRuntime,
+          cliExecution: runtime.useCliExecution,
+        });
         const runStart = params.createAgentRunStartCallbacks();
         const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
           (info) => {

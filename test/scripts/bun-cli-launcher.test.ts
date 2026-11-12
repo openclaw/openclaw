@@ -256,6 +256,9 @@ describe.skipIf(process.platform === "win32")("packaged Bun launcher lifecycle",
     const target = fixture("", "entryPath", true);
     const params = packageParams(target);
     postinstall(params);
+    expect(lifecycle.probeNode).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnavailableNodeFallback: true }),
+    );
     expect(inspect(target).state).toBe("current");
     const updatedBun = join(target.root, "updated-bun");
     params.env.OPENCLAW_PACKAGE_BUN_LAUNCHER = updatedBun;

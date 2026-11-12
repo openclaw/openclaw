@@ -1,10 +1,21 @@
-/** Visible sidebar facts only: avatar presentation, hidden actions and connection status are excluded. */
+/** Sidebar row presentation and saved scroll across cached/live adoption. */
 export function sidebarPresentationProbe() {
-  type Row = { key: string; glyphs: string[]; unread: number; badges: string[] };
+  type Row = {
+    key: string;
+    glyphs: string[];
+    avatars: string[];
+    images: string[];
+    ownerAvatars: number;
+    presenceAvatars: number;
+    unread: number;
+    badges: string[];
+  };
   type Frame = {
     at: number;
     cached: boolean;
+    scrollTop: number;
     rows: Row[];
+    mountedRows: Array<Pick<Row, "key" | "avatars" | "images">>;
     issues: { present: boolean; count: string | null };
   };
   const artwork = (icon: Element) => {
@@ -21,6 +32,8 @@ export function sidebarPresentationProbe() {
   };
   const frames: Frame[] = [];
   let stopped = false;
+  const pendingFrames: Array<() => void> = [];
+  const channel = new MessageChannel();
   let dirty = true;
   let signature: string | undefined;
   const observer = new MutationObserver((records) => {
@@ -35,6 +48,12 @@ export function sidebarPresentationProbe() {
       }
     }
   });
+  const scrolled = (event: Event) => {
+    if (event.target instanceof Element && event.target.closest("aside.sidebar")) {
+      dirty = true;
+    }
+  };
+  document.addEventListener("scroll", scrolled, true);
   observer.observe(document, {
     subtree: true,
     childList: true,
@@ -60,8 +79,20 @@ export function sidebarPresentationProbe() {
         );
       });
       const presentation = {
+        scrollTop: sidebar.querySelector(".sidebar-shell__body")?.scrollTop ?? 0,
+        mountedRows: [...sidebar.querySelectorAll(".sidebar-recent-session")].map((row) => ({
+          key: row.getAttribute("data-session-key") ?? "",
+          avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
+          images: [...row.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
+        })),
         rows: rows.map((row) => ({
           key: row.getAttribute("data-session-key") ?? "",
+          avatars: [...row.querySelectorAll('[class*="avatar"]')].map((avatar) => avatar.className),
+          images: [...row.querySelectorAll("img")].map((image) => image.getAttribute("src") ?? ""),
+          ownerAvatars: row.querySelectorAll('.sidebar-session-indicator [class*="avatar"]').length,
+          presenceAvatars: row.querySelectorAll(
+            '.sidebar-recent-session__details-endcap [class*="avatar"]',
+          ).length,
           glyphs: [
             ...[...row.querySelectorAll(".session-glyph")].flatMap((glyph) => {
               const content = [
@@ -121,13 +152,33 @@ export function sidebarPresentationProbe() {
         frames.push({ at: performance.now(), cached, ...presentation });
       }
     }
-    requestAnimationFrame(sample);
   };
-  requestAnimationFrame(sample);
-  Reflect.set(window, "__sidebarPresentation", {
+  channel.port1.addEventListener("message", () => {
+    sample();
+    for (const resolve of pendingFrames.splice(0)) {
+      resolve();
+    }
+  });
+  channel.port1.start();
+  const requestSample = () => {
+    if (!stopped) {
+      // rAF precedes ResizeObserver; this task samples after the rendering update.
+      channel.port2.postMessage(null);
+      requestAnimationFrame(requestSample);
+    }
+  };
+  requestAnimationFrame(requestSample);
+  const probe = {
+    nextFrame: () =>
+      new Promise<void>((resolve) => {
+        pendingFrames.push(resolve);
+      }),
     read() {
       stopped = true;
+      channel.port1.close();
+      channel.port2.close();
       observer.disconnect();
+      document.removeEventListener("scroll", scrolled, true);
       const first = frames.findIndex((frame) => frame.cached && frame.rows.length > 0);
       const visible = first < 0 ? [] : frames.slice(first);
       const handoff = visible.findIndex((frame) => !frame.cached);
@@ -152,7 +203,15 @@ export function sidebarPresentationProbe() {
           }
         }
       }
-      return { frames, waves: Math.max(0, visible.length - 2), handoffChanges };
+      return {
+        sampling: "after-render-task",
+        timeOrigin: performance.timeOrigin,
+        frames,
+        waves: Math.max(0, visible.length - 2),
+        handoffChanges,
+      };
     },
-  });
+  };
+  Reflect.set(window, "__sidebarPresentation", probe);
+  return probe;
 }

@@ -185,13 +185,12 @@ async function readUpdateRunStatusAsync(
   type: "updateRuns.status" | "updateRuns.historyStatus",
   options: OpenClawStateDatabaseOptions,
 ) {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type },
+    { preferIndependentWarmRead: true },
   );
-  if (!reply) {
-    return {};
-  }
-  return reply.status;
+  return reply?.status ?? {};
 }
 
 /** Doctor retains its maintenance owner while the worker reads the private snapshot. */
