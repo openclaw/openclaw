@@ -73,6 +73,8 @@ export async function prepareCliMcpToolProjection(
       | "authProfileStore"
       | "authProfileStoreAgentDir"
     >;
+    /** The memory audience a loopback grant on a session carries. */
+    forGrant: (sessionKey: string) => Promise<Pick<McpScope, "memoryAudience">>;
     resolvePolicyTools: ResolveMcpTools;
     resolveScopedTools: ResolveMcpTools;
   },
@@ -88,14 +90,18 @@ export async function prepareCliMcpToolProjection(
       ? options.resolvePolicyTools
       : options.resolveScopedTools;
   const admittedParams = await admitCliRunParams(params, options.agentId);
+  // The projected names become the grant's allowlist, so audience-gated tools are
+  // built with the audience the grant will carry; the grant mints with this same value.
+  const grantAudience = await options.forGrant(context.sessionKey);
   const { tools } = await resolveTools({
     ...options.scope,
+    ...(grantAudience.memoryAudience ? { memoryAudience: grantAudience.memoryAudience } : {}),
     defaultMediatedToolNames: options.defaultMediatedToolNames,
     signal: admittedParams.abortSignal,
     context,
     admittedRunContext: admittedParams.admittedRunContext,
   });
-  return { params: admittedParams, tools };
+  return { params: admittedParams, tools, grantAudience };
 }
 
 /** Resolve native-tool and configured-MCP ownership for this CLI run. */

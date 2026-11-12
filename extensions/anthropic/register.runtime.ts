@@ -34,6 +34,7 @@ import {
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createClaudeCodeVersionRequirement } from "./claude-code-version-requirement.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -46,7 +47,12 @@ import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
-import { resolveFastModeSupport } from "./fast-mode-policy.js";
+import {
+  resolveFastModeSupport,
+  setLearnedFastModeUnsupported,
+  whenFastModeAnswersLoaded,
+} from "./fast-mode-policy.js";
+import { createFastModeUnsupportedModels } from "./fast-mode-unsupported.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createAnthropicAuthMethods, createAnthropicProvider } from "./provider-contract-api.js";
 import anthropicProviderDiscovery from "./provider-discovery.js";
@@ -640,25 +646,41 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   const version = createClaudeCodeVersionProbe(api);
+  const identity = createClaudeCodeVersionRequirement({
+    openStore: () =>
+      api.runtime.state.openKeyedStoreV2({ namespace: "claude-code-version", maxEntries: 1 }),
+    resolveInstalledVersion: version.resolveVersion,
+    warn: (message) => api.logger.warn?.(message),
+  });
   api.registerCliBackend(buildAnthropicCliBackend(version));
+  setLearnedFastModeUnsupported(
+    createFastModeUnsupportedModels({
+      openStore: () =>
+        api.runtime.state.openKeyedStoreV2({ namespace: "fast-mode-unsupported", maxEntries: 256 }),
+      warn: (message) => api.logger.warn?.(message),
+    }),
+  );
   api.registerProvider({
     ...buildAnthropicProvider(),
     wrapStreamFn: (ctx) => {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
         runtime.createAnthropicClaudeCodeIdentityWrapper(
           runtime.wrapAnthropicProviderStream(ctx),
-          version.resolveVersion,
+          identity,
         ),
       );
-      return async (...args) => (await loadStream())(...args);
+      // Stored "no fast mode" answers must be loaded before the fast-mode plan runs.
+      return async (...args) => {
+        const stream = await loadStream();
+        if (args[0].provider === PROVIDER_ID) {
+          await whenFastModeAnswersLoaded();
+        }
+        return stream(...args);
+      };
     },
     wrapSimpleCompletionStreamFn: (ctx) => {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>
-        runtime.createAnthropicClaudeCodeIdentityWrapper(
-          ctx.streamFn,
-          version.resolveVersion,
-          ctx.sourceApi,
-        ),
+        runtime.createAnthropicClaudeCodeIdentityWrapper(ctx.streamFn, identity, ctx.sourceApi),
       );
       return async (...args) => (await loadStream())(...args);
     },

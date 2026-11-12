@@ -1,8 +1,8 @@
 {
   "name": "@openclaw/advisor",
-  "version": "2026.11.2",
+  "version": "2026.11.3",
   "private": true,
-  "description": "OpenClaw experimental periodic agent advisor",
+  "description": "OpenClaw periodic agent advisor",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

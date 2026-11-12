@@ -6,8 +6,9 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Access member confirmation layout" });
+const suite = createControlUiE2eSuite({ name: "Access confirmation layout" });
 const longName = "Mira Example — integration review";
+const names = [longName, "Bo", "Mira" + "LongIdentity".repeat(8)];
 
 async function expectContained(surface: Locator) {
   const overflow = await surface.evaluate((root) => {
@@ -18,9 +19,11 @@ async function expectContained(surface: Locator) {
         return (
           element.checkVisibility() &&
           box.width > 0 &&
+          !element.closest(".ocid-access__sr-only") &&
           (box.left < bounds.left - 1 ||
             box.right > bounds.right + 1 ||
-            element.scrollWidth > element.clientWidth + 1)
+            (getComputedStyle(element).textOverflow !== "ellipsis" &&
+              element.scrollWidth > element.clientWidth + 1))
         );
       })
       .map((element) => element.className || element.tagName);
@@ -31,7 +34,12 @@ async function expectContained(surface: Locator) {
 suite.define(() => {
   it("keeps full removal identities, warnings and Cancel inside the registered Access page", async () => {
     await suite.withPage(
-      { viewport: { width: 390, height: 844 }, colorScheme: "dark", serviceWorkers: "block" },
+      {
+        viewport: { width: 390, height: 844 },
+        colorScheme: "dark",
+        serviceWorkers: "block",
+        reducedMotion: "reduce",
+      },
       async ({ page }) => {
         const gateway = await installNativePluginMockGateway(page, {
           nativePlugins: [
@@ -89,7 +97,7 @@ suite.define(() => {
           linked: true,
           clawId: "synthetic-claw",
           ownerDevices: [{ devicePub, label: "Synthetic browser", peerKeys: [], cert: {} }],
-          members: [longName, "Bo"].map((displayName, index) => ({
+          members: names.map((displayName, index) => ({
             accountId: "member-" + index,
             displayName,
             role: "operator",
@@ -143,11 +151,37 @@ suite.define(() => {
         await expect
           .poll(() => member.getByRole("button", { name: "Remove", exact: true }).isEnabled())
           .toBe(true);
+        const node = page.locator('[aria-labelledby="ocid-nodes"] .ocid-access__row').first();
         for (const width of [390, 820, 1400]) {
-          await page.setViewportSize({ width, height: 844 });
+          await page.setViewportSize({ width, height: width === 390 ? 480 : 844 });
+          await node.getByRole("button", { name: "Remove node", exact: true }).click();
+          const nodeConfirm = node.getByRole("button", {
+            name: "Remove Integration review workstation",
+            exact: true,
+          });
+          await nodeConfirm.waitFor();
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(page, node, [nodeConfirm], {
+              animations: "disabled",
+              scrollTo: nodeConfirm,
+            });
+            writeFileSync(
+              path.join(suite.artifactDir, "node-confirmation-" + width + ".png"),
+              frame.png,
+            );
+          }
+          // Containment alone passes with a two-pixel warning column.
+          expect((await node.getByRole("note").boundingBox())!.width).toBeGreaterThanOrEqual(200);
+          expect(
+            (await node.locator(".ocid-access__title").boundingBox())!.width,
+          ).toBeGreaterThanOrEqual(200);
+          expect(await node.getByRole("note").textContent()).toContain("deletes its node pairing");
+          await expectContained(surface);
+          await nodeConfirm.click({ trial: true });
+          await node.getByRole("button", { name: "Cancel", exact: true }).click();
           const group = page.locator(".ocid-access__group");
           const before = (await group.boundingBox())!.width;
-          for (const name of [longName, "Bo"]) {
+          for (const name of names) {
             const row = page.locator(".ocid-access__row--member").filter({ hasText: name });
             await row.getByRole("button", { name: "Remove", exact: true }).click();
             const confirm = row.getByRole("button", { name: "Remove " + name, exact: true });
@@ -155,16 +189,6 @@ suite.define(() => {
             expect(await row.getByRole("note").textContent()).toContain(
               "Completed work and conversations stay here.",
             );
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && name === longName) {
-              const frame = await takeControlUiScreenshotFrame(page, row, [confirm], {
-                animations: "disabled",
-                scrollTo: row,
-              });
-              writeFileSync(
-                path.join(suite.artifactDir, "confirmation-" + width + ".png"),
-                frame.png,
-              );
-            }
             expect((await group.boundingBox())!.width).toBe(before);
             await expectContained(surface);
             await confirm.click({ trial: true });
@@ -173,54 +197,30 @@ suite.define(() => {
           }
         }
         await page.setViewportSize({ width: 390, height: 480 });
-        const node = page.locator('[aria-labelledby="ocid-nodes"] .ocid-access__row').first();
-        await node.getByRole("button", { name: "Remove node", exact: true }).click();
-        await expectContained(surface);
-        await node
-          .getByRole("button", { name: "Remove Integration review workstation", exact: true })
-          .click({ trial: true });
-        await node.getByRole("button", { name: "Cancel", exact: true }).click();
         await page
           .getByRole("textbox", { name: "Email address to invite" })
           .fill("review@example.test");
-        await page.getByRole("combobox", { name: "Role", exact: true }).selectOption("viewer");
+        await page.locator(".ocid-access__role-picker button").click();
+        await page.getByRole("option", { name: "Viewer", exact: false }).click();
         await page
           .getByRole("button", { name: "Create invite link", exact: true })
           .click({ trial: true });
         await page.getByText("Request details", { exact: true }).click();
         await expectContained(surface);
-        await member.getByRole("button", { name: "Remove", exact: true }).click();
-        const confirmation = member.getByRole("button", {
-          name: "Remove " + longName,
-          exact: true,
-        });
-        await confirmation.click({ trial: true });
-        const unbroken = "Mira" + "LongIdentity".repeat(8);
+        await gateway.setOperatorScopes(["operator.read", "operator.write"]);
+        await gateway.closeLatest();
+        await expect
+          .poll(() => node.getByRole("button", { name: "Remove node", exact: true }).isDisabled())
+          .toBe(true);
+        await expectContained(surface);
         await gateway.setMethodResponse("openclawId.people", {
-          link: {
-            ...link,
-            members: [{ ...link.members[0], displayName: unbroken }, link.members[1]],
-          },
+          link: { ...link, ownerDevices: [] },
         });
         await gateway.emitGatewayEvent("openclawId.people.changed");
-        const unbrokenConfirm = member.getByRole("button", {
-          name: "Remove " + unbroken,
-          exact: true,
-        });
-        await unbrokenConfirm.waitFor();
+        await expect
+          .poll(() => surface.getByRole("button", { name: "Remove", exact: true }).count())
+          .toBe(0);
         await expectContained(surface);
-        await unbrokenConfirm.click({ trial: true });
-        await gateway.setMethodResponse("openclawId.people", {
-          link: {
-            ...link,
-            members: [{ ...link.members[0], displayName: unbroken }, link.members[1]],
-            ownerDevices: [],
-          },
-        });
-        await gateway.emitGatewayEvent("openclawId.people.changed");
-        await expect.poll(() => unbrokenConfirm.isDisabled()).toBe(true);
-        await expectContained(surface);
-        await member.getByRole("button", { name: "Cancel", exact: true }).click();
         expect(await gateway.getRequests("openclawId.authority")).toEqual([]);
       },
     );

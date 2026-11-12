@@ -27,6 +27,7 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     },
     agentId: "main",
     canUpdateConfig: true,
+    canReadConfig: true,
     configForm: {
       agents: {
         entries: { main: { tools: { profile: "full" } } },

@@ -66,9 +66,10 @@ controls keep their distinct presentation. Text appears as it arrives, including
 short fragments before a tool call or the final response.
 
 If an inactive run's saved history ends during tool use and has no terminal
-assistant message, Chat keeps its commentary and tool activity visible and marks
-the run **Interrupted**. This presentation does not resume the run or recover an
-answer that was never saved.
+assistant message, Chat keeps its commentary and tool activity visible. It marks
+the run **Interrupted** only when the Gateway recorded that run as aborted; a run
+that ended while its background command keeps working is not marked. This
+presentation does not resume the run or recover an answer that was never saved.
 
 Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
@@ -546,7 +547,7 @@ model configuration, provider credentials, and session access rules still apply.
 
 ## Composer capability menu
 
-Select **+** beside the chat composer to open attachments and session capabilities in one menu:
+Select **+** beside the chat composer to open attachments and session capabilities in one menu. Available attachment choices appear first, above the session capability controls:
 
 - **Skills** enables or disables individual skills for this session.
 - **Plugins** enables or disables configured MCP servers for this session.

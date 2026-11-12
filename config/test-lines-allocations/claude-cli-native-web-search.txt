@@ -1,0 +1,3 @@
+# Managed claude-cli WebSearch opt-in: policy-gated kept list on ordinary and completion turns,
+# completion-turn refusal, and the widened manifest selection. Exact net growth.
+157

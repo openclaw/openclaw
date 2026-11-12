@@ -391,7 +391,7 @@ checkout_git_openclaw_ref() {
     # Full commit IDs pin source bytes, even when a remote ref has the same name.
     # Bundled/existing checkouts already have the object and need no remote lookup.
     if [[ "$ref" =~ ^[[:xdigit:]]{40}$ ]]; then
-        if ! git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
+        if ! GIT_NO_LAZY_FETCH=1 git -C "$repo_dir" cat-file -e "$ref" 2>/dev/null; then
             if ! installer_step "Fetching requested commit" git -C "$repo_dir" fetch --no-tags origin "$ref"; then
                 installer_error "Could not fetch requested git commit: ${ref}"
                 return 1

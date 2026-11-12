@@ -238,10 +238,14 @@ export function buildCodexConversationTurnInstructions(
     spec.type === "namespace" ? spec.tools.map((tool) => `${spec.name}.${tool.name}`) : [spec.name],
   );
   return [
-    "Current OpenClaw conversation instructions (replace earlier conversation context, not persistent policy):",
+    "## OpenClaw conversation instructions",
+    "Instructions in the following conversation_instructions block supersede earlier versions of this block delivered as developer instructions.",
+    "<conversation_instructions>",
     splitCodexExtraSystemPrompt(params).turn ??
       "No additional conversation instructions for this turn.",
+    "### Tool Bindings",
     `Current OpenClaw tool bindings for this turn (accepted declarations alone do not grant execution): ${availableNames.length ? availableNames.toSorted().join(", ") : "none"}.`,
+    "</conversation_instructions>",
   ].join("\n\n");
 }
 

@@ -51,7 +51,10 @@ import {
   openOpenClawAgentDatabaseInWorker,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { createAgentDatabaseExecutionCloser } from "./openclaw-agent-execution-close.js";
+import {
+  createAgentDatabaseExecutionCloser,
+  prepareCreatedAgentDatabaseBackend,
+} from "./openclaw-agent-execution-close.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionOpen,
@@ -89,23 +92,7 @@ export function createSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string },
 ): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
-  const backend = openAgentDatabaseBackend(input, opening, true);
-  try {
-    backend.execute({ type: "database.prepareWrite", input: undefined });
-    backend.assertSettled?.();
-    return backend;
-  } catch (error) {
-    try {
-      backend.closeAfterFailedOpen();
-    } catch (cleanupError) {
-      throw createSqliteLifecycleAggregateError(
-        [error, cleanupError],
-        "Agent creation and cleanup failed",
-        error,
-      );
-    }
-    throw error;
-  }
+  return prepareCreatedAgentDatabaseBackend(openAgentDatabaseBackend(input, opening, true));
 }
 
 /** The broker supplies a private admission channel before invoking this native factory. */
@@ -139,7 +126,8 @@ function openAgentDatabaseBackend(
     input.creatingIdentity?.key ??
     opening.existingIdentity ??
     readDatabasePathIdentitySync(input.databasePath).key;
-  let admittedFileBirthtime = input.creatingIdentity?.birthtime;
+  let admittedFileBirthtime =
+    input.creatingIdentity?.birthtime ?? input.expectedIdentity?.birthtime;
   const assertFileIdentity = () => {
     try {
       if (!database && input.expectedIdentity) {
@@ -180,8 +168,8 @@ function openAgentDatabaseBackend(
   let releaseBorrow: (() => void) | undefined;
   let identity: AgentDatabaseFileExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
-  let startupJournalRequested = false;
   type RequestPreparation = ReturnType<typeof readAgentDatabaseRequestPreparation>;
+  let startup: RequestPreparation | undefined;
   let publicationPreparation: RequestPreparation | undefined;
   const openShared = () => {
     if (!shared) {
@@ -194,10 +182,10 @@ function openAgentDatabaseBackend(
     }
     return shared;
   };
-  const withPreparation = <T>(preparation: RequestPreparation, run: () => T): T => {
-    startupJournalRequested = preparation.startupJournal;
+  const withPreparation = <T>(preparation: RequestPreparation | undefined, run: () => T): T => {
+    startup = preparation;
     try {
-      return preparation.deletion
+      return preparation?.deletion
         ? withAgentDeletionWorkerCleanup(
             preparation.deletion,
             {
@@ -212,7 +200,7 @@ function openAgentDatabaseBackend(
           )
         : run();
     } finally {
-      startupJournalRequested = false;
+      startup = undefined;
     }
   };
   const readDeletionJournal = () =>
@@ -254,12 +242,11 @@ function openAgentDatabaseBackend(
         const preparation = receiveMessageOnPort(port1)?.message as {
           validation?: OpenClawAgentDatabaseValidation;
           integrityRevoked: boolean;
-          startupIntegrity?: import("./agent-database-startup-integrity.js").AgentDatabaseStartupIntegrity;
         };
         lease.validation = preparation.validation;
         lease.integrityRevoked = preparation.integrityRevoked;
-        lease.startupIntegrity = preparation.startupIntegrity;
-        lease.startupRepair = startupJournalRequested
+        lease.startupIntegrityRequired = startup?.startupIntegrityRequired;
+        lease.startupRepair = startup?.startupJournal
           ? maintenance.repairStartupIntegrity.bind(undefined, lease.receipt)
           : undefined;
       } catch (error) {
@@ -351,14 +338,18 @@ function openAgentDatabaseBackend(
     }
     // A fresh open already admitted the schema; publication below still checks its live receipt.
     if (refreshSchema && !validation) {
-      validation = refreshOpenClawAgentDatabaseSchema(database, admitOpen);
+      validation = refreshOpenClawAgentDatabaseSchema(
+        database,
+        admitOpen,
+        !startup?.startupIntegrityRequired,
+      );
     }
     requestSqliteWorkerOperationAdmission({
       stage: "prepare",
       facts: {
         identity,
         validation,
-        ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
+        ...(startup?.startupJournal ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
       },
     });
     return database;
@@ -381,7 +372,7 @@ function openAgentDatabaseBackend(
     const signal = agentDatabaseStartupInspectionSignal(
       expectDefined(preparation.startupCancellation, "Startup inspection cancellation"),
     );
-    startupJournalRequested = preparation.startupJournal;
+    startup = preparation;
     const steps = openClaimedWriterSteps(true);
     try {
       let step = steps.next();
@@ -400,7 +391,7 @@ function openAgentDatabaseBackend(
         }
       }
     } finally {
-      startupJournalRequested = false;
+      startup = undefined;
     }
   };
   const openWriter = (refreshSchema = false) =>
@@ -415,11 +406,22 @@ function openAgentDatabaseBackend(
     transferList?: Transferable[],
     requestAdmission?: AgentDatabaseAdmissionRestriction,
   ) => {
+    // Admitted reads finish on their retained file; mutations must still own the pathname.
+    if (stage !== "prepare") {
+      const operation = currentSqliteWorkerOperationAdmission.getStore();
+      if (operation) {
+        operation.owner.databaseIdentity ??= {
+          databasePath: input.databasePath,
+          key: admittedFileIdentity,
+          birthtime: admittedFileBirthtime,
+        };
+      }
+    }
     const request: SqliteWorkerAdmissionRequest = {
       stage,
       facts: {
         identity,
-        ...(startupJournalRequested ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
+        ...(startup?.startupJournal ? { agentDeletionJournalPresent: readDeletionJournal() } : {}),
         ...(publication ? { publication } : {}),
       },
     };
@@ -670,7 +672,7 @@ function openAgentDatabaseBackend(
       }
       if (command.type === "database.domain.publish") {
         try {
-          withPreparation(publicationPreparation ?? { startupJournal: false }, () =>
+          withPreparation(publicationPreparation, () =>
             domain.cleanupPublication(command.input.id),
           );
         } finally {

@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import {
   resolveChatFastModeSelectState,
@@ -425,3 +426,50 @@ it("restores the remembered permitted Daybreak choice and recovers an unavailabl
   expect(toggle().disabled).toBe(true);
   expect(option("daybreak_blue").disabled).toBe(true);
 });
+
+it.each([true, false])(
+  "keeps Access controls busy until selection settles with %s",
+  async (result) => {
+    const saving = createDeferred();
+    const draw = (requested: "standard" | "daybreak_blue" | "daybreak_red") =>
+      fixture(["low", "high"], "low", false, undefined, true, {
+        requested,
+        previous: "daybreak_red",
+        programs: ["standard", "daybreak_blue", "daybreak_red"],
+        sessionKey: "effort-preview",
+        disabled: false,
+        onSelect,
+      });
+    const onSelect = vi.fn(async () => {
+      await saving.promise;
+      return result;
+    });
+    await draw("daybreak_blue");
+    const toggle = host!.querySelector<HTMLInputElement>(".chat-controls__access-head input")!;
+    const red = host!.querySelector<HTMLButtonElement>('[data-chat-access-option="daybreak_red"]')!;
+    const blue = host!.querySelector<HTMLButtonElement>(
+      '[data-chat-access-option="daybreak_blue"]',
+    )!;
+    try {
+      await userEvent.click(red);
+      await draw("daybreak_red");
+      expect(red.getAttribute("aria-pressed")).toBe("true");
+      expect(document.activeElement).toBe(red);
+      expect(toggle.getAttribute("aria-disabled")).toBe("true");
+      expect(blue.getAttribute("aria-disabled")).toBe("true");
+      toggle.focus();
+      await userEvent.keyboard(" ");
+      blue.focus();
+      await userEvent.keyboard("{Enter}");
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(red.getAttribute("aria-pressed")).toBe("true");
+      saving.resolve();
+      await expect.poll(() => toggle.getAttribute("aria-disabled")).toBeNull();
+      await expect.poll(() => blue.getAttribute("aria-disabled")).toBeNull();
+      await userEvent.click(toggle);
+      expect(onSelect).toHaveBeenLastCalledWith("standard", "effort-preview", "daybreak_red");
+    } finally {
+      saving.resolve();
+    }
+  },
+);
