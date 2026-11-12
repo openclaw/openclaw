@@ -113,3 +113,13 @@ it.each([
 ] as const)("routes cron event %s to its scoped queue", (key, mainKey, scope, expected) => {
   expect(keys.resolveEventSessionKey(key, mainKey, scope)).toBe(expected);
 });
+
+it("names a group account isolation thread only for named accounts", () => {
+  expect(
+    keys.resolveGroupAccountIsolationThreadId({ channel: "whatsapp", accountId: "Work" }),
+  ).toBe("whatsapp-account-work");
+  expect(
+    keys.resolveGroupAccountIsolationThreadId({ channel: "whatsapp", accountId: "default" }),
+  ).toBeUndefined();
+  expect(keys.resolveGroupAccountIsolationThreadId({ channel: "whatsapp" })).toBeUndefined();
+});

@@ -310,6 +310,71 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
     ).toBe(false);
     expect(routed.routing.isNativeApprovalHandlerConfigured({ cfg })).toBe(true);
   });
+
+  it.each([
+    {
+      variant: "synchronous",
+      create: createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes,
+    },
+    {
+      variant: "asynchronous",
+      create: createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutesAsync,
+    },
+  ])(
+    "ignores only the named-account group isolation thread when matching $variant session targets",
+    async ({ create }) => {
+      const routed = create({
+        channel: "example",
+        channelLabel: "Example",
+        authorizeActorAction: () => ({ authorized: true }),
+        routing: {
+          defaultForwardingMode: "session",
+          isTransportEnabled: () => true,
+          listAccountIds: () => ["work", "other"],
+          resolveDefaultAccountId: () => "work",
+          normalizeTo: (to) => to.trim().toLowerCase() || null,
+          resolveApprovers: () => ["owner"],
+        },
+      });
+      const cfg = { approvals: { exec: { enabled: true } } } as never;
+      const request = {
+        ...execRequest,
+        request: {
+          command: "pwd",
+          turnSourceChannel: "example",
+          turnSourceTo: "group-1",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "example-account-work",
+        },
+      } as never;
+      const suppress =
+        routed.capability.delivery?.shouldSuppressForwardingFallbackAsync ??
+        routed.capability.delivery?.shouldSuppressForwardingFallback;
+      const suppressFor = async (target: Record<string, string>) =>
+        await suppress?.({
+          cfg,
+          approvalKind: "exec",
+          target: {
+            channel: "example",
+            to: "group-1",
+            accountId: "work",
+            threadId: "example-account-work",
+            source: "session",
+            ...target,
+          },
+          request,
+        });
+
+      expect(await suppressFor({})).toBe(true);
+      expect(await suppressFor({ threadId: "real-thread" })).toBe(false);
+      expect(await suppressFor({ threadId: "example-account-other" })).toBe(false);
+      expect(await suppressFor({ threadId: "other-channel-account-work" })).toBe(false);
+      expect(await suppressFor({ accountId: "other", threadId: "example-account-other" })).toBe(
+        false,
+      );
+      expect(await suppressFor({ source: "target" })).toBe(false);
+    },
+  );
 });
 
 describe("createChannelApprovalCapability", () => {
