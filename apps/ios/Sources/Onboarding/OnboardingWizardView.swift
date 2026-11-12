@@ -1073,9 +1073,9 @@ extension OnboardingWizardView {
 
     private func resumeAfterPairingApproval(silent: Bool = false) {
         // We intentionally stop reconnect churn while unpaired to avoid generating multiple pending requests.
+        // The forced reconnect below leaves the pause when it commits; resuming here too would
+        // let the waiting loops attempt first and send a second pairing request.
         self.appModel.gatewayAutoReconnectEnabled = true
-        self.appModel.gatewayPairingPaused = false
-        self.appModel.gatewayPairingRequestId = nil
         // Pairing state is sticky to prevent UI flip-flop during reconnect churn.
         // Once the user explicitly resumes after approving, clear the sticky issue
         // so new status/auth errors can surface instead of being masked as pairing.
@@ -1092,6 +1092,9 @@ extension OnboardingWizardView {
         guard self.step == .auth else { return }
         guard self.issue.needsPairing else { return }
         guard self.connectingGateway == nil else { return }
+        // The view's pairing issue is sticky; retry automatically only while every live pause is a
+        // pairing approval, never alongside a rate limit or rejected credential.
+        guard self.appModel.connection.isPausedOnlyForPairing else { return }
 
         let now = Date()
         if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {

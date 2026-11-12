@@ -46,8 +46,8 @@
  * its warm counts, as they are outside recurring heartbeat ticks.
  * Maintenance also holds this sibling lease so recurring sweeps share a warm
  * heartbeat carrier, as they do with other active owners on a busy Gateway.
- * --instrument retention samples memory after collecting the main isolate and
- * observed direct workers, outside timing/GC measurements. Use identical-code controls
+ * --instrument retention samples main memory after GC and unforced heap statistics
+ * from observed direct workers, outside timing measurements. Use identical-code controls
  * to separate retained memory from different natural-GC/worker-idle schedules.
  * --retention-ms 120000 gives both revisions the same minimum elapsed time
  * after warmup before collection, including their normal idle-worker retirement.
@@ -58,6 +58,9 @@
  * preparation owner, not Docker or a model. --transcript-mib seeds genuine
  * synthetic transcript payloads using the shared Team fixture; report DB bytes
  * separately because compression changes physical size. Filesystem is host-owned.
+ * --source-authority captures a new operator authority for each preparation, revokes
+ * one during reconciliation, and proves later admissions reuse the same workspace.
+ * This calls the real authority and preparation owners, not WS or model transport.
  * Compare --requests 8 --burst 8 in fresh-process A/A and interleaved A/B runs;
  * allocation is a separate instrumented pass. Later writes must still reconcile.
  * After the first preparation fixture, --reuse-fixture --report <name>.json
@@ -65,7 +68,10 @@
  * sentinel through canonical reconciliation before warmup; never run concurrently.
  * --serial-turns --mode preparation --burst 1 --requests 3 measures first creation,
  * three unchanged turns, one guest edit, an unchanged turn, 200 mixed guest edits,
- * and a final unchanged turn. --fixture-source <directory> imports a retained
+ * and a final unchanged turn. Simple generated serial fixtures reset their mutations
+ * after validation; --reuse-fixture reopens them with a separate first-reuse sample.
+ * Serial allocation profiles surround each owner call, excluding correctness reads.
+ * --fixture-source <directory> imports a retained
  * synthetic deep workspace into a new owned Git repository. Original files stay untouched.
  * --freeze-source <new-directory> freezes all tracked source plus working changes;
  * add --revision <sha> for an exact committed source. Both arms use this benchmark.
@@ -141,6 +147,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
@@ -158,6 +165,8 @@ const { values } = parseArgs({
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
+    "fingerprint-import": { type: "boolean", default: false },
+    "source-authority": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
     "restart-stage": { type: "string" },
     "creation-contender": { type: "boolean", default: false },
@@ -206,6 +215,76 @@ const harnessSha256 = createHash("sha256")
   .digest("hex");
 const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptRelative = "scripts/perf/local-workspace-checkpoint-measure.ts";
+// Only frozen proof sources receive these counters; no memo, extra message, or await is added.
+function installFingerprintObservers(destination: string) {
+  const rewrite = (relative: string, edits: Array<[string, string]>) => {
+    const filename = path.join(destination, relative);
+    let source = fs.readFileSync(filename, "utf8");
+    for (const [anchor, replacement] of edits) {
+      assert.equal(source.split(anchor).length, 2, `Fingerprint observer anchor: ${relative}`);
+      source = source.replace(anchor, replacement);
+    }
+    fs.writeFileSync(filename, source);
+  };
+  rewrite("src/infra/git-operation.worker.ts", [
+    [
+      "  async (command, channel, control) => {",
+      `  async (command, channel, control) => {
+    const fingerprintMetrics = { contentHashCount: 0, contentReadBytes: 0,
+      fingerprintHitCount: 0, fingerprintMissCount: 0 };
+    Reflect.set(globalThis, "__workspaceFingerprintMetrics", fingerprintMetrics);`,
+    ],
+    [
+      "return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };",
+      "return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason, __fingerprintMetrics: fingerprintMetrics };",
+    ],
+    [
+      '      /(?:)/.test("");',
+      '      Reflect.deleteProperty(globalThis, "__workspaceFingerprintMetrics");\n      /(?:)/.test("");',
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/workspace-actual-manifest.ts", [
+    [
+      "      if (metrics) {\n        metrics.contentHashCount += 1;\n      }",
+      `      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) { measured.contentHashCount++; measured.contentReadBytes += size; }
+      if (metrics) { metrics.contentHashCount += 1; }`,
+    ],
+    [
+      "      const reusable = params.reuseFile?.(relative, identity, stats);",
+      `      const reusable = params.reuseFile?.(relative, identity, stats);
+      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) {
+        if (reusable) { measured.fingerprintHitCount++; }
+        else { measured.fingerprintMissCount++; }
+      }`,
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/workspace-manifest-computation.runtime.ts", [
+    [
+      "      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);",
+      `      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) {
+        measured.action = action.kind;
+        measured.target = "target" in action ? action.target : null;
+      }
+      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);`,
+    ],
+  ]);
+  rewrite("src/infra/git-worker.ts", [
+    [
+      '    outcome = "returned";\n    return reply.value;',
+      `    const measured = Reflect.get(reply, "__fingerprintMetrics");
+    if (measured) {
+      Reflect.get(globalThis, "__recordWorkspaceFingerprintMetrics")?.({
+        operation: command.type, ...measured,
+      });
+    }
+    outcome = "returned";
+    return reply.value;`,
+    ],
+  ]);
+}
 if (values["freeze-source"]) {
   const destination = path.resolve(values["freeze-source"]);
   fs.mkdirSync(destination);
@@ -239,6 +318,9 @@ if (values["freeze-source"]) {
     new URL("./sandbox-builder-engine-fixture.ts", import.meta.url),
     path.join(destination, "scripts/perf/sandbox-builder-engine-fixture.ts"),
   );
+  if (values["fingerprint-import"]) {
+    installFingerprintObservers(destination);
+  }
 
   const digest = createHash("sha256");
   let fileCount = 0;
@@ -266,7 +348,9 @@ if (values["freeze-source"]) {
         const resolved = fs.realpathSync(from);
         const local = path.relative(sourceRoot, resolved);
         const target =
-          local === "" || local.startsWith("packages/") || local.startsWith("extensions/")
+          local === "" ||
+          ((local.startsWith("packages/") || local.startsWith("extensions/")) &&
+            !local.includes("/node_modules/"))
             ? path.join(destination, local)
             : resolved;
         fs.symlinkSync(target, to);
@@ -294,6 +378,7 @@ if (values["freeze-source"]) {
         fileCount,
         sha256: digest.digest("hex"),
         sharedDependencies: path.join(sourceRoot, "node_modules"),
+        fingerprintObservers: values["fingerprint-import"],
       },
       null,
       2,
@@ -364,10 +449,8 @@ const dockerHost = fileReads
     }).trim()
   : undefined;
 const serialTurns = values["serial-turns"];
-assert(
-  !serialTurns ||
-    (values.mode === "preparation" && Number(values.burst) === 1 && !values["reuse-fixture"]),
-);
+const fingerprintImport = values["fingerprint-import"];
+assert(!serialTurns || (values.mode === "preparation" && Number(values.burst) === 1));
 assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
@@ -425,7 +508,27 @@ assert(
       values["fresh-only"] &&
       values.acceleration),
 );
+const reusableSerial =
+  serialTurns &&
+  !values["fixture-source"] &&
+  !values["owner-switch"] &&
+  !values["restart-stage"] &&
+  !values["fresh-only"] &&
+  !values.acceleration &&
+  !values["agent-db-fixture"] &&
+  siblingWorktrees === 0;
+assert(
+  !fingerprintImport || reusableSerial,
+  "Fingerprint import requires the simple serial fixture",
+);
+if (fingerprintImport) {
+  const frozen = path.join(sourceRoot, "checkpoint-source.json");
+  assert(fs.existsSync(frozen), "Freeze both sources with --fingerprint-import before running");
+  assert.equal(JSON.parse(fs.readFileSync(frozen, "utf8")).fingerprintObservers, true);
+}
+assert(!serialTurns || !values["reuse-fixture"] || reusableSerial);
 const reuseFixture = values["reuse-fixture"] || resumeOwnerSwitch;
+assert(!values["source-authority"] || (values.mode === "preparation" && !serialTurns));
 assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
   burst = Number(values.burst),
@@ -511,6 +614,117 @@ const summarizeWorkerAllocation = (
       "Samples are outside CPU/latency timing. Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
   };
 };
+const startSerialWorkerProfiles = async () => {
+  const { sampleTrackedWorkerMemory } = await import("../../src/infra/worker-cpu.js");
+  const snapshot = sampleTrackedWorkerMemory({ refresh: false });
+  const identities = new Map(
+    [...snapshot.workerHeaps, ...snapshot.workerMemoryMissing].map((entry) => [
+      entry.threadId,
+      entry.script,
+    ]),
+  );
+  const existing = new Set(workers);
+  const selected = [...existing].filter(
+    (worker) => identities.get(worker.threadId) === "git-operation.worker.js",
+  );
+  assert(selected.length <= 16, "Allocation proof supports at most 16 existing Git workers");
+  const captures: {
+    worker: Worker;
+    threadId: number;
+    cpu: Awaited<ReturnType<Worker["startCpuProfile"]>>;
+    heap?: Awaited<ReturnType<Worker["startHeapProfile"]>>;
+    cpuBefore?: NodeJS.CpuUsage;
+  }[] = [];
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    for (const worker of selected) {
+      const capture = {
+        worker,
+        threadId: worker.threadId,
+        cpu: await worker.startCpuProfile(),
+      };
+      captures.push(capture);
+      captures.at(-1)!.heap = await worker.startHeapProfile();
+      captures.at(-1)!.cpuBefore = await worker.cpuUsage().catch(() => undefined);
+    }
+  } catch (error) {
+    for (const capture of captures) {
+      await capture.heap?.stop().catch(() => {});
+      await capture.cpu.stop().catch(() => {});
+    }
+    throw error;
+  } finally {
+    clearInterval(keepAlive);
+  }
+  return async (phase: string, discard = false) => {
+    const stopKeepAlive = setInterval(() => {}, 1_000);
+    try {
+      const profiles = [];
+      for (const capture of captures) {
+        const errors: string[] = [];
+        const failed = (error: unknown) => {
+          errors.push(String(error));
+          return undefined;
+        };
+        const cpuAfter = await capture.worker.cpuUsage().catch(() => undefined);
+        const heap = await capture.heap!.stop().catch(failed);
+        const cpu = await capture.cpu.stop().catch(failed);
+        const exited = !workers.has(capture.worker);
+        const prefix = `${values.report}.${phase}.git-worker-${capture.threadId}`;
+        if (!discard && heap) {
+          fs.writeFileSync(path.join(output, `${prefix}.heapprofile`), heap);
+        }
+        if (!discard && cpu) {
+          fs.writeFileSync(path.join(output, `${prefix}.cpuprofile`), cpu);
+        }
+        const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+          node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+        const parsedCpu = cpu ? JSON.parse(cpu) : undefined;
+        profiles.push({
+          threadId: capture.threadId,
+          script: "git-operation.worker.js",
+          sourcePath: path.join(sourceRoot, "src/infra/git-operation.worker.ts"),
+          exited,
+          errors,
+          sampledLiveAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null,
+          workerCpuMs:
+            !exited && cpuAfter && capture.cpuBefore
+              ? (cpuAfter.user +
+                  cpuAfter.system -
+                  capture.cpuBefore.user -
+                  capture.cpuBefore.system) /
+                1000
+              : null,
+          cpuSamples: !exited && parsedCpu ? parsedCpu.samples?.length : null,
+          cpuProfileDurationMs:
+            !exited && parsedCpu ? (parsedCpu.endTime - parsedCpu.startTime) / 1000 : null,
+          heapProfile: !discard && heap ? `${prefix}.heapprofile` : null,
+          cpuProfile: !discard && cpu ? `${prefix}.cpuprofile` : null,
+        });
+      }
+      return {
+        profiles,
+        selectedBefore: captures.map((capture) => ({
+          threadId: capture.threadId,
+          script: identities.get(capture.threadId),
+        })),
+        unprofiledBefore: [...existing]
+          .filter((worker) => !selected.includes(worker))
+          .map((worker) => ({
+            threadId: worker.threadId,
+            script: identities.get(worker.threadId),
+          })),
+        newWorkerThreadIds: [...workers]
+          .filter((worker) => !existing.has(worker))
+          .map((worker) => worker.threadId),
+        accounting:
+          "Existing Git workers only, at most 16, using native profiler defaults. Qualified Node 24 uses 512 KiB heap sampling, depth 16 and no sampling flags: GC-sensitive live allocations only, not total allocation or native memory. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
+      };
+    } finally {
+      clearInterval(stopKeepAlive);
+    }
+  };
+};
 const collectRetainedMemory = async () => {
   assert(globalThis.gc, "Retention samples require --expose-gc");
   // Worker inspection promises do not retain the event loop after these pools unref their workers.
@@ -518,12 +732,28 @@ const collectRetainedMemory = async () => {
   try {
     const workerHeaps = [];
     for (const worker of workers) {
-      const profile = await worker.startHeapProfile({ forceGC: true });
-      await profile.stop();
-      workerHeaps.push({ threadId: worker.threadId, ...(await worker.getHeapStatistics()) });
+      const threadId = worker.threadId;
+      try {
+        workerHeaps.push({ threadId, ...(await worker.getHeapStatistics()) });
+      } catch (error) {
+        if (
+          typeof error !== "object" ||
+          error === null ||
+          !("code" in error) ||
+          error.code !== "ERR_WORKER_NOT_RUNNING"
+        ) {
+          throw error;
+        }
+        workerHeaps.push({ threadId, unavailable: "worker-exited" });
+      }
     }
     globalThis.gc();
-    return { ...process.memoryUsage(), workerHeaps };
+    return {
+      ...process.memoryUsage(),
+      workerHeaps,
+      accounting:
+        "Main heap after explicit GC; worker heap statistics without forced GC. Exited workers are explicitly unavailable, not zero.",
+    };
   } finally {
     clearInterval(keepAlive);
   }
@@ -591,6 +821,7 @@ const owners = [
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
+  ...(values["source-authority"] ? ["src/gateway/operator-run-authority.ts"] : []),
 ];
 const source = new Map(
   owners.map((file) => [
@@ -649,8 +880,20 @@ const guestHeartbeats = new EventEmitter();
 const nextGuestHeartbeat = () =>
   once(guestHeartbeats, "tick", { signal: AbortSignal.timeout(5_000) });
 const manifestReads: Array<{ kind: string; target?: string; bytes: number }> = [];
+type FingerprintMetrics = {
+  operation: string;
+  action?: string;
+  target?: string | null;
+  contentHashCount: number;
+  contentReadBytes: number;
+  fingerprintHitCount: number;
+  fingerprintMissCount: number;
+};
+const fingerprintMetrics: FingerprintMetrics[] = [];
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __recordWorkspaceFingerprintMetrics: (metrics: FingerprintMetrics) =>
+    fingerprintMetrics.push(metrics),
   __containerCommandMeasure: (command: string) => containerCommands.push(command),
   __nativeCommandFinished: nativeCommandFinished,
   __checkpointPhase: async (name: string, operation: () => Promise<unknown>) => {
@@ -983,7 +1226,7 @@ if (reuseFixture && !resumeOwnerSwitch) {
     );
   }
 }
-if (reuseFixture && !resumeOwnerSwitch) {
+if (reuseFixture && !serialTurns) {
   fs.writeFileSync(path.join(canonical, "file-0.txt"), "synthetic 0\n".padEnd(fileBytes, "."));
 }
 if (gatewayMode && !reuseFixture) {
@@ -1573,13 +1816,59 @@ measurement: try {
     assert.deepEqual(result, { orphansDeleted: 0, snapshotsPruned: 0 });
     return result;
   };
-  const prepareWorkspace = async () => {
+  const authorityRuntime = values["source-authority"]
+    ? await import("../../src/gateway/operator-run-authority.js")
+    : undefined;
+  const deviceRuntime = values["source-authority"]
+    ? await import("../../src/gateway/device-revocation.js")
+    : undefined;
+  const operatorProfile = values["source-authority"]
+    ? (await import("../../src/state/user-profiles.js")).ensureProfileForEmail(
+        "source-authority-fixture@example.invalid",
+      )
+    : undefined;
+  const authorityContext = { getRuntimeConfig: () => config };
+  let admissions = 0;
+  const captureSource = async () => {
+    assert(authorityRuntime && deviceRuntime && operatorProfile);
+    const device = deviceRuntime.captureGatewayDeviceRevocation(
+      authorityContext,
+      { deviceId: "synthetic-source", role: "operator" },
+      () => true,
+    );
+    try {
+      const captured = await authorityRuntime.captureGatewayOperatorRunAuthority({
+        client: {
+          connId: `synthetic-${++admissions}`,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "openclaw-control-ui", mode: "webchat", version: "dev", platform: "web" },
+            role: "operator",
+            scopes: ["operator.admin"],
+          },
+          internal: { operatorRoleActor: { kind: "operator", profileId: operatorProfile.id } },
+        },
+        context: authorityContext,
+        hasCurrentClientAuthority: device.isCurrent,
+      });
+      assert(captured, "An admitted operator must receive authority");
+      return captured;
+    } finally {
+      device.release();
+    }
+  };
+  const prepareWithAuthority = async (
+    authority?: Awaited<ReturnType<typeof captureSource>>["authority"],
+  ) => {
     using prepared = await prepareLocalSandboxWorkspace({
       cfg: config,
       agentId: owner.agentId,
       sessionKey,
       workspaceDir: canonical,
       sandbox,
+      assertCurrent: authority?.assertCurrent,
+      signal: authority?.signal,
     });
     assert(prepared, "Preparation must resolve the selected session-owned workspace");
     workspace ??= prepared.workspaceDir;
@@ -1590,6 +1879,62 @@ measurement: try {
     );
     return prepared.workspaceDir;
   };
+  const prepareWorkspace = async () => {
+    const captured = values["source-authority"] ? await captureSource() : undefined;
+    try {
+      return await prepareWithAuthority(captured?.authority);
+    } finally {
+      captured?.release();
+    }
+  };
+  let sourceAuthorityProof: unknown;
+  if (values["source-authority"]) {
+    const original = await captureSource();
+    let revoked = false;
+    const errors: string[] = [];
+    const recordRevocation = (error: unknown) => {
+      const causes = collectNestedErrorCandidates(error);
+      errors.push(...causes.map(String));
+      return (
+        original.authority.signal?.aborted === true &&
+        causes.includes(original.authority.signal.reason)
+      );
+    };
+    try {
+      await assert.rejects(
+        withDiagnosticsTimelineObserver(
+          (name) => {
+            if (!revoked && name === "attempt.setup.sandbox.workspace_selection.reuse.reconcile") {
+              revoked = true;
+              deviceRuntime!.invalidateGatewayDeviceRevocation(
+                authorityContext,
+                "synthetic-source",
+                "operator",
+              );
+            }
+            return undefined;
+          },
+          () => prepareWithAuthority(original.authority),
+        ),
+        recordRevocation,
+      );
+      assert(revoked, "Revocation must occur inside real workspace reconciliation");
+      for (let attempt = 0; attempt < 3; attempt++) {
+        assert.throws(original.authority.assertCurrent, recordRevocation);
+        await prepareWorkspace();
+      }
+      sourceAuthorityProof = {
+        revokedDuring: "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
+        staleAssertionsRejected: 3,
+        freshPreparationsCompleted: 3,
+        errors,
+        abortReason: String(original.authority.signal?.reason),
+        boundary: "real operator/source and sandbox preparation owners; no WS or model",
+      };
+    } finally {
+      original.release();
+    }
+  }
   const runOne = (i: number) =>
     turnLoop
       ? runTurn!()
@@ -1674,6 +2019,7 @@ measurement: try {
     const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
+      fingerprintMetrics.length = 0;
       const workerStartsBefore = workerStarts,
         workerExitsBefore = workerExits;
       const workerAllocationBefore =
@@ -1685,6 +2031,17 @@ measurement: try {
         gitOperations[operation] = (gitOperations[operation] ?? 0) + 1;
       };
       gitDiagnostics.subscribe(observeGitOperation);
+      const stopWorkerProfiles =
+        values.instrument === "allocation" ? await startSerialWorkerProfiles() : undefined;
+      const inspector = values.instrument === "allocation" ? new Session() : undefined;
+      inspector?.connect();
+      await inspector?.post("Profiler.enable");
+      await inspector?.post("Profiler.start");
+      await inspector?.post("HeapProfiler.startSampling", {
+        samplingInterval: 32_768,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
       const physicalBefore = snapshotSqliteReaderMetrics();
       const spans: Record<string, { count: number; totalMs: number }> = {};
       const loop = monitorEventLoopDelay({ resolution: 1 });
@@ -1693,6 +2050,7 @@ measurement: try {
         cpuBefore = process.threadCpuUsage(),
         totalBefore = process.cpuUsage();
       const allocationBefore = getHeapStatistics().total_allocated_bytes;
+      const startedAtUTC = new Date().toISOString();
       const started = performance.now();
       const buildStarted = Promise.withResolvers<void>();
       let contenderStarted = false;
@@ -1723,6 +2081,10 @@ measurement: try {
         () => withWorktreePreparationTiming("sandbox", prepare),
       ).catch(async (error: unknown) => {
         gitDiagnostics.unsubscribe(observeGitOperation);
+        inspector?.disconnect();
+        if (stopWorkerProfiles) {
+          await stopWorkerProfiles(phase, true);
+        }
         if (contenderStarted) {
           await Promise.allSettled([contender]);
         }
@@ -1735,6 +2097,24 @@ measurement: try {
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
+      const heapProfile = await inspector?.post("HeapProfiler.stopSampling");
+      const cpuProfile = await inspector?.post("Profiler.stop");
+      inspector?.disconnect();
+      const workerProfiles = stopWorkerProfiles ? await stopWorkerProfiles(phase) : undefined;
+      if (cpuProfile) {
+        fs.writeFileSync(
+          path.join(output, `${values.report}.${phase}.cpuprofile`),
+          JSON.stringify(cpuProfile.profile),
+        );
+      }
+      if (heapProfile) {
+        fs.writeFileSync(
+          path.join(output, `${values.report}.${phase}.heapprofile`),
+          JSON.stringify(heapProfile.profile),
+        );
+      }
+      const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+        node.selfSize + node.children.reduce((sum, child) => sum + sampledAllocation(child), 0);
       loop.disable();
       gitDiagnostics.unsubscribe(observeGitOperation);
       const readMetrics = snapshotSqliteReaderMetrics().map((metric) => {
@@ -1748,14 +2128,20 @@ measurement: try {
       const workerAllocationAfter = workerAllocationBefore
         ? await sampleWorkerAllocation()
         : undefined;
+      assert(!fingerprintImport || fingerprintMetrics.length > 0, "Missing worker hash counters");
       const result = {
         phase,
+        startedAtUTC,
         elapsedMs,
         ...(contender ? { projectionElapsedMs, contender: contenderResult } : {}),
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
+        sampledAllocatedBytes: heapProfile ? sampledAllocation(heapProfile.profile.head) : null,
+        allocationAccounting:
+          "Main isolate during owner call and measurement bookkeeping, including overlapping background work; excludes CPU-profiler setup/serialization, correctness reads and reset. Unavailable V8 total counters serialize as null. Worker counters are separate; child process allocation is unmeasured.",
         gitOperations,
+        workerProfiles,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter
             ? summarizeWorkerAllocation(
@@ -1773,6 +2159,29 @@ measurement: try {
         probes,
         manifestReads: [...manifestReads],
         manifestSnapshotBytes: manifestReads.reduce((sum, read) => sum + read.bytes, 0),
+        ...(fingerprintImport
+          ? {
+              hashMetrics: {
+                operations: [...fingerprintMetrics],
+                contentHashCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.contentHashCount,
+                  0,
+                ),
+                contentReadBytes: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.contentReadBytes,
+                  0,
+                ),
+                fingerprintHitCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.fingerprintHitCount,
+                  0,
+                ),
+                fingerprintMissCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.fingerprintMissCount,
+                  0,
+                ),
+              },
+            }
+          : {}),
         physicalReaderMetrics: process.platform === "linux" ? readMetrics : null,
         hostLoad: loadBefore,
         hostLoadAfter: loadavg(),
@@ -1824,6 +2233,9 @@ measurement: try {
     };
     if (resumeOwnerSwitch) {
       workspace = fs.readFileSync(path.join(output, "restart-projection.txt"), "utf8");
+    } else if (reuseFixture) {
+      workspace = fs.readFileSync(path.join(output, "serial-projection.txt"), "utf8");
+      await measureTurn("first-reuse");
     } else {
       await measureTurn("first");
     }
@@ -1848,7 +2260,41 @@ measurement: try {
         fs.writeFileSync(filename, content);
       }
     };
-    if (!values["fresh-only"]) {
+    const restoreCanonical = (expectOriginal = false) => {
+      for (const entry of mutations.keys()) {
+        const original = path.join(repo, entry),
+          target = path.join(canonical, entry);
+        if (fs.existsSync(original)) {
+          fs.copyFileSync(original, target);
+          if (expectOriginal) {
+            mutations.set(entry, fs.readFileSync(original, "utf8"));
+          }
+        } else {
+          fs.rmSync(target, { force: true });
+          if (expectOriginal) {
+            mutations.set(entry, null);
+          }
+        }
+      }
+    };
+    if (fingerprintImport) {
+      assert(regularFiles.length >= 200);
+      for (let i = 0; i < 200; i++) {
+        if (i < 20) {
+          modify(regularFiles[i]!, null);
+        } else if (i < 40) {
+          modify(`lane2383-additions/deep/added-${i}.txt`, `added ${i}\n`);
+        } else {
+          modify(regularFiles[i]!, `changed ${i}\n`);
+        }
+      }
+      await measureTurn("guest-export");
+      restoreCanonical(true);
+      await measureTurn("host-import");
+      // No whole-tree validation or extra reconciliation may warm this next probe.
+      await measureTurn("post-import-reuse");
+      await measureTurn("post-import-steady");
+    } else if (!values["fresh-only"]) {
       modify(regularFiles[0]!, "one changed guest file\n");
       await measureTurn("changed-1");
       await measureTurn("post-edit-1");
@@ -2096,8 +2542,33 @@ measurement: try {
       }
     }
     const sourceFile = path.join(root, "checkpoint-source.json");
+    if (reusableSerial) {
+      // Restore only this scenario's own edits through the real acceptance owner, after timing.
+      if (!fingerprintImport) {
+        restoreCanonical();
+        await prepareWorkspace();
+      }
+      for (const entry of mutations.keys()) {
+        const original = path.join(repo, entry);
+        for (const directory of [canonical, workspace!]) {
+          if (fs.existsSync(original)) {
+            assert.deepEqual(readFixtureEntry(directory, entry), readFixtureEntry(repo, entry));
+          } else {
+            assert(!fs.existsSync(path.join(directory, entry)), `Fixture reset retained ${entry}`);
+          }
+        }
+      }
+      fs.writeFileSync(path.join(output, "serial-projection.txt"), workspace!);
+    }
     const result = {
       mode: "serial-preparation",
+      fingerprintImport,
+      harnessSha256,
+      instrument: values.instrument,
+      reusedFixture: reuseFixture,
+      resetAfterMeasurement: reusableSerial,
+      pauseAccounting:
+        "No registered native runtime in serial preparation; empty pause samples do not qualify guest freeze latency",
       fixture: {
         files: inventory.length,
         bytes: initialBytes,
@@ -2131,9 +2602,12 @@ measurement: try {
       sourceDependentInstallMatches,
       correctness:
         "all accepted file bytes, symlink targets, types and deletions match; ignored host file excluded",
+      hashAccounting: fingerprintImport
+        ? "Successful workspace content-hash calls inside observed Git-worker tasks and logical bytes read by that helper, plus accepted-node reuse hits/misses; excludes main-isolate/native Git reads, failed partial reads and OS-level physical IO. In-memory counters piggyback on existing worker replies, with no memo wrapping."
+        : undefined,
       retainedMemory: globalThis.gc ? await collectRetainedMemory() : null,
       retainedMemoryAccounting: globalThis.gc
-        ? "forced GC after all timing and correctness checks; workers then main"
+        ? "main GC after all timing and correctness checks; worker heap statistics are not forced-GC samples; exited workers explicitly unavailable"
         : "not measured; run with --expose-gc",
 
       physicalReaderAccounting:
@@ -2395,6 +2869,8 @@ measurement: try {
   };
   const report = {
     mode: values.mode,
+    sourceAuthorityProof,
+    operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
     turn: turnLoop
       ? {
