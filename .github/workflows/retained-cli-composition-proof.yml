@@ -1,121 +1,85 @@
-name: Release auth publication causal proof
-'on':
+name: Managed startup allocation diagnostic (NOT qualification)
+run-name: Allocation diagnostic a233af0b84e0 run ${{ github.run_id }}
+on:
   workflow_dispatch:
-    inputs:
-      target_ref:
-        required: true
-        type: string
-        description: Exact frozen candidate SHA; prerequisite diagnostic, not final FRV
 permissions:
   contents: read
+  actions: read
 concurrency:
-  group: release-auth-publication-${{ inputs.target_ref }}
+  group: managed-allocation-${{ github.run_id }}
   cancel-in-progress: false
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-  OPENCLAW_RELEASE_CONTEXT_REF: release/2026.11.4
-  BASE_SHA: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
-  REQUIRED_CHECKS_BASE: 258908e6b943c0197bca8d0306dbbbbf503bcb22
-  BEFORE_SHA: f38131f934b45447558cf6f431353a49656198d5
-  PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
-  CAPACITY_PROOF_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
-  PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  CANDIDATE_SHA: a233af0b84e093845c62e88c2702cbd9b297f22c
-  SOURCE_TREE: fefba51180be86548a58cc0438ba340716110bd7
-  PATHS_SHA256: 56a1d5118580b0ea7c50e12d42dac3d95dfabcee58ecf5561b6797c92ae0ef93
-  TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
-  auth-publication:
+  diagnostic:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        variant:
-        - before
-        - after
+    timeout-minutes: 15
     env:
-      VARIANT: ${{ matrix.variant }}
+      CANDIDATE: a233af0b84e093845c62e88c2702cbd9b297f22c
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.target_ref }}
-        fetch-depth: 0
-        persist-credentials: false
-    - name: Bind exact candidate
-      shell: bash
-      run: 'set -euo pipefail
-
-        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-
-        test -z "$(git status --porcelain)"
-
-        git merge-base --is-ancestor "$BASE_SHA" HEAD
-
-        mkdir -p .artifacts/final-ci
-
-        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
-
-        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
-
-        printf ''C=%s
-
-        Q=%s
-
-        P=%s
-
-        workflow=%s
-
-        run=%s
-
-        attempt=%s
-
-        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/final-ci/identity.txt
-
-        '
-    - uses: ./.github/actions/setup-node-env
-      with:
-        semantic-checks: 'true'
-        install-bun: 'false'
-        cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: Apply exact auth publication overlay
-      run: 'set -euo pipefail
-
-        printf ''%s'' ''ZGlmZiAtLWdpdCBhL3NyYy9hZ2VudHMvcHJlcGFyZWQtbW9kZWwtcnVudGltZS5yZWxvYWQtYXV0aC50ZXN0LnRzIGIvc3JjL2FnZW50cy9wcmVwYXJlZC1tb2RlbC1ydW50aW1lLnJlbG9hZC1hdXRoLnRlc3QudHMKaW5kZXggZGE3NWU4OGM2NjNiLi42NGRkNTliM2FiOTMgMTAwNjQ0Ci0tLSBhL3NyYy9hZ2VudHMvcHJlcGFyZWQtbW9kZWwtcnVudGltZS5yZWxvYWQtYXV0aC50ZXN0LnRzCisrKyBiL3NyYy9hZ2VudHMvcHJlcGFyZWQtbW9kZWwtcnVudGltZS5yZWxvYWQtYXV0aC50ZXN0LnRzCkBAIC05LDYgKzksOCBAQCBpbXBvcnQgewogICBjcmVhdGVUZXN0SW5ncmVzc1F1ZXVlLAogICB3aXRoVGVtcFN0YXRlLAogfSBmcm9tICIuLi9jaGFubmVscy9tZXNzYWdlL2luZ3Jlc3MtZHJhaW4udGVzdC1oZWxwZXJzLmpzIjsKK2ltcG9ydCB7IFBsdWdpbkluc3RhbmNlIH0gZnJvbSAiLi4vcGx1Z2lucy9wbHVnaW4taW5zdGFuY2UuanMiOworaW1wb3J0IHsgUGx1Z2luSW52b2NhdGlvblNjb3BlIH0gZnJvbSAiLi4vcGx1Z2lucy9wbHVnaW4taW52b2NhdGlvbi1zY29wZS5qcyI7CiBpbXBvcnQgeyBjcmVhdGVFbXB0eVBsdWdpblJlZ2lzdHJ5IH0gZnJvbSAiLi4vcGx1Z2lucy9yZWdpc3RyeS1lbXB0eS5qcyI7CiBpbXBvcnQgeyBnZXRQbHVnaW5Mb2FkZXJDYWNoZVN0YXRlIH0gZnJvbSAiLi4vcGx1Z2lucy9yZWdpc3RyeS1saWZlY3ljbGUuanMiOwogaW1wb3J0IHsgY3JlYXRlUGx1Z2luUmVjb3JkIH0gZnJvbSAiLi4vcGx1Z2lucy9zdGF0dXMudGVzdC1oZWxwZXJzLmpzIjsKQEAgLTM4LDYgKzQwLDYwIEBAIGNvbnN0IG11dGF0ZSA9IChhZ2VudElkID0gImRlZmF1bHQiKSA9PgogICB9KTsKIAogZGVzY3JpYmUoInByZXBhcmVkIG1vZGVsIHJ1bnRpbWUgcmVsb2FkIGF1dGggYWRvcHRpb24iLCAoKSA9PiB7CisgIGl0KCJvd25zIHF1ZXVlZCBhdXRoIHB1YmxpY2F0aW9uIGFmdGVyIHRoZSBlbWl0dGluZyBpbnZvY2F0aW9uIGNsb3NlcyIsIGFzeW5jICgpID0+IHsKKyAgICBhd2FpdCBzdGFydCgpOworICAgIGNvbnN0IGlucHV0ID0gZml4dHVyZS5hZ2VudElucHV0KCJkZWZhdWx0Iiwge30pOworICAgIGNvbnN0IG9yaWdpbmFsID0gYXdhaXQgcHJlcGFyZU1vZGVsUnVudGltZVNuYXBzaG90KGlucHV0KTsKKyAgICBjb25zdCBpbnN0YW5jZSA9IG5ldyBQbHVnaW5JbnN0YW5jZSgiYXV0aC1wdWJsaWNhdGlvbi1maXh0dXJlIik7CisgICAgY29uc3QgaW52b2NhdGlvbiA9IG5ldyBQbHVnaW5JbnZvY2F0aW9uU2NvcGUoY3JlYXRlRW1wdHlQbHVnaW5SZWdpc3RyeSgpLCBbaW5zdGFuY2VdKTsKKyAgICBjb25zdCBjcmVkZW50aWFsRGlzY292ZXJ5ID0gdmkuZm4oKCkgPT4gKHt9KSk7CisgICAgY29uc3QgZGlzY292ZXJDcmVkZW50aWFscyA9IGluc3RhbmNlLndyYXAoY3JlZGVudGlhbERpc2NvdmVyeSk7CisgICAgY29uc3QgcmV0YWluZWRDYWxsYmFjayA9IGludm9jYXRpb24ud3JhcChkaXNjb3ZlckNyZWRlbnRpYWxzKTsKKyAgICBjb25zdCBkcmFpbiA9IGJlZ2luUHJlcGFyZWRNb2RlbFJ1bnRpbWVQbHVnaW5EcmFpbigpOworICAgIGNvbnN0IGV2ZW50czogc3RyaW5nW10gPSBbXTsKKyAgICBjb25zdCB1bnJlZ2lzdGVyID0gcmVnaXN0ZXJQcmVwYXJlZE1vZGVsUnVudGltZVB1YmxpY2F0aW9uTGlzdGVuZXIoKGV2ZW50KSA9PiB7CisgICAgICBpZiAoZXZlbnQucGhhc2UgPT09ICJpbnZhbGlkYXRlZCIgfHwgZXZlbnQucGhhc2UgPT09ICJwdWJsaXNoZWQiIHx8IGV2ZW50LnBoYXNlID09PSAiZmFpbGVkIikgeworICAgICAgICBldmVudHMucHVzaChldmVudC5waGFzZSk7CisgICAgICB9CisgICAgfSk7CisgICAgLy8gS2VlcCB0aGUgcmVhbCBwbHVnaW4gY2FsbCBib3VuZGFyeSB3aGlsZSBmaXhpbmcgZXh0ZXJuYWwgY3JlZGVudGlhbCBkaXNjb3ZlcnkuCisgICAgbW9ja3MucmVzb2x2ZUFtYmllbnRDcmVkZW50aWFscy5tb2NrSW1wbGVtZW50YXRpb24oKCkgPT4gZGlzY292ZXJDcmVkZW50aWFscygpKTsKKyAgICBsZXQgcmVhZDogUmV0dXJuVHlwZTx0eXBlb2YgcHJlcGFyZU1vZGVsUnVudGltZVNuYXBzaG90PiB8IHVuZGVmaW5lZDsKKyAgICB0cnkgeworICAgICAgaW52b2NhdGlvbi5ydW4oKCkgPT4gbXV0YXRlKCkpOworICAgICAgaW52b2NhdGlvbi5yZWxlYXNlKCk7CisgICAgICBleHBlY3QoKCkgPT4gcmV0YWluZWRDYWxsYmFjaygpKS50b1Rocm93KCJQbHVnaW4gaW52b2NhdGlvbiBzY29wZSBpcyBjbG9zZWQiKTsKKyAgICAgIGV4cGVjdChvcmlnaW5hbC5pc0N1cnJlbnQoKSkudG9CZShmYWxzZSk7CisgICAgICBleHBlY3QoY3JlZGVudGlhbERpc2NvdmVyeSkubm90LnRvSGF2ZUJlZW5DYWxsZWQoKTsKKworICAgICAgcmVhZCA9IHByZXBhcmVNb2RlbFJ1bnRpbWVTbmFwc2hvdChpbnB1dCk7CisgICAgICB2b2lkIHJlYWQuY2F0Y2goKCkgPT4gdW5kZWZpbmVkKTsKKyAgICAgIGRyYWluLnJlbGVhc2UoKTsKKyAgICAgIGNvbnN0IHJlZnJlc2hlZCA9IGF3YWl0IHJlYWQuY2F0Y2goKGVycm9yOiB1bmtub3duKSA9PiB7CisgICAgICAgIHRocm93IG5ldyBFcnJvcihgQXV0aCBwdWJsaWNhdGlvbiBmYWlsZWQ7IHdhcm5pbmdzOiAke0pTT04uc3RyaW5naWZ5KG1vY2tzLndhcm4ubW9jay5jYWxscyl9YCwgeworICAgICAgICAgIGNhdXNlOiBlcnJvciwKKyAgICAgICAgfSk7CisgICAgICB9KTsKKyAgICAgIGV4cGVjdChyZWZyZXNoZWQpLm5vdC50b0JlKG9yaWdpbmFsKTsKKyAgICAgIGV4cGVjdChyZWZyZXNoZWQuaXNDdXJyZW50KCkpLnRvQmUodHJ1ZSk7CisgICAgICBleHBlY3Qob3JpZ2luYWwuaXNDdXJyZW50KCkpLnRvQmUoZmFsc2UpOworICAgICAgZXhwZWN0KGNyZWRlbnRpYWxEaXNjb3ZlcnkpLnRvSGF2ZUJlZW5DYWxsZWQoKTsKKyAgICAgIGV4cGVjdChhd2FpdCBsb2FkRGlzcGF0Y2goeyBhZ2VudElkOiAiZGVmYXVsdCIgfSkpLnRvTWF0Y2hPYmplY3QoeworICAgICAgICBhZ2VudElkOiAiZGVmYXVsdCIsCisgICAgICAgIGFnZW50RGlyOiBpbnB1dC5hZ2VudERpciwKKyAgICAgIH0pOworICAgICAgZXhwZWN0KGV2ZW50cykudG9FcXVhbChbImludmFsaWRhdGVkIiwgInB1Ymxpc2hlZCJdKTsKKyAgICAgIGV4cGVjdChtb2Nrcy53YXJuKS5ub3QudG9IYXZlQmVlbkNhbGxlZCgpOworICAgICAgZXhwZWN0KCgpID0+IHJldGFpbmVkQ2FsbGJhY2soKSkudG9UaHJvdygiUGx1Z2luIGludm9jYXRpb24gc2NvcGUgaXMgY2xvc2VkIik7CisgICAgfSBmaW5hbGx5IHsKKyAgICAgIGludm9jYXRpb24ucmVsZWFzZSgpOworICAgICAgZHJhaW4ucmVsZWFzZSgpOworICAgICAgYXdhaXQgUHJvbWlzZS5hbGxTZXR0bGVkKFtyZWFkXSk7CisgICAgICB1bnJlZ2lzdGVyKCk7CisgICAgICBhd2FpdCBpbnN0YW5jZS5kaXNwb3NlKCk7CisgICAgfQorICB9KTsKKwogICBpdCgicmVwdWJsaXNoZXMgYSBmYWlsZWQgYXV0aCBvd25lciBvbiB0aGUgbmV4dCBpbmJvdW5kIGRpc3BhdGNoIiwgYXN5bmMgKCkgPT4gewogICAgIGF3YWl0IHN0YXJ0KCk7CiAgICAgY29uc3QgZmFpbHVyZSA9IG5ldyBFcnJvcigiY29uZmlndXJlZCBtb2RlbCBwdWJsaWNhdGlvbiB0aW1lZCBvdXQiKTsK''
-        | base64 --decode | git apply -
-
-        echo ''387653ef52064be4ad224f38ed4d9baaec704d03a37030ebe9f4e0a4a5294d0c  src/agents/prepared-model-runtime.reload-auth.test.ts'' | sha256sum -c -
-
-        if [ "$VARIANT" = after ]; then
-
-        printf ''%s'' ''ZGlmZiAtLWdpdCBhL3NyYy9hZ2VudHMvcHJlcGFyZWQtbW9kZWwtcnVudGltZS50cyBiL3NyYy9hZ2VudHMvcHJlcGFyZWQtbW9kZWwtcnVudGltZS50cwppbmRleCA4ZTQ3MTcyMjMyMTUuLmQ5ZGE2M2MzMTIyOCAxMDA2NDQKLS0tIGEvc3JjL2FnZW50cy9wcmVwYXJlZC1tb2RlbC1ydW50aW1lLnRzCisrKyBiL3NyYy9hZ2VudHMvcHJlcGFyZWQtbW9kZWwtcnVudGltZS50cwpAQCAtMyw2ICszLDcgQEAgaW1wb3J0IHsgdG9TdHJpbmdpZmllZEVycm9yIH0gZnJvbSAiQG9wZW5jbGF3L25vcm1hbGl6YXRpb24tY29yZS9lcnJvci1jb2VyY2lvbiIKIGltcG9ydCB0eXBlIHsgT3BlbkNsYXdDb25maWcgfSBmcm9tICIuLi9jb25maWcvdHlwZXMub3BlbmNsYXcuanMiOwogaW1wb3J0IHsgcmVhZE9ubHlXb3JrZXJTY29wZSB9IGZyb20gIi4uL2luZnJhL3NxbGl0ZS1yZWFkb25seS13b3JrZXItY29udGV4dC5qcyI7CiBpbXBvcnQgeyBjcmVhdGVTdWJzeXN0ZW1Mb2dnZXIgfSBmcm9tICIuLi9sb2dnaW5nL3N1YnN5c3RlbS5qcyI7CitpbXBvcnQgeyBwbHVnaW5JbnZvY2F0aW9uQ29udGV4dCB9IGZyb20gIi4uL3BsdWdpbnMvcGx1Z2luLWluc3RhbmNlLXNjb3BlLmpzIjsKIGltcG9ydCB7IGdldFByZXBhcmVkU2hhcmVkQXV0aFN0b3JlT3duZXJzaGlwIH0gZnJvbSAiLi9hdXRoLXByb2ZpbGVzL3BhdGgtcmVzb2x2ZS5qcyI7CiBpbXBvcnQgeyByZWdpc3RlclJ1bnRpbWVBdXRoUHJvZmlsZVN0b3JlTXV0YXRpb25MaXN0ZW5lciB9IGZyb20gIi4vYXV0aC1wcm9maWxlcy9ydW50aW1lLXNuYXBzaG90cy5qcyI7CiBpbXBvcnQgdHlwZSB7IE1vZGVsQ2F0YWxvZ1NuYXBzaG90IH0gZnJvbSAiLi9tb2RlbC1jYXRhbG9nLnR5cGVzLmpzIjsKQEAgLTczNSw5ICs3MzYsOSBAQCBmdW5jdGlvbiBpbnZhbGlkYXRlRm9yQXV0aE11dGF0aW9uKGV2ZW50OiBQcmVwYXJlZE1vZGVsUnVudGltZUF1dGhNdXRhdGlvbik6IHZvaQogICAgIH0pOwogICB9OwogICAvLyBXYWl0IGZvciBwbHVnaW4gcmVwbGFjZW1lbnQgd2l0aG91dCBvY2N1cHlpbmcgaXRzIHF1ZXVlLiBQdWJsaWNhdGlvbiBvd25zIGl0cyByZWFkcwotICAvLyBhbmQgbXVzdCBvdXRsaXZlIHRoZSBhdXRoIGVtaXR0ZXIncyB0ZW1wb3JhcnkgU1FMaXRlIHJlYWRlciBzY29wZS4KLSAgY29uc3QgcHVibGljYXRpb24gPSByZWFkT25seVdvcmtlclNjb3BlLmV4aXQoKCkgPT4KLSAgICBtb2RlbFJ1bnRpbWVEcmFpbi5ydW5BZnRlcihwdWJsaWNhdGlvblF1ZXVlLCBwdWJsaXNoKSwKKyAgLy8gYW5kIHBsdWdpbiBjYWxscywgaW5kZXBlbmRlbnRseSBvZiB0aGUgYXV0aCBlbWl0dGVyJ3MgZmluaXRlIGludm9jYXRpb24gYW5kIHJlYWRlciBzY29wZXMuCisgIGNvbnN0IHB1YmxpY2F0aW9uID0gcGx1Z2luSW52b2NhdGlvbkNvbnRleHQuZXhpdCgoKSA9PgorICAgIHJlYWRPbmx5V29ya2VyU2NvcGUuZXhpdCgoKSA9PiBtb2RlbFJ1bnRpbWVEcmFpbi5ydW5BZnRlcihwdWJsaWNhdGlvblF1ZXVlLCBwdWJsaXNoKSksCiAgICk7CiAgIG5vdGlmeVByZXBhcmVkTW9kZWxSdW50aW1lUHVibGljYXRpb24oeyBwaGFzZTogImludmFsaWRhdGVkIiB9KTsKICAgdm9pZCBwdWJsaWNhdGlvbi5jYXRjaCgoZXJyb3I6IHVua25vd24pID0+IHsK''
-        | base64 --decode | git apply -
-
-        echo ''bb86276d4fd62a8733861c37d03c7b5f9290dd29cda26a0a0999be815c157701  src/agents/prepared-model-runtime.ts'' | sha256sum -c -
-
-        fi
-
-        git diff --binary > .artifacts/final-ci/overlay.patch
-
-        sha256sum src/agents/prepared-model-runtime.reload-auth.test.ts src/agents/prepared-model-runtime.ts > .artifacts/final-ci/overlay-sha256.txt'
-    - name: Exercise queued auth publication and retirement controls
-      shell: bash
-      run: "set -uo pipefail\nset +e\nif [ \"$VARIANT\" = before ]; then\n node scripts/test-projects.mts src/agents/prepared-model-runtime.reload-auth.test.ts -- --testNamePattern='owns queued auth publication after the emitting invocation closes' --reporter=default --reporter=json --outputFile=\"$GITHUB_WORKSPACE/.artifacts/final-ci/tests.json\" 2>&1 | tee .artifacts/final-ci/tests.log\n result=$?\nelse\n node scripts/test-projects.mts src/agents/prepared-model-runtime.reload-auth.test.ts src/agents/prepared-model-runtime.cancelled-admission.test.ts src/agents/prepared-model-runtime.auth-recovery.test.ts src/agents/prepared-model-runtime.plugin-drain.test.ts -- --reporter=default --reporter=json --outputFile=\"$GITHUB_WORKSPACE/.artifacts/final-ci/tests.json\" 2>&1 | tee .artifacts/final-ci/tests.log\n result=$?\nfi\nset -e\nprintf '%s' \"$result\" > .artifacts/final-ci/test-exit.txt\nnode --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\n\
-        const r=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\nconst tests=r.testResults.flatMap(s=>s.assertionResults).filter(t=>t.status==='passed'||t.status==='failed');\nconst regression=tests.filter(t=>t.fullName.includes('owns queued auth publication after the emitting invocation closes'));\nassert.equal(regression.length,1);\nconst exit=fs.readFileSync('.artifacts/final-ci/test-exit.txt','utf8').trim();\nif(process.env.VARIANT==='before') { assert.equal(tests.length,1); assert.equal(regression[0].status,'failed'); assert.ok(JSON.stringify(regression[0].failureMessages).includes('Plugin invocation scope is closed')); assert.equal(r.numRuntimeErrorTestSuites ?? 0,0); assert.equal(r.unhandledErrors?.length ?? 0,0); assert.notEqual(exit,'0'); }\nelse { assert.equal(regression[0].status,'passed'); assert.ok(tests.length>1); assert.ok(tests.every(t=>t.status==='passed')); assert.equal(r.numFailedTests,0); assert.equal(exit,'0'); }\nNODE"
-    - name: Targeted static proof
-      if: matrix.variant == 'after'
-      run: node scripts/check-changed.mjs -- src/agents/prepared-model-runtime.reload-auth.test.ts src/agents/prepared-model-runtime.ts
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: auth-publication-${{ matrix.variant }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: .artifacts/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 14
+      - name: Checkout reviewed diagnostic transport, not candidate code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/diagnostics/managed-startup
+      - name: Node 24.22.1 exactly
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.22.1
+          package-manager-cache: false
+      - name: Checkout pinned trusted package consumer
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 68aff7f864148760c3800c95435cc36ddaa91654
+          path: .package-consumer
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Verify and download immutable prepared bundle
+        id: prepared_bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREPARED_BUNDLE_JSON: '{"schema":"openclaw.prepared-npm-bundle/v1","source":{"sha":"a233af0b84e093845c62e88c2702cbd9b297f22c"},"artifact":{"id":"13990795798","name":"openclaw-npm-package-43315959396-1","digest":"39193ed65816266e2ea409508ff529dc618197a88983278f763de67b790c3c92","runId":"43315959396","runAttempt":"1"},"producer":{"repository":"openclaw/openclaw","workflowRef":"openclaw/openclaw/.github/workflows/full-release-artifacts.yml@refs/heads/release-ci/a233af0b84e0-15239718717656028761794520507436","workflowSha":"a233af0b84e093845c62e88c2702cbd9b297f22c","runId":"43315959396","runAttempt":"1","jobId":"131524096910","jobName":"Prepare npm artifacts / Prepare publishable npm package","producerWorkflowPath":".github/workflows/openclaw-npm-preflight.yml"},"manifestSha256":"0be06dcf3df3ef78b522f224428f6d2b62920ef39585b9dc48d3164dd3a50499","package":{"name":"openclaw","fileName":"openclaw-2026.11.4.tgz","sha256":"ba6190966e8caa741ea238a6759ccdc45e4db664b404b29f61f2611b5c5e9948","version":"2026.11.4","sourceSha":"a233af0b84e093845c62e88c2702cbd9b297f22c"},"corePackages":[{"packageName":"@openclaw/ai","packageVersion":"2026.11.4","tarballName":"openclaw-ai-2026.11.4.tgz","tarballSha256":"b9271eb9fc9ef8def0606cf6a633d1906f163cc2756f9b1b4b141ef2d7dca89e"},{"packageName":"@openclaw/gateway-protocol","packageVersion":"2026.11.4","tarballName":"openclaw-gateway-protocol-2026.11.4.tgz","tarballSha256":"9041fb6fc0c482c5344a7945f58e6bb076f7b402dae2549a043b0e387d3f61e7"},{"packageName":"@openclaw/gateway-client","packageVersion":"2026.11.4","tarballName":"openclaw-gateway-client-2026.11.4.tgz","tarballSha256":"7849b97c41450df432bf4994ceb0adb704cdbb3a36b48d84ab210d8be8cfa78c"}]}'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git -C .package-consumer rev-parse HEAD)" == 68aff7f864148760c3800c95435cc36ddaa91654 ]]
+          mkdir -p "$RUNNER_TEMP/allocation-input" "$RUNNER_TEMP/allocation-evidence"
+          printf '%s\n' "$PREPARED_BUNDLE_JSON" > "$RUNNER_TEMP/allocation-input/descriptor.json"
+          node .package-consumer/scripts/npm-prepared-bundle.mjs download \
+            --descriptor "$RUNNER_TEMP/allocation-input/descriptor.json" \
+            --repository openclaw/openclaw --source-sha "$CANDIDATE" --tooling-sha "$CANDIDATE" \
+            --output-dir "$RUNNER_TEMP/allocation-input/bundle" --npm-dist-tag beta
+          cp "$RUNNER_TEMP/allocation-input/descriptor.json" "$RUNNER_TEMP/allocation-evidence/descriptor.json"
+      - name: Install exact core bundle in credentialless disposable prefix
+        env:
+          PREPARED_TARBALL: ${{ steps.prepared_bundle.outputs.tarball_path }}
+          CORE_TARBALL_DIR: ${{ steps.prepared_bundle.outputs.core_tarball_dir }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(node -p process.version)" == v24.22.1 ]]
+          mkdir -p "$RUNNER_TEMP/allocation-install-home" "$RUNNER_TEMP/allocation-install"
+          # npm direct file dependencies match the packed-install contract in release-check.ts.
+          # All four paths came from the digest/identity-verified canonical bundle consumer.
+          env -i HOME="$RUNNER_TEMP/allocation-install-home" PATH="$PATH" \
+            npm install --prefix "$RUNNER_TEMP/allocation-install" --omit=dev --no-audit --no-fund \
+            "$PREPARED_TARBALL" "$CORE_TARBALL_DIR"/*.tgz
+      - name: Capture first five seconds after Kova-compatible readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          # No linger change, user-manager restart or fallback to system scope.
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          systemctl --user show-environment >/dev/null
+          sha256sum .github/diagnostics/managed-startup/* > "$RUNNER_TEMP/allocation-evidence/diagnostic-sha256.txt"
+          bash .github/diagnostics/managed-startup/run.sh \
+            "$RUNNER_TEMP/allocation-install/node_modules/openclaw" "$RUNNER_TEMP/allocation-evidence"
+      - name: Upload numeric evidence only, even if incomplete
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: managed-allocation-a233af0b84e0-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/allocation-evidence/
+          if-no-files-found: error
+          retention-days: 7
