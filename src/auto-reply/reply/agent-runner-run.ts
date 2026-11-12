@@ -61,7 +61,7 @@ import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
 import * as replyRunState from "./reply-operation-run-state.js";
-import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { bindQueuedFollowupTyping, bindReplyOperationTyping } from "./reply-run-typing.js";
 import { enqueueReplySourceAdmission } from "./reply-source-admission.js";
 import { bindReplySourceToFollowup, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
@@ -300,6 +300,7 @@ export async function runReplyAgent(
     });
     if (activeRunQueueAction === "enqueue-followup") {
       bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
+      const holdQueuedTyping = bindQueuedFollowupTyping(followupRun, typing, typingSignals);
       const enqueued = await enqueueReplySourceAdmission({
         options: explicitFollowup ? opts : undefined,
         input: controllerInput,
@@ -368,11 +369,7 @@ export async function runReplyAgent(
       }
       const queuedBehindActiveRun = (await isRunActive?.()) === true;
       await touchActiveSessionEntry();
-      if (queuedBehindActiveRun) {
-        await typingSignals.signalToolStart();
-      } else {
-        typing.cleanup();
-      }
+      await holdQueuedTyping(queuedBehindActiveRun, opts?.onTypingHandoff);
       return undefined;
     }
 
