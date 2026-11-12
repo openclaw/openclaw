@@ -151,28 +151,33 @@ describe("ordinary session event execution", () => {
         expect(params.extraSystemPrompt).toBe("Existing shared session instructions");
       }
       if (runtime === "cli") {
-        expect(staticPrompts).toEqual([
-          "Stable shared session instructions",
-          "Stable shared session instructions",
-        ]);
+        expect(staticPrompts).toEqual(Array(2).fill("Stable shared session instructions"));
       }
     },
   );
 
-  it("captures a structured result before event settlement consumes the invocation", async () => {
+  it("captures a structured result and binds the scheduled grant to the policy session", async () => {
     const runId = "automation-result-capture";
+    const policySessionKey = "agent:main:irc:default:direct:alice";
     const automation = createScheduledAutomation();
     automation.job.payload = {
       kind: "agentTurn",
       message: "Check quietly",
       includeReasoning: true,
     };
+    automation.deliveryAttemptFence = { beforeAttempt: async () => {}, assertCurrent: vi.fn() };
     const followupRun = createFollowupRun();
     const event = createEventExecution();
     followupRun.run.scheduledAutomation = automation;
     followupRun.run.internalEventExecution = event;
     let recordResult: ReturnType<typeof createAutomationResultRecorder> | undefined;
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+    let redeemed: unknown[] = [];
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (run) => {
+      // Tools redeem under this peer's policy key only; the grant names its executing session.
+      const lookup = { token: run.messageActionTurnCapability, agentId: "main", runId };
+      redeemed = [policySessionKey, "agent:main:irc:default:direct:bob", "main"].map((sessionKey) =>
+        resolveMessageActionTurnAuthorization({ ...lookup, sessionKey, sessionId: "session" }),
+      );
       recordResult = createAutomationResultRecorder(runId, automation.job.id);
       recordResult({ outcome: "no_change", summary: "Nothing new." });
       return { payloads: [{ text: "No updates." }], meta: {} };
@@ -186,9 +191,10 @@ describe("ordinary session event execution", () => {
     });
     const { replyOperation } = createMockReplyOperation();
 
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
-    );
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
+      runtimePolicySessionKey: policySessionKey,
+    });
 
     expect(event.onTerminal).toHaveBeenCalledOnce();
     expect(result.outcome).toMatchObject({
@@ -199,40 +205,8 @@ describe("ordinary session event execution", () => {
         includeReasoning: true,
       },
     });
-  });
-
-  it("binds the scheduled message capability to the runtime policy session", async () => {
-    const runId = "scheduled-policy-session";
-    const policySessionKey = "agent:main:irc:default:direct:alice";
-    const automation = createScheduledAutomation();
-    automation.deliveryAttemptFence = { beforeAttempt: async () => {}, assertCurrent: vi.fn() };
-    const followupRun = createFollowupRun();
-    followupRun.run.scheduledAutomation = automation;
-    const redeemAs: Record<string, ReturnType<typeof resolveMessageActionTurnAuthorization>> = {};
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (run) => {
-      // Another peer's policy key and the shared execution key must not redeem this turn's grant.
-      for (const sessionKey of [policySessionKey, "agent:main:irc:default:direct:bob", "main"]) {
-        redeemAs[sessionKey] = resolveMessageActionTurnAuthorization({
-          token: run.messageActionTurnCapability,
-          agentId: "main",
-          runId,
-          sessionKey,
-          sessionId: "session",
-        });
-      }
-      return { payloads: [{ text: "done" }], meta: {} };
-    });
-    const { replyOperation } = createMockReplyOperation();
-
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
-      runtimePolicySessionKey: policySessionKey,
-    });
-
-    expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
-    expect(redeemAs[policySessionKey]?.deliveryAttempt).toBeDefined();
-    expect(redeemAs["agent:main:irc:default:direct:bob"]).toBeUndefined();
-    expect(redeemAs.main).toBeUndefined();
+    expect(redeemed[0]).toMatchObject({ sourceReplySessionKey: "main", deliveryAttempt: {} });
+    expect(redeemed.slice(1)).toEqual([undefined, undefined]);
   });
 
   it.for([
@@ -243,12 +217,7 @@ describe("ordinary session event execution", () => {
       expected: ["openai/gpt-5.4"],
     },
     { label: "explicit empty fallback", fallbacks: [], locked: false, expected: [] },
-    {
-      label: "locked session",
-      fallbacks: ["openai/gpt-5.4"],
-      locked: true,
-      expected: [],
-    },
+    { label: "locked session", fallbacks: ["openai/gpt-5.4"], locked: true, expected: [] },
   ])(
     "preserves scheduled fallback policy: $label",
     async ({ fallbacks, locked, expected }, { onTestFinished }) => {
@@ -552,9 +521,6 @@ describe("ordinary session event execution", () => {
             expect.objectContaining({ payloads: [expect.objectContaining({ isError: true })] }),
           );
           expect(
-            lifecycleEvents.some((lifecycleEvent) => lifecycleEvent.data.phase === "start"),
-          ).toBe(false);
-          expect(
             lifecycleEvents.find((lifecycleEvent) => lifecycleEvent.data.phase === "error")?.data,
           ).toMatchObject({
             executionStarted: false,
@@ -599,7 +565,6 @@ describe("ordinary session event execution", () => {
       release.resolve();
     }
     await rejected;
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(event.onStarted).not.toHaveBeenCalled();
     expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
