@@ -76,7 +76,13 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
           ...(proxyAgent ? { agent: proxyAgent } : {}),
         });
       },
-      capture: runtime.captureWsEventAsync,
+      capture: async (event) => {
+        try {
+          await runtime.captureWsEventAsync(event);
+        } catch {
+          // Diagnostic capture is optional and must never block provider transport.
+        }
+      },
       onOpen: () => {
         this.resetRealtimeSessionState();
         this.sendSessionUpdate();

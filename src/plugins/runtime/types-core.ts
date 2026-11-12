@@ -151,7 +151,13 @@ export type PluginRuntimeCore = {
     ) => PluginRuntimeThinkingPolicy;
     /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
     runCommandFromIngress: (
-      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      opts: import("../../agents/command/types.js").AgentCommandIngressOpts & {
+        /** Trusted channel-owned sink for a yielded subagent cohort's eventual final. */
+        requesterFinal?: {
+          append: (text: string) => boolean;
+          onPromoted?: () => void;
+        };
+      },
       runtime: import("../../runtime.js").RuntimeEnv,
     ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: (

@@ -23,11 +23,12 @@ type RequesterFinalAttachment = {
   lifecycleGeneration: string;
   expiresAt: number;
   append: (text: string) => boolean;
+  onPromoted?: () => void;
   batch?: RequesterFinalAttachmentBatch;
 };
 
 type RequesterFinalAttachmentState = {
-  byOwner: Map<string, RequesterFinalAttachment>;
+  byOwner: Map<string, RequesterFinalAttachment[]>;
 };
 
 const state = resolveGlobalSingleton<RequesterFinalAttachmentState>(
@@ -44,36 +45,60 @@ function sameRunIds(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((runId, index) => runId === right[index]);
 }
 
+function matchesAttachment(
+  attachment: RequesterFinalAttachment,
+  params: Partial<RequesterFinalAttachmentBatch> & {
+    requesterSessionId?: string;
+    requesterTurnRunId?: string;
+  },
+): boolean {
+  return (
+    (params.requesterSessionId === undefined ||
+      attachment.requesterSessionId === params.requesterSessionId) &&
+    (params.requesterTurnRunId === undefined ||
+      attachment.requesterTurnRunId === params.requesterTurnRunId) &&
+    (params.batchRunIds === undefined ||
+      (attachment.batch !== undefined &&
+        sameRunIds(attachment.batch.batchRunIds, params.batchRunIds.toSorted()))) &&
+    (params.rearmGeneration === undefined ||
+      attachment.batch?.rearmGeneration === params.rearmGeneration)
+  );
+}
+
 function getCurrentAttachment(
   params: RequesterFinalAttachmentOwner &
     Partial<RequesterFinalAttachmentBatch> & {
       requesterSessionId?: string;
+      requesterTurnRunId?: string;
     },
 ): RequesterFinalAttachment | undefined {
   const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
-  const attachment = state.byOwner.get(key);
-  if (!attachment) {
+  const attachments = state.byOwner.get(key);
+  if (!attachments) {
     return undefined;
   }
-  if (
-    attachment.expiresAt <= Date.now() ||
-    attachment.lifecycleGeneration !== getAgentEventLifecycleGeneration()
-  ) {
+  const current = attachments.filter(
+    (attachment) =>
+      attachment.expiresAt > Date.now() &&
+      attachment.lifecycleGeneration === getAgentEventLifecycleGeneration(),
+  );
+  if (current.length === 0) {
     state.byOwner.delete(key);
     return undefined;
   }
-  if (
-    (params.requesterSessionId !== undefined &&
-      attachment.requesterSessionId !== params.requesterSessionId) ||
-    (params.batchRunIds !== undefined &&
-      (!attachment.batch ||
-        !sameRunIds(attachment.batch.batchRunIds, params.batchRunIds.toSorted()))) ||
-    (params.rearmGeneration !== undefined &&
-      attachment.batch?.rearmGeneration !== params.rearmGeneration)
-  ) {
-    return undefined;
+  if (current.length !== attachments.length) {
+    state.byOwner.set(key, current);
   }
-  return attachment;
+  return current.find((attachment) => matchesAttachment(attachment, params));
+}
+
+function deleteAttachment(key: string, attachment: RequesterFinalAttachment): void {
+  const remaining = state.byOwner.get(key)?.filter((candidate) => candidate !== attachment) ?? [];
+  if (remaining.length > 0) {
+    state.byOwner.set(key, remaining);
+  } else {
+    state.byOwner.delete(key);
+  }
 }
 
 export function registerRequesterFinalAttachment(
@@ -83,8 +108,10 @@ export function registerRequesterFinalAttachment(
     lifecycleGeneration: string;
     timeoutMs: number;
     append: (text: string) => boolean;
+    onPromoted?: () => void;
   },
 ): {
+  updateSessionId: (requesterSessionId: string) => boolean;
   releaseProvisional: () => void;
   revoke: () => void;
 } {
@@ -95,15 +122,35 @@ export function registerRequesterFinalAttachment(
     lifecycleGeneration: params.lifecycleGeneration,
     expiresAt: Date.now() + Math.min(params.timeoutMs, REQUESTER_FINAL_ATTACHMENT_MAX_TTL_MS),
     append: params.append,
+    onPromoted: params.onPromoted,
   };
-  state.byOwner.set(key, attachment);
+  state.byOwner.set(key, [
+    ...(state.byOwner.get(key) ?? []).filter(
+      (current) => current.requesterTurnRunId !== params.requesterTurnRunId,
+    ),
+    attachment,
+  ]);
   const deleteIfCurrent = (requireProvisional: boolean) => {
-    const current = state.byOwner.get(key);
-    if (current === attachment && (!requireProvisional || !current.batch)) {
-      state.byOwner.delete(key);
+    if (
+      state.byOwner.get(key)?.includes(attachment) &&
+      (!requireProvisional || !attachment.batch)
+    ) {
+      deleteAttachment(key, attachment);
     }
   };
   return {
+    updateSessionId: (requesterSessionId) => {
+      const current = getCurrentAttachment({
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterTurnRunId: params.requesterTurnRunId,
+      });
+      if (current !== attachment) {
+        return false;
+      }
+      attachment.requesterSessionId = requesterSessionId;
+      return true;
+    },
     releaseProvisional: () => deleteIfCurrent(true),
     revoke: () => deleteIfCurrent(false),
   };
@@ -118,14 +165,23 @@ export function promoteRequesterFinalAttachment(
   const attachment = getCurrentAttachment({
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
+    requesterTurnRunId: params.requesterTurnRunId,
   });
-  if (!attachment || attachment.requesterTurnRunId !== params.requesterTurnRunId) {
+  if (!attachment) {
     return false;
   }
+  const wasPromoted = attachment.batch !== undefined;
   attachment.batch = {
     batchRunIds: params.batchRunIds.toSorted(),
     rearmGeneration: params.rearmGeneration,
   };
+  if (!wasPromoted) {
+    try {
+      attachment.onPromoted?.();
+    } catch {
+      // Promotion remains durable even when an optional host observer has retired.
+    }
+  }
   return true;
 }
 
@@ -136,7 +192,13 @@ export function transferRequesterFinalAttachment(
       requesterTurnRunId: string;
     },
 ): boolean {
-  const attachment = getCurrentAttachment(params);
+  const attachment = getCurrentAttachment({
+    requesterAgentId: params.requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+    requesterSessionId: params.requesterSessionId,
+    batchRunIds: params.batchRunIds,
+    rearmGeneration: params.rearmGeneration,
+  });
   if (!attachment) {
     return false;
   }
@@ -155,7 +217,13 @@ export function revokeRequesterFinalAttachment(
   if (!getCurrentAttachment(params)) {
     return false;
   }
-  state.byOwner.delete(key);
+  const current = state.byOwner.get(key) ?? [];
+  const remaining = current.filter((attachment) => !matchesAttachment(attachment, params));
+  if (remaining.length === 0) {
+    state.byOwner.delete(key);
+  } else {
+    state.byOwner.set(key, remaining);
+  }
   return true;
 }
 
@@ -199,7 +267,7 @@ export function finalizeRequesterFinalAttachment(params: {
     return;
   }
   // Claim before invoking provider code so replay and callback failure cannot double-append.
-  state.byOwner.delete(ownerKey(requesterAgentId, params.requesterSessionKey));
+  deleteAttachment(ownerKey(requesterAgentId, params.requesterSessionKey), attachment);
   try {
     attachment.append(text);
   } catch {

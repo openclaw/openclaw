@@ -57,6 +57,10 @@ export type VoiceRealtimeAgentTurnParams = {
   toolsAllow?: string[];
   userId: string;
   isCurrent: () => boolean;
+  requesterFinal?: {
+    append: (text: string) => boolean;
+    onPromoted?: () => void;
+  };
   signal?: AbortSignal;
   voiceSelection?: import("openclaw/plugin-sdk/realtime-voice").RealtimeVoiceSelectionHandle;
 };

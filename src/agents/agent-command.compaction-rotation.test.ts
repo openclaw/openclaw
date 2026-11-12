@@ -27,6 +27,10 @@ import {
 } from "./agent-command.compaction.test-support.js";
 import type { CompactionAccountingFact } from "./embedded-agent-runner/run/internal-params.js";
 import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
+import {
+  finalizeRequesterFinalAttachment,
+  promoteRequesterFinalAttachment,
+} from "./subagents/requester-final-attachment.js";
 
 const {
   acceptCompactionSuccessor,
@@ -167,6 +171,121 @@ async function commitAttemptCompaction(
 }
 
 describe("agentCommand compaction transcript rotation", () => {
+  it("keeps a yielded requester final attached after preflight compaction", async () => {
+    const sessionId = "requester-final-predecessor";
+    const successorSessionId = "requester-final-successor";
+    const sessionKey = "agent:main:discord:requester-final-compaction";
+    const requesterTurnRunId = "requester-run";
+    const batchRunIds = ["delegated-run"];
+    const rearmGeneration = 1;
+    const storePath = requireStorePath();
+    const target = { agentId: "main", sessionKey, storePath };
+    const append = vi.fn(() => true);
+    const onPromoted = vi.fn();
+
+    await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
+    state.runSessionPreflightCompactionMock.mockImplementationOnce(async (params) => {
+      const entry = expectDefined(loadSessionEntry(target), "preflight predecessor");
+      const accepted = await acceptCompactionSuccessor({
+        currentTarget: { ...target, sessionId: entry.sessionId },
+        currentSessionFile: sessionKey,
+        expectedEntry: {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          activeWriterRunId: entry.activeWriterRunId,
+        },
+        assertActive: () => {},
+        result: {
+          ok: true,
+          compacted: true,
+          result: { sessionId: successorSessionId, tokensBefore: 120, tokensAfter: 42 },
+        },
+      });
+      params.onCompactionCommitted?.(accepted);
+      return accepted.entry;
+    });
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      expect(params.sessionId).toBe(successorSessionId);
+      expect(
+        promoteRequesterFinalAttachment({
+          requesterAgentId: "main",
+          requesterSessionKey: sessionKey,
+          requesterTurnRunId,
+          batchRunIds,
+          rearmGeneration,
+        }),
+      ).toBe(true);
+      return makeResult({ sessionId: successorSessionId, text: "delegation yielded" });
+    });
+
+    await agentCommand({
+      ...discordTurn(sessionId, sessionKey),
+      deliver: false,
+      runId: requesterTurnRunId,
+      requesterFinal: { append, onPromoted },
+    });
+    finalizeRequesterFinalAttachment({
+      requesterAgentId: "main",
+      requesterSessionKey: sessionKey,
+      requesterSessionId: successorSessionId,
+      batchRunIds,
+      rearmGeneration,
+      requesterYieldBatch: true,
+      pause: false,
+      delivered: true,
+      finalAssistantVisibleText: "delegated answer",
+    });
+
+    expect(onPromoted).toHaveBeenCalledOnce();
+    expect(append).toHaveBeenCalledExactlyOnceWith("delegated answer");
+  });
+
+  it("keeps a yielded requester final attached after in-run compaction", async () => {
+    const sessionId = "requester-final-in-run-predecessor";
+    const sessionKey = "agent:main:discord:requester-final-in-run-compaction";
+    const requesterTurnRunId = "requester-in-run";
+    const batchRunIds = ["delegated-in-run"];
+    const rearmGeneration = 1;
+    const append = vi.fn(() => true);
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath: requireStorePath() },
+      { sessionId, updatedAt: 1 },
+    );
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      await commitAttemptCompaction(params);
+      expect(
+        promoteRequesterFinalAttachment({
+          requesterAgentId: "main",
+          requesterSessionKey: sessionKey,
+          requesterTurnRunId,
+          batchRunIds,
+          rearmGeneration,
+        }),
+      ).toBe(true);
+      return makeResult({ sessionId: "rotated-session", text: "delegation yielded" });
+    });
+
+    await agentCommand({
+      ...discordTurn(sessionId, sessionKey),
+      deliver: false,
+      runId: requesterTurnRunId,
+      requesterFinal: { append },
+    });
+    finalizeRequesterFinalAttachment({
+      requesterAgentId: "main",
+      requesterSessionKey: sessionKey,
+      requesterSessionId: "rotated-session",
+      batchRunIds,
+      rearmGeneration,
+      requesterYieldBatch: true,
+      pause: false,
+      delivered: true,
+      finalAssistantVisibleText: "delegated in-run answer",
+    });
+
+    expect(append).toHaveBeenCalledExactlyOnceWith("delegated in-run answer");
+  });
+
   it("admits an actor-bound command and persists its transcript through final delivery", async () => {
     const cfg = expectDefined(state.cfg, "command fixture config");
     const sessionId = "actor-command";

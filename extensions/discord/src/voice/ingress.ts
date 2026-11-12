@@ -92,6 +92,10 @@ export async function runDiscordVoiceAgentTurn(params: {
   runtime: RuntimeEnv;
   context: DiscordVoiceIngressContext;
   toolsAllow?: string[];
+  requesterFinal?: {
+    append: (text: string) => boolean;
+    onPromoted?: () => void;
+  };
   voiceSelection?: RealtimeVoiceSelectionHandle;
   signal?: AbortSignal;
 }): Promise<string | null> {
@@ -136,6 +140,7 @@ export async function runDiscordVoiceAgentTurn(params: {
         model: voiceModel,
         toolsAllow: params.toolsAllow,
         deliver: false,
+        requesterFinal: params.requesterFinal,
         ...(runId ? { runId } : {}),
         ...(params.signal ? { abortSignal: params.signal } : {}),
       },

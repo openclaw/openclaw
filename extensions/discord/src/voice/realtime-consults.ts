@@ -40,8 +40,13 @@ const CANCELLED_CONSULT_RESULT = {
   message: "OpenClaw cancelled this consult before completion. Do not restart it.",
 } satisfies AgentProxyConsultResult;
 
+const DEFERRED_CONSULT_RESULT = {
+  status: "deferred",
+  message: "OpenClaw will deliver the delegated final separately. Do not speak a response.",
+};
+
 type AgentProxyConsultResult =
-  | { text: string }
+  | { text: string; requesterFinalPromoted: boolean }
   | ReturnType<typeof buildRealtimeVoiceAgentErrorProviderResult>;
 
 type AgentProxyProviderDelivery = ReturnType<typeof createDeferred<void>> & {
@@ -131,7 +136,7 @@ export class DiscordRealtimeConsults {
     if (!context) {
       throw new Error("No Discord speaker context available");
     }
-    const text = await this.runAgentTurn({
+    const result = await this.runAgentTurn({
       context,
       message: request.prompt,
       signal: request.signal,
@@ -140,7 +145,7 @@ export class DiscordRealtimeConsults {
     if (this.params.stopped() && this.detachedProviderEpoch === undefined) {
       throw new Error("Discord realtime speaker session is closed");
     }
-    return { text };
+    return { text: result.text };
   }
 
   async handleToolCall(
@@ -348,16 +353,17 @@ export class DiscordRealtimeConsults {
       fallbackText: DISCORD_REALTIME_FALLBACK_TEXT,
       consult: async ({ question, responseStyle, metadata }) => {
         const context = isDiscordRealtimeSpeakerContext(metadata) ? metadata : undefined;
+        const result = await this.runAgentTurn({
+          context,
+          message: formatVoiceIngressPrompt(
+            [question, responseStyle ? `Spoken style: ${responseStyle}` : undefined]
+              .filter(Boolean)
+              .join("\n\n"),
+            context?.speakerLabel ?? "Discord voice speaker",
+          ),
+        });
         return {
-          text: await this.runAgentTurn({
-            context,
-            message: formatVoiceIngressPrompt(
-              [question, responseStyle ? `Spoken style: ${responseStyle}` : undefined]
-                .filter(Boolean)
-                .join("\n\n"),
-              context?.speakerLabel ?? "Discord voice speaker",
-            ),
-          }),
+          text: result.text,
         };
       },
       deliver: (text) => this.params.playback.enqueueExactSpeechMessage(text),
@@ -384,25 +390,43 @@ export class DiscordRealtimeConsults {
     message: string;
     signal?: AbortSignal;
     deliveryOwner?: "consult";
-  }): Promise<string> {
+  }): Promise<{ text: string; requesterFinalPromoted: boolean }> {
     const context = params.context;
     if (!context) {
-      return "";
+      return { text: "", requesterFinalPromoted: false };
     }
     const providerEpoch = this.params.providerEpoch();
+    let requesterFinalPromoted = false;
+    const requesterFinal = {
+      append: (text: string) => {
+        if (
+          !text.trim() ||
+          this.params.stopped() ||
+          providerEpoch !== this.params.providerEpoch()
+        ) {
+          return false;
+        }
+        this.params.playback.enqueueExactSpeechMessage(text);
+        return true;
+      },
+      onPromoted: () => {
+        requesterFinalPromoted = true;
+      },
+    };
     const text = await this.params.runAgentTurn({
       context,
       message: params.message,
       toolsAllow: this.params.consultToolsAllow(),
       userId: context.userId,
       isCurrent: () => !this.params.stopped() && providerEpoch === this.params.providerEpoch(),
+      requesterFinal,
       ...(params.signal ? { signal: params.signal } : {}),
     });
     params.signal?.throwIfAborted();
     if (params.deliveryOwner !== "consult" && this.detachedProviderEpoch === providerEpoch) {
       this.params.playback.deliverRetainedSpeech(text);
     }
-    return text;
+    return { text, requesterFinalPromoted };
   }
 
   private prepareForcedAgentProxyConsult(
@@ -483,14 +507,14 @@ export class DiscordRealtimeConsults {
 
   private trackAgentProxyConsult(
     recent: AgentProxyConsultHandle | undefined,
-    promise: Promise<string>,
+    promise: Promise<{ text: string; requesterFinalPromoted: boolean }>,
   ): Promise<AgentProxyConsultResult> {
     const state = recent?.context;
     if (recent) {
       this.params.harness.forcedConsults.markStarted(recent);
     }
     const tracked = promise
-      .then((text) => ({ text }), buildRealtimeVoiceAgentErrorProviderResult)
+      .then((result) => result, buildRealtimeVoiceAgentErrorProviderResult)
       .then((result) => {
         if (state) {
           state.result = result;
@@ -602,7 +626,8 @@ export class DiscordRealtimeConsults {
     result: AgentProxyConsultResult,
     alreadyDelivered = false,
   ): Promise<void> {
-    const terminal = "status" in result || alreadyDelivered;
+    const deferred = "text" in result && result.requesterFinalPromoted && !result.text.trim();
+    const terminal = "status" in result || alreadyDelivered || deferred;
     const payload =
       "status" in result
         ? CANCELLED_CONSULT_RESULT
@@ -611,7 +636,11 @@ export class DiscordRealtimeConsults {
               status: "already_delivered",
               message: "OpenClaw already delivered this answer to Discord voice. Do not repeat it.",
             }
-          : result;
+          : deferred
+            ? DEFERRED_CONSULT_RESULT
+            : "text" in result
+              ? { text: result.text }
+              : result;
     // Unsupported suppression still needs a terminal payload that prevents replay.
     if (terminal && session.bridge.supportsToolResultSuppression !== false) {
       await session.submitToolResult(callId, payload, { suppressResponse: true });

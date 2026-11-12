@@ -1,6 +1,8 @@
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { pluginInstanceInvocation } from "../../../plugins/plugin-instance-invocation.js";
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
   SUBAGENT_KILL_TASK_ERROR,
@@ -150,23 +152,29 @@ export async function emitSubagentEndedHookOnce(params: {
     if (!hookRunner?.hasHooks("subagent_ended")) {
       return false;
     }
-    await hookRunner.runSubagentEnded(
-      {
-        targetSessionKey: params.entry.childSessionKey,
-        targetKind: SUBAGENT_TARGET_KIND_SUBAGENT,
-        reason: params.reason,
-        sendFarewell: params.sendFarewell,
-        accountId: params.accountId,
-        runId: params.entry.runId,
-        endedAt: params.entry.execution.endedAt,
-        outcome: params.outcome,
-        error: params.error,
-      },
-      {
-        runId: params.entry.runId,
-        childSessionKey: params.entry.childSessionKey,
-        requesterSessionKey: params.entry.requesterSessionKey,
-      },
+    // Terminal completion may inherit the requester plugin's already-closed scope.
+    // Dispatch from host scope so the selected current hook opens its exact owner.
+    await pluginInvocationContext.exit(() =>
+      pluginInstanceInvocation.exit(() =>
+        hookRunner.runSubagentEnded(
+          {
+            targetSessionKey: params.entry.childSessionKey,
+            targetKind: SUBAGENT_TARGET_KIND_SUBAGENT,
+            reason: params.reason,
+            sendFarewell: params.sendFarewell,
+            accountId: params.accountId,
+            runId: params.entry.runId,
+            endedAt: params.entry.execution.endedAt,
+            outcome: params.outcome,
+            error: params.error,
+          },
+          {
+            runId: params.entry.runId,
+            childSessionKey: params.entry.childSessionKey,
+            requesterSessionKey: params.entry.requesterSessionKey,
+          },
+        ),
+      ),
     );
     await params.recordEmitted();
     return true;

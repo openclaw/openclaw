@@ -24,13 +24,17 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   createDebugProxyWebSocketAgent: () => mocks.proxyAgent,
 }));
 
-describe.each(["present", "rejected"])("async capture %s", (capture) => {
+describe.each(["present", "rejected", "throws"])("capture %s", (capture) => {
   beforeEach(() => {
     vi.resetModules();
     FakeWebSocket.instances = [];
     mocks.capture.mockReset().mockResolvedValue(undefined);
     if (capture === "rejected") {
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
+    } else if (capture === "throws") {
+      mocks.capture.mockImplementation(() => {
+        throw new Error("diagnostic scope closed");
+      });
     }
   });
 
@@ -69,27 +73,29 @@ describe.each(["present", "rejected"])("async capture %s", (capture) => {
     );
   });
 
-  it("preserves Live session input and graceful close", async () => {
-    const { createHarness, sentEvents } =
-      await import("./realtime-quicksilver-bridge.test-support.js");
-    const harness = createHarness({ model: "gpt-live-1" });
-    try {
-      await harness.bridge.connect();
-      expect(harness.onReady).toHaveBeenCalledOnce();
-      harness.bridge.sendUserMessage("Hello");
-      expect(sentEvents(harness.socket)).toContainEqual({
-        type: "session.commentary.append",
-        delegation_id: null,
-        content: "Hello",
-      });
-      harness.socket.serverEvent(transcript("Spoken words"));
-      expect(harness.onTranscript).toHaveBeenCalledWith("user", "Spoken words", false);
-    } finally {
-      const closing = harness.bridge.close();
-      harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-      await closing;
-    }
-    expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("completed");
-    expect(harness.onError).not.toHaveBeenCalled();
-  });
+  if (capture !== "throws") {
+    it("preserves Live session input and graceful close", async () => {
+      const { createHarness, sentEvents } =
+        await import("./realtime-quicksilver-bridge.test-support.js");
+      const harness = createHarness({ model: "gpt-live-1" });
+      try {
+        await harness.bridge.connect();
+        expect(harness.onReady).toHaveBeenCalledOnce();
+        harness.bridge.sendUserMessage("Hello");
+        expect(sentEvents(harness.socket)).toContainEqual({
+          type: "session.commentary.append",
+          delegation_id: null,
+          content: "Hello",
+        });
+        harness.socket.serverEvent(transcript("Spoken words"));
+        expect(harness.onTranscript).toHaveBeenCalledWith("user", "Spoken words", false);
+      } finally {
+        const closing = harness.bridge.close();
+        harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
+        await closing;
+      }
+      expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      expect(harness.onError).not.toHaveBeenCalled();
+    });
+  }
 });
