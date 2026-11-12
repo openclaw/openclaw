@@ -527,8 +527,10 @@ describe("CLI transcript account boundary", () => {
 
   it("an empty reset after more history than the bounded read still starts fresh", async () => {
     const f = await seededFixture();
+    const appendAsync = (content: string) =>
+      f.manager().appendMessageAsync({ role: "user", content, timestamp: 2 });
     for (let index = 0; index < 120; index += 1) {
-      append(f, `A long history ${index}`);
+      await appendAsync(`A long history ${index}`);
     }
     const kept = f.manager().getLeafId() ?? undefined;
     f.manager().appendResetBoundary("reset", kept);
@@ -536,7 +538,7 @@ describe("CLI transcript account boundary", () => {
     f.manager().appendResetBoundary("reset");
     await f.run("epoch-b", async (allowed) => {
       expect(allowed).toBe(true);
-      append(f, "B fresh canary");
+      await appendAsync("B fresh canary");
     });
     await f.run("epoch-b", async (allowed, params) => {
       const prompt = await history(allowed, params);

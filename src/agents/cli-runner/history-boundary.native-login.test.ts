@@ -284,15 +284,17 @@ describe("native CLI login owner", () => {
 
   it("keeps a long session's /new boundary bound to its native login", async () => {
     const { f, backend, prepared } = await setupNative(true);
+    const appendAsync = (content: string) =>
+      f.manager().appendMessageAsync({ role: "user", content, timestamp: 2 });
     for (let index = 0; index < 120; index += 1) {
-      append(f, `pre-reset history ${index}`);
+      await appendAsync(`pre-reset history ${index}`);
     }
     f.manager().appendResetBoundary("reset");
     await f.run(
       undefined,
       async (allowed) => {
         expect(allowed).toBe(true);
-        append(f, "post-reset canary");
+        await appendAsync("post-reset canary");
       },
       native,
       undefined,
