@@ -514,7 +514,9 @@ export async function verifyGatewayMemoryWatcherRestart(
     releaseStartup.resolve();
     await Promise.allSettled([reloading]);
     if (reloadFailure && reloadFailure.error !== error) {
-      throw new AggregateError([error, reloadFailure.error], "Memory watcher reload assertion failed");
+      throw new AggregateError([error, reloadFailure.error], "Memory watcher reload assertion failed", {
+        cause: error,
+      });
     }
     throw error;
   } finally {
