@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { traceFakeTimerDiagnostics } from "../../../test/helpers/fake-timer-diagnostic.js";
 import { hasDescendantRunAwaitingSettleFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 
@@ -327,6 +328,7 @@ describe("waitForDescendantSubagentSummary", () => {
 
   it.each(["handoff", "running"])("stops waiting when cron cancels during %s", async (phase) => {
     vi.useFakeTimers();
+    using timers = traceFakeTimerDiagnostics(`cron cancellation ${phase}`);
     const controller = new AbortController();
     const descendant = createDescendantRun({
       active: phase === "running",
@@ -355,6 +357,7 @@ describe("waitForDescendantSubagentSummary", () => {
     await vi.advanceTimersByTimeAsync(20);
     controller.abort(new Error("cron cancelled"));
     expect(await resultPromise).toBeUndefined();
+    timers.reportIfUnexpected(0);
     expect(vi.getTimerCount()).toBe(0);
     expect(readLatestAssistantReply).toHaveBeenCalledTimes(1);
   });

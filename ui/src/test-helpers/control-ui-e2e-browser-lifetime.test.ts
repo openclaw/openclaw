@@ -46,31 +46,91 @@ const endpoint = inject("controlUiE2eChromium").wsEndpoint;
         `${imports}
 suite.define(() => {
   it("disconnects only its own contexts", async () => {
+    // Temporary Linux attribution only; remove after the inclusive CI proof.
+    const trace = (phase: string) => fs.writeSync(2, "[browser-lifetime-phase] " + JSON.stringify({ phase, atMs: Date.now() }) + "\\n");
+    fs.writeSync(2, "[browser-lifetime-identity] " + JSON.stringify({
+      platform: process.platform, arch: process.arch, node: process.versions.node,
+      bun: process.versions.bun, chromium: suite.browser.version(),
+      playwright: ${JSON.stringify(require("playwright/package.json").version)},
+      executable: ${JSON.stringify(path.basename(chromiumExecutablePath))},
+      revision: ${JSON.stringify(chromiumExecutablePath.match(/chromium-\d+/u)?.[0] ?? null)},
+    }) + "\\n");
+    trace("connect-begin");
     fs.writeFileSync(${JSON.stringify(endpointFile)}, endpoint);
     const sibling = await chromium.connect(endpoint);
+    trace("connect-end");
     try {
       const ownContext = await suite.browser.newContext();
       const siblingContext = await sibling.newContext();
       const ownPage = await ownContext.newPage();
+      ownPage.once("crash", () => trace("own-page-crash"));
       await ownContext.addCookies([{ name: "own", value: "one", url: "http://fixture.invalid/" }]);
+      trace("cookies-begin");
       expect(await siblingContext.cookies()).toEqual([]);
+      trace("cookies-end");
       await siblingContext.addCookies([{ name: "sibling", value: "two", url: "http://fixture.invalid/" }]);
+      trace("crash-prepare-begin");
       const crashed = await ownContext.newPage();
       await crashed.goto("data:text/html,<title>synthetic-private-page</title>");
       const cdp = await ownContext.newCDPSession(crashed);
       const { targetInfo } = await cdp.send("Target.getTargetInfo");
+      // Temporary probe: this extra CDP roundtrip can perturb crash timing.
+      const processSession = await sibling.newBrowserCDPSession();
+      let rendererPids: number[];
+      try {
+        const { processInfo } = await processSession.send("SystemInfo.getProcessInfo");
+        rendererPids = processInfo.filter(info => info.type === "renderer").map(info => info.id);
+      } finally {
+        await processSession.detach();
+      }
       const crashEvent = crashed.waitForEvent("crash");
+      let samples = 0;
+      let probeTimer: ReturnType<typeof setInterval> | undefined;
+      if (process.platform === "linux") {
+        let corePattern = "unavailable";
+        try {
+          corePattern = fs.readFileSync("/proc/sys/kernel/core_pattern", "utf8").startsWith("|") ? "pipe" : "file";
+        } catch {}
+        fs.writeSync(2, "[browser-lifetime-proc] " + JSON.stringify({ corePattern, rendererCount: rendererPids.length }) + "\\n");
+        probeTimer = setInterval(() => {
+          samples += 1;
+          const renderers = rendererPids.map(pid => {
+            try {
+              const status = fs.readFileSync("/proc/" + pid + "/status", "utf8");
+              const fields = Object.fromEntries(status.split("\\n").flatMap(line => {
+                const match = /^(State|CoreDumping|Threads|VmRSS):\\s+([A-Z]|\\d+)\\b/.exec(line);
+                return match ? [[match[1], match[2]]] : [];
+              }));
+              return { pid, fields };
+            } catch {
+              return { pid, status: "unavailable" };
+            }
+          });
+          fs.writeSync(2, "[browser-lifetime-proc] " + JSON.stringify({ sample: samples, atMs: Date.now(), renderers }) + "\\n");
+          if (samples === 10) clearInterval(probeTimer);
+        }, 1000);
+      }
+      trace("crash-submit");
       const crashCommand = cdp.send("Page.crash").catch(() => {});
-      await crashEvent;
+      try {
+        await crashEvent;
+      } finally {
+        clearInterval(probeTimer);
+      }
+      trace("crash-event");
       // The raw CDP command can stay pending until its crashed target closes.
       await crashed.close();
+      trace("crashed-page-closed");
       await crashCommand;
+      trace("crash-command-settled");
       const readCrash = () => {
         const directory = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR;
         const entry = fs.existsSync(directory) && fs.readdirSync(directory).find(name => name.startsWith("failure-chromium-"));
         return entry ? fs.readFileSync(directory + "/" + entry + "/failure.public.json", "utf8") : "";
       };
+      trace("crash-artifact-begin");
       await expect.poll(readCrash).not.toBe("");
+      trace("crash-artifact-end");
       const publicCrash = readCrash();
       expect(JSON.parse(publicCrash)).toMatchObject({
         kind: "chromium-target-crashes", dropped: 0,
@@ -79,13 +139,20 @@ suite.define(() => {
       expect(publicCrash).not.toContain("synthetic-private-page");
       expect(publicCrash).not.toContain("data:text/html");
       expect(publicCrash).not.toContain(endpoint);
+      trace("sibling-probe-begin");
       expect(await (await siblingContext.newPage()).evaluate(() => 2 + 2)).toBe(4);
+      trace("suite-close-begin");
       await suite.browser.close();
+      trace("suite-close-end");
       expect(ownPage.isClosed()).toBe(true);
       expect(sibling.isConnected()).toBe(true);
+      trace("sibling-cookies-begin");
       expect((await siblingContext.cookies()).map(cookie => cookie.name)).toEqual(["sibling"]);
+      trace("sibling-cookies-end");
     } finally {
+      trace("sibling-close-begin");
       await sibling.close();
+      trace("sibling-close-end");
     }
   });
 });
