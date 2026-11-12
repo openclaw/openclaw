@@ -5050,6 +5050,51 @@ ${buildScript}`,
     }
   });
 
+  it("reuses recovery output only after exact native restoration and retains historical builds", () => {
+    const workflow = readCiWorkflow();
+    const producer = workflow.jobs["build-artifacts"];
+    expect(producer.outputs.bundled_recovery_runtime).toBe(
+      "${{ steps.native_runtime_package.outputs.bundled-recovery }}",
+    );
+    expect(
+      requiredWorkflowStep(producer.steps, "Package runtime for native policy tests").env
+        .BUNDLED_RECOVERY,
+    ).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && hashFiles('scripts/test-macos-app-host.sh') != '' }}",
+    );
+    const steps = workflow.jobs["macos-swift"].steps;
+    const prepare = requiredWorkflowStep(steps, "Build bundled recovery runtime");
+    expect(prepare.env).toMatchObject({
+      BUNDLED_RECOVERY_RUNTIME: "${{ needs.build-artifacts.outputs.bundled_recovery_runtime }}",
+      NATIVE_RUNTIME_PREPARED: "${{ steps.native-test-cli.outcome }}",
+    });
+    const root = tempDirs.make("native-recovery-reuse-");
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    writeExecutable(path.join(bin, "pnpm"), ["#!/bin/sh", "echo local-build:$*"]);
+    for (const [reuse, restored, status, output] of [
+      ["true", "success", 0, "Reusing the exact-source"],
+      ["true", "failure", 1, ""],
+      ["false", "skipped", 0, "local-build:build:ci-artifacts"],
+      ["", "skipped", 0, "local-build:build:ci-artifacts"],
+    ] as const) {
+      const result = runWorkflowShellScript(prepare.run, {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH ?? ""}`,
+          BUNDLED_RECOVERY_RUNTIME: reuse,
+          NATIVE_RUNTIME_PREPARED: restored,
+        },
+      });
+      expect(result.status, result.stderr).toBe(status);
+      expect(result.stdout.trim()).toContain(output);
+      if (reuse === "true") {
+        expect(result.stdout).not.toContain("local-build:");
+      }
+    }
+  });
+
   it("uses native macOS Swift tests and retains failures after completing every profile", () => {
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];

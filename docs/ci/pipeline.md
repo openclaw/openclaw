@@ -513,7 +513,12 @@ Full nonpublishing manual validation also stages the exact candidate runtime and
 ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
 The existing launcher owns their private home, Keychain, selected service, and process
 settlement. Both phase event streams are retained in `macos-bundled-recovery-proof`.
-Only this full-tier test phase has a 75-minute budget for the runtime build, staging,
+For selected sources supporting complete runtime reuse, the existing Linux artifact
+also carries the UI, plugin outputs, runtime overlay, and sealed worker distribution.
+No host `node_modules` are transferred. The Mac still installs its own dependencies
+and performs native runtime staging, verification, and recovery tests; only the
+duplicate source build is omitted. Older selected sources retain that build.
+Only this full-tier test phase has a 75-minute budget for preparation, staging,
 and native composition; ordinary tests and independent packages retain 30 minutes.
 The proof does not sign or publish an app.
 
