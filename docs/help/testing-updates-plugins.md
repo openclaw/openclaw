@@ -76,7 +76,7 @@ versions/inventory, version-bound runtime floors), writes the package dist inven
 `npm pack --dry-run`, rejects forbidden packed files, installs the tarball into
 a temp prefix, runs postinstall, and smokes bundled channel entrypoints.
 
-The runtime-floor step (`pnpm check:official-runtime-floor`) type-checks each
+The runtime-floor step (`scripts/check-official-runtime-floor.mts`) type-checks each
 version-bound official runtime (Codex) at its `minimumCompatibleVersion` release
 tag against this checkout. If an SDK export or a required argument that runtime
 used has changed, it fails and asks for a higher floor. An unreleased floor is

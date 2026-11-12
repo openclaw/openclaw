@@ -24,7 +24,7 @@ export const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly ConfiguredRu
       trustedSourceLinkedOfficialInstall: true,
       versionBoundToOpenClaw: true,
       // Bump this floor when an SDK subpath, export or required argument used by this runtime changes;
-      // `pnpm check:official-runtime-floor` (run by release-check) type-checks this release's source here.
+      // release-check (`scripts/check-official-runtime-floor.mts`) type-checks this release's source here.
       minimumCompatibleVersion: "2026.11.5-beta.1",
     },
   ];
