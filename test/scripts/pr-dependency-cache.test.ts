@@ -475,54 +475,80 @@ describePosix("operator dependency hold release", () => {
     expect(readFileSync(join(f.cache, "lifetime.sqlite"))).toEqual(before);
   });
 
-  it.for(["creator", "group", "cwd", "argv"])("blocks a live %s", async (kind, { signal }) => {
-    const f = finishedHold();
-    const group = kind === "group";
-    let args = kind === "cwd" || kind === "argv" ? reviewHolds(f).args : [];
-    const expected =
-      kind === "creator" ? "creator-live" : group ? "process-group-live" : "process-references";
-    const worker = spawn(
-      "/bin/sh",
-      ["-c", group ? "cat <&3 &" : "cat <&3", ...(kind === "argv" ? ["a".repeat(64)] : [])],
-      {
-        cwd: kind === "cwd" ? f.anchor : f.home,
-        detached: group,
-        stdio: ["ignore", "ignore", "ignore", "pipe"],
-        env: { ...process.env, HOME: f.home },
-      },
-    );
-    const completed = once(worker, "close");
-    try {
-      if (group) {
-        await withinTest(once(worker, "exit"), signal);
+  it.for(["creator", "group", "cwd", "argv", "mixed-cwd", "mixed-argv"])(
+    "blocks a live %s",
+    async (kind, { signal }) => {
+      const f = finishedHold();
+      const group = kind === "group";
+      const cwd = kind.endsWith("cwd"),
+        argv = kind.endsWith("argv");
+      const mixed = kind.startsWith("mixed-");
+      if (mixed) {
+        const db = new DatabaseSync(join(f.cache, "lifetime.sqlite"));
+        try {
+          db.exec("UPDATE holds SET anchor_dev = '20'");
+        } finally {
+          db.close();
+        }
       }
-      if (kind === "creator" || group) {
-        f.creatorPid = worker.pid!;
-        f.anchor = join(f.home, `${ANCHOR_PREFIX}${worker.pid}.live`);
-        mkdirSync(f.anchor, { mode: 0o700 });
-        expect(hold(f, f.installation).status).toBe(0);
-        const { plan } = reviewHolds(f);
-        expect(plan.blocked).toMatchObject([{ path: f.anchor, blockers: [expected] }]);
-        // Promoting blocked records proves that sealed evidence never authorizes release.
-        args = sealPrDependencyPlan(
-          f.home,
-          JSON.stringify({ ...plan, anchors: plan.blocked, blocked: [] }),
-        );
+      let args = cwd || argv ? reviewHolds(f).args : [];
+      if (mixed) {
+        const db = new DatabaseSync(join(f.cache, "lifetime.sqlite"));
+        try {
+          db.exec(
+            "INSERT INTO holds SELECT entry_key, anchor_path, '10', anchor_ino, anchor_uid, anchor_mode FROM holds",
+          );
+        } finally {
+          db.close();
+        }
       }
-      const result = releaseCommand(f, args);
-      expect(result.status, result.stderr).toBe(1);
-      expect(JSON.parse(result.stdout)).toEqual({
-        path: f.anchor,
-        state: "blocked",
-        blockers: [expected],
-      });
-      expect(readPrCacheState(f.installation).settled).toBe(false);
-      expect(existsSync(f.anchor)).toBe(true);
-    } finally {
-      (worker.stdio[3] as import("node:stream").Writable).end();
-      await withinTest(completed, signal);
-    }
-  });
+      const expected =
+        kind === "creator" ? "creator-live" : group ? "process-group-live" : "process-references";
+      const worker = spawn(
+        "/bin/sh",
+        ["-c", group ? "cat <&3 &" : "cat <&3", ...(argv ? ["a".repeat(64)] : [])],
+        {
+          cwd: cwd ? f.anchor : f.home,
+          detached: group,
+          stdio: ["ignore", "ignore", "ignore", "pipe"],
+          env: { ...process.env, HOME: f.home },
+        },
+      );
+      const completed = once(worker, "close");
+      try {
+        if (group) {
+          await withinTest(once(worker, "exit"), signal);
+        }
+        if (kind === "creator" || group) {
+          f.creatorPid = worker.pid!;
+          f.anchor = join(f.home, `${ANCHOR_PREFIX}${worker.pid}.live`);
+          mkdirSync(f.anchor, { mode: 0o700 });
+          expect(hold(f, f.installation).status).toBe(0);
+          const { plan } = reviewHolds(f);
+          expect(plan.blocked).toMatchObject([{ path: f.anchor, blockers: [expected] }]);
+          // Promoting blocked records proves that sealed evidence never authorizes release.
+          args = sealPrDependencyPlan(
+            f.home,
+            JSON.stringify({ ...plan, anchors: plan.blocked, blocked: [] }),
+          );
+        }
+        const before = readFileSync(join(f.cache, "lifetime.sqlite"));
+        const result = releaseCommand(f, args);
+        expect(result.status, result.stderr).toBe(1);
+        expect(readFileSync(join(f.cache, "lifetime.sqlite"))).toEqual(before);
+        expect(JSON.parse(result.stdout)).toEqual({
+          path: f.anchor,
+          state: "blocked",
+          blockers: [expected],
+        });
+        expect(readPrCacheState(f.installation).settled).toBe(false);
+        expect(existsSync(f.anchor)).toBe(true);
+      } finally {
+        (worker.stdio[3] as import("node:stream").Writable).end();
+        await withinTest(completed, signal);
+      }
+    },
+  );
 
   it("refuses a failed process scan", () => {
     const f = finishedHold();
