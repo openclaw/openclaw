@@ -689,6 +689,12 @@ conversations, or transfer refresh grants to a transport.
 
 `wrapStreamFn` receives optional request context for provider-owned behavior:
 
+- `sessionId` and `sessionKey` identify the owning conversation when available,
+  including foreground turns and compaction. Use them for session affinity or
+  caching; they are identifiers, not authorization. Calls without a session leave
+  these fields undefined. Compaction and branch-summary completion options also
+  carry the owning `sessionId` when supplied by their caller.
+
 - `modelParams` contains only per-model params, with the current agent's model
   params taking precedence over default model params. Global and agent-wide
   params are excluded; `extraParams` still contains the merged request params.

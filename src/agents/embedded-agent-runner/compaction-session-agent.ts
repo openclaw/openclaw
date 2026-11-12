@@ -21,6 +21,7 @@ export async function prepareCompactionSessionAgent(params: {
   llmRuntime: LlmRuntime;
   providerStreamFn: StreamFn | undefined;
   sessionId: string;
+  sessionKey?: string;
   effectiveModel: ProviderRuntimeModel;
   resolvedApiKey?: string;
   authStorage: Parameters<typeof resolveEmbeddedAgentStream>[0]["authStorage"];
@@ -84,6 +85,8 @@ export async function prepareCompactionSessionAgent(params: {
     params.agentDir,
     undefined,
     {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       modelCallUrgency: params.modelCallUrgency,
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
       auth: params.runtimePlan?.auth.selectedAuthMode

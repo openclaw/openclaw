@@ -194,7 +194,12 @@ async function resolveSideQuestionStream(input: SideQuestionStreamInput) {
       runtimeModel,
       params.agentDir,
       undefined,
-      { auth, nativeWebSearchPolicyContext: { sessionKey: params.sessionKey } },
+      {
+        sessionId,
+        sessionKey: params.sessionKey,
+        auth,
+        nativeWebSearchPolicyContext: { sessionKey: params.sessionKey },
+      },
     ),
   );
   const preparedStream = agent.streamFn;

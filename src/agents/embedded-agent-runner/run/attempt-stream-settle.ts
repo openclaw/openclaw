@@ -647,6 +647,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
       input.agentDir,
       resolvedTransport,
       {
+        sessionId: session.sessionId,
+        sessionKey: attempt.sessionKey,
         preparedExtraParams: effectiveExtraParams,
         transportConfig: attempt.transportConfig,
         modelCallUrgency: resolveModelCallUrgency(attempt),

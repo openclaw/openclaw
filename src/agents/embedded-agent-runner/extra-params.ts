@@ -524,6 +524,8 @@ export function applyExtraParamsToAgent(
   agentDir?: string,
   resolvedTransport?: AgentRuntimeTransport,
   options?: {
+    sessionId?: string;
+    sessionKey?: string;
     preparedExtraParams?: Record<string, unknown>;
     transportConfig?: OpenClawConfig;
     modelCallUrgency?: ModelCallUrgency;
@@ -577,6 +579,8 @@ export function applyExtraParamsToAgent(
       agentDir,
       workspaceDir,
       agentId,
+      sessionId: options?.sessionId,
+      sessionKey: options?.sessionKey,
       auth: options?.auth,
       nativeWebSearchAllowedByToolPolicy,
       ...selectedModel,
