@@ -181,12 +181,26 @@ export function startWorkspaceTemplatePrewarm(params: {
       if (!previous && active.size >= 32) {
         return;
       }
+      const promotedMain =
+        previous &&
+        event.recipe.template.cacheKey === key &&
+        event.recipe.template.sourceCommit === previous.observed &&
+        (event.recipe.template.id !== previous.recipe.template.id ||
+          event.recipe.template.cacheKey !== previous.recipe.template.cacheKey);
+      if (promotedMain && !previous.head) {
+        // Promotion can retire the former canonical generation after prewarm's collection.
+        previous.head = previous.observed;
+        previous.at = scheduler.now();
+      }
       active.set(key, {
         ...previous,
         recipe: event.recipe,
         config: params.getConfig(),
         publication: getRuntimeConfigSnapshotMetadata(),
       });
+      if (promotedMain) {
+        schedule();
+      }
     } else {
       for (const [key, item] of active) {
         if (item.recipe.template.commonDir !== event.commonDir || item.observed === event.commit) {

@@ -124,6 +124,68 @@ it("coalesces advancing main to the newest head for used templates only", async 
   expect(mocks.prepare).toHaveBeenCalledTimes(3);
 });
 
+it("queues cleanup after main promotion without repeating same-generation work", async () => {
+  await using f = fixture();
+  const use = (commit: string, cacheKey = "managed") => {
+    const recipe: WorktreeTemplateRecipe = {
+      ...f.recipe,
+      template: {
+        ...f.recipe.template,
+        id: commit,
+        sourceCommit: commit,
+        contentKey: commit,
+        cacheKey,
+      },
+    };
+    mocks.notify({ type: "used", recipe });
+    return recipe;
+  };
+  f.use();
+  f.advance("b");
+  mocks.prepare.mockImplementationOnce(async () => {
+    use("b", "retained:managed:b");
+  });
+  await f.clock.advanceBy(30_000);
+  expect(mocks.prepare).toHaveBeenCalledTimes(1);
+  use("a"); // An older foreground request can replace the recipe before main is promoted.
+  await f.clock.advanceBy(0);
+  expect(mocks.prepare).toHaveBeenCalledTimes(1);
+  f.preparation(true);
+  const promoted = use("b");
+  await f.clock.advanceBy(0);
+  expect(mocks.prepare).toHaveBeenCalledTimes(1);
+  f.preparation(false);
+  await f.clock.advanceBy(0);
+  expect(mocks.prepare).toHaveBeenCalledTimes(2);
+  expect(mocks.prepare).toHaveBeenLastCalledWith(promoted, "b", expect.anything());
+  use("b");
+  await f.clock.advanceBy(30_000);
+  expect(mocks.prepare).toHaveBeenCalledTimes(2);
+
+  f.advance("c");
+  const readyBeforeDebounce = use("c");
+  await f.clock.advanceBy(29_999);
+  expect(mocks.prepare).toHaveBeenCalledTimes(2);
+  await f.clock.advanceBy(1);
+  expect(mocks.prepare).toHaveBeenCalledTimes(3);
+  expect(mocks.prepare).toHaveBeenLastCalledWith(readyBeforeDebounce, "c", expect.anything());
+
+  f.advance("d");
+  mocks.prepare.mockImplementationOnce(async () => {
+    use("d", "retained:managed:d");
+  });
+  await f.clock.advanceBy(30_000);
+  expect(mocks.prepare).toHaveBeenCalledTimes(4);
+  f.advance("e");
+  use("d"); // A late promotion must preserve the newer observed head and its deadline.
+  await f.clock.advanceBy(29_999);
+  expect(mocks.prepare).toHaveBeenCalledTimes(4);
+  await f.clock.advanceBy(1);
+  expect(mocks.prepare).toHaveBeenCalledTimes(5);
+  expect(mocks.prepare.mock.calls.map((call) => call[1])).toEqual(["b", "b", "c", "d", "e"]);
+  expect(f.errors).not.toHaveBeenCalled();
+});
+
 it.each([
   [{ cacheKey: "sandbox" }, true],
   [{ contentKey: "different-policy" }, false],
