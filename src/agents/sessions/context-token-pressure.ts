@@ -1,16 +1,18 @@
 /** Shared fresh-request estimates for admission and compaction replacement. */
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SAFETY_MARGIN } from "../compaction-planning.js";
-import type { AgentMessage, BashExecutionMessage } from "../runtime/index.js";
+import { IMAGE_BLOCK_TOKENS } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
   bashExecutionToText,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
-  IMAGE_BLOCK_TOKENS,
-} from "../runtime/index.js";
+} from "../../../packages/agent-core/src/harness/messages.js";
+import type { AgentMessage, BashExecutionMessage } from "../../../packages/agent-core/src/types.js";
+
+/** Buffer for token-estimation inaccuracy, shared by admission and compaction. */
+export const SAFETY_MARGIN = 1.2;
 
 export const ESTIMATED_CHARS_PER_TOKEN = 4;
 const TOOL_RESULT_CHARS_PER_TOKEN = 2;
@@ -252,4 +254,37 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
         SAFETY_MARGIN,
     );
   };
+}
+
+export function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
+  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
+  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
+}
+
+export function estimateCompactionHistoryTokens(
+  messages: AgentMessage[],
+  budget?: {
+    pendingTokens: number;
+    pendingUserTokens?: number;
+    pendingUserIdempotencyKey?: string;
+  },
+): number {
+  // A key identifies overlapping input, not proof that its content is replaced.
+  // A retained carrier can reuse a larger canonical user, so charge the larger representation.
+  const pending =
+    budget?.pendingTokens && budget.pendingUserIdempotencyKey
+      ? messages.findLast(
+          (message) =>
+            message.role === "user" &&
+            "idempotencyKey" in message &&
+            message.idempotencyKey === budget.pendingUserIdempotencyKey,
+        )
+      : undefined;
+  const overlap = pending
+    ? Math.min(
+        estimateCompactionHistoryTokens([pending]),
+        budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
+      )
+    : 0;
+  return estimateVariableRequestTokens(messages, "") - overlap;
 }

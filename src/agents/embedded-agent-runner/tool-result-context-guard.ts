@@ -7,9 +7,11 @@ import type {
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
 import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-constants.js";
-import { SAFETY_MARGIN } from "../compaction-planning.js";
 import type { Agent, AgentMessage } from "../runtime/index.js";
-import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
+import {
+  SAFETY_MARGIN,
+  createFreshLlmBoundaryTokenEstimator,
+} from "../sessions/context-token-pressure.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import {

@@ -264,7 +264,7 @@ async function prepareHistoryRead(
     }
     case "context-messages": {
       const [
-        { readSessionTranscriptContextMessages },
+        { readSessionTranscriptContextMessages, readSessionTranscriptContextSeed },
         { resolveSqliteTranscriptReadScope, toDatabaseOptions },
         { resolveOpenClawAgentSqlitePath },
         { readDatabasePathIdentitySync },
@@ -287,6 +287,9 @@ async function prepareHistoryRead(
             );
           } else if (readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
             throw new Error("Session context changed its captured database owner");
+          }
+          if (request.seed) {
+            return readSessionTranscriptContextSeed(request.target, request.seed);
           }
           return readSessionTranscriptContextMessages(
             request.target,

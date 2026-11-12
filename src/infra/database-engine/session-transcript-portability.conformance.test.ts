@@ -5,6 +5,10 @@ import {
   findUnindexedActiveTranscriptEntry,
   iterateUnindexedActiveTranscriptNavigation,
 } from "../../config/sessions/session-accessor.sqlite-history-navigation.js";
+import {
+  readSessionTranscriptContextMessages,
+  readSessionTranscriptContextSeed,
+} from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { CurrentTranscriptProjection } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
@@ -247,6 +251,106 @@ for (const engine of ["sqlite", "postgres"] as const) {
               .run(fixture.scope.sessionId);
           });
           expect(find("missing")).toBeUndefined();
+        }));
+
+      it.each([
+        [
+          "key",
+          '"message":{"role":"user","content":"request","idempotencyKey":"wrong","idempotencyKey":"seed:user","timestamp":1}',
+        ],
+        [
+          "role",
+          '"message":{"role":"assistant","role":"user","content":"request","idempotencyKey":"seed:user","timestamp":1}',
+        ],
+        [
+          "message",
+          '"message":{"role":"assistant"},"message":{"role":"user","content":"request","idempotencyKey":"seed:user","timestamp":1}',
+        ],
+      ])(
+        "seeds duplicate %s scalars using the full reader's last-member semantics",
+        (name, fields) =>
+          withEngineStoreAdmission(() => {
+            const fixture = transcriptFixture(
+              `seed-duplicates-${name}`,
+              [
+                {
+                  id: "summary",
+                  parentId: null,
+                  json: '{"type":"branch_summary","id":"summary","parentId":null,"fromId":"earlier","timestamp":"2026-11-09T00:00:00.000Z","summary":"older","summary":""}',
+                },
+                {
+                  id: "admitted",
+                  parentId: "summary",
+                  json: `{"type":"message","id":"admitted","parentId":"summary",${fields}}`,
+                },
+              ],
+              false,
+            );
+            const full = readSessionTranscriptContextMessages(fixture.scope, (messages) => [
+              ...messages,
+            ]);
+            const seed = readSessionTranscriptContextSeed(fixture.scope, {
+              maxBytes: 100_000,
+              tokenBudget: 25_000,
+              admittedKey: "seed:user",
+              beforeAdmittedUser: true,
+            });
+            expect(seed.messages).toEqual([]);
+            expect(seed.seed?.admittedUser).toEqual(full[0]);
+            expect(seed.seed?.admittedUser).toMatchObject({ idempotencyKey: "seed:user" });
+          }),
+      );
+
+      it("seeds branch summaries and admitted input with escapes JSONB rejects", () =>
+        withEngineStoreAdmission(() => {
+          const fixture = transcriptFixture(
+            "seed-exceptional",
+            [
+              {
+                id: "summary",
+                parentId: null,
+                json: JSON.stringify({
+                  type: "branch_summary",
+                  id: "summary",
+                  parentId: null,
+                  fromId: "earlier",
+                  timestamp: "2026-11-09T00:00:00.000Z",
+                  summary: "retained summary \ud800",
+                }),
+              },
+              {
+                id: "admitted",
+                parentId: "summary",
+                json: JSON.stringify({
+                  type: "message",
+                  id: "admitted",
+                  parentId: "summary",
+                  message: {
+                    role: "user",
+                    content: "admitted request \udc00 \u0000",
+                    idempotencyKey: "seed:user",
+                    timestamp: 1,
+                  },
+                }),
+              },
+            ],
+            false,
+          );
+          const seed = readSessionTranscriptContextSeed(fixture.scope, {
+            maxBytes: 100_000,
+            tokenBudget: 25_000,
+            admittedKey: "seed:user",
+            beforeAdmittedUser: true,
+          });
+          expect(seed.messages).toMatchObject([
+            { role: "branchSummary", summary: "retained summary \ud800" },
+          ]);
+          expect(seed.seed?.admittedUser).toMatchObject({
+            role: "user",
+            content: "admitted request \udc00 \u0000",
+            idempotencyKey: "seed:user",
+          });
+          expect(seed.seed?.retainedInputTokens).toBeGreaterThan(0);
         }));
 
       it("advances mutation time beyond both prior mutation and observation with nullable fields", () =>
