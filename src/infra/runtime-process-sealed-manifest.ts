@@ -1,7 +1,7 @@
-import type {
+import {
   createRuntimeProcessEntrypoints,
-  runtimeProcessDeployManifest,
-  runtimeProcessHelperManifest,
+  type runtimeProcessDeployManifest,
+  type runtimeProcessHelperManifest,
 } from "./runtime-process-manifest.js";
 
 // Each sealed bootstrap selects only the sibling entries it owns.
@@ -46,3 +46,18 @@ export const runtimeProcessSealedManifest = {
     ])[];
   }
 >;
+
+// Sealed deployments and launch fixtures share the manifest owner for sibling layout.
+export function createSealedRuntimeProcessEntrypoints(
+  group: keyof typeof runtimeProcessSealedManifest,
+  currentModuleUrl: string,
+) {
+  const runtimeEntries = new Map(Object.entries(createRuntimeProcessEntrypoints(currentModuleUrl)));
+  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
+    name,
+    url: new URL(
+      `./${runtimeEntries.get(entry)?.distWorkerPath ?? `${entry}.mjs`}`,
+      currentModuleUrl,
+    ),
+  }));
+}
