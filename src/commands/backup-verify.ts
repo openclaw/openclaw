@@ -19,6 +19,7 @@ import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -697,7 +698,14 @@ export async function prepareBackupArchive(
   archive: string,
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
 ) {
-  const archivePath = resolveBackupArchivePath(archive, "<archive>");
+  let archivePath = resolveBackupArchivePath(archive, "<archive>");
+  if (process.platform !== "win32") {
+    const input = expandHomePrefix(archive);
+    if (input.split("/").includes("..")) {
+      // POSIX resolves symlink parents before ..; path.resolve would change the target.
+      archivePath = path.isAbsolute(input) ? input : process.cwd() + "/" + input;
+    }
+  }
   return await verifyResolvedBackupArchive(archivePath, requiredSnapshots).catch(
     (error: unknown) => {
       const detail = error instanceof Error ? error.message : formatErrorMessage(error);
