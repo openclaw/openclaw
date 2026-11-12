@@ -190,6 +190,7 @@ type EnglishCatalog = TranslationMap & {
       | "discardUnconfirmed"
       | "writeGatewayChanged"
       | "writeUnconfirmed"
+      | "savedNotApplied"
       | "reloadBlocked"
       | "rawDraftBlocksApply"
       | "rawDraftBlocksFormEdit"
@@ -871,6 +872,7 @@ const startupEnglish = {
       "This unsettled change belongs to a different Gateway. Reconnect to that Gateway to retry, or discard the draft.",
     writeUnconfirmed:
       "The last configuration change could not be confirmed. Your draft is kept. Retry before changing other settings.",
+    savedNotApplied: "Your settings are saved but not active yet. Restart OpenClaw to apply them.",
     reloadBlocked: "Finish saving or discard pending config changes before reloading.",
     rawDraftBlocksApply: "Save or discard edits in the Raw editor before applying changes.",
     rawDraftBlocksFormEdit:

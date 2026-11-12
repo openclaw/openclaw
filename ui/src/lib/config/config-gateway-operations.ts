@@ -33,6 +33,7 @@ import {
   isCurrentConfigConnection,
   markConfigAwaitingApply,
   resolveEditableSnapshotConfig,
+  type ConfigAutoSaveStatus,
   type ConfigGatewayClient,
   type ConfigReadResult,
   type LoadConfigOptions,
@@ -351,7 +352,40 @@ export type ConfigSubmission = ConfigSubmittedDraft & {
 };
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
-function persistedConfigReceipt(error: unknown): { ack: ConfigWriteAck; deferred: boolean } | null {
+/**
+ * How a saved write reached the running Gateway. A restart finishes the write on its own;
+ * deferred and unapplied writes stay saved but inactive.
+ */
+type PersistedConfigApplication =
+  | { kind: "restarting" }
+  | { kind: "deferred"; message: string | null }
+  | { kind: "unapplied"; message: string };
+
+function persistedConfigApplication(application: unknown): PersistedConfigApplication | null {
+  if (!isRecord(application)) {
+    return null;
+  }
+  const { status, reason, appliesWhen } = application;
+  if (status === "applied-restart-required" || status === "restart-pending") {
+    return { kind: "restarting" };
+  }
+  if (status === "deferred") {
+    return {
+      kind: "deferred",
+      message:
+        typeof reason === "string" && typeof appliesWhen === "string"
+          ? `${reason} ${appliesWhen}`
+          : null,
+    };
+  }
+  return typeof status === "string"
+    ? { kind: "unapplied", message: t("configView.savedNotApplied") }
+    : null;
+}
+
+function persistedConfigReceipt(
+  error: unknown,
+): { ack: ConfigWriteAck; application: PersistedConfigApplication | null } | null {
   return error instanceof GatewayRequestError &&
     isGatewayProtocolResponseError(error) &&
     error.gatewayCode === ErrorCodes.UNAVAILABLE &&
@@ -361,10 +395,26 @@ function persistedConfigReceipt(error: unknown): { ack: ConfigWriteAck; deferred
     isConfigWriteAck(error.details.persistedConfig)
     ? {
         ack: error.details.persistedConfig,
-        deferred:
-          isRecord(error.details.application) && error.details.application.status === "deferred",
+        application: persistedConfigApplication(error.details.application),
       }
     : null;
+}
+
+/** A restart completes this saved write, so it reports as saved rather than failed. */
+function reportRestartingWrite(state: RuntimeConfigState): true {
+  state.lastError = null;
+  state.configAutoSaveStatus = "restarting";
+  return true;
+}
+
+/** Reports a write failure, or a saved write the Gateway has not applied yet. */
+function reportWriteFailure(
+  state: RuntimeConfigState,
+  application: PersistedConfigApplication | null | undefined,
+  outcome: { status: ConfigAutoSaveStatus; message: string },
+): void {
+  state.lastError = (application?.kind !== "restarting" && application?.message) || outcome.message;
+  state.configAutoSaveStatus = application ? "deferred" : outcome.status;
 }
 
 export async function submitConfigDraft(
@@ -464,6 +514,9 @@ export async function submitConfigDraft(
         if (adoptedStatus === "conflict") {
           return false;
         }
+        if (persisted.application?.kind === "restarting") {
+          return reportRestartingWrite(state);
+        }
       }
       const outcome = configMutationFailure(state, err, submittedFormRaw);
       // A response can follow persistence without completing runtime apply.
@@ -475,8 +528,7 @@ export async function submitConfigDraft(
       ) {
         onSubmitted?.({ ...submission, rejected: true });
       }
-      state.lastError = outcome.message;
-      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
+      reportWriteFailure(state, persisted?.application, outcome);
     }
     return false;
   } finally {
@@ -599,9 +651,10 @@ export async function patchConfig(
           return false;
         }
       }
-      const outcome = configMutationFailure(state, err);
-      state.lastError = outcome.message;
-      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
+      if (persisted?.application?.kind === "restarting") {
+        return reportRestartingWrite(state);
+      }
+      reportWriteFailure(state, persisted?.application, configMutationFailure(state, err));
     }
     return false;
   }

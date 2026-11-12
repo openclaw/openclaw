@@ -144,7 +144,11 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     if (saving() || status() === "saving") {
       return "saving";
     }
-    if (["recovery", "rejected", "error", "deferred", "paused", "conflict"].includes(status())) {
+    if (
+      ["recovery", "rejected", "error", "deferred", "restarting", "paused", "conflict"].includes(
+        status(),
+      )
+    ) {
       return status();
     }
     if (props.pending) {
@@ -265,6 +269,10 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               <Match when={state() === "applying"}>
                 <span class="btn__spinner settings-save-indicator__spinner" aria-hidden="true" />
                 <span>{t("configView.applying")}</span>
+              </Match>
+              <Match when={state() === "restarting"}>
+                <span class="btn__spinner settings-save-indicator__spinner" aria-hidden="true" />
+                <span>{t("configView.autoSaveRestarting")}</span>
               </Match>
               <Match when={state() === "paused"}>
                 <span>{t("configView.autoSavePaused")}</span>

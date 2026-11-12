@@ -109,6 +109,50 @@ describe("config patch recovery", () => {
     },
   );
   it.each([
+    ["config.set", "applied-restart-required"],
+    ["config.patch", "applied-restart-required"],
+    ["config.patch", "restart-pending"],
+  ] as const)(
+    "reports %s saved with %s as restarting instead of failed",
+    async (method, status) => {
+      const { request, store } = createPersistedFailureTransport({
+        method,
+        message: `${method} persisted; wait for the Gateway to restart, then run config.get`,
+        failureDetails: (ack) => ({ persistedConfig: ack, application: { status } }),
+      });
+      const { runtimeConfig, state } = await createRecoveryCapability(request);
+      if (method === "config.set") {
+        runtimeConfig.patchForm(["enabled"], false);
+      }
+      await expect(
+        method === "config.set" ? runtimeConfig.save() : runtimeConfig.patch(disableFeature),
+      ).resolves.toBe(true);
+      expectFeedback(state, "restarting");
+      expect(state).toMatchObject({
+        configSnapshot: { hash: "hash-2", config: { enabled: false } },
+        configFormDirty: false,
+      });
+      await expectStoredConfig(store, { count: 1, enabled: false });
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+      expect(store.submissions).toHaveLength(1);
+    },
+  );
+  it("explains a saved but unapplied write without Gateway method names", async () => {
+    const { request } = createPersistedFailureTransport({
+      message:
+        "config.patch persisted but was not applied to the active Gateway (failed); run config.get, then use config.apply",
+      failureDetails: (ack) => ({ persistedConfig: ack, application: { status: "failed" } }),
+    });
+    const { runtimeConfig, state } = await createRecoveryCapability(request);
+    await expect(runtimeConfig.patch(disableFeature)).resolves.toBe(false);
+    expectFeedback(
+      state,
+      "deferred",
+      "Your settings are saved but not active yet. Restart OpenClaw to apply them.",
+    );
+    expect(state.configNeedsApply).toBe(true);
+  });
+  it.each([
     [true, { persistedConfig: { hash: "unconfirmed", config: { enabled: false } } }],
     ...[
       {},

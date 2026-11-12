@@ -9,6 +9,7 @@ const enSettingsSidebar = {
     autoSaveSaving: "Saving…",
     autoSaveSaved: "Saved",
     autoSaveDeferred: "Saved; waiting to apply",
+    autoSaveRestarting: "Saved. Restarting OpenClaw to finish applying…",
     autoSavePaused: "Autosave paused after reconnect",
     saveNow: "Save",
     autoSaveFailed: "Couldn’t save settings. Try again.",

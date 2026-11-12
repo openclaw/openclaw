@@ -83,6 +83,16 @@ describe("settings save indicator", () => {
     expect(button("Apply changes")).toBeUndefined();
   });
 
+  it("reports a write finishing through a restart as saved, without failure actions", async () => {
+    await update({ status: "restarting", needsApply: true });
+    expect(indicator.textContent?.trim()).toBe("Saved. Restarting OpenClaw to finish applying…");
+    expect(part("spinner")).not.toBeNull();
+    expect(part("title")).toBeNull();
+    expect(button("Retry")).toBeUndefined();
+    expect(button("Discard changes")).toBeUndefined();
+    expect(button("Apply changes")).toBeUndefined();
+  });
+
   it.each([true, false])("discards a failure only when confirmed: %s", async (confirmed) => {
     vi.mocked(showConfirmDialog).mockResolvedValueOnce(confirmed);
     const { onRetry, onReload } = await update({

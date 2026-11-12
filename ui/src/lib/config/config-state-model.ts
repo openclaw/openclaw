@@ -14,6 +14,7 @@ export type ConfigAutoSaveStatus =
   | "saving"
   | "saved"
   | "deferred"
+  | "restarting"
   | "rejected"
   | "error"
   | "conflict"
