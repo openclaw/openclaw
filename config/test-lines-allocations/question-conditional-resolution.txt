@@ -1,0 +1,3 @@
+# Exact net growth: 15 manager regression lines and 136 handler integration lines.
+# Proves stale-incarnation refusal, unchanged legacy payloads, and secret-write guards.
+151

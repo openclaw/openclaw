@@ -216,3 +216,28 @@ its own plan.
 - [Secrets](/tools/secrets) — the credential-safe path when the answer is a secret
 - [Control UI](/web/control-ui) — where the docked answer panel appears
 - [Tools overview](/tools) — the rest of the built-in tool surface
+
+## Conditional Gateway answers
+
+Clients that retain a human decision across reconnects can require the
+`question-conditional-resolve-v1` capability in `hello-ok.features.capabilities`.
+An older Gateway without this capability cannot provide this contract.
+
+Request `includeIncarnation: true` on `question.request`, `question.get` or
+`question.list` to receive an opaque `incarnation` for the selected entry.
+Pass that exact value as `expectedIncarnation` to `question.resolve` (answer or
+cancel). The manager rejects a replaced entry with
+`QUESTION_INCARNATION_MISMATCH` before committing an answer, even if its public
+ID, wording, session and run are identical. Existing session, client, source and
+secret-store authorization still applies. The token is a comparison value,
+not a permission or a human identity. Legacy requests and events keep their
+existing payloads when the client does not opt in.
+
+Before sending an answer, retain its original `resolutionId` and incarnation.
+After an uncertain response, use only `question.waitAnswer` with that same ID,
+`expectedIncarnation` and `includeResolutionId: true`. A retained answer returns
+its original resolution ID and incarnation. Absence after the transient retention
+window or Gateway restart is unknown, not proof that the answer was never
+accepted. A successor with the same ID is rejected; never submit a new answer
+to compensate for a missing receipt. Questions remain transient and the token
+does not extend their lifetime or survive replacement.

@@ -31,6 +31,7 @@ const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
 
 export const QuestionManagerErrorCodes = {
   NOT_FOUND: "QUESTION_NOT_FOUND",
+  INCARNATION_MISMATCH: "QUESTION_INCARNATION_MISMATCH",
   ALREADY_TERMINAL: "QUESTION_ALREADY_TERMINAL",
   ID_IN_USE: "QUESTION_ID_IN_USE",
   INVALID_ANSWER: "QUESTION_INVALID_ANSWER",
@@ -72,6 +73,7 @@ type QuestionManagerRequest = {
 type Waiter = () => void;
 
 type QuestionEntry = {
+  incarnation: string;
   record: QuestionRecord;
   ordinary: boolean;
   resolutionId?: string;
@@ -92,6 +94,7 @@ type QuestionEntry = {
 
 /** Private entry identity. Never reselect a successor by its public question id. */
 export type QuestionObservation = {
+  readonly incarnation: string;
   readonly record: QuestionRecord;
   readonly ordinary: boolean;
   readonly sessionAccess?: QuestionSessionAccess;
@@ -100,15 +103,30 @@ export type QuestionObservation = {
   refreshRequester: () => void;
 };
 
-function waitResult(entry: QuestionEntry, includeResolutionId: boolean): QuestionWaitAnswerResult {
+function conditionalResolution(entry: QuestionEntry, expectedIncarnation?: string) {
+  return expectedIncarnation
+    ? {
+        incarnation: entry.incarnation,
+        ...(entry.resolutionId ? { resolutionId: entry.resolutionId } : {}),
+      }
+    : {};
+}
+
+function waitResult(
+  entry: QuestionEntry,
+  includeResolutionId: boolean,
+  expectedIncarnation?: string,
+): QuestionWaitAnswerResult {
   const { record, resolutionId } = entry;
+  const correlation = expectedIncarnation ? { incarnation: entry.incarnation } : {};
   if (record.status !== "answered") {
-    return { status: record.status };
+    return { status: record.status, ...correlation };
   }
   // Legacy native decoders reject extra fields. Correlation is opt-in per
   // waiter, never exposed on records/events or used as resolution authority.
   return {
     status: "answered",
+    ...correlation,
     answers: record.answers ?? { answers: {} },
     ...(includeResolutionId && resolutionId ? { resolutionId } : {}),
   };
@@ -184,6 +202,7 @@ export class QuestionManager {
       status: "pending",
     };
     const entry: QuestionEntry = {
+      incarnation: randomUUID(),
       record,
       ordinary: !params.questions.some((question) => question.isSecret || question.secretStore),
       job: this.scheduler.schedule({
@@ -239,6 +258,7 @@ export class QuestionManager {
 
   private observeEntry(entry: QuestionEntry): QuestionObservation {
     return {
+      incarnation: entry.incarnation,
       get record() {
         return entry.record;
       },
@@ -321,10 +341,11 @@ export class QuestionManager {
     id: string,
     timeoutMs?: number,
     includeResolutionId = false,
+    expectedIncarnation?: string,
   ): Promise<QuestionWaitAnswerResult> {
-    const entry = this.requireEntry(id);
+    const entry = this.requireEntry(id, expectedIncarnation);
     if (entry.record.status !== "pending") {
-      return Promise.resolve(waitResult(entry, includeResolutionId));
+      return Promise.resolve(waitResult(entry, includeResolutionId, expectedIncarnation));
     }
     const signal = getAsyncWorkSignal();
     return new Promise<QuestionWaitAnswerResult>((resolve) => {
@@ -337,7 +358,7 @@ export class QuestionManager {
         signal?.removeEventListener("abort", waiter);
         // finish() may close this observer after recording an answer. Read that
         // fact directly; get() could expire/cancel the question during retirement.
-        resolve(waitResult(entry, includeResolutionId));
+        resolve(waitResult(entry, includeResolutionId, expectedIncarnation));
       };
       entry.waiters.add(waiter);
       if (signal?.aborted) {
@@ -355,9 +376,9 @@ export class QuestionManager {
     id: string,
     answers: QuestionAnswers,
     resolvedBy?: string,
-    options?: { commit?: () => void; resolutionId?: string },
+    options?: { commit?: () => void; resolutionId?: string; expectedIncarnation?: string },
   ): QuestionResolveResult {
-    const entry = this.requirePendingEntry(id);
+    const entry = this.requirePendingEntry(id, options?.expectedIncarnation);
     const canonical = this.validateAnswers(entry.record.questions, answers);
     // The commit, receipt, and answered transition are synchronous. Failed
     // validation/writes must not publish a receipt; lost ACKs must not erase it.
@@ -370,7 +391,11 @@ export class QuestionManager {
       ...(resolvedBy ? { resolvedBy } : {}),
     };
     void this.finish(entry);
-    return { status: "answered", answers: canonical };
+    return {
+      status: "answered",
+      answers: canonical,
+      ...conditionalResolution(entry, options?.expectedIncarnation),
+    };
   }
 
   /** Async persistence keeps the v2026.8.1 SDK's ordinary resolve() synchronous. */
@@ -378,9 +403,13 @@ export class QuestionManager {
     id: string,
     answers: QuestionAnswers,
     resolvedBy: string | undefined,
-    options: { commit: (assertCurrent: () => void) => Promise<void>; resolutionId?: string },
+    options: {
+      commit: (assertCurrent: () => void) => Promise<void>;
+      resolutionId?: string;
+      expectedIncarnation?: string;
+    },
   ): Promise<QuestionResolveResult> {
-    const entry = this.requirePendingEntry(id);
+    const entry = this.requirePendingEntry(id, options.expectedIncarnation);
     const canonical = this.validateAnswers(entry.record.questions, answers);
     entry.committing = true;
     const assertCurrent = () => {
@@ -412,7 +441,11 @@ export class QuestionManager {
           ...(resolvedBy ? { resolvedBy } : {}),
         };
         await this.finish(entry);
-        return { status: "answered", answers: canonical };
+        return {
+          status: "answered",
+          answers: canonical,
+          ...conditionalResolution(entry, options.expectedIncarnation),
+        };
       } catch (error) {
         entry.commitUnknown = hasSqliteWorkerOutcomeUnknown(error);
         throw error;
@@ -427,9 +460,12 @@ export class QuestionManager {
     });
   }
 
-  cancel(id: string, resolvedBy?: string): QuestionResolveResult {
-    const entry = this.requirePendingEntry(id);
-    return this.cancelEntry(entry, resolvedBy);
+  cancel(id: string, resolvedBy?: string, expectedIncarnation?: string): QuestionResolveResult {
+    const entry = this.requirePendingEntry(id, expectedIncarnation);
+    return {
+      ...this.cancelEntry(entry, resolvedBy),
+      ...(expectedIncarnation ? { incarnation: entry.incarnation } : {}),
+    };
   }
 
   private cancelEntry(entry: QuestionEntry, resolvedBy?: string): QuestionResolveResult {
@@ -485,7 +521,7 @@ export class QuestionManager {
     }
   }
 
-  private requireEntry(id: string): QuestionEntry {
+  private requireEntry(id: string, expectedIncarnation?: string): QuestionEntry {
     // get() settles expiry/requester loss; its callbacks can replace the entry.
     const record = this.get(id);
     const entry = this.entries.get(id);
@@ -495,11 +531,17 @@ export class QuestionManager {
         `question '${id}' was not found`,
       );
     }
+    if (expectedIncarnation !== undefined && entry.incarnation !== expectedIncarnation) {
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.INCARNATION_MISMATCH,
+        `question '${id}' no longer has the expected incarnation`,
+      );
+    }
     return entry;
   }
 
-  private requirePendingEntry(id: string): QuestionEntry {
-    const entry = this.requireEntry(id);
+  private requirePendingEntry(id: string, expectedIncarnation?: string): QuestionEntry {
+    const entry = this.requireEntry(id, expectedIncarnation);
     if (entry.record.status !== "pending" || entry.committing || entry.commitUnknown) {
       throw new QuestionManagerError(
         QuestionManagerErrorCodes.ALREADY_TERMINAL,

@@ -367,7 +367,17 @@ export function createQuestionHandlers(
             prepared,
             record,
           );
-          respond(true, { id: record.id, expiresAtMs: record.expiresAtMs }, undefined);
+          respond(
+            true,
+            {
+              id: record.id,
+              expiresAtMs: record.expiresAtMs,
+              ...(request.includeIncarnation
+                ? { incarnation: manager.observe(record.id, record)?.incarnation }
+                : {}),
+            },
+            undefined,
+          );
         };
         if (sessionKey && requestedSession?.ok) {
           let consumed = false;
@@ -443,7 +453,12 @@ export function createQuestionHandlers(
         }
         const waiting = await selected.withCurrent(() => ({
           // Register without yielding between final authorization and the exact-entry waiter.
-          answer: manager.waitAnswer(request.id, request.timeoutMs, request.includeResolutionId),
+          answer: manager.waitAnswer(
+            request.id,
+            request.timeoutMs,
+            request.includeResolutionId,
+            request.expectedIncarnation,
+          ),
         }));
         if (!waiting) {
           return;
@@ -475,7 +490,11 @@ export function createQuestionHandlers(
         await selected.withCurrent(() => {
           if ("cancel" in request) {
             authorize.assertCurrent();
-            respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
+            respond(
+              true,
+              manager.cancel(request.id, request.resolvedBy, request.expectedIncarnation),
+              undefined,
+            );
             return;
           }
           const secretQuestion = question.questions[0];
@@ -494,6 +513,7 @@ export function createQuestionHandlers(
               true,
               manager.resolve(request.id, request.answers, request.resolvedBy, {
                 resolutionId: request.resolutionId,
+                expectedIncarnation: request.expectedIncarnation,
               }),
               undefined,
             );
@@ -535,6 +555,7 @@ export function createQuestionHandlers(
                 request.resolvedBy,
                 {
                   resolutionId: request.resolutionId,
+                  expectedIncarnation: request.expectedIncarnation,
                   commit: async (assertQuestionCurrent) => {
                     await storeWriteService.write({
                       name: binding.name,
@@ -603,7 +624,18 @@ export function createQuestionHandlers(
       }
       await selected
         .withCurrent(() => {
-          respond(true, { question: selected.observation!.record }, undefined);
+          respond(
+            true,
+            {
+              question: {
+                ...selected.observation!.record,
+                ...(params.includeIncarnation
+                  ? { incarnation: selected.observation!.incarnation }
+                  : {}),
+              },
+            },
+            undefined,
+          );
         })
         .catch((error: unknown) => {
           if (!managerError(error, respond)) {
@@ -639,7 +671,12 @@ export function createQuestionHandlers(
             observation?.record === question &&
             question.status === "pending" &&
             !authorize.authorize(prepared[index])
-              ? [question]
+              ? [
+                  {
+                    ...question,
+                    ...(params.includeIncarnation ? { incarnation: observation.incarnation } : {}),
+                  },
+                ]
               : [],
           );
           respond(true, { questions }, undefined);

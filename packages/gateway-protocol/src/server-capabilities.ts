@@ -1,5 +1,6 @@
 /** Stable feature names advertised in Gateway hello responses. */
 export const GATEWAY_SERVER_CAPS = {
+  QUESTION_CONDITIONAL_RESOLVE: "question-conditional-resolve-v1",
   AGENT_SESSION_ID_CREATE: "agent-session-id-create-v1",
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
   /** Queue modes and exact input receipts, not active-backend injection availability. */

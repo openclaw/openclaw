@@ -231,6 +231,7 @@ export async function sendGatewayHello(
         ? events
         : events.filter((event) => !event.startsWith("openclawId.")),
       capabilities: [
+        GATEWAY_SERVER_CAPS.QUESTION_CONDITIONAL_RESOLVE,
         GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE,
         SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,

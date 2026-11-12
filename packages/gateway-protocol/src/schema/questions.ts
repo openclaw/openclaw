@@ -11,6 +11,7 @@ const QuestionResolutionIdSchema = withSince(
   "2026.8",
   Type.String({ minLength: 1, maxLength: 128 }),
 );
+const QuestionIncarnationSchema = Type.String({ minLength: 1, maxLength: 128 });
 // UI chip/tag display cap shared by every question input and output shape.
 const QuestionHeaderSchema = Type.String({ maxLength: 12 });
 const QuestionSecretStoreAllowedHostsSchema = Type.Array(
@@ -114,6 +115,7 @@ export const QuestionStatusSchema = stringLiteralUnion([
  */
 export const QuestionRecordSchema = closedObject({
   id: NonEmptyString,
+  incarnation: Type.Optional(QuestionIncarnationSchema),
   questions: Type.Array(QuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
@@ -126,6 +128,7 @@ export const QuestionRecordSchema = closedObject({
 });
 
 export const QuestionRequestParamsSchema = closedObject({
+  includeIncarnation: Type.Optional(Type.Boolean()),
   id: Type.Optional(NonEmptyString),
   questions: Type.Array(QuestionRequestQuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
@@ -135,30 +138,43 @@ export const QuestionRequestParamsSchema = closedObject({
 });
 
 export const QuestionRequestResultSchema = closedObject({
+  incarnation: Type.Optional(QuestionIncarnationSchema),
   id: NonEmptyString,
   expiresAtMs: Type.Integer({ minimum: 0 }),
 });
 
 export const QuestionWaitAnswerParamsSchema = closedObject({
+  expectedIncarnation: Type.Optional(QuestionIncarnationSchema),
   id: NonEmptyString,
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   includeResolutionId: Type.Optional(withSince("2026.8", Type.Boolean())),
 });
 
 export const QuestionWaitAnswerResultSchema = Type.Union([
-  closedObject({ status: Type.Literal("pending") }),
+  closedObject({
+    status: Type.Literal("pending"),
+    incarnation: Type.Optional(QuestionIncarnationSchema),
+  }),
   closedObject({
     status: Type.Literal("answered"),
+    incarnation: Type.Optional(QuestionIncarnationSchema),
     answers: QuestionAnswersSchema,
     resolutionId: Type.Optional(QuestionResolutionIdSchema),
   }),
-  closedObject({ status: Type.Literal("cancelled") }),
-  closedObject({ status: Type.Literal("expired") }),
+  closedObject({
+    status: Type.Literal("cancelled"),
+    incarnation: Type.Optional(QuestionIncarnationSchema),
+  }),
+  closedObject({
+    status: Type.Literal("expired"),
+    incarnation: Type.Optional(QuestionIncarnationSchema),
+  }),
 ]);
 
 export const QuestionResolveParamsSchema = Type.Union([
   closedObject({
     id: NonEmptyString,
+    expectedIncarnation: Type.Optional(QuestionIncarnationSchema),
     answers: QuestionAnswersSchema,
     secretStoreAllowedHosts: Type.Optional(
       withSince("2026.8", QuestionSecretStoreAllowedHostsSchema),
@@ -168,19 +184,33 @@ export const QuestionResolveParamsSchema = Type.Union([
   }),
   closedObject({
     id: NonEmptyString,
+    expectedIncarnation: Type.Optional(QuestionIncarnationSchema),
     cancel: Type.Literal(true),
     resolvedBy: Type.Optional(NonEmptyString),
   }),
 ]);
 
 export const QuestionResolveResultSchema = Type.Union([
-  closedObject({ status: Type.Literal("answered"), answers: QuestionAnswersSchema }),
-  closedObject({ status: Type.Literal("cancelled") }),
+  closedObject({
+    status: Type.Literal("answered"),
+    answers: QuestionAnswersSchema,
+    incarnation: Type.Optional(QuestionIncarnationSchema),
+    resolutionId: Type.Optional(QuestionResolutionIdSchema),
+  }),
+  closedObject({
+    status: Type.Literal("cancelled"),
+    incarnation: Type.Optional(QuestionIncarnationSchema),
+  }),
 ]);
 
-export const QuestionGetParamsSchema = closedObject({ id: NonEmptyString });
+export const QuestionGetParamsSchema = closedObject({
+  id: NonEmptyString,
+  includeIncarnation: Type.Optional(Type.Boolean()),
+});
 export const QuestionGetResultSchema = closedObject({ question: QuestionRecordSchema });
-export const QuestionListParamsSchema = closedObject({});
+export const QuestionListParamsSchema = closedObject({
+  includeIncarnation: Type.Optional(Type.Boolean()),
+});
 export const QuestionListResultSchema = closedObject({
   questions: Type.Array(QuestionRecordSchema),
 });

@@ -104,6 +104,21 @@ afterEach(async () => {
 });
 
 describe("QuestionManager", () => {
+  it("rejects an old incarnation after reset even when id and question content are identical", async () => {
+    const original = manager.request({ id: "same-id", questions, timeoutMs: 10_000 });
+    const expectedIncarnation = manager.observe(original.id)!.incarnation;
+    manager.reset();
+    const successor = manager.request({ id: original.id, questions, timeoutMs: 10_000 });
+    expect(() => manager.resolve(original.id, answers, undefined, { expectedIncarnation })).toThrow(
+      QuestionManagerError,
+    );
+    expect(successor.status).toBe("pending");
+    expect(() => manager.waitAnswer(original.id, 1, true, expectedIncarnation)).toThrow(
+      QuestionManagerError,
+    );
+    expect(manager.observe(successor.id)!.incarnation).not.toBe(expectedIncarnation);
+  });
+
   it("hides a committing question on reset and settles it without touching a reused id", async () => {
     const commit = createDeferredCore();
     const onResolved = vi.fn();
