@@ -1510,6 +1510,12 @@
               "minimum": 1,
               "type": "integer"
             },
+            "maxChars": {
+              "description": "Per-text-field character limit (default 4000). The 80 KiB response cap still applies; inspect truncation flags and continue with nextOffset.",
+              "maximum": 64000,
+              "minimum": 1,
+              "type": "integer"
+            },
             "messageId": {
               "description": "Return history around this message id. Ignores offset; limit bounds the window.",
               "minLength": 1,
