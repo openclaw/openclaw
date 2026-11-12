@@ -812,7 +812,12 @@ describe("chat transcript rendering", () => {
     });
     const answer = message("assistant", text, answeredAt, {
       stopReason: "stop",
-      __openclaw: { id: "timestamp-answer", runId, runTerminal: true },
+      __openclaw: {
+        id: "timestamp-answer",
+        runId,
+        runTerminal: true,
+        recordTimestampMs: startedAt - 1_000 + 35 * 60_000 + 17_000,
+      },
     });
     const call = { type: "toolCall", id: "ask", name: "ask_user", arguments: {} };
     const work = [
