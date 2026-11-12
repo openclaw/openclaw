@@ -125,9 +125,26 @@ function isRunGrantedDirectoryEntry(entry: ToolSearchCatalogEntry): boolean {
 export function buildRunGrantedToolDirectory(
   catalogRef: ToolSearchCatalogRef | undefined,
 ): string | undefined {
-  const rows = (catalogRef?.current?.entries ?? [])
+  const entries = catalogRef?.current?.entries ?? [];
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
+  const rows = entries
     .filter((entry) => !entry.directVisible && isRunGrantedDirectoryEntry(entry))
-    .map(prepareToolDirectoryRow)
+    .map((entry) => {
+      const row = prepareToolDirectoryRow(entry);
+      // A bare name that collides or needs an exact id would fail lookup; list the id.
+      if (!row || (!entry.requiresExactId && nameCounts.get(entry.name) === 1)) {
+        return row;
+      }
+      const id = formatToolDirectoryIdentifier(entry.id);
+      if (!id) {
+        return undefined;
+      }
+      row.label = `- ${id}`;
+      return row;
+    })
     .filter((row): row is ToolDirectoryRow => row !== undefined)
     .toSorted((left, right) => (left.label < right.label ? -1 : 1));
   if (rows.length === 0) {

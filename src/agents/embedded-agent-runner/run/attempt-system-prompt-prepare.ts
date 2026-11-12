@@ -86,6 +86,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   referencePaths?: Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
   remoteWorkspace?: boolean;
   toolSchemaDirectoryPrompt?: () => string | undefined;
+  /** Pre-rendered run-granted listing for callers whose catalog is gone after projection. */
+  runGrantedToolDirectory?: () => string | undefined;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
   effectiveTools: PromptTools;
@@ -527,7 +529,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         ...turnInstructions,
       ];
       const runGrantedTools = runGrantedToolsListed
-        ? buildRunGrantedToolDirectory(params.toolSearchCatalogRef)
+        ? (params.runGrantedToolDirectory?.() ??
+          buildRunGrantedToolDirectory(params.toolSearchCatalogRef))
         : undefined;
       if (runGrantedTools) {
         fragments.push({ kind: "runtime-instruction", text: runGrantedTools });

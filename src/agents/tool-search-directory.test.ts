@@ -53,6 +53,22 @@ describe("run-granted tools in the Tool Search directory", () => {
     expect(buildRunGrantedToolDirectory(grantedRef)).toContain("- skill_library (core)");
     expect(buildRunGrantedToolDirectory(catalogRef(base))).toBeUndefined();
   });
+
+  it("lists an exact id that resolves when another source shares the granted name", async () => {
+    const ref = catalogRef([createStubTool("skill_library")]);
+    addClientToolsToToolCatalog({
+      enabled: true,
+      tools: [createStubTool("skill_library")],
+      catalogRef: ref,
+    });
+    const listing = buildRunGrantedToolDirectory(ref) ?? "";
+    const listed = /^- (\S+): /m.exec(listing)?.[1];
+
+    expect(listed).toBeDefined();
+    expect(listed).not.toBe("skill_library");
+    const runtime = new ToolSearchRuntime({ catalogRef: ref });
+    await expect(runtime.describe(listed!)).resolves.toMatchObject({ name: "skill_library" });
+  });
 });
 
 describe("lean Tool Search directory", () => {
