@@ -27,14 +27,14 @@ import {
   isOpenAIApiBaseUrl,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./chatgpt-default-model.js";
-import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import { applyOpenAIConfig } from "./default-models.js";
 import { classifyOpenAiFailoverCode } from "./failover-code.js";
 import {
   OPENAI_MANIFEST_PROVIDER,
   OPENAI_GPT_54_MAX_TOKENS,
   OPENAI_CHAT_LATEST_COST,
 } from "./model-catalog-config.js";
+import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./model-default-refs.js";
 import {
   buildOpenAIUnknownModelHint,
   OPENAI_CHAT_LATEST_MODEL_ID,
@@ -267,7 +267,6 @@ export function buildOpenAIProvider(): ProviderPlugin {
     if (method.id !== "api-key") {
       throw new Error(`OpenAI provider contract has unknown auth method: ${method.id}`);
     }
-    method.starterModel = apiKeyRuntime.starterModel;
     method.run = apiKeyRuntime.run;
     method.runNonInteractive = apiKeyRuntime.runNonInteractive;
     method.validateNonInteractive = apiKeyRuntime.validateNonInteractive;

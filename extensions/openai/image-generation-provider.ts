@@ -23,7 +23,6 @@ import {
   isOpenAICodexBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./chatgpt-default-model.js";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 import {
   annotateDirectImageAuthFailure,
@@ -37,6 +36,7 @@ import {
   OPENAI_SUPPORTED_SIZES,
   OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL,
 } from "./image-generation-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./model-default-refs.js";
 import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 

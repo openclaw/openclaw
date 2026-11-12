@@ -1,18 +1,43 @@
 import {
+  listAgentIds,
+  resolveAgentEffectiveModelPrimary,
+  resolveAllowedModelRef,
+} from "openclaw/plugin-sdk/agent-runtime";
+import {
   applyAgentDefaultModelPrimary,
   ensureModelAllowlistEntry,
   resolveAgentModelPrimaryValue,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
+import { OPENAI_DEFAULT_MODEL } from "./model-default-refs.js";
 
-export const OPENAI_DEFAULT_MODEL = "openai/gpt-6-astra";
 export const OPENAI_DEFAULT_IMAGE_MODEL = "gpt-image-2";
 export const OPENAI_DEFAULT_TTS_MODEL = "gpt-4o-mini-tts";
 export const OPENAI_DEFAULT_TTS_VOICE = "alloy";
 export const OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL = "gpt-4o-transcribe";
 export const OPENAI_DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small";
 
-export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+function applyAllowedOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig | undefined {
+  // A shared default must remain usable for every agent that would inherit it.
+  // Check before adding metadata: a legacy model map may itself be the restriction.
+  const inheritingAgents = listAgentIds(cfg).filter(
+    (agentId) => !resolveAgentEffectiveModelPrimary(cfg, agentId),
+  );
+  if (
+    [undefined, ...inheritingAgents].some(
+      (agentId) =>
+        "error" in
+        resolveAllowedModelRef({
+          cfg,
+          agentId,
+          catalog: [],
+          raw: OPENAI_DEFAULT_MODEL,
+          defaultProvider: "openai",
+        }),
+    )
+  ) {
+    return undefined;
+  }
   const configuredModel = cfg.agents?.defaults?.model;
   const configuredRefs = [
     resolveAgentModelPrimaryValue(configuredModel),
@@ -46,8 +71,15 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return applyAllowedOpenAIProviderConfig(cfg) ?? cfg;
+}
+
 export function applyOpenAIConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const next = applyOpenAIProviderConfig(cfg);
+  const next = applyAllowedOpenAIProviderConfig(cfg);
+  if (!next) {
+    return cfg;
+  }
   return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) === undefined
     ? applyAgentDefaultModelPrimary(next, OPENAI_DEFAULT_MODEL)
     : next;

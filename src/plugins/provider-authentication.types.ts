@@ -174,7 +174,7 @@ export type ProviderAuthMethod = {
   /** Provider-owned model used to validate app-guided secret setup. */
   starterModel?: string;
   /**
-   * Initialize an unset agent model after successful login or credential reuse.
+   * Initialize an unset agent model after successful login or credential reuse when policy permits.
    * Login still requires an inference-capable result's `defaultModel`; imports use `starterModel`.
    * Omit to preserve existing login behavior, including an unset model.
    */

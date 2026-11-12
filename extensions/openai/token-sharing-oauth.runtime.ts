@@ -20,7 +20,7 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./chatgpt-default-model.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./model-default-refs.js";
 import {
   createOpenAIAuthorizationCodeForm,
   withOpenAIOAuthResponse,

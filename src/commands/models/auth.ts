@@ -70,7 +70,7 @@ import {
   allowProviderModelsInConfig,
   applyProviderLoginDefaultModel,
   applyProviderLoginInitialDefaultModel,
-  hasProviderLoginModelSelection,
+  canInitializeProviderLoginDefaultModel,
   withoutProviderModelPolicy,
   type ProviderModelAccess,
 } from "./auth-model-policy.js";
@@ -359,7 +359,15 @@ async function runProviderAuthMethod(
   const shouldUpdateConfig =
     (isRecord(configPatch) && Object.keys(configPatch).length > 0) ||
     Boolean(login.setDefault && defaultModel) ||
-    Boolean(initializeDefault && !hasProviderLoginModelSelection(loginConfig, login.agentId));
+    Boolean(
+      initializeDefault &&
+      canInitializeProviderLoginDefaultModel(
+        loginConfig,
+        login.agentId,
+        login.provider.id,
+        initializeDefault,
+      ),
+    );
   if (profiles.length > 0 || shouldUpdateConfig) {
     await login.beforePersistentEffect?.();
   }
@@ -413,6 +421,7 @@ async function runProviderAuthMethod(
             const initialized = applyProviderLoginInitialDefaultModel(
               next,
               login.agentId,
+              login.provider.id,
               initializeDefault,
             );
             initializedDefault = initialized !== next;
@@ -886,7 +895,15 @@ async function runModelsAuthLoginFlow(
         : undefined;
     let initializedDefault = false;
     let connectedConfig = context.config;
-    if (initialModel && !hasProviderLoginModelSelection(context.config, context.agentId)) {
+    if (
+      initialModel &&
+      canInitializeProviderLoginDefaultModel(
+        context.config,
+        context.agentId,
+        selectedProvider.id,
+        initialModel,
+      )
+    ) {
       opts.signal?.throwIfAborted();
       try {
         connectedConfig = await writeProviderAuthConfig({
@@ -900,6 +917,7 @@ async function runModelsAuthLoginFlow(
             const initialized = applyProviderLoginInitialDefaultModel(
               current,
               context.agentId,
+              selectedProvider.id,
               initialModel,
             );
             initializedDefault = initialized !== current;

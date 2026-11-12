@@ -37,8 +37,10 @@ initial chat model after credentials are saved. A normal login must still return
 an inference-capable result's `defaultModel`; identity-only authorization omits
 that recommendation. A completed credential import uses the same method's
 `starterModel`. The host initializes only when there is no existing primary or
-configured provider-model default, including in connection-only flows. Existing
-and concurrent selections win. On multi-agent Gateways, only the target agent is
+configured provider-model default and policy permits the recommendation,
+including in connection-only flows. Existing and concurrent selections win.
+The host does not widen an existing narrower provider restriction to initialize
+a recommended model. On multi-agent Gateways, only the target agent is
 initialized. Omit the policy to preserve existing behavior, including an unset
 model. Personal-account login does not change an agent's model.
 

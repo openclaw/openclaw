@@ -21,6 +21,8 @@ import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
+  resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -29,6 +31,7 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexCatalogCreateSession } from "../session-catalog-create.js";
 import { readCodexCliCredentialsAsync } from "./cli-credentials.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
@@ -149,6 +152,55 @@ async function expectNoLocalProfiles() {
 }
 
 describe("Codex migration credential inspection and persistence", () => {
+  it.each<NonNullable<MigrationProviderContext["config"]["agents"]>>([
+    { defaults: { modelPolicy: { allow: ["openai/gpt-6-astra"] } } },
+    { defaults: { models: { "openai/gpt-6-astra": {} } } },
+    { entries: { main: { modelPolicy: { allow: ["openai/gpt-6-astra"] } } } },
+  ])("keeps session creation available after a restricted OAuth import", async (restriction) => {
+    const { configState, ctx } = await createOAuthImport("acct_restricted");
+    configState.agents = {
+      ...restriction,
+      defaults: { workspace: fixture.workspaceDir, ...restriction.defaults },
+    };
+    const beforeDefaults = structuredClone(configState.agents.defaults);
+    const modelConfig = { resolveAllowedModelRef, resolveDefaultModelForAgent };
+    const beforeCreation = resolveCodexCatalogCreateSession(modelConfig, configState, "main");
+    expect(beforeCreation).toEqual({ model: "openai/gpt-6-astra", agentRuntime: "codex" });
+    const result = await provider.apply(ctx, await provider.plan(ctx));
+    expect(findItem(result.items, "auth:openai")).toMatchObject({ status: "migrated" });
+    expect(loadTargetAuthStore(fixture).profiles["openai:account-acct_restricted"]).toMatchObject({
+      type: "oauth",
+    });
+    expect(resolveCodexCatalogCreateSession(modelConfig, configState, "main")).toEqual(
+      beforeCreation,
+    );
+    expect(configState.agents?.defaults).toEqual(beforeDefaults);
+  });
+
+  it.each<NonNullable<MigrationProviderContext["config"]["agents"]>>([
+    { defaults: { modelPolicy: { allow: ["openai/gpt-6-astra"] } } },
+    { defaults: { models: { "openai/gpt-6-astra": {} } } },
+    { entries: { main: { modelPolicy: { allow: ["openai/gpt-6-astra"] } } } },
+  ])(
+    "does not return a default-model patch outside an existing restriction",
+    async (restriction) => {
+      const { configState, ctx } = await createOAuthImport("acct_restricted_return");
+      configState.agents = {
+        ...restriction,
+        defaults: { workspace: fixture.workspaceDir, ...restriction.defaults },
+      };
+      ctx.providerOptions = { configPatchMode: "return" };
+      ctx.runtime = createFailingConfigRuntime(configState);
+      const result = await provider.apply(ctx, await provider.plan(ctx));
+      expect(findItem(result.items, "auth:openai")).toMatchObject({ status: "migrated" });
+      expect(
+        result.items.find((item) => item.id === "auth:openai:config:agents-defaults")?.details
+          ?.value,
+      ).toEqual(configState.agents.defaults);
+      expect(configState.agents?.defaults?.model).toBeUndefined();
+    },
+  );
+
   it("does not open native credential storage when prompting is explicitly disabled", async () => {
     await writeAuth({
       OPENAI_API_KEY: "fixture-uninspected-key",

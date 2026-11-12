@@ -9,6 +9,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
+import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import {
   LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
   resolveConfiguredPrimaryProviderFallback,
@@ -45,7 +46,7 @@ export function applyProviderLoginDefaultModel(
   return next;
 }
 
-export function hasProviderLoginModelSelection(config: OpenClawConfig, agentId: string): boolean {
+function hasProviderLoginModelSelection(config: OpenClawConfig, agentId: string): boolean {
   return (
     Boolean(resolveAgentEffectiveModelPrimary(config, agentId)) ||
     Boolean(
@@ -64,13 +65,41 @@ export function hasProviderLoginModelSelection(config: OpenClawConfig, agentId: 
   );
 }
 
+/** Check the policy saving these credentials will produce, without changing it here. */
+export function canInitializeProviderLoginDefaultModel(
+  config: OpenClawConfig,
+  agentId: string,
+  provider: string,
+  model: string,
+): boolean {
+  if (hasProviderLoginModelSelection(config, agentId)) {
+    return false;
+  }
+  const connected = structuredClone(config);
+  // The existing access owner only widens policy when it hides this entire provider.
+  // An operator's narrower OpenAI restriction must keep its working implicit default.
+  allowProviderModelsInConfig(connected, agentId, provider);
+  return !(
+    "error" in
+    resolveAllowedModelRefCore({
+      cfg: connected,
+      agentId,
+      catalog: [],
+      raw: model,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    })
+  );
+}
+
 /** The login and credential-reuse paths share one current-config initialization decision. */
 export function applyProviderLoginInitialDefaultModel(
   config: OpenClawConfig,
   agentId: string,
+  provider: string,
   model: string,
 ): OpenClawConfig {
-  if (hasProviderLoginModelSelection(config, agentId)) {
+  if (!canInitializeProviderLoginDefaultModel(config, agentId, provider, model)) {
     return config;
   }
   const entries = listAgentEntries(config);

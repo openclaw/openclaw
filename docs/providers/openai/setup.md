@@ -13,19 +13,21 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 
 ## Getting started
 
-Fresh ChatGPT OAuth setup defaults to `openai/gpt-6.1-sol` for Codex browser
-login, device-code login, and inference-enabled Sign in with ChatGPT (Beta).
+Fresh OpenAI setup defaults to `openai/gpt-6.1-sol` with an API key, Codex
+browser or device-code login, or inference-enabled Sign in with ChatGPT (Beta).
 Connecting an agent through the Models page or `models auth login` also
-initializes Sol when no model has been selected. Existing explicit selections
-and configured provider-model defaults are preserved, including choices made
-while sign-in is running. Identity-only sign-in does not select an inference
-model. Direct OpenAI API-key setup keeps its separate Astra default.
-Offline login that reuses an existing Codex OAuth credential follows the same
-initial-model rule; reusing an API key does not initialize a model.
-Direct Codex OAuth imports also use Sol when they supply a missing default.
+initializes Sol when no model has been selected and the model policy permits it.
+Existing explicit selections and configured provider-model defaults are
+preserved, including choices made while sign-in is running. A narrower model
+restriction, such as an Astra-only allowlist, retains its working implicit
+default rather than silently permitting Sol. Identity-only sign-in does not
+select an inference model.
 
-Detected native Codex setup recommends Sol regardless of whether Codex itself
-uses a ChatGPT account or an API key. This is separate from OpenAI API-key setup.
+Offline login that reuses existing Codex OAuth or API-key credentials follows
+the same initial-model rule. Direct Codex OAuth imports also use Sol when they
+supply a permitted missing default. Detected native Codex setup recommends Sol
+with either a ChatGPT account or an API key. Existing installations are not
+automatically migrated.
 
 <Tabs>
   <Tab title="API key (OpenAI Platform)">
@@ -77,7 +79,7 @@ uses a ChatGPT account or an API key. This is separate from OpenAI API-key setup
     ```json5
     {
       env: { vars: { OPENAI_API_KEY: "example-openai-key-not-real" } },
-      agents: { defaults: { model: { primary: "openai/gpt-6-astra" } } },
+      agents: { defaults: { model: { primary: "openai/gpt-6.1-sol" } } },
     }
     ```
 
@@ -96,7 +98,7 @@ uses a ChatGPT account or an API key. This is separate from OpenAI API-key setup
     ```
 
     `chat-latest` is a moving alias. Fresh OpenAI API-key setup instead uses
-    `openai/gpt-6-astra`. The bare direct-API `openai/gpt-5.6` alias remains
+    `openai/gpt-6.1-sol`. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to Sol. Existing
     explicit primaries, including `openai/gpt-5.5`, remain unchanged. The
     `chat-latest` alias only accepts `medium` text verbosity; OpenClaw forces

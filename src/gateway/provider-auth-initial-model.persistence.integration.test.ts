@@ -7,11 +7,13 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
+import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
 import {
   runModelsAuthLoginFlowCore,
   runModelsAuthLoginFlowForGateway,
 } from "../commands/models/auth.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cleanupPluginLoaderFixturesForTest } from "../plugins/loader.test-fixtures.js";
@@ -64,13 +66,12 @@ async function loginFixture(
       };
   const result = {
     profiles: [{ profileId: "openai:initial-proof", credential }],
-    ...(!identityOnly
-      ? { defaultModel: apiKey ? "openai/gpt-6-astra" : "openai/gpt-6.1-sol" }
-      : {}),
+    ...(!identityOnly ? { defaultModel: "openai/gpt-6.1-sol" } : {}),
   };
-  const initialSelection = !apiKey
-    ? { starterModel: "openai/gpt-6.1-sol", defaultModelSelection: "if-unset" }
-    : {};
+  const initialSelection = {
+    starterModel: "openai/gpt-6.1-sol",
+    defaultModelSelection: "if-unset",
+  };
   const importSpec = options.reuse
     ? {
         credentialImport: {
@@ -208,7 +209,7 @@ it("initializes only the target agent while preserving its inherited fallback ch
 
 it.each([
   ["oauth", "gpt-6.1-sol"],
-  ["api-key", "gpt-6-astra"],
+  ["api-key", "gpt-6.1-sol"],
 ] as const)("selects the right default after reusing %s credentials", async (method, model) => {
   const { config, loginResult } = await loginFixture({
     method,
@@ -237,14 +238,60 @@ it.each(["global", "agent"] as const)(
   },
 );
 
-it.each(["identity-only", "api-key"] as const)(
-  "does not initialize a model for %s login",
-  async (method) => {
-    const { config } = await loginFixture({ method });
+it("initializes the Sol default after API-key login", async () => {
+  const { config } = await loginFixture({ method: "api-key" });
+  expect(resolveDefaultModelForAgent({ cfg: config, agentId: "main" })).toEqual({
+    provider: "openai",
+    model: "gpt-6.1-sol",
+  });
+});
+
+it("does not initialize a model for identity-only login", async () => {
+  const { config } = await loginFixture({ method: "identity-only" });
+  expect(config.agents?.defaults?.model).toBeUndefined();
+  expect(config.agents?.entries?.main?.model).toBeUndefined();
+});
+
+it.each<["oauth" | "api-key", boolean, AgentDefaultsConfig]>([
+  ["oauth", false, { modelPolicy: { allow: ["openai/gpt-6-astra"] } }],
+  ["api-key", false, { models: { "openai/gpt-6-astra": {} } }],
+  ["oauth", true, { models: { "openai/gpt-6-astra": {} } }],
+  ["api-key", true, { modelPolicy: { allow: ["openai/gpt-6-astra"] } }],
+])(
+  "preserves a permitted implicit default after %s login (reuse: %s)",
+  async (method, reuse, defaults) => {
+    const { config } = await loginFixture({ method, reuse, credentialOnly: !reuse, defaults });
     expect(config.agents?.defaults?.model).toBeUndefined();
-    expect(config.agents?.entries?.main?.model).toBeUndefined();
+    expect(config.agents?.defaults).toMatchObject(defaults);
+    expect(config.agents?.defaults?.models?.["openai/gpt-6.1-sol"]).toBeUndefined();
+    const selected = resolveDefaultModelForAgent({ cfg: config, agentId: "main" });
+    expect(selected).toEqual({ provider: "openai", model: "gpt-6-astra" });
+    expect(
+      resolveAllowedModelRefCore({
+        cfg: config,
+        agentId: "main",
+        catalog: [],
+        raw: `${selected.provider}/${selected.model}`,
+        defaultProvider: selected.provider,
+        defaultModel: selected.model,
+      }),
+    ).toMatchObject({ key: "openai/gpt-6-astra" });
   },
 );
+
+it("initializes Sol when saving credentials enables the previously hidden provider", async () => {
+  const { config } = await loginFixture({
+    defaults: { modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] } },
+  });
+  expect(resolveDefaultModelForAgent({ cfg: config, agentId: "main" })).toEqual({
+    provider: "openai",
+    model: "gpt-6.1-sol",
+  });
+  expect(config.agents?.defaults?.modelPolicy?.allow).toEqual([
+    "anthropic/claude-sonnet-4-6",
+    "openai/*",
+  ]);
+});
 
 it.each([
   ["existing-backend", "selected"],

@@ -214,7 +214,7 @@ describe("detectInferenceBackends", () => {
     ]);
     expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
     expect(candidates[0]?.detail).toBe("zai/glm-5.2 — already configured");
-    expect(candidates[1]?.modelRef).toBe("openai/gpt-6-astra");
+    expect(candidates[1]?.modelRef).toBe("openai/gpt-6.1-sol");
     expect(candidates[2]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
     expect(candidates[3]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
     expect(candidates[4]?.modelRef).toBe("openai/gpt-6.1-sol");
