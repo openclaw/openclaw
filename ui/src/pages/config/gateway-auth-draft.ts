@@ -47,7 +47,7 @@ export function stageGatewayAuthEdit(
   path: ConfigPath,
   edit: { value: unknown } | "remove",
 ): GatewayAuthDraft {
-  const relative = path.slice(2) as Array<string | number>;
+  const relative = path.slice(2);
   if (relative.length === 0) {
     const next = edit === "remove" ? {} : (asNullableRecord(structuredClone(edit.value)) ?? {});
     return { base: draft.base, next };
@@ -86,12 +86,11 @@ export function withGatewayAuthDraft(
 }
 
 export function gatewayAuthMode(auth: Readonly<AuthRecord>): GatewayAuthMode {
-  const mode = auth.mode;
-  if (typeof mode === "string" && (GATEWAY_AUTH_MODES as readonly string[]).includes(mode)) {
-    return mode as GatewayAuthMode;
-  }
-  // Without a mode the Gateway uses password auth when a password is set, otherwise token.
-  return hasCredential(auth.password) ? "password" : "token";
+  return (
+    GATEWAY_AUTH_MODES.find((mode) => mode === auth.mode) ??
+    // Without a mode the Gateway uses password auth when a password is set, otherwise token.
+    (hasCredential(auth.password) ? "password" : "token")
+  );
 }
 
 /** A saved (redacted) secret or a SecretRef counts; the Gateway checks it on apply. */

@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Show } from "solid-js";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
@@ -136,9 +137,7 @@ export function GatewayAuthSettings(props: {
               placeholder={t("configPage.gatewayAuth.userHeaderPlaceholder")}
               autocomplete="off"
               spellcheck="false"
-              value={String(
-                (auth().trustedProxy as { userHeader?: unknown } | undefined)?.userHeader ?? "",
-              )}
+              value={String(asNullableRecord(auth().trustedProxy)?.userHeader ?? "")}
               disabled={locked()}
               onInput={(event) =>
                 props.onPatch(
