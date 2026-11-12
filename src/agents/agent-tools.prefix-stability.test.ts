@@ -9,6 +9,7 @@ import { resolveChatSendCallerContext } from "../gateway/server-methods/gateway-
 import { createSessionMutationTestClient } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
@@ -140,6 +141,7 @@ it.each(["browser", "cli", "acp"] as const)(
       { agentId: "main", sessionKey, operatorAuthority },
       () => render(operator),
     );
+    expect(expected.names).toContain("message");
     expect(expected.names).toContain("sessions_create");
     expect(expected.names.includes("ask_user")).toBe(clientKind !== "acp");
     expect(createOpenClawCodingTools(operator).some((tool) => tool.name === "screen")).toBe(
@@ -166,6 +168,32 @@ it.each(["browser", "cli", "acp"] as const)(
     expect(refreshedNames).toContain("ask_user");
   },
 );
+
+it("retains WebChat prompt reactions independently of an external delivery route", async () => {
+  const { operator, wake, update, callerContext } = await webchatSession();
+  const external = {
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    To: "telegram:owner",
+    ChatType: "direct",
+  } as const;
+  await update(external);
+  // A WebChat operator declaration must not replace the configured external route.
+  await update({ ...callerContext, OriginatingChannel: "telegram" });
+  const render = (options: ToolOptions) => {
+    const message = createOpenClawCodingTools(options).find((tool) => tool.name === "message")!;
+    expect(message.parameters).toHaveProperty(
+      "properties.action.enum",
+      expect.arrayContaining(["react"]),
+    );
+    return JSON.stringify({ parameters: message.parameters, description: message.description });
+  };
+  const normal = render(operator);
+  await update({ Provider: "webchat", InputProvenance: wake.inputProvenance });
+  expect(render({ ...wake, sourceReplyDeliveryMode: "message_tool_only" })).toBe(normal);
+  expect(render(operator)).toBe(normal);
+});
 
 it.each([true, false])(
   "keeps GitHub definitions and the catalog across operator and wake turns (publication=%s)",
@@ -279,10 +307,25 @@ it("offers the same message definition on a source-bound completion turn", () =>
 it.each(["agent:main:operator-task", "agent:main:telegram:direct:owner"])(
   "keeps message definitions stable across CLI, recovery, and announce sources in %s",
   (sessionKey) => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+          },
+        },
+      ]),
+    );
     const messageDefinition = (options: ToolOptions) => {
-      const tool = createOpenClawCodingTools({ ...session, ...options, sessionKey }).find(
-        (entry) => entry.name === "message",
-      )!;
+      const tool = createOpenClawCodingTools({
+        ...session,
+        ...options,
+        sessionKey,
+      }).find((entry) => entry.name === "message")!;
+      expect(tool).toBeDefined();
       return JSON.stringify({ description: tool.description, parameters: tool.parameters });
     };
     const cli = messageDefinition({ messageProvider: undefined, messageTo: undefined });

@@ -1153,3 +1153,27 @@ See also [Scripts](https://docs.openclaw.ai/help/scripts) for public-facing scri
 ### Dynamic validator benchmark
 
 `node --import ./scripts/tsx.mjs scripts/bench-dynamic-validators.mts <jit|aot> [iterations] [warmup] [mcp|plugin|llm|llm-coerce]` measures the actual validation owners. Compare five interleaved fresh baseline/candidate processes per fixture; import/setup and warm CPU/wall costs are reported separately.
+
+### Message-tool request proof
+
+Run the maintained synthetic workload against a built product:
+
+```bash
+node scripts/perf/message-tool-availability.mjs --build <installed-build> \
+  --state .openclaw/tmp/message-proof/state --out .openclaw/tmp/message-proof/base \
+  --route none
+```
+
+The routes are `none`, `internal`, `external-webchat`, and `configured`.
+Stage baseline and candidate artifacts at the same disposable installation path;
+installation paths appear in prompts. Use the same state path for each edition,
+preserving the completed state elsewhere before the next run. Existing state and
+output paths are refused, never deleted. The script runs only an isolated agent,
+a loopback provider, and an optional synthetic direct-channel adapter.
+
+Each turn captures the received HTTP body bytes, then observes the actual Code
+Mode catalog. The six-stage flows cover normal/source-only/normal, internal wake,
+and process-reentry recovery, not a live Gateway restart. The configured route
+requires a synthetic adapter receipt. Provider usage fields are protocol fixtures,
+not token or billing measurements. No timing claim is made. The existing
+`scripts/perf/**` Knip entry covers this command and its same-file worker.

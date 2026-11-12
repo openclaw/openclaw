@@ -77,6 +77,14 @@ Code Mode catalog, including `screen`, without borrowing execution authority.
 The next operator declaration updates that session fact; current-turn execution
 gates and the live requesting-browser check still enforce calls.
 
+Message-tool listing uses configured channel capabilities and the recorded prompt
+source, not connection health or the current turn’s reaction grant. A WebChat
+operator declaration retains local prompt-reaction support even when the session
+keeps an external delivery route. A session with neither a supported source nor a
+configured messaging route omits the tool. This presentation-only omission does
+not become a permanent restriction on children or automations; their final policy
+and schema checks still apply.
+
 GitHub tool listing follows the session's Gateway publication capability and
 workspace support, not the current turn's operator or GitHub identity. Operator,
 channel, scheduled, heartbeat, and senderless wake turns retain the same

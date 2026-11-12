@@ -304,11 +304,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     },
   };
   let webSearchUnconfigured = false;
+  let messageToolAvailable = true;
   const constructTools = async (
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
     webSearchUnconfigured = false;
+    messageToolAvailable = true;
     additionalInheritedToolNamesRef.length = 0;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
@@ -381,6 +383,10 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         inboundEventKind: attempt.currentInboundEventKind,
         inputProvenance: attempt.inputProvenance,
         disableMessageTool: attempt.disableMessageTool,
+        retainUnavailableMessageTool: true,
+        onMessageToolAvailability: (available) => {
+          messageToolAvailable = available;
+        },
         forceMessageTool: attempt.forceMessageTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
         additionalInheritedToolNamesRef,
@@ -517,6 +523,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeSkills,
       computerContextEpoch,
       skillInstructionDeliveryCache,
+      get messageToolAvailable() {
+        return messageToolAvailable;
+      },
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       effectiveToolsAllow,

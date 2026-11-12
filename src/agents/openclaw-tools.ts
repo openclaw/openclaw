@@ -381,11 +381,13 @@ function* createOpenClawToolsSteps(
     hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
+  let messageToolAvailable = false;
   const messageTool = options?.disableMessageTool
     ? null
     : ((yield {
         message: {
           ...options,
+          config: resolvedConfig ?? {},
           agentSessionKey:
             options?.messageToolTurnCapability?.sessionKey ?? options?.agentSessionKey,
           runSessionKey:
@@ -396,6 +398,10 @@ function* createOpenClawToolsSteps(
             options?.messageToolTurnCapability?.token ?? options?.messageActionTurnCapability,
           admitScheduledInvocation: options?.admitScheduledMessageInvocation,
           preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
+          onAvailability: (available) => {
+            messageToolAvailable = available;
+            options?.onMessageToolAvailability?.(available);
+          },
           currentMessagingTarget:
             options?.currentMessagingTarget ??
             (options?.sourceReplyOnly ? options.agentTo : undefined),
@@ -560,7 +566,9 @@ function* createOpenClawToolsSteps(
           cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
         })
       : []),
-    includeMessageTool ? messageTool : null,
+    includeMessageTool && (messageToolAvailable || options?.retainUnavailableMessageTool)
+      ? messageTool
+      : null,
     !isCoreCanvasHostEnabled(resolvedConfig) && !currentChannelWidgetPresenter
       ? null
       : createShowWidgetTool({

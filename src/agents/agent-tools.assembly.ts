@@ -348,9 +348,15 @@ export function* assembleOpenClawCodingTools(
     accountId: options?.agentAccountId,
     channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
   });
+  let messageToolAvailable = true;
   const pluginToolOptions = {
     ...options,
     listingClientCaps,
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available: boolean) => {
+      messageToolAvailable = available;
+      options?.onMessageToolAvailability?.(available);
+    },
     agentSessionKey: options?.sessionKey,
     agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
     agentTo: options?.messageTo,
@@ -637,7 +643,11 @@ export function* assembleOpenClawCodingTools(
   };
   const finalizedTools = finalizeAgentTools({
     ...options,
-    tools: authorizedTools,
+    // Route omission is presentation, not a durable child or scheduled deny.
+    tools:
+      messageToolAvailable || options?.retainUnavailableMessageTool
+        ? authorizedTools
+        : authorizedTools.filter((tool) => tool.name !== "message"),
     wrapBeforeToolCallHook: preparedTools
       ? (tool) =>
           options?.wrapBeforeToolCallHook !== false &&

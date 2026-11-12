@@ -3,8 +3,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildRuntimeAccountStatusSnapshot } from "../plugin-sdk/status-helpers.js";
-import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
+import { readChannelAccountConfigured } from "./account-configuration.js";
 import { describeChannelAccount } from "./account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
@@ -13,6 +13,8 @@ import {
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { applyChannelAccountState, resolveChannelAccountState } from "./status/account-state.js";
+
+export { resolveChannelAccountEnabled } from "./account-configuration.js";
 
 /** Projects an admitted lifetime without resolving its potentially stale account configuration. */
 export function buildChannelAccountSnapshotFromRuntime(
@@ -130,28 +132,10 @@ export function buildChannelAccountNotes(
   ].filter((note): note is string => Boolean(note));
 }
 
-export function resolveChannelAccountEnabled(params: {
-  plugin: ChannelPlugin;
-  account: unknown;
-  cfg: OpenClawConfig;
-}): boolean {
-  if (params.plugin.config.isEnabled) {
-    return params.plugin.config.isEnabled(params.account, params.cfg);
-  }
-  const enabled = isRecord(params.account) ? params.account.enabled : undefined;
-  return enabled !== false;
-}
-
 export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
 }): Promise<boolean> {
-  if (params.plugin.config.isConfigured) {
-    return await params.plugin.config.isConfigured(params.account, params.cfg);
-  }
-  // Status inspection can project an explicit configured=false marker. Account
-  // objects otherwise default to configured unless the plugin owns a stricter check.
-  const configured = isRecord(params.account) ? params.account.configured : undefined;
-  return configured !== false;
+  return await readChannelAccountConfigured(params);
 }

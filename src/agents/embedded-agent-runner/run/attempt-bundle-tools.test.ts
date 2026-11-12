@@ -78,6 +78,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       setup: createAttemptSetupFixture(),
       isRawModelRun: false,
       preparedToolBase: {
+        messageToolAvailable: true,
         cronCreatorToolAllowlist: [],
         cronCreatorToolAllowlistCaptureRef: {},
         inheritedToolAllowlist,
@@ -213,6 +214,36 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         expect(mocks.createBundleLspToolRuntime).toHaveBeenCalledWith(reservation);
       }
     },
+  );
+
+  it.each(["available", "policy-removed", "quarantined"] as const)(
+    "keeps presentation omission separate from final permission capture: %s",
+    async (mode) =>
+      await withStateDirEnv("message-presentation-capture-", async () => {
+        const inherited = ["message"];
+        const message = createStubTool("message");
+        const input = createInput(inherited, mode === "policy-removed" ? [] : [message]);
+        input.preparedToolBase = { ...input.preparedToolBase, messageToolAvailable: false };
+        input.preparedToolBase.cronCreatorToolAllowlist.push({ name: "message" });
+        if (mode === "quarantined") {
+          const { filterRuntimeCompatibleTools } = await vi.importActual<
+            typeof import("../../tool-schema-projection.js")
+          >("../../tool-schema-projection.js");
+          mocks.filterRuntimeCompatibleTools.mockImplementation(filterRuntimeCompatibleTools);
+          message.parameters = { type: "array" };
+        }
+        const result = await prepare(input);
+        expect(toolNames(result.uncompactedEffectiveTools)).not.toContain("message");
+        expect(inherited.includes("message")).toBe(mode === "available");
+        expect(
+          input.preparedToolBase.cronCreatorToolAllowlist.some(
+            (entry) => (typeof entry === "string" ? entry : entry.name) === "message",
+          ),
+        ).toBe(mode === "available");
+        result.refreshTools(() => {});
+        expect(toolNames(result.uncompactedEffectiveTools)).not.toContain("message");
+        expect(inherited.includes("message")).toBe(mode === "available");
+      }),
   );
 
   it.each([

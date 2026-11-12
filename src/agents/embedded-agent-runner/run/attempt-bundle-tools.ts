@@ -251,7 +251,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         sessionId: params.attempt.sessionId,
       });
-      return schemaProjection.tools;
+      // Presentation-only absence must not become a delegated capability denial.
+      // Capture after final policy/quarantine, then omit from the model surface.
+      return !params.preparedToolBase.messageToolAvailable
+        ? schemaProjection.tools.filter((tool) => tool.name !== "message")
+        : schemaProjection.tools;
     };
     phases.mark("attempt.bundle-tools.project");
     const uncompactedEffectiveTools = await withRuntimeToolSchemaQuarantine((record) =>

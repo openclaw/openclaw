@@ -86,6 +86,9 @@ export type OpenClawSharedToolsOptions = {
   webSearchEnabled?: boolean;
   /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
   onWebSearchConfiguration?: (configured: boolean) => void;
+  /** Assembly records permission ceilings before applying route-only presentation. */
+  retainUnavailableMessageTool?: boolean;
+  onMessageToolAvailability?: (available: boolean) => void;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Dynamic audio state for runs that can accept steered input after tool creation. */

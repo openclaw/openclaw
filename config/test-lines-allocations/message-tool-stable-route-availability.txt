@@ -1,0 +1,5 @@
+# Exact net LF growth against 24819901d92ee379b5b36a957276d3b3657d7b79.
+# Route absence, final child/cron capture and quarantine, stable source prefixes,
+# configured/offline/modern sender facts, pending sync config and payload-only eligibility.
+# Existing reaction/scheduled fixtures follow the real prompt producer. Shared scalar unchanged.
+397

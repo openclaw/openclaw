@@ -6,6 +6,8 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import { getChannelPlugin, getLoadedChannelPlugin } from "../../channels/plugins/index.js";
 import {
   type ChannelMessageActionDiscoveryInput,
+  createMessageActionDiscoveryContext,
+  resolveConfiguredOutboundMessageToolDiscoveryAdapter,
   listCrossChannelSchemaSupportedMessageActionsSteps,
   listMessageActionDiscoveryChannels,
   type MessageActionDiscoverySteps,
@@ -18,6 +20,7 @@ import {
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { listRouteBindings } from "../../config/bindings.js";
+import { WEBCHAT_PROMPT_REACTIONS_CAPABILITY } from "../../config/sessions/client-capabilities.js";
 import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -229,11 +232,13 @@ function inferDeliveryFromSessionKey(
 }
 
 /** A session can receive WebChat prompts independently of its delivery route. */
-export function supportsMessageToolPromptReactions(options?: MessageToolCurrentContextOptions) {
-  return (
-    Boolean(options?.agentSessionKey) ||
-    normalizeMessageChannel(options?.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
-  );
+export function supportsMessageToolPromptReactions(
+  options?: MessageToolCurrentContextOptions,
+  entry?: SessionEntry,
+) {
+  return options?.agentSessionKey
+    ? entry?.clientCapabilities?.includes(WEBCHAT_PROMPT_REACTIONS_CAPABILITY) === true
+    : normalizeMessageChannel(options?.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL;
 }
 
 export function resolveMessageToolDefinitionContext(
@@ -250,9 +255,7 @@ export function resolveMessageToolDefinitionContext(
     currentChannelProvider:
       stored?.context.channel ??
       delivery?.channel ??
-      (parseAgentSessionKey(options.agentSessionKey)?.rest.startsWith("dashboard:")
-        ? INTERNAL_MESSAGE_CHANNEL
-        : undefined),
+      (entry?.delivery?.kind === "internal" ? INTERNAL_MESSAGE_CHANNEL : undefined),
     currentChannelId: stored?.context.to ?? delivery?.to,
     currentChatType: stored?.origin.chatType ?? delivery?.chatType,
     currentThreadTs: stored?.context.threadId?.toString() ?? delivery?.threadId,
@@ -421,13 +424,16 @@ function resolveMessageToolDiscoveryChannels(params: MessageToolDiscoveryParams)
 
 function* resolveMessageToolSchemaActionsSteps(
   params: MessageToolDiscoveryParams,
-): MessageActionDiscoverySteps<string[]> {
+): MessageActionDiscoverySteps<{ actions: string[]; available: boolean }> {
   const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
-  const actions = new Set<string>(currentChannel ? ["send"] : ["send", "broadcast"]);
+  const actions = new Set<string>();
+  let available =
+    currentChannel === INTERNAL_MESSAGE_CHANNEL || params.supportsPromptReactions === true;
   if (currentChannel) {
     for (const action of yield* listChannelSupportedActionsSteps(
       buildMessageActionDiscoveryInput(params, currentChannel),
     )) {
+      available = true;
       actions.add(action);
     }
   }
@@ -440,22 +446,52 @@ function* resolveMessageToolSchemaActionsSteps(
       ? yield* listCrossChannelSchemaSupportedMessageActionsSteps(input)
       : yield* listChannelSupportedActionsSteps(input);
     for (const action of discovered) {
+      available = true;
       actions.add(action);
     }
   }
-  return Array.from(actions);
+  if (!available) {
+    for (const channel of resolveMessageToolDiscoveryChannels(params)) {
+      const outbound = resolveConfiguredOutboundMessageToolDiscoveryAdapter(
+        channel.id,
+        params.preparedMessageToolCatalog,
+      );
+      if (!outbound) {
+        continue;
+      }
+      const configured = yield {
+        pluginId: channel.id,
+        actions: outbound,
+        context: createMessageActionDiscoveryContext(
+          buildMessageActionDiscoveryInput(params, channel.id),
+        ),
+        includeActions: true,
+      };
+      if (configured.actions.includes("send")) {
+        available = true;
+        break;
+      }
+    }
+  }
+  // Defaults describe the retained schema, not evidence of an executable route.
+  actions.add("send");
+  if (!currentChannel) {
+    actions.add("broadcast");
+  }
+  return { actions: Array.from(actions), available };
 }
 
 export function resolveMessageToolActionSchemaActions(
   params: MessageToolDiscoveryParams,
 ): string[] {
-  return runMessageActionDiscovery(resolveMessageToolActionSchemaActionsSteps(params));
+  return runMessageActionDiscovery(resolveMessageToolActionSchemaActionsSteps(params)).actions;
 }
 
 function* resolveMessageToolActionSchemaActionsSteps(
   params: MessageToolDiscoveryParams,
-): MessageActionDiscoverySteps<string[]> {
-  const discoveredActions = yield* resolveMessageToolSchemaActionsSteps(params);
+): MessageActionDiscoverySteps<{ actions: string[]; available: boolean }> {
+  const discovered = yield* resolveMessageToolSchemaActionsSteps(params);
+  const discoveredActions = discovered.actions;
   if (params.supportsPromptReactions && !discoveredActions.includes("react")) {
     discoveredActions.push("react");
   }
@@ -464,11 +500,14 @@ function* resolveMessageToolActionSchemaActionsSteps(
     agentId: params.agentId,
   });
   if (!allowedActions) {
-    return sortUniqueStrings(discoveredActions);
+    return { actions: sortUniqueStrings(discoveredActions), available: discovered.available };
   }
   const allow = new Set(allowedActions);
   const filtered = discoveredActions.filter((action) => allow.has(action));
-  return sortUniqueStrings(filtered.length > 0 ? filtered : allowedActions);
+  return {
+    actions: sortUniqueStrings(filtered.length > 0 ? filtered : allowedActions),
+    available: discovered.available,
+  };
 }
 
 function* resolveIncludeCapabilitySteps(
@@ -568,6 +607,10 @@ function* buildMessageToolSchemaSteps(
   });
 }
 
+export function resolveMessageToolDiscovery(params: MessageToolDiscoveryParams) {
+  return runMessageActionDiscovery(resolveMessageToolDiscoverySteps(params));
+}
+
 export function resolveMessageToolDiscoveryAsync(params: MessageToolDiscoveryParams) {
   return runMessageActionDiscoveryAsync(resolveMessageToolDiscoverySteps(params));
 }
@@ -576,11 +619,12 @@ function* resolveMessageToolDiscoverySteps(
   params: MessageToolDiscoveryParams,
 ): MessageActionDiscoverySteps<{
   actions: string[];
+  available: boolean;
   schema: ReturnType<typeof buildMessageToolSchemaFromActions>;
 }> {
-  const actions = yield* resolveMessageToolActionSchemaActionsSteps(params);
+  const { actions, available } = yield* resolveMessageToolActionSchemaActionsSteps(params);
   const schema = yield* buildMessageToolSchemaSteps(params, actions);
-  return { actions, schema };
+  return { actions, schema, available };
 }
 
 export function resolveAgentAccountId(value?: string): string | undefined {

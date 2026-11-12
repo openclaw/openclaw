@@ -10,6 +10,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionReactions } from "../../config/sessions/session-reaction-store.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -96,7 +97,14 @@ beforeEach(async () => {
     payload: { ok: true },
     dryRun: false,
   });
-  await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  await upsertSessionEntryCore(scope, {
+    sessionId: scope.sessionId,
+    updatedAt: 1,
+    ...deriveSessionMetaPatch({
+      sessionKey: scope.sessionKey,
+      ctx: { Provider: "webchat", GatewayClientCaps: [] },
+    }),
+  });
   recorder = prompt("Please check this", { id: "human", name: "Human" });
   run = prepareRun(config, runId, scope.agentId, "reaction-test");
   caller = await admitCaller(run);
