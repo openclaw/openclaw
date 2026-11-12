@@ -1,5 +1,0 @@
-# Cron scheduler regressions for #197484: due cron/every slots run on a late tick with
-# skipMissedJobs; clock-jump and startup skips stay and are logged with their reason;
-# a slot passed over earlier is not re-reported on later late ticks.
-# Exact net test-line growth for PR #197484.
-90

@@ -58,8 +58,6 @@ type SchedulerActor = {
   lastMonotonicMs?: number;
   wakeAtMs?: number;
   catchupNeeded?: boolean;
-  /** Wall time outran monotonic time (clock step or suspend) since the last tick. */
-  clockJumped?: boolean;
   startupBatch?: {
     immediateReceiptIds: Map<string, string>;
     overflow: Map<string, StartupOverflow>;
@@ -260,12 +258,6 @@ function isAgentWork(job: CronJob): boolean {
   return job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
 }
 
-/**
- * Why a catch-up pass runs. Only "startup" and "clock-jump" can mean slots passed
- * while nothing could run them; a "late-tick" pass still runs slots that came due.
- */
-type CatchupReason = "startup" | "clock-jump" | "late-tick";
-
 function boundedCatchup(
   database: OpenClawStateDatabase,
   actor: SchedulerActor,
@@ -275,7 +267,7 @@ function boundedCatchup(
   result: CronSchedulerResult,
   jobs: ReadonlyMap<string, CronJob>,
   options: { skipJobIds?: string[]; deferAgentWork?: boolean; liveSinceMs?: number } | undefined,
-  reason: CatchupReason,
+  lateWake: boolean,
 ): { immediate: CronJob[]; overflow: Map<string, StartupOverflow> } {
   if (jobs.size === 0) {
     return { immediate: [], overflow: new Map() };
@@ -344,35 +336,19 @@ function boundedCatchup(
         }
         if (
           config.cronConfig?.skipMissedJobs &&
-          (job.schedule.kind === "cron" || job.schedule.kind === "every")
+          (job.schedule.kind === "cron" || job.schedule.kind === "every") &&
+          // A wake that is only late, with no restart or clock jump, still runs the slot
+          // that came due while this Gateway was up.
+          !(lateWake && job.state.nextRunAtMs !== undefined && job.state.nextRunAtMs <= nowMs)
         ) {
-          // skipMissedJobs is for slots missed while the Gateway was down or the host
-          // clock jumped. A tick that is only late (a busy host delays the wake while
-          // wall and monotonic time advance together) must still run a slot that came
-          // due; skipping it drops the run with no record.
-          const dueAtMs = job.state.nextRunAtMs;
-          if (reason === "late-tick" && dueAtMs !== undefined && dueAtMs <= nowMs) {
-            missed.push(job);
-            continue;
-          }
           if (
             recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications })
           ) {
             changed.push(job);
-            if (job.state.nextRunAtMs !== dueAtMs) {
-              skippedSlots.push(job.id);
-            }
           }
         } else {
           missed.push(job);
         }
-      }
-      if (skippedSlots.length > 0) {
-        result.logs.push({
-          level: "info",
-          fields: { jobIds: skippedSlots, reason },
-          message: "cron: skipped missed slots (cron.skipMissedJobs)",
-        });
       }
       missed.sort((left, right) => (left.state.nextRunAtMs ?? 0) - (right.state.nextRunAtMs ?? 0));
       // Startup defers agent work missed during downtime. A due slot that came due
@@ -491,7 +467,7 @@ export function runCronSchedulerInWorker(
   const elapsedMonotonicMs =
     actor.lastMonotonicMs === undefined ? 0 : monotonicMs - actor.lastMonotonicMs;
   const clockJumped = elapsedWallMs - elapsedMonotonicMs > MIN_REFIRE_GAP_MS;
-  actor.clockJumped ||= clockJumped;
+  // Refreshes keep the last tick's baselines, so a later tick still sees this jump.
   actor.catchupNeeded ||=
     clockJumped || (actor.wakeAtMs !== undefined && nowMs > actor.wakeAtMs + MIN_REFIRE_GAP_MS);
   const forwardJump = actor.catchupNeeded;
@@ -523,7 +499,7 @@ export function runCronSchedulerInWorker(
         result,
         jobs,
         command.type === "cron.schedulerStart" ? command.input : undefined,
-        starting ? "startup" : actor.clockJumped ? "clock-jump" : "late-tick",
+        !starting && !clockJumped,
       );
       candidates = catchup.immediate;
       overflow = catchup.overflow;
@@ -647,7 +623,6 @@ export function runCronSchedulerInWorker(
   result.nextWakeAtMs = armActor(input.storeKey, actor, snapshot, currentJobs(), nowMs);
   if (command.type !== "cron.schedulerRefresh") {
     actor.catchupNeeded = false;
-    actor.clockJumped = false;
     actor.lastWallMs = nowMs;
     actor.lastMonotonicMs = monotonicMs;
   }
