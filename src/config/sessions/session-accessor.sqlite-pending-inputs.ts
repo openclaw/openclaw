@@ -161,7 +161,6 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   // Timers can retain this owner through their async frame after settlement.
   // Keep replay facts, but release the admission and staging closures.
   owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
-  owner.assertMentionInvitationCurrent = undefined;
   owner.finish = () => {};
   owner.authority = undefined;
   owner.promotedOwner = undefined;
@@ -209,9 +208,6 @@ function assertPendingInputOwnerCurrent(
     owner.authority.withPreparedCurrent(facts, owner.assertCurrent, assertSourceCurrent);
   } else {
     owner.assertCurrent();
-  }
-  if (!owner.consumed) {
-    owner.assertMentionInvitationCurrent?.();
   }
 }
 
@@ -639,13 +635,6 @@ export function resolveSessionPendingInputAppend(
       inputId: transcriptInputId,
       message: parseSessionPendingInputMessage(owner.messageJson),
       alreadyPromoted,
-      ...(!alreadyPromoted
-        ? {
-            mentionInvitations: owner.sources.flatMap((source) =>
-              source.mentionInvitation ? [source.mentionInvitation] : [],
-            ),
-          }
-        : {}),
       sourceInputIds: sources.map((source) => source.input_id),
       ...(alreadyPromoted && stageRelocation ? { stageRelocation } : {}),
     };
@@ -659,7 +648,6 @@ export function resolveSessionPendingInputAppend(
     inputId: transcriptInputId,
     message: parseSessionPendingInputMessage(row?.message_json ?? owner.messageJson),
     alreadyPromoted: !row,
-    ...(row && owner.mentionInvitation ? { mentionInvitations: [owner.mentionInvitation] } : {}),
     ...(!row && stageRelocation ? { stageRelocation } : {}),
   };
 }
