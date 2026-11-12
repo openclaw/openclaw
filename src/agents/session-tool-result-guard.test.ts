@@ -14,6 +14,7 @@ import { buildExecForegroundResult } from "./bash-tools.exec-support.js";
 import { createPromptCacheRequestObserver } from "./embedded-agent-runner/prompt-cache-request-observer.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -74,12 +75,37 @@ describe("installSessionToolResultGuard", () => {
     },
   );
 
-  it.each(["appendMessage", "appendMessageAsync"] as const)(
-    "keeps guarded live continuation and cold replay append-only through %s",
-    async (append) => {
+  it.each([
+    ["appendMessage", "known"],
+    ["appendMessageAsync", "known"],
+    ["appendMessageAsync", "unknown"],
+  ] as const)(
+    "keeps guarded live continuation and cold replay append-only through %s with a %s tool call",
+    async (append, tool) => {
       await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
         const { sm } = setup({ runId: "synthetic-run" });
-        const live = [makeUserMessage("Read the fixture", 1), call(), result("fixture result")];
+        // The live loop answers a call to a tool that does not exist and keeps it in history.
+        const live =
+          tool === "known"
+            ? [makeUserMessage("Read the fixture", 1), call(), result("fixture result")]
+            : [
+                makeUserMessage("Read the fixture", 1),
+                makeAgentAssistantMessage({
+                  content: [
+                    { type: "toolCall", id: "call_0", name: "missing_tool", arguments: {} },
+                    { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+                  ],
+                  stopReason: "toolUse",
+                }),
+                makeTextToolResult(
+                  "call_0",
+                  "missing_tool",
+                  "Tool missing_tool not found",
+                  true,
+                  1,
+                ),
+                result("fixture result"),
+              ];
         for (const message of live) {
           await sm[append](message);
         }
@@ -103,7 +129,12 @@ describe("installSessionToolResultGuard", () => {
         await observer.onModelRequest(model, context);
         observer.onModelUsage({ cacheRead: 8_000 });
         const replay = SessionManager.fromEntries(sm.getPersistedEntries()).buildSessionContext();
-        const replayContext = { ...context, messages: convertToLlm(replay.messages) };
+        const replayContext = {
+          ...context,
+          messages: convertToLlm(
+            sanitizeToolCallInputs(replay.messages, { allowedToolNames: ["read"] }),
+          ),
+        };
         const providers = new Set(["openai"]);
         const input = convertResponsesMessages(model, context, providers);
         const encoded = JSON.stringify(input);
@@ -226,7 +257,7 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("clears disabled-synthesis pending state across replacement and dropped calls", () => {
-    const { sm, guard } = setup({ allowSyntheticToolResults: false, allowedToolNames: ["read"] });
+    const { sm, guard } = setup({ allowSyntheticToolResults: false });
     sm.appendMessage(call());
     sm.appendMessage(call("call_2"));
     expect(guard.getPendingIds()).toEqual(["call_2"]);
@@ -234,7 +265,6 @@ describe("installSessionToolResultGuard", () => {
       asAppendMessage({
         role: "assistant",
         content: [
-          { type: "toolCall", id: "unknown", name: "write", arguments: {} },
           { type: "toolCall", id: "missing-input", name: "read" },
           { type: "toolCall", id: "bad-name", name: "invalid name", arguments: {} },
         ],

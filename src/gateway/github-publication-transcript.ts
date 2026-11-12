@@ -6,6 +6,7 @@ import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { isSessionControllerWorkActive } from "../sessions/session-controller.lifecycle-observation.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import type {
   GitHubPublicationCoordinator,
@@ -91,6 +92,15 @@ export async function reportGitHubPublicationTranscript(
   if (entry?.sessionId !== recipient.sessionId || target.canonicalKey !== recipient.sessionKey) {
     throw new Error("GitHub publication transcript owner changed");
   }
+  // A receipt that lands inside a live run would sit before that run's later messages on
+  // replay. The run's next request places it at the end of history instead.
+  const placement = isSessionControllerWorkActive(
+    target.storePath,
+    [recipient.sessionKey, recipient.sessionId],
+    target.agentId,
+  )
+    ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
+    : {};
   const appended = await appendSessionTranscriptReport(
     {
       agentId: target.agentId,
@@ -112,6 +122,7 @@ export async function reportGitHubPublicationTranscript(
           usage: makeZeroUsageSnapshot(),
           stopReason: "stop",
           timestamp: Date.now(),
+          ...placement,
         },
         params.origin?.runId ?? params.runId,
       ),

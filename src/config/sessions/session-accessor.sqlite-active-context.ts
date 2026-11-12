@@ -556,7 +556,7 @@ function readActiveContext(
                 eb(dependencyField("$.type"), "=", "message"),
                 eb(dependencyField("$.message.role"), "=", "assistant"),
                 eb(dependencyField("$.message.provider"), "=", "openclaw"),
-                eb(dependencyField("$.message.model"), "=", "automation-result"),
+                // The pending marker selects candidates; fitBackgroundResultDependencies owns the model check.
                 eb(dependencyField("$.message.openclawModelPlacement"), "=", "pending"),
               ]),
               eb.and([
