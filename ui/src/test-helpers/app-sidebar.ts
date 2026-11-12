@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type {
@@ -21,6 +22,7 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
+import { createGatewaySelfProfile } from "../app/gateway-store.self-profile.ts";
 import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type { AppSidebarElement, AppSidebarOwner } from "../components/app-sidebar.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -105,16 +107,23 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
       listener(snapshot);
     }
   };
+  const connection = {
+    gatewayUrl: "ws://gateway.test",
+    token: "",
+    bootstrapToken: "",
+    password: "",
+  };
+  const selfProfile = createGatewaySelfProfile({
+    getSnapshot: () => snapshot,
+    getConnection: () => connection,
+    publish: (selfUser) => publish({ selfUser }),
+  });
   const gateway = {
     get snapshot() {
       return snapshot;
     },
-    connection: {
-      gatewayUrl: "ws://gateway.test",
-      token: "",
-      bootstrapToken: "",
-      password: "",
-    },
+    connection,
+    loadSelfProfile: selfProfile.load,
     connectionRevision: 0,
     setSessionKey: () => undefined,
     subscribe: (listener: (next: ApplicationGatewaySnapshot) => void) =>
@@ -127,6 +136,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
       if (!snapshot.selfUser) {
         return;
       }
+      selfProfile.invalidate();
       publish({ selfUser: { ...snapshot.selfUser, ...patch } });
     },
   } as unknown as ApplicationGateway;
@@ -134,6 +144,12 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     gateway,
     publish,
     publishEvent(event: string, payload: unknown) {
+      if (
+        event === "sessions.changed" &&
+        asOptionalRecord(payload)?.reason === "profile-identity"
+      ) {
+        selfProfile.invalidate();
+      }
       for (const listener of eventListeners) {
         listener({ event, payload });
       }

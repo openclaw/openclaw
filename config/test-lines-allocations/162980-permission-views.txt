@@ -7,4 +7,6 @@
 # Includes 15 LF for deterministic first-attempt connection fixture ownership.
 # Includes canonical saved-assignment/self-read lifecycle, concise full ceilings,
 # query disclosure retention and desktop/theme/phone long-label boundary proof.
-1037
+# Includes canonical self-profile ownership in the shared test Gateway and
+# exact self-mention response/privacy assertions; production behavior unchanged.
+1066
