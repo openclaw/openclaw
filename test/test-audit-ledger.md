@@ -598,6 +598,17 @@ CLI-test typecheck, typed lint, formatting and diff checks passed. Production
 and support line counts are unchanged. Full dead-code scans and hosted/landing
 outcomes are tracked in [PR #197639](https://github.com/openclaw/openclaw/pull/197639).
 
+### Tool-result fidelity at each output
+
+At `a41c7111235fdfcb5e4103edba0e5ff711d7e02c`, the single tool-result reuse
+case mixes trajectory, callback and terminal values into one collection and
+searches for a secret that also appears in metadata. Its persistence check has
+the same weakness. Plan: retain both existing lifecycle routes, assert each
+output's complete text and metadata separately, and absorb the direct sanitizer
+replay into those boundary assertions. Keep the distinct stored/display image
+contracts and use the awaited session append. No production change or new test
+case is planned. Baseline, mutation controls and validation remain pending.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
