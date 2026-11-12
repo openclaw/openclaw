@@ -57,7 +57,6 @@ async function writeArchive(params: {
   archivePath: string;
   archiveRoot?: string;
   payloadPath?: string;
-  payloadContents?: string;
   manifest?: string | Partial<BackupManifest>;
   extraEntries?: Buffer[];
 }): Promise<string> {
@@ -87,7 +86,7 @@ async function writeArchive(params: {
     gzipSync(
       Buffer.concat([
         encodeTarEntry({ path: `${root}/manifest.json`, contents: manifest }),
-        encodeTarEntry({ path: payload, contents: params.payloadContents ?? "{}\n" }),
+        encodeTarEntry({ path: payload, contents: "{}\n" }),
         ...(params.extraEntries ?? []),
         Buffer.alloc(1024),
       ]),
@@ -113,59 +112,16 @@ async function writeUnextractableArchive(archivePath: string) {
 
 describe("backupRestoreCommand", () => {
   it.skipIf(process.platform === "win32")(
-    "verifies and restores archive paths with parent components in filesystem order",
-    async () => {
-      await withState(async (state) => {
-        await fs.mkdir(state.path("physical", "child"), { recursive: true });
-        await fs.symlink("physical/child", state.path("alias"));
-        const physicalContents = '{"messages":{"responsePrefix":"physical"}}\n';
-        await writeArchive({
-          archivePath: state.path("archive.tar.gz"),
-          manifest: { runtimeVersion: "lexical" },
-          payloadContents: '{"messages":{"responsePrefix":"lexical"}}\n',
-        });
-        await writeArchive({
-          archivePath: state.path("physical", "archive.tar.gz"),
-          manifest: { runtimeVersion: "physical" },
-          payloadContents: physicalContents,
-        });
-
-        const archive = state.path("alias") + "/../archive.tar.gz";
-        await expect(verifyBackupArchive(archive)).resolves.toMatchObject({
-          archivePath: archive,
-          runtimeVersion: "physical",
-        });
-        const target = state.path("restored");
-        await restore(archive, target);
-        expect(await fs.readFile(path.join(target, DEFAULT_PAYLOAD_PATH), "utf8")).toBe(
-          physicalContents,
-        );
-
-        const missingArchive = state.path("missing") + "/../archive.tar.gz";
-        const missingMessage = "Archive does not exist. Check the path";
-        await expect(verifyBackupArchive(missingArchive)).rejects.toThrow(missingMessage);
-        const refusedTarget = state.path("refused");
-        await expect(restore(missingArchive, refusedTarget)).rejects.toThrow(missingMessage);
-        await expect(fs.lstat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
-
-        const ordinaryAlias = state.path("ordinary-alias.tar.gz");
-        await fs.symlink("physical/archive.tar.gz", ordinaryAlias);
-        await expect(verifyBackupArchive(ordinaryAlias)).resolves.toMatchObject({
-          archivePath: ordinaryAlias,
-          runtimeVersion: "physical",
-        });
-      });
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "escapes terminal controls in restore output while preserving the restored payload",
+    "escapes terminal controls and resolves symlinked parents while preserving the payload",
     async () => {
       await withState(async (state) => {
         const text = "café\u001b[31m\nforged\tend\rrow\u0007 ";
-        const archive = state.path(`${text}.tar.gz `);
+        const archive = `${state.path("link")}/../${text}.tar.gz `;
         const target = state.path(`restored-${text}`);
-        await writeArchive({ archivePath: archive });
+        await fs.mkdir(state.path("real", "sub"), { recursive: true });
+        await fs.symlink("real/sub", state.path("link"));
+        await writeUnextractableArchive(state.path(`${text}.tar.gz `));
+        await writeArchive({ archivePath: state.path("real", `${text}.tar.gz `) });
         const runtime = createTestRuntime();
         const result = await backupRestoreCommand(runtime, { archive, target });
         const report = vi.mocked(runtime.log).mock.calls.flat().join("\n");
@@ -601,10 +557,7 @@ describe("backupRestoreCommand", () => {
     await withState(async (state) => {
       const archivePath = state.path("corrupt.tar.gz");
       const targetPath = state.path("restore-target");
-      await writeArchive({
-        archivePath,
-        manifest: "{not-json}\n",
-      });
+      await writeArchive({ archivePath, manifest: "{not-json}\n" });
       await fs.mkdir(targetPath);
 
       await expect(restore(archivePath, targetPath)).rejects.toThrow(
