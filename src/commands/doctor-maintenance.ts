@@ -248,7 +248,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         (health.outcome !== "ready" && health.runtime.status === "running")
       ) {
         warn(
-          `Warning: Doctor repair complete; Gateway started but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
+          `Warning: Gateway started after Doctor maintenance, but readiness was not verified. ${renderRestartDiagnostics(health).join(" ")} Run \`${formatCliCommand("openclaw gateway status --deep", state.env)}\` or \`${formatCliCommand("openclaw gateway diagnostics export", state.env)}\`.`,
         );
         return;
       }
@@ -257,7 +257,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
           env,
           phase: "gateway-restoration",
           code: "doctor-gateway-rpc-verification-failed",
-          detail: `Doctor repaired state, but the managed Gateway did not become ready: ${renderRestartDiagnostics(health).join(" ")}.`,
+          detail: `The managed Gateway did not become ready after Doctor maintenance: ${renderRestartDiagnostics(health).join(" ")}.`,
         });
       }
     } catch (error) {
@@ -292,7 +292,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
         cause: error,
       });
     }
-    params.runtime.log("Gateway restarted and verified after Doctor repair.");
+    params.runtime.log("Gateway restarted and verified after Doctor maintenance.");
     if (staleReplacement) {
       const warning = `Warning: Replaced stale Gateway PID ${staleReplacement.pid ?? "unknown"} through its service manager; verified ${staleReplacement.version} build ${staleReplacement.buildId} after Doctor maintenance.`;
       warn(warning);
