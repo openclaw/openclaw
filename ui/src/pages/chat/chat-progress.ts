@@ -107,13 +107,17 @@ export function buildCompactionDividerItem(
 ): Extract<ChatItem, { kind: "divider" }> {
   const tokensBefore = marker.tokensBefore;
   const tokensAfter = marker.tokensAfter;
-  const tokensSaved =
+  const metric =
     typeof tokensBefore === "number" &&
     Number.isFinite(tokensBefore) &&
     typeof tokensAfter === "number" &&
     Number.isFinite(tokensAfter) &&
+    tokensAfter >= 0 &&
     tokensBefore > tokensAfter
-      ? Math.floor(tokensBefore - tokensAfter)
+      ? t("chat.compaction.savedTokensWithPercent", {
+          count: formatCompactTokenCount(Math.floor(tokensBefore - tokensAfter)),
+          percent: String(Math.round(((tokensBefore - tokensAfter) / tokensBefore) * 1_000) / 10),
+        })
       : null;
   return {
     kind: "divider",
@@ -125,13 +129,7 @@ export function buildCompactionDividerItem(
       phase === "active" ? "chat.composer.compactingContext" : "chat.composer.contextCompacted",
     ),
     compaction: phase,
-    ...(tokensSaved === null
-      ? {}
-      : {
-          metric: t("chat.compaction.savedTokens", {
-            count: formatCompactTokenCount(tokensSaved),
-          }),
-        }),
+    ...(metric === null ? {} : { metric }),
     timestamp,
   };
 }

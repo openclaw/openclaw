@@ -109,6 +109,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var browserProfileImportOfferRequestIsInFlight = false
     private var browserProfileImportOfferRetryPending = false
     private var nativeCommandsReady = false
+    private var lastPublishedNativeTitlebarInset: CGFloat?
     /// The document whose finish arrived while a newer load was pending.
     private var deferredFinishSourceID: String?
     private(set) var gatewayHealth: DashboardGatewayHealth?
@@ -1089,6 +1090,30 @@ extension DashboardWindowController {
         self.updateToolbarVisibility(isFullScreen: false)
     }
 
+    func windowDidUpdate(_: Notification) {
+        // Full-screen transitions can finish laying out AppKit's traffic lights
+        // after the web view's bounds have stopped changing.
+        self.publishNativeTitlebarInset()
+    }
+
+    private func publishNativeTitlebarInset() {
+        guard self.documentHost.hasLiveContent, self.isTrustedDashboardDocument,
+              let window = self.window else { return }
+        let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+        guard let trailingEdge = buttons.compactMap({ window.standardWindowButton($0) })
+            .map({ self.webView.convert($0.bounds, from: $0).maxX }).max() else { return }
+        // AppKit controls vary with toolbar style and OS. Their measured edge is
+        // in view points; the hosted controls use CSS pixels at the page's zoom.
+        let inset = (trailingEdge - self.webView.bounds.minX) / self.webView.pageZoom +
+            DashboardWindowLayout.titlebarControlsGap
+        guard self.lastPublishedNativeTitlebarInset != inset else { return }
+        self.lastPublishedNativeTitlebarInset = inset
+        self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
+            """
+            document.documentElement.style.setProperty('--openclaw-native-controls-inset', "\(inset)px");
+            """, url: self.currentURL))
+    }
+
     private func updateToolbarVisibility(isFullScreen: Bool) {
         // Apply completed transitions; failed transitions keep their previous chrome.
         // Reused windows also pass through this owner during initialization.
@@ -1467,6 +1492,8 @@ extension DashboardWindowController {
         self.documentHost.hasLiveContent = true
         guard self.isTrustedDashboardDocument else { return }
         self.deviceSettingsMessageHandler.refresh(refreshAvailability: true)
+        self.lastPublishedNativeTitlebarInset = nil
+        self.publishNativeTitlebarInset()
         self.publishNativeHistoryState()
         self.nativeBrowser.scheduleStatePush()
         self.refreshNativeCommandReadiness()

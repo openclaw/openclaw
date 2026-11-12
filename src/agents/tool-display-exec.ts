@@ -569,8 +569,13 @@ export function resolveExecDetail(
   }
 
   const title = options?.detailMode === "raw" ? undefined : resolveExecTitle(record);
+  const nodeName =
+    record.host === "node" && typeof record.node === "string" && record.node.trim()
+      ? record.node.trim()
+      : undefined;
+  const nodeFragment = nodeName ? `, node: ${nodeName}` : "";
   if (title) {
-    return title;
+    return `${title}${nodeFragment}`;
   }
   const code = resolveExecCode(record);
   if (code) {
@@ -586,11 +591,6 @@ export function resolveExecDetail(
     return undefined;
   }
 
-  const nodeName =
-    record.host === "node" && typeof record.node === "string" && record.node.trim()
-      ? record.node.trim()
-      : undefined;
-
   const unwrapped = unwrapShellWrapper(raw);
   const compact = compactRawCommand(unwrapped);
   const cwdRaw =
@@ -599,7 +599,6 @@ export function resolveExecDetail(
       : typeof record.cwd === "string"
         ? record.cwd
         : undefined;
-  const nodeFragment = nodeName ? `, node: ${nodeName}` : "";
   if (hasShellCompoundCommand(unwrapped)) {
     const cwdSuffix = cwdRaw?.trim() ? formatCwdSuffix(cwdRaw.trim()) : undefined;
     return `${cwdSuffix ? `${compact} ${cwdSuffix}` : compact}${nodeFragment}`;

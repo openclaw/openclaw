@@ -69,6 +69,16 @@ export async function authorizeGatewayConnectDevice(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): Promise<DeviceAuthorizedGatewayConnect | undefined> {
+  if (state.authResult.delegation) {
+    // The private proxy owns admission. A browser key never enrolls or widens this grant.
+    return {
+      ...state,
+      scopes: [...state.authResult.delegation.scopes],
+      handoffBootstrapProfile: null,
+      deviceToken: null,
+      bootstrapDeviceTokens: [],
+    };
+  }
   const {
     connId,
     buildRequestContext,

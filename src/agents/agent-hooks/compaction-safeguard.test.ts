@@ -776,6 +776,19 @@ it("keeps only a head excerpt of preserved tool output", async () => {
   expect(summary).not.toContain("tool-tail-");
 });
 
+it("redacts credentials in preserved turns and the latest request context", async () => {
+  const pem = "-----BEGIN PRIVATE KEY-----\nMIIEFAKEpem\n-----END PRIVATE KEY-----";
+  const secrets = `token=FAKEtok12345 sk-FAKEsk1234567890ab ghp_FAKEghp1234567890ab ${pem}`;
+  summarize.mockResolvedValue(structuredSummary());
+  const session = qualitySession({ recentTurnsPreserve: 1 });
+  const event = historyEvent(recentConversation(`deploy with ${secrets}`));
+  const { summary } = await runSummary(session, event);
+  const redacted = "deploy with [redacted] [redacted] [redacted] [redacted]";
+  expect(summary).toContain(`Latest user request context:\n"${redacted}"`);
+  expect(summary).toContain(`## Recent turns preserved verbatim\n- User: ${redacted}`);
+  expect(summary).not.toMatch(/FAKE|PRIVATE KEY/);
+});
+
 it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
   const { result, getApiKeyAndHeadersMock } = await runCompaction(
     stubSessionManager(),

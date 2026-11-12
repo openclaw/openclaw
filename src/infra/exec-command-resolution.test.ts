@@ -29,7 +29,11 @@ function buildNestedEnvShellCommand(params: {
   return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
 }
 
-function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; cwd: string }) {
+async function analyzeEnvWrapperAllowlist(params: {
+  argv: string[];
+  envPath: string;
+  cwd: string;
+}) {
   const analysis = {
     ok: true as const,
     segments: [
@@ -44,7 +48,7 @@ function analyzeEnvWrapperAllowlist(params: { argv: string[]; envPath: string; c
       },
     ],
   };
-  const allowlistEval = evaluateExecAllowlist({
+  const allowlistEval = await evaluateExecAllowlist({
     analysis,
     allowlist: [{ pattern: params.envPath }],
     safeBins: resolveSafeBins([]),
@@ -270,7 +274,7 @@ describe("exec-command-resolution", () => {
     );
   });
 
-  it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {
+  it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -283,7 +287,7 @@ describe("exec-command-resolution", () => {
     expect(shellResolution?.execution.resolvedPath).toMatch(/sh$/);
 
     const wrappedResolution = resolveCommandResolutionFromArgv([busybox, "sh", "-lc", "echo hi"]);
-    const evalResult = evaluateExecAllowlist({
+    const evalResult = await evaluateExecAllowlist({
       analysis: {
         ok: true,
         segments: [
@@ -302,7 +306,7 @@ describe("exec-command-resolution", () => {
     expect(evalResult.allowlistSatisfied).toBe(false);
   });
 
-  it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", () => {
+  it("blocks semantic env wrappers, env -S, and deep transparent-wrapper chains", async () => {
     const blockedEnv = resolveCommandResolutionFromArgv([
       "/usr/bin/env",
       "FOO=bar",
@@ -324,7 +328,7 @@ describe("exec-command-resolution", () => {
     fs.writeFileSync(envPath, "#!/bin/sh\n");
     fs.chmodSync(envPath, 0o755);
 
-    const envS = analyzeEnvWrapperAllowlist({
+    const envS = await analyzeEnvWrapperAllowlist({
       argv: [envPath, "-S", 'sh -c "echo pwned"'],
       envPath,
       cwd: dir,
@@ -332,7 +336,7 @@ describe("exec-command-resolution", () => {
     expect(envS.analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
     expect(envS.allowlistEval.allowlistSatisfied).toBe(false);
 
-    const deep = analyzeEnvWrapperAllowlist({
+    const deep = await analyzeEnvWrapperAllowlist({
       argv: buildNestedEnvShellCommand({
         envExecutable: envPath,
         depth: 5,
@@ -375,7 +379,7 @@ describe("exec-command-resolution", () => {
       "unshare",
       "watch",
       "xvfb-run",
-    ])("blocks opaque dispatch wrapper allowlist matches: %s", (wrapperName) => {
+    ])("blocks opaque dispatch wrapper allowlist matches: %s", async (wrapperName) => {
     const dir = makeExecApprovalsTempDir();
     const wrapperPath = makeExecutable(dir, wrapperName);
     const pythonPath = makeExecutable(dir, "python3");
@@ -388,7 +392,7 @@ describe("exec-command-resolution", () => {
     expect(resolution?.blockedWrapper).toBe(wrapperName);
     expect(resolvePlannedSegmentArgv(segment)).toBeNull();
 
-    const evaluation = evaluateExecAllowlist({
+    const evaluation = await evaluateExecAllowlist({
       analysis: { ok: true, segments: [segment] },
       allowlist: [{ pattern: wrapperPath }],
       safeBins: resolveSafeBins([]),
@@ -487,7 +491,7 @@ describe("exec-command-resolution", () => {
     },
   ] as const)(
     "keeps execution and policy targets coherent across wrapper classes: $name",
-    (testCase) => {
+    async (testCase) => {
       const dir = makeExecApprovalsTempDir();
       const binDir = path.join(dir, "bin");
       fs.mkdirSync(binDir, { recursive: true });
@@ -517,7 +521,7 @@ describe("exec-command-resolution", () => {
       expect(resolvePlannedSegmentArgv(segment), `${testCase.name} planned argv`).toEqual(
         testCase.expectedPlannedArgvFactory(fixture),
       );
-      const evaluation = evaluateExecAllowlist({
+      const evaluation = await evaluateExecAllowlist({
         analysis: { ok: true, segments: [segment] },
         allowlist: [{ pattern: testCase.allowlistPatternFactory(fixture) }],
         safeBins: resolveSafeBins([]),

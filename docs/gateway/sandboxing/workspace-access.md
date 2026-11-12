@@ -387,8 +387,14 @@ bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `resto
 or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
 and stopped containers do not increment it; counters restart with the Gateway.
 Release records `Local workspace unpause` with the same `reason`, elapsed
-`durationMs`, `dominantPhase`, and `dominantPhaseMs`. Timing includes engine pause
-and resume calls. `durationScope=observed` means recovery found an already-paused
+`durationMs`, `dominantPhase`, and `dominantPhaseMs`. The bounded JSON field
+`phaseDurationsMs` lists every cumulative phase lasting at least one second;
+shorter phases are omitted. Resume inspection, generation validation, and unpause
+are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
+times include broker admission, transport, and command completion, not just engine
+execution. All runtime targets are inspected before the first runtime is paused;
+each runtime's live authority is still checked immediately before pausing.
+`durationScope=observed` means recovery found an already-paused
 runtime and cannot measure the earlier owner's interval; `durationScope=owner`
 covers this owner's pause. `outcome` distinguishes a resumed, already-running, or
 removed runtime. Failed resumes retain custody and do not log a successful release.
