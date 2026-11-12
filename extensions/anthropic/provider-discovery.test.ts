@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 
 const { probeClaudeCliAuthStatus, discoverClaudeCliModels } = vi.hoisted(() => ({
@@ -131,3 +134,50 @@ it("publishes the native menu once per discovery generation, never static member
   });
   expect(discoverClaudeCliModels).toHaveBeenCalledTimes(2);
 });
+
+// POSIX executable fixture; cli-auth-seam.test.ts separately covers Windows shim parsing.
+it.skipIf(process.platform === "win32").each([
+  ["claude.ai", "max", { kind: "subscription", plan: "Max" }],
+  ["claude.ai", "redacted", { kind: "subscription" }],
+  ["claude.ai", { token: "synthetic-private-token" }, { kind: "subscription" }],
+  ["api_key", "max", { kind: "api" }],
+  ["api_key_helper", null, { kind: "api" }],
+  ["third_party", null, { kind: "api" }],
+  ["oauth_token", "max", { kind: "native" }],
+  ["future-method", "max", { kind: "native" }],
+])(
+  "projects native CLI status without guessing billing: %s / %s",
+  async (authMethod, subscriptionType, display) => {
+    await withTempDir("claude-native-status-", async (dir) => {
+      const command = path.join(dir, "claude");
+      const payload = {
+        loggedIn: true,
+        authMethod,
+        subscriptionType,
+        apiProvider: "firstParty",
+        storedClaudeAiLogin: true,
+        planTier: "other",
+        email: "synthetic@example.test",
+        accessToken: "synthetic-private-token",
+        orgId: "synthetic-private-org",
+      };
+      await fs.writeFile(
+        command,
+        "#!" +
+          process.execPath +
+          "\n" +
+          "require('node:assert/strict').deepEqual(process.argv.slice(2), ['auth', 'status', '--json']);\n" +
+          "process.stdout.write(" +
+          JSON.stringify(JSON.stringify(payload)) +
+          ");\n",
+        { mode: 0o755 },
+      );
+      const actual =
+        await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
+      probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
+      const auth = await prepare({ config: {}, env: { PATH: dir, HOME: dir }, signal: undefined });
+      expect(auth?.nativeAuth).toEqual({ runtime: "claude-cli", mode: "oauth", display });
+      expect(JSON.stringify(auth)).not.toMatch(/synthetic@example|private|other|redacted/);
+    });
+  },
+);

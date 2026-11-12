@@ -8,6 +8,10 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { readExactSessionEntryRow as readSessionRow } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
+  readSqliteDatabaseIntegrityVerification,
+  revokeSqliteDatabaseAdmissionsForPath,
+} from "../infra/sqlite-database-admission.js";
+import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
@@ -19,6 +23,7 @@ import {
   recordAgentDatabaseAdmissions as recordAdmissions,
 } from "./agent-database-admission.js";
 import { publishAgentDeletionJournalStatus } from "./agent-deletion-journal-status.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase as openAgentDb } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution as captureExecution } from "./openclaw-agent-execution.js";
@@ -126,16 +131,26 @@ it.each([
           }),
         );
       };
+      const revokeIntegrity = () => {
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        revokeSqliteDatabaseAdmissionsForPath(database.path);
+        expect(readSqliteDatabaseIntegrityVerification(database.path)).toBeUndefined();
+      };
+      const prepareWriter = () => execution.prepare(source);
       const readLabel = () => readSessionRow(database, sessionKey)?.entry.label;
       const replaceNormally = async (label: string) => {
         await replace(label);
         expect(readLabel()).toBe(label);
       };
       try {
-        await execution.runExisting(source, (scope) =>
-          scope.execute({ type: "database.prepareWrite", input: undefined }),
-        );
+        await prepareWriter();
         await replaceNormally("normal-before");
+        if (scenario === "normal-startup-normal") {
+          revokeIntegrity();
+          await prepareWriter();
+          expect(readSqliteDatabaseIntegrityVerification(database.path)).toBeUndefined();
+          revokeIntegrity();
+        }
         const refusal = inspectionRefusal({
           agentId: "worker",
           paths: [database.path],
@@ -145,6 +160,12 @@ it.each([
         recordAdmissions([refusal], { env: state.env, source: "startup" });
         const replaceDuringStartup = (label: string) =>
           preparePending(refusal, { env: state.env, assertCurrent() {} }, async () => {
+            if (scenario === "normal-startup-normal") {
+              await prepareWriter();
+              expect(readSqliteDatabaseIntegrityVerification(database.path)).toEqual({
+                verifiedAt: expect.any(Number),
+              });
+            }
             await replace(label);
           });
         let inserted = false;
@@ -191,6 +212,9 @@ it.each([
         }
         afterAuthorize = undefined;
         if (scenario === "normal-startup-normal") {
+          revokeIntegrity();
+          await prepareWriter();
+          expect(readSqliteDatabaseIntegrityVerification(database.path)).toBeUndefined();
           insertDeletion();
           await replaceNormally("normal-after");
         }
