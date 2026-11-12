@@ -434,6 +434,23 @@ const enSettings = {
       hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
     },
+    transcription: {
+      title: "Speech to text",
+      description:
+        "Transcribes dictation and Talk audio. Shared with inbound voice notes (tools.media).",
+      unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
+      failedHint: "Couldn’t check speech-to-text readiness.",
+      noProvider: "No speech-to-text model is configured yet.",
+      modelTitle: "Speech-to-text model",
+      modelDescription:
+        "Preferred transcription model. Automatic tries configured audio models in order.",
+      automatic: "Automatic",
+      custom: "Other model (provider/model)",
+      keyMissing: "Key needed",
+      keyMissingDescription:
+        "No {provider} key is set up. Provider keys are added on Settings → Models.",
+      openModels: "Open Models",
+    },
   },
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",

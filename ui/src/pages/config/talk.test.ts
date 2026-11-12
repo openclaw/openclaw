@@ -7,7 +7,6 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
-import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -23,6 +22,7 @@ import {
   mountTalkSettingsRoutes,
   nativeVoice,
   readVoiceOptions,
+  realtimeModelPicker,
   setTalkRealtimeConfig,
 } from "./talk.test-support.tsx";
 
@@ -49,8 +49,7 @@ const expectFocused = (input: HTMLTextAreaElement, value: string) => {
   expect(input.value).toBe(value);
   expect(document.activeElement).toBe(input);
 };
-const modelPicker = (page: HTMLElement) =>
-  page.querySelector<SelectPicker>("openclaw-select-picker");
+const modelPicker = realtimeModelPicker;
 const waitCatalogCalls = (request: unknown, count: number) =>
   waitForSolid(() => expect(request).toHaveBeenCalledTimes(count));
 const realtimePath = (field: string) => ["talk", "realtime", field];
@@ -103,6 +102,7 @@ type TalkMutationHarnessOptions = {
   transport?: string | null;
   transports?: TalkCatalogResult["transports"];
   voicesByModel?: Record<string, string[]>;
+  navigate?: ReturnType<typeof vi.fn>;
 };
 
 function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
@@ -219,6 +219,9 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     nativeDeviceSettings: options.nativeDeviceSettings ?? null,
     gateway,
     runtimeConfig,
+    ...(options.navigate
+      ? { navigate: options.navigate, settingsAgentSelection: { set: vi.fn() } }
+      : {}),
   } as unknown as ApplicationContext;
   const page = mountTalkPage(context, configForm);
   return {
@@ -280,9 +283,7 @@ it("locks every curated picker while config is saving", async () => {
   const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
   expect(page.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(true);
   expect([...page.querySelectorAll("select")]).toMatchObject([{ disabled: true }]);
-  expect(page.querySelector<HTMLButtonElement>("openclaw-select-picker button")?.disabled).toBe(
-    true,
-  );
+  expect(modelPicker(page)?.querySelector("button")?.disabled).toBe(true);
 });
 
 it("commits provider-local model ids without qualifying them", async () => {
@@ -334,6 +335,50 @@ it.each([
     }
   },
 );
+
+it("reports a missing key for the chosen speech-to-text provider and links to Models", async () => {
+  const navigate = vi.fn();
+  const { page } = createTalkMutationHarness({
+    navigate,
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        ready: true,
+        activeProvider: "openai",
+        providers: [
+          { id: "openai", label: "OpenAI", configured: true },
+          { id: "openrouter", label: "OpenRouter", configured: false },
+        ],
+      },
+    }),
+  });
+  page.configObject = {
+    ...page.configObject,
+    tools: {
+      media: {
+        models: [
+          { provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] },
+          {
+            provider: "openrouter",
+            model: "openai/whisper-large-v3-turbo",
+            capabilities: ["audio"],
+          },
+        ],
+        audio: { preferredModel: "openrouter/openai/whisper-large-v3-turbo" },
+      },
+    },
+  };
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(
+      t("talkPage.transcription.keyMissingDescription", { provider: "OpenRouter" }),
+    ),
+  );
+  const open = [...page.querySelectorAll("button")].find(
+    (button) => button.textContent === t("talkPage.transcription.openModels"),
+  );
+  open!.click();
+  expect(navigate).toHaveBeenCalledWith("model-providers", { search: "?provider=openrouter" });
+});
 
 describe("Talk catalog boundaries", () => {
   it("keeps the trigger editor mounted through catalog failure and focus recovery", async () => {

@@ -52,6 +52,15 @@ export function nativeVoice(snapshot: NonNullable<NativeDeviceSettingsCapability
   };
 }
 
+/** The realtime model picker; the speech-to-text section renders its own picker. */
+export function realtimeModelPicker(page: HTMLElement): SelectPicker | null {
+  return (
+    [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+      (picker) => picker.params.label === t("talkPage.model.title"),
+    ) ?? null
+  );
+}
+
 export function readVoiceOptions(page: HTMLElement): string[] {
   return [...page.querySelectorAll("select option")].map(
     (option) => option.getAttribute("value") ?? "",
@@ -73,7 +82,7 @@ export function mountTalkPage(context: ApplicationContext, initialConfig: Record
     configObject: initialConfig,
     changeModel: (value: string | null) => {
       flush();
-      const picker = page.querySelector<SelectPicker>("openclaw-select-picker");
+      const picker = realtimeModelPicker(page);
       if (!picker) {
         throw new Error("Talk model picker is unavailable");
       }
