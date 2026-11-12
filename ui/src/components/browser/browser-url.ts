@@ -66,6 +66,13 @@ export function resolveBrowserAddressInput(raw: string): string | null {
  * now searches. The address bar offers it as a "Go to" option.
  */
 export function bareNameAddress(raw: string): string | null {
+  // Only a single host label qualifies. Browser URL parsers accept spaces in
+  // a host ("a b" becomes "https://a%20b/"), so the normalizer alone would
+  // offer "Go to" for ordinary search phrases.
+  const host = raw.trim().split(/[/?#]/, 1)[0] ?? "";
+  if (!/^[\p{L}\p{N}_-]+$/u.test(host)) {
+    return null;
+  }
   const url = normalizeBrowserUrlDraft(raw);
   return url && url !== resolveBrowserAddressInput(raw) ? url : null;
 }
