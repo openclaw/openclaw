@@ -30,6 +30,10 @@ Shows whether remote access is on, the claw's hostname, its binding number with 
 Discovery has, the connection keys (endpoint key and Gateway key) as short fingerprints,
 and the last publication.
 
+Ctrl-C or SIGTERM stops a pending status read without printing a late result; the CLI
+exits with status 130 or 143. Interrupted `rebind` writes still report their committed
+receipts.
+
 When a key file is missing or holds a different key, status says so:
 
 - `keys_missing`: "Remote access is off: this claw's connection keys are missing from this

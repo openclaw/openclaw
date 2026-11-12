@@ -14,6 +14,7 @@ import {
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { RebindCommitResult } from "../gateway/openclaw-id/service-rebind.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { describeRebind, displayKey } from "./id-cli-rebind.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -67,12 +68,15 @@ type PeopleLink = {
   };
 };
 
-async function readPeopleLink(opts: IdCliOpts): Promise<PeopleLink | undefined> {
+async function readPeopleLink(
+  opts: IdCliOpts,
+  signal?: AbortSignal,
+): Promise<PeopleLink | undefined> {
   const raw = await callGatewayFromCli(
     "openclawId.people",
     opts,
     {},
-    { scopes: ["operator.admin"] },
+    { scopes: ["operator.admin"], ...(signal ? { signal } : {}) },
   );
   // SAFETY: openclawId.people answers { link } with the owner link view (owner-link-view.ts).
   const result = raw as { link?: PeopleLink };
@@ -151,15 +155,41 @@ function write(opts: IdCliOpts, json: unknown, text: string) {
 }
 
 async function runStatus(opts: IdCliOpts) {
-  const raw = await callGatewayFromCli(
-    "openclawId.status",
-    opts,
-    {},
-    { scopes: ["operator.read"] },
-  );
+  // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
+  const signal = getAsyncWorkSignal();
+  let raw: unknown;
+  try {
+    raw = await callGatewayFromCli(
+      "openclawId.status",
+      opts,
+      {},
+      { scopes: ["operator.read"], ...(signal ? { signal } : {}) },
+    );
+  } catch (error) {
+    if (signal?.aborted) {
+      return;
+    }
+    throw error;
+  }
+  if (signal?.aborted) {
+    return;
+  }
   // SAFETY: openclawId.status answers the status shape KeysStatus reads a subset of.
   const status = raw as KeysStatus;
-  const link = status.link?.linked ? await readPeopleLink(opts) : undefined;
+  let link: PeopleLink | undefined;
+  if (status.link?.linked) {
+    try {
+      link = await readPeopleLink(opts, signal);
+    } catch (error) {
+      if (signal?.aborted) {
+        return;
+      }
+      throw error;
+    }
+    if (signal?.aborted) {
+      return;
+    }
+  }
   const lines = [describeKeysState(status.status)];
   if (status.link?.hostname) {
     lines.push(`Claw: ${sanitizeTerminalText(status.link.hostname)}`);

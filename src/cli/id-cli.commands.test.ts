@@ -11,6 +11,7 @@ import {
   type SignedStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { registerIdCli } from "./id-cli.js";
 
@@ -158,6 +159,17 @@ describe("registered id commands", () => {
       expect(process.exitCode).toBeUndefined();
     },
   );
+
+  it("prints no status reply that lands after Ctrl+C", async () => {
+    const work = new AsyncWorkScope();
+    // The status read settles only after the command scope begins closing.
+    vi.mocked(callGatewayFromCli).mockImplementation(() => work.beginClose());
+
+    await work.run(() => run("status"));
+
+    expect(output).toBe("");
+    expect(process.exitCode).toBeUndefined();
+  });
 
   it.each([true, false])(
     "reports an accepted commit when its publication read fails (json=%s)",
