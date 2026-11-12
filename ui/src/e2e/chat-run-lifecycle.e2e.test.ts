@@ -756,7 +756,15 @@ suite.define(() => {
     });
 
     await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
-    await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
+    await page.getByText("saved 875.3k tokens (97.3%)", { exact: true }).waitFor();
+    const frame = await takeControlUiScreenshotFrame(
+      page,
+      page.locator(".chat-thread"),
+      [page.locator(".chat-compaction")],
+      { animations: "disabled" },
+    );
+    await writeFile(join(suite.artifactDir, "compaction-savings.png"), frame.png);
+    console.log("COMPACTION_SAVINGS_PROOF", suite.artifactDir);
     await page.locator(".agent-chat__input textarea").fill("keep working");
     // Fix wall time without freezing the mock ACK and rendering timers.
     const startedAt = Date.now();

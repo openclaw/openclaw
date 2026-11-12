@@ -406,6 +406,7 @@ const enSettings = {
       notReady: "Not configured",
       unavailable: "Unavailable",
       unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
+      catalogFailedHint: "Couldn’t check realtime voice readiness.",
       activeProvider: "Active provider: {provider}",
       noProvider: "No realtime voice provider is configured yet.",
     },

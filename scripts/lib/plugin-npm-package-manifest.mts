@@ -711,10 +711,16 @@ function shouldBundleDependencies(
   patchedDependencies: WorkspacePatchedDependency[] = [],
 ) {
   if (packageJson?.openclaw?.release?.bundleRuntimeDependencies === false) {
-    if (patchedDependencies.length > 0) {
+    const configured = packageJson.bundleDependencies ?? packageJson.bundledDependencies;
+    if (
+      patchedDependencies.some(
+        ({ name }) => !Array.isArray(configured) || !configured.includes(name),
+      )
+    ) {
       throw new Error("patched runtime dependencies conflict with bundleRuntimeDependencies=false");
     }
-    return false;
+    // Explicit patch names may ship without opting native-heavy packages into the full closure.
+    return patchedDependencies.length > 0;
   }
   return patchedDependencies.length > 0 || value === true || value === "1" || value === "true";
 }

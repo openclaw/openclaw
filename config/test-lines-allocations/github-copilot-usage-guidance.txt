@@ -1,2 +1,0 @@
-# One regression through the registered Copilot usage hook for malformed HTTP 200 responses.
-8

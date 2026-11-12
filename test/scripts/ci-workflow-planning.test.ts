@@ -11760,9 +11760,6 @@ describe("ci workflow guards", () => {
       ...expectedSharedUiE2eSetup,
       "restore-test-caches":
         "${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}",
-      "vitest-worker-cache":
-        "${{ matrix.task == 'control-ui' && needs.preflight.outputs.frozen_target != 'true' && 'true' || 'false' }}",
-      "vitest-worker-preset": "runtime",
     } as const;
     expect(uiE2eSetup.with).toEqual(expectedUiE2eSetup);
     const realGatewaySetup = requiredWorkflowStep(uiE2eRealGateway.steps, "Setup Node environment");
