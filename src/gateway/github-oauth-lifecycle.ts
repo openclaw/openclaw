@@ -575,8 +575,8 @@ export function createGitHubOAuthLifecycle(params: {
       if (stopping) {
         throw new Error("GitHub authorization lifecycle is stopping.");
       }
-      assertGitHubCliAvailable();
       const expectedIdentity = captureGitHubOAuthAuthorizationIdentity(params.getConfig(), input);
+      await assertGitHubCliAvailable();
       const agentLifecycleBinding =
         input.scope === "agent"
           ? await captureAgentLifecycleBinding(params.getConfig, input.agentId)

@@ -389,8 +389,8 @@ export function registerCliReplyCompletionTests({
       config,
       messageChannel: "webchat",
       messageProvider: "webchat",
-      inputProvenance: { kind: "internal_system", sourceTool: "test-required-result" },
       sourceReplyDeliveryMode: "message_tool_only",
+      inputProvenance: { kind: "internal_system" },
     });
     context.backendResolved.config.output = "jsonl";
     const tool = createMessageTool({

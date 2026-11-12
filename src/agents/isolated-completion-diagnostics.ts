@@ -102,17 +102,15 @@ export async function observeIsolatedCompletionUsage<T>(
       }
     })();
   };
-  let result: T;
   try {
-    result = await run(observe);
+    const result = await run(observe);
     observe(result);
+    return result;
   } finally {
     // Logical abort can precede settlement. Only this actual dispatch closes its observation.
     observe();
     await observation;
   }
-  params.assertCurrent?.();
-  return result;
 }
 
 /** Measure runtime dispatch, not provider-wire inference or an inferred queue wait. */

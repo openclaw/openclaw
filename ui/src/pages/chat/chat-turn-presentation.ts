@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -126,6 +127,15 @@ function groupHasFailedResult(group: MessageGroup): boolean {
 }
 
 function groupHasVisibleReplyContent(group: MessageGroup, includeText: boolean): boolean {
+  if (group.role.toLowerCase() === "tool") {
+    // Inspection media stays with its activity. Explicit inline widgets instead
+    // own a visible output surface, even when their source is a tool result.
+    return group.messages.some(({ message }) =>
+      normalizeMessage(message).content.some(
+        (part) => part.type === "canvas" && part.preview.surface === "assistant_message",
+      ),
+    );
+  }
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 

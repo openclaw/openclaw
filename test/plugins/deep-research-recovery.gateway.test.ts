@@ -876,15 +876,15 @@ it.each([
             await projection.ensureMaterialized();
           }
           if (scenario === "provider-reload-after-await") {
-            // Reload stops service owners before retiring their plugin instance.
-            await services?.stop({ strict: true, pluginIds: new Set(["google"]) });
             // Actual plugin disposal retires the registered provider and its pending HTTP work.
             const google = registry.plugins.find((item) => item.id === "google");
             assert.ok(google);
             // Start disposal before remote completion; do not wait on its in-flight consumer.
             const instance = getPluginInstance(google);
             assert.ok(instance);
-            const disposing = instance.dispose();
+            const disposing = instance.dispose(async () => {
+              await services?.stop({ pluginIds: new Set([google.id]), strict: true });
+            });
             release.resolve();
             await disposing;
           } else {

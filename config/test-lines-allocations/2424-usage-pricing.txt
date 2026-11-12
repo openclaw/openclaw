@@ -1,0 +1,2 @@
+# Exact excess for cancellation scope ownership and physical cleanup assertions; net test growth is 402.
+2
