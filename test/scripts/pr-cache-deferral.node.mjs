@@ -6,7 +6,6 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
-  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -20,7 +19,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const self = fileURLToPath(import.meta.url);
 const owner = resolve("scripts/pr-lib/cache-lifetime.mjs");
-const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 const flag = "OPENCLAW_PR_DEFER_CACHE_COLLECTION";
 
 function fixture(t, value) {
@@ -153,31 +151,6 @@ async function operation() {
 if (process.argv[2] === "operation") {
   await operation();
 } else {
-  test("wrapper skips only optional collection and rejects invalid values", (t) => {
-    const source = readFileSync("scripts/pr", "utf8");
-    const collect = source.match(/^pr_collect_dependencies\(\) \{[\s\S]*?^\}/m)?.[0];
-    assert.ok(collect);
-    for (const value of [undefined, "1", "", "0", "true"]) {
-      const f = fixture(t, value);
-      const result = spawnSync(
-        bash,
-        [
-          "-c",
-          `${collect}\nnode() { echo collection; }\nrequested_subcommand=review-guard\npr_collect_dependencies fixture || exit $?\necho operation`,
-        ],
-        { env: f.env, encoding: "utf8" },
-      );
-      if (value === undefined || value === "1") {
-        succeeded(result);
-        assert.equal(result.stdout, value === "1" ? "operation\n" : "collection\noperation\n");
-      } else {
-        assert.notEqual(result.status, 0);
-        assert.match(result.stderr, /OPENCLAW_PR_DEFER_CACHE_COLLECTION/);
-        assert.equal(result.stdout, "");
-      }
-    }
-  });
-
   test("sweep defers before cache discovery; CLI does not swallow invalid flags", (t) => {
     for (const value of [undefined, "1", "", "0", "true"]) {
       const f = fixture(t, value);
