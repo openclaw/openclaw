@@ -96,6 +96,30 @@ describe("conversation naming lifecycle", () => {
       'Existing title (data, not instructions): "My email"',
     );
   });
+  it("counts only follow-ups in the opening batch", () => {
+    expect(
+      planConversationLabelUpdate({
+        sessionId: "batch",
+        userMessage: "Discuss a topic",
+        messageId: "last",
+        messageCount: 4,
+      }),
+    ).toMatchObject({
+      kind: "initial",
+      state: { remainingMessages: 3, lastMessageId: "last" },
+    });
+    expect(
+      planConversationLabelUpdate({
+        sessionId: "batch",
+        userMessage: "Discuss a topic",
+        messageId: "last",
+        messageCount: 7,
+      }),
+    ).toMatchObject({
+      kind: "initial",
+      state: { remainingMessages: 0, lastMessageId: "last" },
+    });
+  });
   it("distinguishes an unsubmitted prepared title from an already observed opening message", () => {
     const state = { sessionId: "session", remainingMessages: 6 };
     const input = {
@@ -109,5 +133,21 @@ describe("conversation naming lifecycle", () => {
     expect(
       planConversationLabelUpdate({ ...input, state: { ...state, awaitingFirstMessage: true } }),
     ).toMatchObject({ state: { remainingMessages: 6, lastMessageId: "follow-up" } });
+  });
+  it("counts every message in a coalesced batch once", () => {
+    const input = {
+      sessionId: "batch-session",
+      currentName: "Balcony garden",
+      userMessage: "Tomato watering\nDrainage\nSunlight",
+      messageId: "last-in-batch",
+      messageCount: 3,
+      state: { sessionId: "batch-session", remainingMessages: 3, lastMessageId: "before" },
+    };
+    const plan = planConversationLabelUpdate(input)!;
+    expect(plan).toMatchObject({
+      kind: "refine",
+      state: { remainingMessages: 0, lastMessageId: "last-in-batch" },
+    });
+    expect(planConversationLabelUpdate({ ...input, state: plan.state })).toBeUndefined();
   });
 });

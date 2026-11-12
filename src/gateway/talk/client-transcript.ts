@@ -30,6 +30,7 @@ export async function appendTalkClientTranscript(
     scheduleChatDashboardSessionTitle({
       ...scope,
       admittedSessionId: entry.sessionId,
+      entry,
       cfg: params.config,
       context,
       request: { rawMessage: params.text, normalizedAttachments: [] },

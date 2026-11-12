@@ -4,7 +4,9 @@ import {
   readConversationLabelRefinementSource,
 } from "../auto-reply/reply/conversation-label-refinement.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { SessionLabelOwnerIndex } from "../config/sessions/session-entry-selection.js";
 import {
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
@@ -70,29 +72,70 @@ export async function maybeReassessDashboardSessionTitle(params: {
       if (!plan || plan.kind === "initial") {
         return false;
       }
+      const makePatch = (current: InternalSessionEntry, name?: string) => {
+        // A reset or manual rename during inference wins over the old result.
+        if (
+          current.sessionId !== params.sessionId ||
+          current.lifecycleRevision !== before.lifecycleRevision ||
+          current.label !== before.label ||
+          current.displayName !== before.displayName
+        ) {
+          return null;
+        }
+        const patch: Partial<InternalSessionEntry> = {
+          conversationLabelRefinement: plan.state,
+        };
+        if (name && name !== currentName) {
+          patch.displayName = name;
+          if (current.label?.trim()) {
+            patch.label = name;
+          }
+        }
+        return patch;
+      };
       const persist = async (name?: string) => {
+        if (name && name !== currentName && before.label?.trim()) {
+          return await applySessionEntryCanonicalReplacements({
+            agentId: scope.agentId,
+            storePath: scope.storePath,
+            sessionKeys: [scope.sessionKey],
+            includeLabelOwners: name,
+            labelClaim: { sessionKey: scope.sessionKey, label: name },
+            assertCommitAllowed: () => {
+              params.assertCurrent();
+              params.commitGuard?.();
+            },
+            update: (entries) => {
+              const current = entries.find(
+                ({ sessionKey }) => sessionKey === scope.sessionKey,
+              )?.entry;
+              const owners = new SessionLabelOwnerIndex(
+                Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+              );
+              const patch = current && makePatch(current, name);
+              if (!current || !patch || owners.isLabelInUse(name, [scope.sessionKey])) {
+                return { result: false };
+              }
+              return {
+                result: true,
+                replacements: [
+                  {
+                    sessionKey: scope.sessionKey,
+                    previousSessionKeys: [],
+                    entry: { ...current, ...patch },
+                  },
+                ],
+              };
+            },
+          });
+        }
         let committed = false;
         await patchSessionEntryCore(
           scope,
           (current) => {
-            // A reset or manual rename during inference wins over the old result.
-            if (
-              current.sessionId !== params.sessionId ||
-              current.lifecycleRevision !== before.lifecycleRevision ||
-              current.label !== before.label ||
-              current.displayName !== before.displayName
-            ) {
-              return null;
-            }
-            committed = true;
-            const patch: Partial<InternalSessionEntry> = {
-              conversationLabelRefinement: plan.state,
-            };
-            if (name && name !== currentName) {
-              patch.displayName = name;
-              if (current.label?.trim()) {
-                patch.label = name;
-              }
+            const patch = makePatch(current, name);
+            if (patch) {
+              committed = true;
             }
             return patch;
           },

@@ -173,17 +173,26 @@ describeTelegramDispatch("DM topic label recovery", () => {
     await dispatchWithContext({ context: context(), cfg, bot, streamMode: "off" });
     await vi.waitFor(() => expect(generateTopicLabel).toHaveBeenCalledTimes(1));
     mockDefaultSessionEntry({ sessionId: "s1", systemSent: true });
-    const observed = createDeferred();
+    const started = createDeferred();
+    const release = createDeferred<string>();
+    const staleRead = createDeferred();
     const cache = await import("./topic-name-cache.js");
-    const persist = cache.updateTopicName;
-    vi.spyOn(cache, "updateTopicName").mockImplementation(async (...args) => {
-      await persist(...args);
-      if (args[2].labelState?.remainingMessages === 6) {
-        observed.resolve();
+    const readMetadata = cache.getTopicLabelMetadata;
+    let released = false;
+    vi.spyOn(cache, "getTopicLabelMetadata").mockImplementation(async (...args) => {
+      const result = await readMetadata(...args);
+      if (released) {
+        staleRead.resolve();
       }
+      return result;
+    });
+    generateTopicLabel.mockImplementationOnce(async () => {
+      started.resolve();
+      return await release.promise;
     });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
       async ({ dispatcherOptions }) => {
+        await withinTest(started.promise, signal);
         const { handleTelegramAction } = await import("./action-runtime.js");
         await handleTelegramAction(
           {
@@ -195,13 +204,19 @@ describeTelegramDispatch("DM topic label recovery", () => {
           },
           cfg,
         );
+        released = true;
+        release.resolve("Outdated title");
         await dispatcherOptions.deliver({ text: "Renamed the topic" }, { kind: "final" });
         return { queuedFinal: true };
       },
     );
-    await dispatchWithContext({ context: context(), cfg, bot, streamMode: "off" });
-    await withinTest(observed.promise, signal);
-    expect(generateTopicLabel).toHaveBeenCalledTimes(1);
+    try {
+      await dispatchWithContext({ context: context(), cfg, bot, streamMode: "off" });
+      await withinTest(staleRead.promise, signal);
+    } finally {
+      release.resolve("Outdated title");
+    }
+    expect(generateTopicLabel).toHaveBeenCalledTimes(2);
     expect(http.requests).toEqual([
       {
         method: "editForumTopic",

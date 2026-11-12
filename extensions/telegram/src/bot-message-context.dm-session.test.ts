@@ -409,6 +409,24 @@ describe("Telegram recorded session destinations", () => {
     expect(harness.replySpy).not.toHaveBeenCalled();
   });
 
+  it("dispatches a user message carrying a private topic creation event", async () => {
+    const bot = await createBot(false, true, cfg, true);
+    await receive(
+      bot,
+      serviceMessage({
+        message_thread_id: 77,
+        is_topic_message: true,
+        forum_topic_created: { name: "New Chat", icon_color: 7322096 },
+        text: "The actual first task",
+      }),
+    );
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      RawBody: "The actual first task",
+      SessionKey: privateTopicKey,
+    });
+  });
+
   it("learns reply topic names and restores them after plugin-state reopen", async () => {
     const bot = await createBot(false, true, cfg);
     await receive(bot, {

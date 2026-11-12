@@ -56,6 +56,7 @@ export function planConversationLabelUpdate(params: {
   skillCommands?: SkillCommandSpec[];
   isControlCommand?: boolean;
   messageId?: string;
+  messageCount?: number;
 }): ConversationLabelUpdatePlan | undefined {
   if (
     params.isControlCommand ||
@@ -63,11 +64,12 @@ export function planConversationLabelUpdate(params: {
   ) {
     return undefined;
   }
+  const count = Math.max(1, Math.floor(params.messageCount ?? 1));
   const currentName = params.currentName?.trim();
   const next = {
     sessionId: params.sessionId,
     ...(params.lifecycleRevision ? { lifecycleRevision: params.lifecycleRevision } : {}),
-    remainingMessages: 6,
+    remainingMessages: Math.max(0, 6 - (count - 1)),
     ...(params.messageId ? { lastMessageId: params.messageId } : {}),
   };
   if (!currentName) {
@@ -93,7 +95,7 @@ export function planConversationLabelUpdate(params: {
   if (params.messageId && state.awaitingFirstMessage) {
     return { kind: "observe", state: next, currentName };
   }
-  const remainingMessages = state.remainingMessages - 1;
+  const remainingMessages = Math.max(0, state.remainingMessages - count);
   return {
     kind: remainingMessages === 0 ? "refine" : "observe",
     state: { ...next, remainingMessages },
