@@ -8,6 +8,7 @@ import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-
 import { scopePreparedModelRuntimeLease } from "../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  getPendingPreparedModelRuntimeReplacement,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
@@ -336,6 +337,7 @@ describe("prepared Gateway plugin borrowing", () => {
             params,
           );
         let lease: PreparedModelRuntimeLease | undefined;
+        let publication: Promise<unknown> | undefined;
         try {
           await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
             publishConfiguredModelRuntimeSnapshots({
@@ -367,7 +369,7 @@ describe("prepared Gateway plugin borrowing", () => {
             lease = undefined;
             const publicationEntered = createDeferredCore();
             const finishPublication = createDeferredCore<OpenClawConfig>();
-            let publication: Promise<unknown> | undefined;
+            let publicationBarrier: Promise<void> | undefined;
             let releaseWork: (() => void) | undefined;
             let current = true;
             let preparedCheckpoints = 0;
@@ -438,6 +440,8 @@ describe("prepared Gateway plugin borrowing", () => {
                         (error: unknown) => error,
                       );
                       await publicationEntered.promise;
+                      publicationBarrier = getPendingPreparedModelRuntimeReplacement();
+                      assert(publicationBarrier, "Suspended publication must own a replacement barrier");
                     } else if (preparedCheckpoints === 2) {
                       if (change === "automatic busy") {
                         releaseWork = oldInstance.retainWork();
@@ -457,6 +461,10 @@ describe("prepared Gateway plugin borrowing", () => {
                 });
               }
               expect(preparedCheckpoints).toBe(2);
+              expect(
+                getPendingPreparedModelRuntimeReplacement(),
+                "Automatic reload refusal must preserve the in-flight publication barrier",
+              ).toBe(publicationBarrier);
               expect(setState).not.toHaveBeenCalled();
               expect(requestRecoveryRestart).not.toHaveBeenCalled();
               expect(registryOwner.registry).toBe(initial.pluginRegistry);
@@ -475,7 +483,6 @@ describe("prepared Gateway plugin borrowing", () => {
               });
             } finally {
               finishPublication.resolve(config);
-              await publication;
               releaseWork?.();
               handlers.stopRestartRetries();
             }
@@ -668,6 +675,7 @@ describe("prepared Gateway plugin borrowing", () => {
         } finally {
           await lease?.[Symbol.asyncDispose]();
           await closePreparedModelRuntimeSnapshots();
+          await publication;
           await lifetime.stop();
           loaded.forEach((entry) => entry.retireGatewayRuntimeBindings());
           await registryOwner.close();
