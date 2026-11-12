@@ -10,7 +10,7 @@ import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
-import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
+import { copyAgentToolMetadata, getAgentToolListingScope } from "../agent-tool-metadata.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
@@ -111,12 +111,25 @@ function changedPromptRoutePart(previous: unknown, current: string): SystemPromp
 }
 
 type ToolDefinition = Pick<AnyAgentTool, "name" | "description" | "parameters">;
+type PublicationListing = ToolDefinition &
+  Pick<AnyAgentTool, "label" | "async" | "catalogMode"> & { scope?: string };
+
 type ToolSurface = {
   routeKey: string;
   historyId: string | null;
   /** Digest of the tool policy config; a policy change starts a new pin. */
   toolPolicy: string;
   tools: ToolDefinition[];
+  publicationListing?: PublicationListing;
+};
+
+type ToolSurfaceInput = {
+  state: EmbeddedSessionPromptState;
+  routeKey: string;
+  toolPolicy: string;
+  entries: SessionEntry[];
+  historyBoundaryCount?: number;
+  tools: AnyAgentTool[];
 };
 
 function describeTool(tool: AnyAgentTool): ToolDefinition {
@@ -160,26 +173,20 @@ function sameToolParameters(left: unknown, right: unknown): boolean {
     : stableStringify(left) === stableStringify(right);
 }
 
-/**
- * The session pins every tool definition it has sent, so a turn that builds fewer
- * tools keeps the provider prefix: retained definitions refuse their calls. New or
- * changed definitions extend the pin once and are written with the next checkpoint.
- */
-export function prepareSessionToolSurface(params: {
-  state: EmbeddedSessionPromptState;
-  routeKey: string;
-  toolPolicy: string;
-  entries: SessionEntry[];
-  historyBoundaryCount?: number;
-  tools: AnyAgentTool[];
-}): AnyAgentTool[] {
+function resolveSessionToolSurface(params: ToolSurfaceInput) {
   const historyId = resolvePromptHistoryId(params);
   const restored = (): ToolSurface | undefined => {
     const pin = readToolSurfaceCheckpoint(params.entries);
     return pin?.routeKey === params.routeKey &&
       pin.historyId === historyId &&
       pin.toolPolicy === params.toolPolicy
-      ? { routeKey: params.routeKey, historyId, toolPolicy: params.toolPolicy, tools: pin.tools }
+      ? {
+          routeKey: params.routeKey,
+          historyId,
+          toolPolicy: params.toolPolicy,
+          tools: pin.tools,
+          publicationListing: pin.publicationListing,
+        }
       : undefined;
   };
   const candidate = params.state.pendingToolSurface ?? params.state.toolSurface ?? restored();
@@ -191,6 +198,74 @@ export function prepareSessionToolSurface(params: {
       : undefined;
   // A restored pin rides along with later combined checkpoints.
   params.state.toolSurface = params.state.pendingToolSurface ? params.state.toolSurface : known;
+  return { known, historyId };
+}
+
+/** Async discovery cannot rewrite an established listing before a config/tool refresh. */
+export function prepareSessionPublicationToolListing(
+  params: Omit<ToolSurfaceInput, "entries"> & {
+    getEntries: () => SessionEntry[];
+    refresh?: boolean;
+  },
+): AnyAgentTool[] {
+  const current = params.tools.find((tool) => tool.name === "github_publish");
+  const scope = current && getAgentToolListingScope(current);
+  if (!current || scope === undefined) {
+    return params.tools;
+  }
+  const { known, historyId } = resolveSessionToolSurface({
+    ...params,
+    entries: params.getEntries(),
+  });
+  const previous = known?.publicationListing;
+  const listing =
+    previous && previous.scope === scope && !params.refresh
+      ? previous
+      : {
+          scope,
+          ...describeTool(current),
+          label: current.label,
+          async: current.async,
+          catalogMode: current.catalogMode,
+        };
+  if (listing !== previous) {
+    params.state.pendingToolSurface = {
+      routeKey: params.routeKey,
+      historyId,
+      toolPolicy: params.toolPolicy,
+      tools: known?.tools ?? [],
+      publicationListing: listing,
+    };
+  }
+  const { scope: _scope, ...pin } = listing;
+  if (
+    pin.description === current.description &&
+    pin.label === current.label &&
+    pin.async === current.async &&
+    pin.catalogMode === current.catalogMode &&
+    sameToolParameters(pin.parameters, current.parameters)
+  ) {
+    return params.tools;
+  }
+  return params.tools.map((tool) =>
+    tool === current
+      ? copyAgentToolMetadata(tool, {
+          ...tool,
+          ...pin,
+          async: pin.async,
+          catalogMode: pin.catalogMode,
+        })
+      : tool,
+  );
+}
+
+/**
+ * The session pins every tool definition it has sent, so a turn that builds fewer
+ * tools keeps the provider prefix: retained definitions refuse their calls. New or
+ * changed definitions extend the pin once and are written with the next checkpoint.
+ */
+export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentTool[] {
+  const { known, historyId } = resolveSessionToolSurface(params);
   const pinned = new Map(known?.tools.map((tool) => [tool.name, tool]));
   // Sibling guidance in a description follows the tools a turn built; the pin keeps
   // the session's wording while the parameters match.
@@ -218,6 +293,7 @@ export function prepareSessionToolSurface(params: {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
+      publicationListing: known?.publicationListing,
       // oxlint-disable-next-line unicorn/no-array-sort -- The combined definitions array is private.
       tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
     };
@@ -246,8 +322,10 @@ function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
         routeKey: data.routeKey,
         historyId: data.historyId,
         toolPolicy: data.toolPolicy,
-        // SAFETY: only this module writes `tools`, as the ToolDefinition entries a turn sent.
+        // SAFETY: this module alone writes the tool definitions and publication listing checkpoint.
         tools: data.tools as ToolDefinition[],
+        // SAFETY: this module alone checkpoints PublicationListing values; older pins omit the field.
+        publicationListing: data.publicationListing as PublicationListing | undefined,
       }
     : undefined;
 }
@@ -469,7 +547,12 @@ export async function persistSessionSystemPrompt(
       await appendEntry(
         "openclaw.system-prompt",
         toolSurface
-          ? { ...snapshot, toolPolicy: toolSurface.toolPolicy, tools: toolSurface.tools }
+          ? {
+              ...snapshot,
+              toolPolicy: toolSurface.toolPolicy,
+              tools: toolSurface.tools,
+              publicationListing: toolSurface.publicationListing,
+            }
           : snapshot,
       );
     } catch (error) {

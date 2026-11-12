@@ -31,6 +31,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/file-log-main-thread-measure.mjs!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
@@ -45,6 +46,7 @@ const repositoryScriptEntries = [
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/exec-safe-bin-io-measure.mjs!",
   "scripts/perf/clickclack-account-snapshot.ts!",
   "scripts/perf/clickclack-credential-read.ts!",
   "scripts/perf/github-managed-profile-read.ts!",
@@ -718,6 +720,7 @@ const rootEntries = [
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-client-credentials.ts!",
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-log.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-file-tool-read.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
@@ -735,6 +738,7 @@ const rootEntries = [
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/logging/logger-file.worker.ts!",
   // Offline port foundations precede orchestration; remove with their first production callers.
   "src/infra/database-engine/port.worker.ts!",
   "src/snapshot/export-envelope.ts!",

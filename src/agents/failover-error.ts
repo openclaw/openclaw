@@ -35,6 +35,7 @@ import { resolveExecutionApprovalFailureMessage } from "./failover/message-patte
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import { renderRateLimitRetryExhaustion } from "./failover/user-copy.js";
 import {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessSessionSupersededError,
   isAgentHarnessPreflightError,
 } from "./harness/errors.js";
@@ -490,7 +491,13 @@ export function resolveFailoverClassificationFromError(
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
-  if (isAgentHarnessPreflightError(err) || findLocalWorkerTaskFailure(err)) {
+  if (
+    isAgentHarnessPreflightError(err) ||
+    findLocalWorkerTaskFailure(err) ||
+    collectErrorGraphCandidates(err, resolveNestedErrors).some(
+      (candidate) => candidate instanceof AgentHarnessModelRequestPolicyError,
+    )
+  ) {
     return null;
   }
   // Local coordination codes such as SQLite "overloaded" are not provider signals.
