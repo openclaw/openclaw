@@ -1,4 +1,4 @@
-name: Release broad failure isolation
+name: Release restart fixture claim repair
 'on':
   workflow_dispatch:
     inputs:
@@ -9,7 +9,7 @@ name: Release broad failure isolation
 permissions:
   contents: read
 concurrency:
-  group: release-broad-failure-isolation-${{ inputs.target_ref }}
+  group: release-restart-fixture-claim-e851e8c29e561b777995c08a89decb9d9fc0a99c
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -20,9 +20,9 @@ env:
   PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
   CAPACITY_PROOF_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
   PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  CANDIDATE_SHA: 3fdf22dbe1a317e79b349ed276e57bea686bd6ac
-  SOURCE_TREE: 7598fb6c541e204e9b29e2a76cca4478ea34fb42
-  PATHS_SHA256: 8b35c727dbdea25568ab11fb98e887f95a2b42c40ce134122d056f34e9866f05
+  CANDIDATE_SHA: e851e8c29e561b777995c08a89decb9d9fc0a99c
+  SOURCE_TREE: 1c5d1058eb92f17193ebc46caad6f5d0a6c515ec
+  PATHS_SHA256: 491ba06de4699b3a6def5e936bbd4e93b671bd0749784fcc22b39cb2deca5c26
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
   tests:
@@ -66,7 +66,8 @@ jobs:
 
         attempt=%s
 
-        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/final-ci/identity.txt
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
 
         '
     - uses: ./.github/actions/setup-node-env
@@ -82,10 +83,24 @@ jobs:
 
         mapfile -t suites < <(node -e ''for(const p of JSON.parse(process.env.TESTS_JSON)) console.log(p)'')
 
-        node scripts/test-projects.mts "${suites[@]}" -- --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/final-ci/tests.json" 2>&1 | tee .artifacts/final-ci/tests.log'
+        node scripts/test-projects.mts "${suites[@]}" -- --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/final-ci/tests.json"
+        2>&1 | tee .artifacts/final-ci/tests.log'
     - name: Require executed suite coverage
       shell: bash
-      run: "node --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\nconst selected=JSON.parse(process.env.TESTS_JSON);\nconst report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\nassert.equal(report.numFailedTests,0); assert.equal(report.numFailedTestSuites,0);\nfor (const path of selected) {\n const matches=report.testResults.filter(x=>x.name.replaceAll('\\\\','/').endsWith('/'+path));\n assert.equal(matches.length,1,'Missing/duplicate suite '+path);\n assert(matches[0].assertionResults.some(x=>x.status==='passed'),'No executed case '+path);\n assert(matches[0].assertionResults.every(x=>['passed','pending','skipped','todo','disabled'].includes(x.status)),'Failed case '+path);\n}\nfor (const path of ['src/agents/code-mode.catalog-lifetime.test.ts','src/gateway/server.delegated-administration.product.test.ts','test/system-agent-delegation-authority.e2e.test.ts','ui/src/e2e/session-management.trailing-state.e2e.test.ts']) {\n if (!selected.includes(path)) continue;\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\\','/').endsWith('/'+path));\n assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Critical cases must all pass '+path);\n}\nif (process.env.REQUIRE_STRESS==='1') {\n const suite=report.testResults.find(x=>x.name.endsWith('/packages/memory-host-sdk/src/host/session-files-large-export.test.ts'));\n assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Stress must execute, never skip');\n}\nif (process.platform==='win32') {\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\\','/').endsWith('/src/infra/update-retained-runtime-imports.process.test.ts'));\n for (const runtime of ['node-short-path','node-junction']) assert(suite?.assertionResults.some(x=>x.title.includes(runtime)&&x.status==='passed'),'Missing real '+runtime+' pass');\n}\nNODE"
+      run: "node --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\nconst selected=JSON.parse(process.env.TESTS_JSON);\n\
+        const report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\nassert.equal(report.numFailedTests,0);\
+        \ assert.equal(report.numFailedTestSuites,0);\nfor (const path of selected) {\n const matches=report.testResults.filter(x=>x.name.replaceAll('\\\
+        \\','/').endsWith('/'+path));\n assert.equal(matches.length,1,'Missing/duplicate suite '+path);\n assert(matches[0].assertionResults.some(x=>x.status==='passed'),'No\
+        \ executed case '+path);\n assert(matches[0].assertionResults.every(x=>['passed','pending','skipped','todo','disabled'].includes(x.status)),'Failed\
+        \ case '+path);\n}\nfor (const path of ['src/agents/code-mode.catalog-lifetime.test.ts','src/gateway/server.delegated-administration.product.test.ts','test/system-agent-delegation-authority.e2e.test.ts','ui/src/e2e/session-management.trailing-state.e2e.test.ts'])\
+        \ {\n if (!selected.includes(path)) continue;\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\\','/').endsWith('/'+path));\n\
+        \ assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Critical\
+        \ cases must all pass '+path);\n}\nif (process.env.REQUIRE_STRESS==='1') {\n const suite=report.testResults.find(x=>x.name.endsWith('/packages/memory-host-sdk/src/host/session-files-large-export.test.ts'));\n\
+        \ assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Stress\
+        \ must execute, never skip');\n}\nif (process.platform==='win32') {\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\
+        \\','/').endsWith('/src/infra/update-retained-runtime-imports.process.test.ts'));\n for (const runtime of ['node-short-path','node-junction'])\
+        \ assert(suite?.assertionResults.some(x=>x.title.includes(runtime)&&x.status==='passed'),'Missing real '+runtime+'\
+        \ pass');\n}\nNODE"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
@@ -98,11 +113,82 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - lane: permissions
-          tests_json: '["src/gateway/session-utils.permissions.test.ts"]'
         - lane: queued-inputs
           tests_json: '["src/gateway/server-close.queued-inputs.test.ts"]'
+        - lane: fixture-siblings
+          tests_json: '["src/gateway/server-close.metadata.test.ts", "src/gateway/server-close.port-reservation.test.ts",
+            "src/gateway/server-close.plugin-failure.test.ts"]'
     env:
       TESTS_JSON: ${{ matrix.tests_json }}
       OPENCLAW_SESSION_EXPORT_STRESS: '1'
       REQUIRE_STRESS: ${{ matrix.lane == 'memory-replay' && '1' || '0' }}
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Verify static
+      run: 'set -euo pipefail
+
+        ( node scripts/run-oxlint.mjs --tsconfig tsconfig.json src/gateway/server-close.metadata.test-support.ts && pnpm exec
+        oxfmt --check --no-error-on-unmatched-pattern -- src/gateway/server-close.metadata.test-support.ts && node scripts/run-tsgo-core-test-shards.mjs
+        --ci-graphs-json ''["core-test-gateway-server"]'' ) 2>&1 | tee .artifacts/final-ci/static.log
+
+        git diff --exit-code
+
+        '
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: restart-fixture-static-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
