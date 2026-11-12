@@ -912,13 +912,16 @@ describe("scripts/changed-lanes", () => {
         "run-vitest",
         "test-extension",
         "extension-test-plan",
-      ].map((name) => "test/scripts/" + name + ".test.ts").toSorted();
+      ]
+        .map((name) => "test/scripts/" + name + ".test.ts")
+        .toSorted();
       const coreTargets = Array.from(
         { length: 83 },
         (_, index) => (index % 2 ? "ui/src" : "src/shared") + "/file-" + index + ".ts",
       ).toReversed();
-      const rootCommands = createChangedCheckPlan(detectChangedLanes(rootTargets), { platform })
-        .commands.filter((command) => command.name.startsWith("lint test root changed"));
+      const rootCommands = createChangedCheckPlan(detectChangedLanes(rootTargets), {
+        platform,
+      }).commands.filter((command) => command.name.startsWith("lint test root changed"));
       const coreCommands = expectDefined(
         createTargetedCoreLintCommands(
           coreTargets,
@@ -1015,18 +1018,20 @@ describe("scripts/changed-lanes", () => {
     ).toMatchObject({ bin: "pnpm", args: ["check"] });
   });
 
-  it.each([
-    ["docs/reference/test.md"],
-    [],
-    ["CHANGELOG.md"],
-    ["CHANGELOG.md", "src/config/config.ts"],
-  ].map((paths) => ({ paths })))("keeps classified changed gates local for $paths", ({ paths }) => {
+  it.each(
+    [
+      ["docs/reference/test.md"],
+      [],
+      ["CHANGELOG.md"],
+      ["CHANGELOG.md", "src/config/config.ts"],
+    ].map((paths) => ({ paths })),
+  )("keeps classified changed gates local for $paths", ({ paths }) => {
     const result = detectChangedLanes(paths);
     expect(shouldDelegateChangedCheckToCrabbox([], {}, { result })).toBe(false);
     if (paths.length > 0) {
-      expect(
-        shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1" }, { result }),
-      ).toBe(true);
+      expect(shouldDelegateChangedCheckToCrabbox([], { OPENCLAW_TESTBOX: "1" }, { result })).toBe(
+        true,
+      );
     }
   });
 
@@ -1103,9 +1108,7 @@ describe("scripts/changed-lanes", () => {
       plan.commands
         .filter((command) => command.name.startsWith("lint UI changed style"))
         .map((command) => command.args),
-    ).toEqual([
-      ["--import", "tsx", "scripts/run-stylelint.mts", ...styles],
-    ]);
+    ).toEqual([["--import", "tsx", "scripts/run-stylelint.mts", ...styles]]);
   });
 
   it("routes live Docker ACP tooling changes through a focused gate", () => {
@@ -1143,11 +1146,7 @@ describe("scripts/changed-lanes", () => {
 
   it("classifies package dependency and live script changes through Git", () => {
     const dir = createGitRepo("openclaw-package-scripts-");
-    writeRepoFile(
-      dir,
-      "package.json",
-      prettyJson({ scripts: {}, dependencies: { fixture: "1" } }),
-    );
+    writeRepoFile(dir, "package.json", prettyJson({ scripts: {}, dependencies: { fixture: "1" } }));
     commitAll(dir, "package baseline");
     writeRepoFile(
       dir,
@@ -1178,7 +1177,10 @@ describe("scripts/changed-lanes", () => {
     expect(commands).not.toContain("tsgo:all");
     expect(commands).not.toContain("ios:version:check");
     expect(commands).toContain("android:version:check");
-    expect(checkArgs(plan, "release-metadata:check")).toEqual(["release-metadata:check", "--staged"]);
+    expect(checkArgs(plan, "release-metadata:check")).toEqual([
+      "release-metadata:check",
+      "--staged",
+    ]);
   });
 
   it("passes release metadata base and head refs as options", () => {
@@ -1186,7 +1188,11 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result, { base: "main", head: "feature" });
 
     expect(checkArgs(plan, "release-metadata:check")).toEqual([
-      "release-metadata:check", "--base", "main", "--head", "feature",
+      "release-metadata:check",
+      "--base",
+      "main",
+      "--head",
+      "feature",
     ]);
     const staged = createChangedCheckPlan(result, { staged: true, base: "main" });
     expect(
@@ -1418,7 +1424,10 @@ describe("scripts/changed-lanes", () => {
       const plan = createChangedCheckPlan(result, { staged, base: "main" });
       for (const owner of sourceRatchets) {
         expect(checkArgs(plan, owner)).toEqual([
-          owner, ...(staged ? ["--staged"] : []), "--base", "main",
+          owner,
+          ...(staged ? ["--staged"] : []),
+          "--base",
+          "main",
         ]);
       }
     }
