@@ -5969,7 +5969,6 @@
 ["src/state/openclaw-agent-worker-store.env-capture.test.ts","./openclaw-agent-db-identity.js","69718d229c8999ab1351bccfe80deb1652ddb5069be02c1787f5fe0bd7a9d9d8",1]
 ["src/state/openclaw-agent-worker-store.env-capture.test.ts","./openclaw-agent-db.js","87401a6a83ec15cfe37414bf4302a397dde1171896d6ed03b945353d6e1d0cb5",1]
 ["src/state/openclaw-agent-worker-store.env-capture.test.ts","./openclaw-agent-db.paths.js","f6166f655fd346f566fcd963498c8db466d44ca635ca6941d7d79f13b1f225ea",1]
-["src/state/openclaw-agent-worker-store.env-capture.test.ts","./openclaw-agent-execution.js","c9638fc2b250f10d693da6bb83eb5c58234b221baf4ad7f3b8740f0f1ccd7992",1]
 ["src/state/openclaw-agent-worker-store.env-capture.test.ts","./openclaw-state-db-cache.js","5bfcd2a37502e794c48018fbb1c3a273d80ee7f6c9264d8cd07f8c4b6ff44e67",1]
 ["src/state/openclaw-agent-worker-store.env-capture.test.ts","./openclaw-state-db.paths.js","2e45f6c671ab95253a28ea50f69c6ee9901c894a04d326187abdb622dc44e022",1]
 ["src/state/openclaw-state-db-handle.test.ts","../infra/gateway-state-owner.js","f01ffca907aafa5ffb6a87265242196ae784aab4e4ff7acceee179b04c3e0011",1]

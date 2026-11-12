@@ -118,6 +118,7 @@ export function closeRelaySession(
   };
   session.closing = closing;
   const close = async (admissionFailure?: { error: unknown }) => {
+    let preparation: Promise<unknown> | undefined;
     try {
       if (admissionFailure) {
         throw admissionFailure.error;
@@ -125,28 +126,22 @@ export function closeRelaySession(
       const source = captureRelayVoiceSessionSource(session);
       if (session.voiceSessionCreated) {
         source.assertCurrent();
+      } else {
+        preparation = source.prepare();
       }
     } catch (error) {
-      closing.reason = "error";
-      closing.runTranscript = () => false;
-      session.voiceTranscriptQueue.seal();
-      const accepted = (session.voiceSessionClose ??= session.voiceTranscriptQueue.flush());
-      try {
-        await finishRelaySessionClose(session, "error", closing, () => accepted, options);
-      } catch (cleanupError) {
-        throw new AggregateError([error, cleanupError], "Realtime relay close failed", {
-          cause: cleanupError,
-        });
-      }
-      throw error;
+      return rejectRelaySessionClose(session, closing, error, (closeVoice) =>
+        finishRelaySessionClose(session, "error", closing, closeVoice, options),
+      );
     }
     closing.runTranscript = AsyncLocalStorage.bind((run: () => boolean) => run());
-    await finishRelaySessionClose(
+    return finishRelaySessionClose(
       session,
       reason,
       closing,
       (disposition) => closeRelayVoiceSession(session, disposition),
       options,
+      preparation,
     );
   };
   void withClientVoiceSessionSettlement(
@@ -163,12 +158,33 @@ export function closeRelaySession(
   return completion.promise;
 }
 
+async function rejectRelaySessionClose(
+  session: RelaySession,
+  closing: NonNullable<RelaySession["closing"]>,
+  error: unknown,
+  finish: (closeVoice: () => Promise<void>) => Promise<void>,
+): Promise<never> {
+  closing.reason = "error";
+  closing.runTranscript = () => false;
+  session.voiceTranscriptQueue.seal();
+  const accepted = (session.voiceSessionClose ??= session.voiceTranscriptQueue.flush());
+  try {
+    await finish(() => accepted);
+  } catch (cleanupError) {
+    throw new AggregateError([error, cleanupError], "Realtime relay close failed", {
+      cause: cleanupError,
+    });
+  }
+  throw error;
+}
+
 function finishRelaySessionClose(
   session: RelaySession,
   reason: "completed" | "error",
   closing: NonNullable<RelaySession["closing"]>,
   closeVoice: (disposition: "abort" | "detach") => Promise<void>,
   options?: RealtimeVoiceCloseOptions & { eventReason?: "output-cancelled" },
+  preparation?: Promise<unknown>,
 ): Promise<void> {
   const disposition =
     options?.disposition ??
@@ -187,8 +203,8 @@ function finishRelaySessionClose(
     session,
     disposition === "detach" ? undefined : reason === "error" ? "relay-error" : "relay-closed",
   );
-  const finish = () => {
-    const voiceClose = closeVoice(disposition).finally(() => session.runAuthority?.release());
+  const finish = (close = closeVoice) => {
+    const voiceClose = close(disposition).finally(() => session.runAuthority?.release());
     void voiceClose.then(
       () => drainingRelaySessions.delete(session),
       () => drainingRelaySessions.delete(session),
@@ -196,9 +212,22 @@ function finishRelaySessionClose(
     broadcastRelaySessionClosed(session, closing.reason, options?.eventReason);
     return voiceClose;
   };
+  const settle = () =>
+    preparation
+      ? preparation.then(
+          () => finish(),
+          (error: unknown) => rejectRelaySessionClose(session, closing, error, finish),
+        )
+      : finish();
   const failClose = async (error: unknown): Promise<never> => {
     closing.reason = "error";
-    await finish();
+    try {
+      await settle();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Realtime relay close failed", {
+        cause: cleanupError,
+      });
+    }
     throw error;
   };
   let providerClose: void | Promise<void>;
@@ -207,7 +236,7 @@ function finishRelaySessionClose(
   } catch (error) {
     return failClose(error);
   }
-  return providerClose ? providerClose.then(finish, failClose) : finish();
+  return providerClose ? providerClose.then(settle, failClose) : settle();
 }
 
 function closeTalkRealtimeRelaySessionsForConnection(connId: string): Promise<void> {

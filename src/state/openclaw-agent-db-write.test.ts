@@ -100,7 +100,9 @@ describe("agent database write admission", () => {
       const reservation = reserveWorkerOperation();
       await reservation.entered;
       const queued = write("queued");
-      const refused = expect(queued).rejects.toThrow("database target changed");
+      const refused = expect(queued).rejects.toThrow(
+        /^(?:Agent database target changed before write admission|SQLite database pathname changed during admission)$/u,
+      );
       try {
         retarget();
         const next = write("successor");

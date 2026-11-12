@@ -26,7 +26,7 @@ import {
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
 import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
-import { clearRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
+import { invalidateRuntimeAuthProfileStoreSnapshotsForOwner } from "./runtime-snapshots.js";
 import { loadPersistedAuthProfileStoreFromRows } from "./sqlite-read.js";
 import {
   prepareAuthProfileWriteTransactionAsync,
@@ -187,10 +187,7 @@ async function persistPreparedInlineAuthFailure(
                 try {
                   await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
                 } catch (error) {
-                  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-                    owner.databasePath,
-                    effectiveAgentDir,
-                  );
+                  invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
                   reportCommittedInlineAuthFailure(
                     "auth usage committed but publication failed",
                     error,
@@ -232,14 +229,8 @@ async function persistPreparedInlineAuthFailure(
       );
     } catch (error) {
       if (durableReceipt) {
-        try {
-          clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(owner.databasePath, effectiveAgentDir);
-        } catch (invalidationError) {
-          reportCommittedInlineAuthFailure(
-            "auth usage snapshot invalidation failed",
-            invalidationError,
-          );
-        }
+        // Retirement cannot prevent invalidation of a completed write's derived views.
+        invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
         reportCommittedInlineAuthFailure(
           "auth usage committed before publication or cleanup failed",
           error,

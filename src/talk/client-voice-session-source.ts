@@ -206,7 +206,8 @@ export function captureClientVoiceSessionWriter(params: {
       options,
       pending.then((retained) => retained.capturedIdentity),
     );
-  void pending.catch(() => {});
+  const ready = Promise.all([pending, captured.prepare()]).then(([retained]) => retained);
+  void ready.catch(() => {});
   const preparedExecution = () => {
     if (!execution) {
       throw new Error("Voice session writer preparation has not completed");
@@ -293,7 +294,7 @@ export function captureClientVoiceSessionWriter(params: {
     const mutation = structuredClone(input);
     const source = createSource(authority);
     return runOpenClawAgentWorkerWrite(options, async () => {
-      const retained = await pending;
+      const retained = await ready;
       if (mutation.kind === "create") {
         await retained.prepare(source);
       }
@@ -365,13 +366,13 @@ export function captureClientVoiceSessionWriter(params: {
     get admissionExecution(): OpenClawAgentDatabaseAdmissionExecution {
       return preparedExecution();
     },
-    prepare: () => pending,
+    prepare: () => ready,
     adoptNativeDatabase: (database: OpenClawAgentDatabase) =>
       preparedExecution().adoptNativeDatabase(database),
     release: async () => (await pending).release(),
     read(voiceSessionId: string) {
       return runOpenClawAgentWorkerWrite(options, async () =>
-        (await pending).runExisting(createSource(), async (worker) => {
+        (await ready).runExisting(createSource(), async (worker) => {
           const result = await worker.execute({
             type: "voice.session.read",
             input: { voiceSessionId },

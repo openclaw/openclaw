@@ -135,7 +135,7 @@ export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promi
     const captured = target
       ? captureOpenClawAgentDatabaseExecutionAsync(
           { ...target, env },
-          params.existingDatabaseTarget
+          params.existingDatabaseTarget?.identity.key.startsWith("file:")
             ? toAgentExecutionConstraints(params.existingDatabaseTarget.identity)
             : {},
         ).then(

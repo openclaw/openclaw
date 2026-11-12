@@ -8,7 +8,7 @@ import type { SchemaContract } from "../../../packages/gateway-protocol/src/sche
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type {
   inlineAuthProfileCredentialSchema,
   OAuthCredentialMetadata,

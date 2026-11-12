@@ -938,10 +938,8 @@ it.each([false, true])(
         }
       });
       const capture = vi
-        .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-        .mockImplementation(() => {
-          throw acquisitionFailure;
-        });
+        .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+        .mockRejectedValue(acquisitionFailure);
       const update = vi.fn(() => ({ label: "must not commit" }));
       try {
         const failure: unknown = await patchSessionEntryCore(f.scope, update, {

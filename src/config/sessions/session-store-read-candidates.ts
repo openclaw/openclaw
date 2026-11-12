@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+import {
+  matchesAgentDatabaseReadCandidatePath,
+  type AgentDatabaseReadCandidate,
+} from "../../infra/agent-database-readers.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
   assertDatabasePathIdentity,
@@ -9,10 +13,6 @@ import {
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
-import {
-  matchesAgentDatabaseReadCandidatePath,
-  type OpenClawAgentDatabaseReadCandidateResource,
-} from "../../state/openclaw-agent-db-resources.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 
 export type CapturedSessionStorePaths = ReadonlyMap<
@@ -48,10 +48,10 @@ export function resolveCapturedSessionStorePath(
   return captured[kind];
 }
 
-export type SessionStoreReadCandidate = Pick<
-  OpenClawAgentDatabaseReadCandidateResource,
-  "path" | "scope"
-> & { physicalPath: string; identity?: DatabasePathIdentity };
+export type SessionStoreReadCandidate = AgentDatabaseReadCandidate & {
+  physicalPath: string;
+  identity?: DatabasePathIdentity;
+};
 
 export type SessionStoreReadCustody = {
   sourcePath: string;

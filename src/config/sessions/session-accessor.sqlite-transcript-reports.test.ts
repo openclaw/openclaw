@@ -5,8 +5,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it as baseIt, onTestFinished, vi } from "vitest";
 import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { AssistantMessage } from "../../llm/types.js";
@@ -196,16 +198,27 @@ describe("SQLite report payload selection", () => {
     copyFileSync(databasePath, replacement);
     const { release, blocker } = await blockWriter();
     const selectReport = vi.fn(() => statusReport("stale"));
+    const queued = createDeferredCore();
+    const enqueue = admissionTurn.runWithSqliteDatabaseAdmissionTurn;
+    const queueSpy = vi
+      .spyOn(admissionTurn, "runWithSqliteDatabaseAdmissionTurn")
+      .mockImplementation((...args) => {
+        const result = enqueue(...args);
+        queued.resolve();
+        return result;
+      });
     const report = appendSessionTranscriptReport(scope, custom(selectReport));
     const rejected = expect(report).rejects.toThrow(/target changed|identity|physical file/i);
-    renameSync(databasePath, retired);
-    renameSync(replacement, databasePath);
-    release.resolve();
     try {
+      await awaitGateBeforeSettlement(queued.promise, report, "Report settled before queueing");
+      renameSync(databasePath, retired);
+      renameSync(replacement, databasePath);
+      release.resolve();
       await Promise.all([blocker, rejected]);
       expect(selectReport).not.toHaveBeenCalled();
       expectBytesEqual(readFileSync(databasePath), readFileSync(retired), "replacement database");
     } finally {
+      queueSpy.mockRestore();
       release.resolve();
       await Promise.allSettled([blocker, report]);
     }

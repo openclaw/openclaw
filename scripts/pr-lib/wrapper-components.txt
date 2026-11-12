@@ -2098,6 +2098,7 @@ src/state/openclaw-agent-db-session-provenance.ts
 src/state/openclaw-agent-db-terminal.ts
 src/state/openclaw-agent-db-transaction.ts
 src/state/openclaw-agent-db-validation-cache.ts
+src/state/openclaw-agent-db-validation-observation.ts
 src/state/openclaw-agent-db-validation-facts.ts
 src/state/openclaw-agent-db-validation-schema.ts
 src/state/openclaw-agent-db.paths.ts

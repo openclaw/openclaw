@@ -71,11 +71,11 @@ function holdExecution(
       await gate.release.promise;
     }
   };
-  const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+  const capture = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
   const intercept = vi
-    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
-    .mockImplementation((...args) => {
-      const execution = capture(...args);
+    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+    .mockImplementation(async (...args) => {
+      const execution = await capture(...args);
       const overrides: Partial<OpenClawAgentDatabaseExecution> = {};
       if (stage === "before-open") {
         overrides.prepare = async (source) => {
@@ -97,7 +97,13 @@ function holdExecution(
             options,
           );
       }
-      return { ...execution, ...overrides };
+      return {
+        ...execution,
+        ...overrides,
+        get fileIdentity() {
+          return execution.fileIdentity;
+        },
+      };
     });
   return gate;
 }
@@ -354,12 +360,12 @@ it.for([
     const writerEntered = createDeferredCore();
     const releaseWriter = createDeferredCore();
     let priorWriter: Promise<void> | undefined;
-    const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
+    const capture = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
     const intercept = vi
-      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
-      .mockImplementationOnce((...args) => {
+      .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+      .mockImplementationOnce(async (...args) => {
         intercept.mockRestore();
-        const execution = capture(...args);
+        const execution = await capture(...args);
         // Discovery must finish its cold admission before a writer can hold the read queue.
         priorWriter = runOpenClawAgentWorkerWrite(target, async () => {
           writerEntered.resolve();

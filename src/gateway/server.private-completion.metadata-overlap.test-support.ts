@@ -86,11 +86,11 @@ export function holdMetadataThroughSubagentStop(target: {
     return pending;
   });
 
-  const captureExecution = executionOwner.captureOpenClawAgentDatabaseExecution;
+  const captureExecution = executionOwner.captureOpenClawAgentDatabaseExecutionAsync;
   const executionSpy = vi
-    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
-    .mockImplementation((...args) => {
-      const execution = captureExecution(...args);
+    .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
+    .mockImplementation(async (...args) => {
+      const execution = await captureExecution(...args);
       if (producerScope.getStore() !== true) {
         return execution;
       }

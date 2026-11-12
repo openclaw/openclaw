@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import * as configEnvVars from "../../config/config-env-vars.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
@@ -81,9 +81,9 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-it.each(["current", "relocated", "closed"] as const)(
+it.for(["current", "relocated", "closed"] as const)(
   "keeps cold auth health behind asynchronous preparation and its %s owner",
-  async (owner) => {
+  async (owner, { signal }) => {
     await withOpenClawTestState(
       { label: "auth-health-cold-owner", scenario: "minimal" },
       async (state) => {
@@ -127,6 +127,7 @@ it.each(["current", "relocated", "closed"] as const)(
           settled = true;
         });
         void update.catch(() => {});
+        let writer: Promise<void> | undefined;
         try {
           await Promise.race([entered.promise, update]);
           expect({ reading, settled, usage: store.usageStats }).toEqual({
@@ -135,12 +136,22 @@ it.each(["current", "relocated", "closed"] as const)(
             usage: undefined,
           });
           let writerEntered = false;
-          const writer = runOpenClawAgentWriteAdmission(options, () => {
+          writer = runOpenClawAgentWriteAdmission(options, () => {
             writerEntered = true;
           });
-          await nextTurn();
+          await withinTest(
+            awaitGateBeforeSettlement(
+              writer,
+              update,
+              "Auth usage settled before the unrelated writer",
+            ),
+            signal,
+          );
           expect(writerEntered).toBe(true);
-          await writer;
+          expect({ settled, usage: store.usageStats }).toEqual({
+            settled: false,
+            usage: undefined,
+          });
           if (owner === "relocated") {
             writeConfigMachineState(
               SHARED_AUTH_STORE_STATE_KEY,
@@ -153,7 +164,7 @@ it.each(["current", "relocated", "closed"] as const)(
           }
         } finally {
           release.resolve();
-          await Promise.allSettled([update]);
+          await Promise.allSettled([update, ...(writer ? [writer] : [])]);
         }
         expect(joined).toBe(true);
         if (owner === "current") {

@@ -20,9 +20,9 @@ import { assertSqliteWorkerRequestCustody } from "../infra/sqlite-writer-admissi
 import { admitAgentEngineSearchExtensions } from "./openclaw-agent-db-engine.js";
 import type { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import type {
-  AgentDatabaseFileExecutionOpen,
+  AgentDatabaseExecutionFileIdentity,
   AgentDatabaseFileExecutionIdentity,
-} from "./openclaw-agent-execution-contract.js";
+} from "./openclaw-agent-execution-identity.types.js";
 import type { readAgentDatabaseRequestPreparation } from "./openclaw-agent-execution-preparation.js";
 
 /** Request-local physical facts stay on the native side of every live host grant. */
@@ -49,7 +49,7 @@ export function bindAgentDatabasePhysicalSources(
 
 /** Initial native acceptance binds the file before its identity can be published to the host. */
 export function acceptAgentDatabaseNativeFile(
-  input: AgentDatabaseFileExecutionOpen,
+  input: { databasePath: string; expectedIdentity?: AgentDatabaseExecutionFileIdentity },
   admittedIdentity: string,
   admittedBirthtime: string | undefined,
   native: ReturnType<typeof readOpenClawAgentDatabaseIdentity>,

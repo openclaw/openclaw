@@ -70,7 +70,7 @@ function createCacheWriter(
   options: ReturnType<typeof captureCacheDatabaseOptions>,
   observed: DatabasePathIdentity,
 ) {
-  const constraints = toAgentExecutionConstraints(observed);
+  const constraints = observed.key.startsWith("file:") ? toAgentExecutionConstraints(observed) : {};
   // Missing stores join their preparation owner; existing stores borrow at writer admission.
   let execution = observed.key.startsWith("path:")
     ? captureOpenClawAgentDatabaseExecutionAsync(options, constraints, "inherit")

@@ -104,10 +104,7 @@ export async function compareSessionProviderReview(
         },
         { identityAgentId: options.agentId },
         {
-          prepare(_execution, source) {
-            source.readCustody = [owner.readCustody];
-            return { prepare: owner.revalidateTarget, beforeWrite: owner.assertCurrent };
-          },
+          readCustody: [owner.readCustody],
           errors: {
             identity: "Provider review has no prepared native database identity",
             unknown: "Provider review has no confirmed native completion and commit receipt",

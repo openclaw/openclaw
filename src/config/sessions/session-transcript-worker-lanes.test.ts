@@ -144,12 +144,23 @@ it.each([false, true])(
       await ready.promise;
     });
     await entered.promise;
-    observed.run.mockResolvedValue(absent);
+    const readStarted = createDeferredCore();
+    observed.run.mockImplementation(async () => {
+      readStarted.resolve();
+      return absent;
+    });
     const read = withSessionHistoryWorkerDatabase(request.database, async (owner) => {
       const present = await owner.readEntryPresence(request.scope);
       return runOpenClawAgentWriteAdmission(request.database, () => present);
     });
     try {
+      if (prepared) {
+        await awaitGateBeforeSettlement(
+          readStarted.promise,
+          writer,
+          "Prepared read waited for the blocked writer",
+        );
+      }
       expect(observed.run).toHaveBeenCalledTimes(prepared ? 1 : 0);
     } finally {
       ready.resolve();
@@ -348,11 +359,20 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
   const prewarm = (lane: (typeof lanes)[number]) =>
     prewarmSessionHistoryWorker(request.database, lane);
   const replies = lanes.map(() => createDeferredCore<unknown>());
-  for (const reply of replies) {
-    observed.run.mockReturnValueOnce(reply.promise);
+  const started = lanes.map(() => createDeferredCore());
+  for (const [index, reply] of replies.entries()) {
+    observed.run.mockImplementationOnce(() => {
+      started[index]!.resolve();
+      return reply.promise;
+    });
   }
   const preparing = lanes.map((lane) => Promise.all([prewarm(lane), prewarm(lane)]));
   try {
+    await awaitGateBeforeSettlement(
+      Promise.all(started.map((gate) => gate.promise)),
+      Promise.all(preparing),
+      "Prewarms settled before every independent lane dispatched",
+    );
     expect(observed.run).toHaveBeenCalledTimes(5);
     expect(observed.run.mock.calls[0]?.[0]).toMatchObject({ kind: "prewarm" });
     expect(lanes.map((lane) => lane.pending)).toEqual([1, 1, 1, 1, 1]);
@@ -490,8 +510,17 @@ it.each([historyLane, maintenanceLane])(
     expect(lane.pending).toBe(0);
 
     const reply = createDeferredCore<unknown>();
-    observed.run.mockReturnValueOnce(reply.promise);
+    const started = createDeferredCore();
+    observed.run.mockImplementationOnce(() => {
+      started.resolve();
+      return reply.promise;
+    });
     const pending = prewarmSessionHistoryWorker(request.database, lane);
+    await awaitGateBeforeSettlement(
+      started.promise,
+      pending,
+      "Prewarm settled before worker dispatch",
+    );
     const resource = observed.resources.at(-1)!;
     resource.revoke();
     reply.resolve(prewarmed);

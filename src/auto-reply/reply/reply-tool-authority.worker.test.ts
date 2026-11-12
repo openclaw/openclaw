@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -28,6 +29,10 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { SESSION_ENTRY_MAINTENANCE_INTERVAL_MS } from "../../config/sessions/session-accessor.sqlite-maintenance-age.js";
+import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
+import * as maintenance from "../../config/sessions/session-accessor.sqlite-maintenance.js";
+import { observeNextPeriodicMaintenance } from "../../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   projectionLane,
@@ -87,10 +92,42 @@ function makeRun(overrides: Partial<ReturnType<typeof createQueueTestRun>["run"]
   return run;
 }
 
-it("evaluates retained reply authority without main-thread filesystem polling", async () => {
+it("evaluates retained reply authority without main-thread filesystem polling", async ({
+  signal,
+}) => {
   await withState(async (state, config) => {
     setRuntimeConfigSnapshot(config);
-    await seed(executionKey, { sessionId: "execution", sandboxMode: "off" });
+    const database = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    let seedMaintenanceCompleted = false;
+    const completed = observeSessionMaintenanceCompletion(database, {
+      accept: () => (seedMaintenanceCompleted = true),
+    });
+    const settled = createDeferred();
+    const release = maintenance.releaseSessionEntryMaintenanceExecution;
+    const releaseObserver = vi
+      .spyOn(maintenance, "releaseSessionEntryMaintenanceExecution")
+      .mockImplementation((databasePath, owner) => {
+        release(databasePath, owner);
+        if (databasePath === database && seedMaintenanceCompleted && owner.release) {
+          // The scheduler finishes synchronously after release, before idle-timer continuations.
+          const scheduled = observeNextPeriodicMaintenance(
+            (delay) =>
+              delay > SESSION_ENTRY_MAINTENANCE_INTERVAL_MS / 2 &&
+              delay <= SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
+          );
+          void Promise.all([scheduled(signal), owner.release]).then(
+            () => settled.resolve(),
+            settled.reject,
+          );
+        }
+      });
+    try {
+      await seed(executionKey, { sessionId: "execution", sandboxMode: "off" });
+      await withinTest(completed, signal);
+      await withinTest(settled.promise, signal);
+    } finally {
+      releaseObserver.mockRestore();
+    }
     const run = makeRun({ sessionKey: executionKey, config, workspaceDir: state.workspaceDir });
     const snapshot = prepareReplyToolAuthority(run);
     try {
@@ -133,7 +170,6 @@ it("evaluates retained reply authority without main-thread filesystem polling", 
         realpath.mockRestore();
         syncBuiltinESMExports();
       }
-      const database = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
       const moved = `${database}.original`;
       const replacement = path.join(state.stateDir, "replacement.sqlite");
       await upsertSessionEntryCore(

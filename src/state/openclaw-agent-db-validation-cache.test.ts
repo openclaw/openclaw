@@ -313,7 +313,9 @@ describe("canonical proof on physical database validation", () => {
       }
       resume.resolve();
       await first;
-      await expect(queued).rejects.toThrow("Agent database target changed before write admission");
+      await expect(queued).rejects.toThrow(
+        /^(?:Agent database target changed before write admission|SQLite database pathname changed during admission)$/u,
+      );
       expect(effect).toBe(false);
     } finally {
       resume.resolve();
