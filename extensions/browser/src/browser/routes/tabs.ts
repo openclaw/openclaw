@@ -3,6 +3,7 @@ import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime"
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
+import type { OperatorBrowserPagesOption } from "../cdp-target-filter.js";
 import { isLocalManagedProfile } from "../config.js";
 import {
   BrowserProfileUnavailableError,
@@ -25,7 +26,12 @@ import {
 } from "./agent.shared.js";
 import { readRouteNonNegativeInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { jsonError, runProfileRouteOperation, toStringOrEmpty } from "./utils.js";
+import {
+  jsonError,
+  operatorPagesOption,
+  runProfileRouteOperation,
+  toStringOrEmpty,
+} from "./utils.js";
 
 const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
 const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
@@ -161,12 +167,16 @@ async function runTabTargetMutation(params: {
 }
 
 export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
-  const listTabs = async (profileCtx: ProfileContext, signal: AbortSignal) => {
+  const listTabs = async (
+    profileCtx: ProfileContext,
+    signal: AbortSignal,
+    operatorPages: OperatorBrowserPagesOption = {},
+  ) => {
     const running = await checkTabReachability(ctx, profileCtx, signal);
     if (!running) {
       return { running: false, tabs: [] };
     }
-    let tabs = await profileCtx.listTabs({ signal });
+    let tabs = await profileCtx.listTabs({ signal, ...operatorPages });
     const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
     if (navigationPolicy.ssrfPolicy) {
       const { results } = await runTasksWithConcurrency<(typeof tabs)[number]>({
@@ -220,6 +230,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     await profileCtx.focusTab(tab.targetId, {
       exactTargetId: true,
       signal,
+      ...operatorPagesOption(req),
       ...(requestAssertCurrent
         ? { assertCurrent: () => requestAssertCurrent(profileCtx.profile) }
         : {}),
@@ -232,7 +243,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       req,
       res,
       ctx,
-      run: listTabs,
+      run: (profileCtx, signal) => listTabs(profileCtx, signal, operatorPagesOption(req)),
     });
   });
 
@@ -261,14 +272,17 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       mapTabError: true,
       run: async (profileCtx, signal) => {
         await profileCtx.ensureBrowserAvailable({ signal });
+        const operatorPages = operatorPagesOption(req);
         await assertBrowserNavigationAllowed({
           url,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
+          ...(operatorPages.includeOperatorPages ? { allowOperatorPages: true } : {}),
         });
         await req.assertCurrent?.(profileCtx.profile);
         const opened = await profileCtx.openTab(url, {
           label,
           signal,
+          ...operatorPages,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(isManagedOnlyBrowserRequest(req) ? { requireDurableOwnership: true } : {}),
         });
@@ -288,7 +302,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       ctx,
       targetId,
       mutate: async (profileCtx, id, signal) => {
-        const tabs = await profileCtx.listTabs({ signal });
+        const tabs = await profileCtx.listTabs({ signal, ...operatorPagesOption(req) });
         const tab = resolveBrowserTabOrThrow(id, tabs);
         return await focusTab(req, profileCtx, tab, signal);
       },
@@ -317,6 +331,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         const canonicalTargetId = await profileCtx.closeTab(id, {
           ...(targetIdMode === "raw" ? { exactTargetId: true } : {}),
           signal,
+          ...operatorPagesOption(req),
         });
         clearSnapshotKeysForTab(ctx, profileCtx.profile.name, canonicalTargetId);
         return canonicalTargetId;
