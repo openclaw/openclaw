@@ -22,29 +22,21 @@ export function registerCodexMemoryProbeTests(params: {
     ).rejects.toThrow("must be a regular file");
   });
 
-  it.each([
-    {
-      label: "EACCES",
-      prepare: async (codexHome: string) => {
-        await writeFile(path.join(codexHome, "memories", "MEMORY.md"), "# Memory\n");
-        await fs.chmod(path.join(codexHome, "memories"), 0o000);
-      },
-    },
-    {
-      label: "ENOTDIR",
-      prepare: (codexHome: string) =>
-        fs.writeFile(path.join(codexHome, "memories"), "leftover", "utf8"),
-    },
-  ])(
-    "keeps other Codex migration items when memory probing fails with $label",
-    async ({ label, prepare }) => {
+  // chmod(0o000) only denies traversal on non-root POSIX; Windows has no such
+  // permission model and POSIX root can still traverse, so lstat would succeed
+  // and the item would be planned, making the "error" assertion wrong despite
+  // correct production behavior. Gate the EACCES case off those environments.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps other Codex migration items when memory probing fails with EACCES",
+    async () => {
       const fixture = await createCodexFixture();
-      await prepare(fixture.codexHome);
+      await writeFile(path.join(fixture.codexHome, "memories", "MEMORY.md"), "# Memory\n");
+      await fs.chmod(path.join(fixture.codexHome, "memories"), 0o000);
       try {
         const plan = await buildCodexMigrationProvider().plan(params.contextFor(fixture));
         expect(findItem(plan.items, "memory:codex:MEMORY.md")).toMatchObject({
           status: "error",
-          reason: expect.stringContaining(label),
+          reason: expect.stringContaining("EACCES"),
         });
         expect(plan.items.some((item) => item.kind === "skill")).toBe(true);
       } finally {
@@ -52,4 +44,15 @@ export function registerCodexMemoryProbeTests(params: {
       }
     },
   );
+
+  it("keeps other Codex migration items when memory probing fails with ENOTDIR", async () => {
+    const fixture = await createCodexFixture();
+    await fs.writeFile(path.join(fixture.codexHome, "memories"), "leftover", "utf8");
+    const plan = await buildCodexMigrationProvider().plan(params.contextFor(fixture));
+    expect(findItem(plan.items, "memory:codex:MEMORY.md")).toMatchObject({
+      status: "error",
+      reason: expect.stringContaining("ENOTDIR"),
+    });
+    expect(plan.items.some((item) => item.kind === "skill")).toBe(true);
+  });
 }
