@@ -53,10 +53,9 @@ export function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceT
 export function resolveAnthropicFastModePlan(
   context: ProviderFastModePolicyContext,
 ): "native" | "service-tier" | false | undefined {
-  // The bundled Claude CLI backend ignores fastMode in its spawn args, so Fast has no
-  // request mapping there. Report support once the backend forwards it.
+  // Claude Code reports fast mode per model in its menu and owns the request and its fallback.
   if (context.runtimeId === CLAUDE_CLI_BACKEND_ID) {
-    return false;
+    return context.modelParams?.claudeCodeFastMode === true ? "native" : false;
   }
   if (
     context.provider.trim().toLowerCase() !== "anthropic" ||

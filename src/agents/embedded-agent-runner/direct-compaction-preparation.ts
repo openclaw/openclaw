@@ -15,6 +15,10 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import { prepareProviderRuntimeAuth } from "../../plugins/provider-runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import {
+  isCompactionSummaryRefusal,
+  type CompactionSummaryRefusalMode,
+} from "../compaction-summary-refusal.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { MissingProviderAuthError } from "../model-auth.js";
 import { projectModelThinkingCompat } from "../model-catalog-lookup.js";
@@ -48,6 +52,7 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
   requestedRouteResolution?: "resolved";
   seedCompaction?: CompactionAppendPersistenceAsync;
   sandbox?: SandboxContext | null;
+  summaryRefusal?: CompactionSummaryRefusalMode;
 };
 
 export async function prepareDirectCompactionAttempt(
@@ -130,6 +135,7 @@ export async function prepareDirectCompactionAttempt(
             status: failure.status,
             code: failure.code,
             rawError: failure.rawError ?? failure.message,
+            ...(isCompactionSummaryRefusal(err) ? { summaryRefused: true as const } : {}),
           }
         : undefined,
     };
