@@ -457,7 +457,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
             "outputDownloadFailed",
             "toolError",
             "previewMore",
-            "previewOmitted",
             "previewCaptured",
             "previewTruncated",
           ]

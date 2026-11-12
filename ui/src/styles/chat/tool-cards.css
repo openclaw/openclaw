@@ -1276,7 +1276,16 @@ openclaw-chat-tool-output {
   font-size: var(--control-ui-text-xs);
 }
 
-.chat-command-trail__preview pre {
+.chat-command-trail__preview-output {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-block-size: 3lh;
+  overflow: clip;
+}
+
+.chat-command-trail__preview-output pre {
+  flex: none;
   margin: 0;
 }
 

@@ -261,8 +261,9 @@ Drag an empty area of the titlebar row to move the window; its buttons keep thei
 In the conversation menu, choose **View → Inline command trail (this browser)**
 to show commands, file reads, and searches in the conversation as they run.
 Each row keeps its status and a preview of its latest output; expand it
-for tool details and more captured output. Earlier omitted output and truncated
-capture have separate notices. Inline commands start compact even with Full
+for tool details and more captured output. The preview shows at most three visual
+rows, keeping the newest text visible when lines wrap. Truncated capture has its
+own notice. Inline commands start compact even with Full
 verbosity, and your manual expand or collapse choices take precedence. Finished
 commands stay visible while the turn continues.
 Turning the trail off restores ordinary disclosure defaults and keeps your manual choices.
@@ -272,8 +273,8 @@ Expanded output retains its usual formatting.
 
 For running Codex commands, the preview continues following recent stdout after
 the 10,000-character capture limit. This live tail is bounded to 600 characters
-and three visible lines. **View captured beginning** opens the retained prefix;
-the omission and capture notices explain why it differs from the live tail.
+and three visible rows. **View captured beginning** opens the retained prefix,
+which can differ from the recent output shown in the live tail.
 Completion and Stop retire the live tail. Completed output and saved history
 keep their existing capture limits. If an interrupted command has no saved tool
 result, its partial output may be unavailable after terminal reconciliation or

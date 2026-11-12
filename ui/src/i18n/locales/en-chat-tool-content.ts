@@ -6,7 +6,6 @@ const enChatToolContent = {
   chat: {
     toolCards: {
       previewMore: "Expand for more output",
-      previewOmitted: "Earlier output omitted",
       previewCaptured: "View captured beginning",
       previewTruncated: "Captured output is truncated",
       providerResponse: "Provider tool response",

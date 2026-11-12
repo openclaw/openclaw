@@ -61,10 +61,9 @@ export function InlineToolPreview(props: ToolCardProps & { output?: ToolCardOutp
     <Show when={preview()}>
       {(value) => (
         <div class="chat-command-trail__preview">
-          <Show when={value().more}>
-            <div>{t("chat.toolCards.previewOmitted")}</div>
-          </Show>
-          <pre class="chat-tool-output__text">{value().text}</pre>
+          <div class="chat-command-trail__preview-output">
+            <pre class="chat-tool-output__text">{value().text}</pre>
+          </div>
           <Show when={value().more}>
             <button
               type="button"

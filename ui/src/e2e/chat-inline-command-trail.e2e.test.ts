@@ -114,6 +114,64 @@ async function saveHistory(
 }
 
 suite.define(() => {
+  it("caps wrapped live previews at three visual rows while keeping the newest output visible", async () => {
+    await suite.withPage(
+      { viewport: { width: 1200, height: 800 }, locale: "en-US", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const { pane, tool } = await startRun(page);
+        await toggleInline(pane, true);
+        await tool("wrapped", { phase: "start", args: { command: "printf wrapped-output" } });
+        const current = command(pane, "printf wrapped-output");
+        const preview = current.locator(".chat-command-trail__preview pre");
+        const output = `Captured beginning.\nPrevious phase.\n${"current output ".repeat(28)}LATEST: ready.`;
+        await tool("wrapped", { phase: "update", partialResult: { content: textContent(output) } });
+        await expect.poll(() => preview.textContent()).toBe(output);
+        const measurements = [];
+        for (const width of [1200, 820, 400]) {
+          await page.setViewportSize({ width, height: 800 });
+          const frame = await takeControlUiScreenshotFrame(page, pane, [current], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, `wrapped-preview-${width}.png`), frame.png);
+          measurements.push(
+            await preview.evaluate((element) => {
+              const bounds = element.parentElement!.getBoundingClientRect();
+              const range = document.createRange();
+              range.setStart(
+                element.firstChild!,
+                element.textContent!.length - "LATEST: ready.".length,
+              );
+              range.setEnd(element.firstChild!, element.textContent!.length);
+              const newest = range.getBoundingClientRect();
+              return {
+                rows: bounds.height / Number.parseFloat(getComputedStyle(element).lineHeight),
+                newestVisible: newest.top >= bounds.top - 1 && newest.bottom <= bounds.bottom + 1,
+              };
+            }),
+          );
+        }
+        for (const measurement of measurements) {
+          expect(measurement.rows).toBeLessThanOrEqual(3.05);
+          expect(measurement.newestVisible).toBe(true);
+        }
+        expect(await current.getByText("Earlier output omitted", { exact: true }).count()).toBe(0);
+        const row = current.locator(".chat-tool-row");
+        await row.click();
+        await expect
+          .poll(() => current.locator(".chat-tool-msg-body").textContent())
+          .toContain(output);
+        await row.click();
+        const next = `${output}\nLATEST: finished.`;
+        await tool("wrapped", { phase: "update", partialResult: { content: textContent(next) } });
+        await expect.poll(() => preview.textContent()).toContain("LATEST: finished.");
+        await current.getByRole("button", { name: "Expand for more output" }).click();
+        await expect
+          .poll(() => current.locator(".chat-tool-msg-body").textContent())
+          .toContain(next);
+      },
+    );
+  });
+
   it("keeps the live speech bubble on the running noncommand after splitting a mixed trail", async () => {
     await suite.withPage(
       { viewport: { width: 1200, height: 800 }, locale: "en-US", reducedMotion: "reduce" },
@@ -216,7 +274,7 @@ suite.define(() => {
         expect(await firstRow.getAttribute("aria-expanded")).toBe("false");
         await tool("first", { phase: "update", partialResult: { content: textContent(output) } });
         await expect.poll(() => preview.textContent()).toBe("phase three\nphase four\nphase five");
-        await first.getByText("Earlier output omitted", { exact: true }).waitFor();
+        expect(await first.getByText("Earlier output omitted", { exact: true }).count()).toBe(0);
         await first.getByRole("button", { name: "Expand for more output" }).click();
         await expect.poll(() => firstRow.getAttribute("aria-expanded")).toBe("true");
         await expect
