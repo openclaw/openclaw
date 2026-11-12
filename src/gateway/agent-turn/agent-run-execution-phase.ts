@@ -18,7 +18,7 @@ import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { withPreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
@@ -174,8 +174,8 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
       dispatch: Parameters<typeof dispatchAgentRunWithMedia>[0],
     ) => {
       const run = () => {
-        const execution = withPreparedModelRuntimePluginGenerationScope(
-          replyDispatchRuntime.pluginGeneration,
+        const execution = withPreparedModelRuntimeLease(
+          preparedModelRuntimeLease,
           () => dispatchAgentRunWithMedia(dispatch, params),
           () => (leaseActive ? preparedModelRuntimeLease.snapshot : undefined),
         );

@@ -1176,6 +1176,7 @@ const enSettings = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
+    autoSaveDeferred: "Saved; waiting to apply",
     categories: {
       core: "Core",
       ai: "Agent Defaults",

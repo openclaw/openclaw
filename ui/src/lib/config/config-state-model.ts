@@ -13,6 +13,7 @@ export type ConfigAutoSaveStatus =
   | "idle"
   | "saving"
   | "saved"
+  | "deferred"
   | "rejected"
   | "error"
   | "conflict"
@@ -51,6 +52,7 @@ export function createInitialConfigState(
     configAutoSaveStatus: initialConfigValue<ConfigAutoSaveStatus>("idle"),
     configRecoveryError: initialConfigValue<string | null>(null),
     configNeedsApply: false,
+    configDeferredApplication: initialConfigValue<{ reason: string; appliesWhen: string } | null>(null),
     configSnapshot: initialConfigValue<ConfigSnapshot | null>(null),
     configDraftBaseHash: initialConfigValue<string | null>(null),
     configSchema: initialConfigValue<unknown>(null),

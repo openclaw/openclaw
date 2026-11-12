@@ -186,12 +186,25 @@ export async function executeConfigExternalMutation<T>(
   try {
     value = await task(client);
   } catch (error) {
+    const persisted = persistedConfigReceipt(error);
+    if (persisted) {
+      onSubmitted({ ...submitted, ack: persisted.ack });
+    }
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return {
         ok: false,
         reason: "unavailable",
         error: "Connection changed before the configuration update completed.",
       };
+    }
+    if (persisted) {
+      const adoptedStatus = adoptConfigWriteAck(state, submitted, persisted.ack);
+      state.configNeedsApply = true;
+      state.configDeferredApplication = persisted.deferred;
+      if (adoptedStatus !== "conflict" && persisted.deferred) {
+        state.configAutoSaveStatus = "deferred";
+        state.lastError = `${persisted.deferred.reason} ${persisted.deferred.appliesWhen}`;
+      }
     }
     const outcome = configMutationFailure(state, error);
     return {
@@ -328,6 +341,7 @@ async function readConfig(
     !options.draftWrites?.hasUnacknowledgedDraftWrite() &&
     state.configAutoSaveStatus !== "conflict" &&
     state.configAutoSaveStatus !== "rejected" &&
+    state.configAutoSaveStatus !== "deferred" &&
     (!options.background || state.configAutoSaveStatus !== "error")
   ) {
     state.lastError = null;
@@ -341,6 +355,7 @@ async function readConfig(
     state.configValid = typeof res.valid === "boolean" ? res.valid : null;
     state.configIssues = Array.isArray(res.issues) ? res.issues : [];
     if (res.writeError) {
+      state.configDeferredApplication = null;
       const outcome = configMutationFailure(state, new GatewayRequestError(res.writeError));
       state.lastError = outcome.message;
       state.configAutoSaveStatus = "error";
@@ -364,6 +379,7 @@ async function readConfig(
     if (
       !options.background &&
       !state.configFormDirty &&
+      state.configAutoSaveStatus !== "deferred" &&
       !options.draftWrites?.hasUnacknowledgedDraftWrite()
     ) {
       if (
@@ -439,6 +455,34 @@ export type ConfigSubmission = ConfigSubmittedDraft & {
 };
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
+function persistedConfigReceipt(error: unknown): {
+  ack: ConfigWriteAck;
+  deferred: { reason: string; appliesWhen: string } | null;
+} | null {
+  if (
+    !(error instanceof GatewayRequestError) ||
+    !isGatewayProtocolResponseError(error) ||
+    error.gatewayCode !== ErrorCodes.UNAVAILABLE ||
+    !isRecord(error.details) ||
+    error.details.publication === "partial" ||
+    error.details.publication === "complete" ||
+    !isConfigWriteAck(error.details.persistedConfig)
+  ) {
+    return null;
+  }
+  const application = error.details.application;
+  return {
+    ack: error.details.persistedConfig,
+    deferred:
+      isRecord(application) &&
+      application.status === "deferred" &&
+      typeof application.reason === "string" &&
+      typeof application.appliesWhen === "string"
+        ? { reason: application.reason, appliesWhen: application.appliesWhen }
+        : null,
+  };
+}
+
 export async function submitConfigDraft(
   state: RuntimeConfigState,
   mode: "auto" | "save" | "apply",
@@ -506,6 +550,7 @@ export async function submitConfigDraft(
       return false;
     }
     adoptConfigWriteAck(state, submitted, ack);
+    state.configDeferredApplication = null;
     state.configNeedsApply = mode !== "apply";
     // Manual writes refresh resolved values and applied revision truth. Autosave
     // already has its authoritative hash and must not lock editors with a reload.
@@ -520,7 +565,20 @@ export async function submitConfigDraft(
     }
     return true;
   } catch (err) {
+    const persisted = persistedConfigReceipt(err);
+    // Even a late receipt retires this flight; reconnect must not submit it again.
+    if (submission && persisted) {
+      onSubmitted?.({ ...submission, ack: persisted.ack });
+    }
     if (isCurrent()) {
+      if (submission && persisted) {
+        const adoptedStatus = adoptConfigWriteAck(state, submission, persisted.ack);
+        state.configNeedsApply = true;
+        state.configDeferredApplication = persisted.deferred;
+        if (adoptedStatus === "conflict") {
+          return false;
+        }
+      }
       const outcome = configMutationFailure(state, err, submittedFormRaw);
       // A response can follow persistence without completing runtime apply.
       // Only a pre-write refusal or confirmed rollback retires the receipt.
@@ -532,7 +590,7 @@ export async function submitConfigDraft(
         onSubmitted?.({ ...submission, rejected: true });
       }
       state.lastError = outcome.message;
-      state.configAutoSaveStatus = outcome.status;
+      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
     }
     return false;
   } finally {
@@ -574,7 +632,16 @@ export function teardownFlushConfigDraft(
   void client
     .request<ConfigWriteAck>("config.set", { raw: draft.raw, baseHash: ack.hash })
     .then((receipt) => adoptConfigWriteAck(state, draft, receipt))
-    .catch(() => undefined);
+    .catch((error: unknown) => {
+      const persisted = persistedConfigReceipt(error);
+      if (persisted) {
+        adoptConfigWriteAck(state, draft, persisted.ack);
+        state.configNeedsApply = true;
+        state.configDeferredApplication = persisted.deferred;
+        state.configAutoSaveStatus = persisted.deferred ? "deferred" : "error";
+        state.lastError = formatUiError(error);
+      }
+    });
 }
 
 export async function patchConfig(
@@ -628,6 +695,7 @@ export async function patchConfig(
       raw: ack.noop === true ? currentSnapshot.raw : undefined,
     });
     if (ack.noop !== true) {
+      state.configDeferredApplication = null;
       // The commit is authoritative; polling config.get reconciles applied truth.
       state.configNeedsApply = true;
     }
@@ -641,27 +709,22 @@ export async function patchConfig(
             : "saved";
     return true;
   } catch (err) {
+    const persisted = persistedConfigReceipt(err);
+    if (persisted) {
+      onSubmitted({ ...submitted, ack: persisted.ack });
+    }
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-      if (
-        err instanceof GatewayRequestError &&
-        isGatewayProtocolResponseError(err) &&
-        err.gatewayCode === ErrorCodes.UNAVAILABLE &&
-        isRecord(err.details) &&
-        err.details.publication !== "partial" &&
-        err.details.publication !== "complete" &&
-        isConfigWriteAck(err.details.persistedConfig)
-      ) {
-        // This negative response confirms persistence, not runtime application.
-        onSubmitted({ ...submitted, ack: err.details.persistedConfig });
-        const adoptedStatus = adoptConfigWriteAck(state, submitted, err.details.persistedConfig);
+      if (persisted) {
+        const adoptedStatus = adoptConfigWriteAck(state, submitted, persisted.ack);
         state.configNeedsApply = true;
+        state.configDeferredApplication = persisted.deferred;
         if (adoptedStatus === "conflict") {
           return false;
         }
       }
       const outcome = configMutationFailure(state, err);
       state.lastError = outcome.message;
-      state.configAutoSaveStatus = outcome.status;
+      state.configAutoSaveStatus = persisted?.deferred ? "deferred" : outcome.status;
     }
     return false;
   }

@@ -104,6 +104,36 @@ it.each([
   }
 });
 
+it("does not confuse a same-ID replacement with the exact admitted instance", async () => {
+  const config = {};
+  await publishConfigured(config);
+  const input = fixture.agentInput("default", config);
+  const admitted = new PluginInstance("same-id");
+  const replacement = new PluginInstance("same-id");
+  const scope = new PluginInvocationScope(createTestPluginRegistry().registry, [admitted], {
+    retained: true,
+  });
+  const releaseReplacement = replacement.reserveReplacement();
+  const drain = beginPreparedModelRuntimePluginDrain();
+  let settled = false;
+  const acquisition = scope.run(() => acquireAgentRunPreparedModelRuntime(input)).finally(() => {
+    settled = true;
+  });
+  try {
+    await prepareModelRuntimeSnapshot(input, { readPublished: true });
+    expect(settled).toBe(false);
+    drain.release();
+    await using lease = await acquisition;
+    expect(lease.snapshot.config).toBe(config);
+  } finally {
+    drain.release();
+    releaseReplacement();
+    await acquisition;
+    scope.release();
+    await Promise.all([admitted.dispose(), replacement.dispose()]);
+  }
+});
+
 it("lets admitted plugin work join initial model-owner construction", async () => {
   fixture.mocks.authStorage.getAll.mockReturnValue({});
   const input = fixture.agentInput("default", {});

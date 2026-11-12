@@ -74,7 +74,9 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
     if (props.applying) {
       return "applying";
     }
-    if (["saving", "recovery", "rejected", "error", "paused", "conflict"].includes(props.status)) {
+    if (
+      ["saving", "recovery", "rejected", "error", "deferred", "paused", "conflict"].includes(props.status)
+    ) {
       return props.status;
     }
     if (savedVisible()) {
@@ -129,6 +131,12 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
             </Show>
             {action(t("configView.retry"), () => input.props!.onRetry())}
             {action(t("configView.recoveryReload"), () => input.props!.onReload())}
+          </Match>
+          <Match when={state() === "deferred"}>
+            <span>{t("configView.autoSaveDeferred")}</span>
+            <Show when={input.props!.lastError}>
+              <span>{input.props!.lastError}</span>
+            </Show>
           </Match>
           <Match when={state() === "error"}>
             <span>{t("configView.autoSaveFailed")}</span>

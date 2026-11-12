@@ -226,7 +226,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     assert("resources" in owned);
     expect.soft(owned.registry.tools).toEqual(a.registry.tools);
     expect.soft(a.instance.retainedWorkCount).toBeGreaterThan(0);
-    const scope = owned.resources.createInvocationScope(owned.registry);
+    const scope = owned.resources.createInvocationScope(owned.registry, [a.instance]);
     try {
       const tool = scope.wrap(owned.registry.tools[0]!.factory)({ config, workspaceDir });
       assert(tool && !Array.isArray(tool));

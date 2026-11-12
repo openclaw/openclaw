@@ -44,6 +44,7 @@ import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { retainAgentHarnessCompactionSource } from "../harness/host-source-authority.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
+import { runInPreparedModelRuntimeLease } from "../prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -268,44 +269,46 @@ async function compactNativeHarnessCliTranscript(
       params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {},
     );
     const preparedModelRuntime = preparedRuntimeLease.snapshot;
-    result = await withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
-      await ensureSelectedAgentHarnessPlugin({
-        provider: params.provider,
-        modelId: params.model,
-        config: params.cfg,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        agentId: params.sessionAgentId,
-        ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
-        pluginRegistry: preparedModelRuntime.pluginRegistry,
-      });
-      params.assertActive();
-      return await maybeCompactAgentHarnessSession(
-        {
-          ...buildCliCompactionParams(params),
-          sessionId: params.sessionId,
-          sessionFile: params.sessionFile,
-          authProfileId,
-          contextTokenBudget: params.contextTokenBudget,
-          currentTokenCount: params.currentTokenCount,
-          trigger: "budget",
-          force: true,
-          modelSelectionLocked,
-          allowGatewaySubagentBinding: true,
-          contextEngine: params.contextEngine,
-          contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
-            ...params,
+    result = await runInPreparedModelRuntimeLease(preparedRuntimeLease, () =>
+      withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
+        await ensureSelectedAgentHarnessPlugin({
+          provider: params.provider,
+          modelId: params.model,
+          config: params.cfg,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          agentId: params.sessionAgentId,
+          ...(nativeHarnessId ? { agentHarnessRuntimeOverride: nativeHarnessId } : {}),
+          pluginRegistry: preparedModelRuntime.pluginRegistry,
+        });
+        params.assertActive();
+        return await maybeCompactAgentHarnessSession(
+          {
+            ...buildCliCompactionParams(params),
+            sessionId: params.sessionId,
+            sessionFile: params.sessionFile,
             authProfileId,
-            harnessRuntime: nativeHarnessId,
+            contextTokenBudget: params.contextTokenBudget,
+            currentTokenCount: params.currentTokenCount,
+            trigger: "budget",
+            force: true,
             modelSelectionLocked,
-            trigger: "cli_native_budget",
-          }),
-          ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
-          abortSignal: params.abortSignal,
-        },
-        { preparedModelRuntime, sourceAuthority: params.sourceAuthority },
-      );
-    });
+            allowGatewaySubagentBinding: true,
+            contextEngine: params.contextEngine,
+            contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
+              ...params,
+              authProfileId,
+              harnessRuntime: nativeHarnessId,
+              modelSelectionLocked,
+              trigger: "cli_native_budget",
+            }),
+            ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
+            abortSignal: params.abortSignal,
+          },
+          { preparedModelRuntime, sourceAuthority: params.sourceAuthority },
+        );
+      }),
+    );
   } catch (error) {
     const reason = coerceErrorMessage(error);
     log.warn(

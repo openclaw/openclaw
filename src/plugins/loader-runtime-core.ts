@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
@@ -166,8 +167,21 @@ export function loadOpenClawPluginsCore(
   return step.value;
 }
 
-/** One registration sequence, consumed synchronously by CLI/SDK callers or incrementally by hosts. */
+/** Incremental registry construction has finite custody, never inherited turn execution work. */
 export function* loadOpenClawPluginsSteps(
+  ...args: Parameters<typeof loadOpenClawPluginsStepsUnscoped>
+): Generator<void, PluginRegistry> {
+  const steps = loadOpenClawPluginsStepsUnscoped(...args);
+  for (;;) {
+    const step = pluginInvocationContext.exit(() => steps.next());
+    if (step.done) {
+      return step.value;
+    }
+    yield;
+  }
+}
+
+function* loadOpenClawPluginsStepsUnscoped(
   options: PluginLoadOptions,
   nativeBindings: NativePluginLoadBindings,
   overrides?: InternalPluginLoadOverrides,

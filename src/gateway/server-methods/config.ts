@@ -733,7 +733,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "config.set": async ({ params, respond, context }) => {
+  "config.set": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
@@ -768,25 +768,40 @@ export const configHandlers: GatewayRequestHandlers = {
       nextConfig: parsed.writeConfig,
       context,
       respond,
+      awaitRuntimeApplication: shouldAwaitGatewayConfigApplication({
+        previousConfig: snapshot.config,
+        nextConfig: parsed.config,
+      }),
     });
     if (!writeResult) {
       return;
     }
     invalidateGatewayRuntimeConfigSchema();
-    respond(
-      true,
-      {
-        ok: true,
-        path: writeResult.path,
-        // Writers adopt the committed revision without a reload.
-        ...(writeResult.hash
-          ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
-          : {}),
-        config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
-        ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
-      },
-      undefined,
-    );
+    const persistedConfig = {
+      ...(writeResult.hash
+        ? { hash: context.configRevisionProjector.projectRawHash(writeResult.hash) }
+        : {}),
+      config: redactConfigObject(writeResult.config, parsed.schema.uiHints),
+    };
+    const success = {
+      ok: true,
+      path: writeResult.path,
+      ...persistedConfig,
+      ...preparedSecretDegradationPayload(preparedSecretsSnapshot),
+    };
+    if (
+      !writeResult.application ||
+      !respondConfigWriteApplicationOutcome({
+        outcome: await writeResult.application,
+        mode: "config.set",
+        client,
+        respond,
+        success,
+        persistedConfig,
+      })
+    ) {
+      respond(true, success, undefined);
+    }
     writeResult.queueFollowUp();
   },
   "config.patch": async (options) => {

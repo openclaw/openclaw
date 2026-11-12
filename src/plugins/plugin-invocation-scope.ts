@@ -6,6 +6,7 @@ import {
   pluginInvocationContext,
   type PluginInstanceHandle,
   type PluginInvocationBinding,
+  type PluginInvocationContext,
 } from "./plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -60,27 +61,41 @@ export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
   private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
   private closed = false;
+  private readonly parent?: PluginInvocationContext;
+  private readonly work?: {
+    instances: ReadonlySet<PluginInstanceHandle>;
+    retain: (instance: PluginInstanceHandle) => void;
+  };
   private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
-    options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
+    options: {
+      retained?: boolean;
+      parent?: PluginInvocationContext;
+      kind?: "work" | "custody";
+      work?: PluginInvocationScope["work"];
+      registryByInstance?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
+    } = {},
   ) {
     this.consumerKind = options.kind ?? "work";
+    this.parent = options.parent ?? pluginInvocationContext.getStore();
+    this.work = options.work;
     try {
       for (const instance of new Set(instances)) {
+        const instanceRegistry = options.registryByInstance?.get(instance) ?? registry;
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
-          const parent = options.parent?.consumer(instance);
+            instance.retainConsumer((run) => this.run(run), instanceRegistry, this.consumerKind);
+          const parent = this.parent?.lookup(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
           this.bindings.set(instance, consumer);
         } else {
           this.bindings.set(instance, {
-            run: (run) => this.run(() => instance.runInRegistry(registry, run)),
-            wrap: instance.createRegistryView(registry, (run) => this.run(run)),
+            run: (run) => this.run(() => instance.runInRegistry(instanceRegistry, run)),
+            wrap: instance.createRegistryView(instanceRegistry, (run) => this.run(run)),
           });
         }
       }
@@ -90,29 +105,41 @@ export class PluginInvocationScope {
     }
   }
 
-  private consumer(instance: PluginInstanceHandle): PluginInstanceConsumer | undefined {
-    this.assertOpen();
-    return this.consumers.get(instance);
-  }
-
   private assertOpen(): void {
     if (this.closed) {
       throw new Error("Plugin invocation scope is closed");
     }
   }
 
+  get retainedInstances(): readonly PluginInstanceHandle[] {
+    return this.closed
+      ? []
+      : [
+          ...new Set([
+            ...(this.consumerKind === "work" ? this.consumers.keys() : []),
+            ...(this.work?.instances ?? []),
+            ...(this.parent?.retainedInstances ?? []),
+          ]),
+        ];
+  }
+
   get holdsPendingReplacement(): boolean {
-    return (
-      !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
-    );
+    return this.retainedInstances.some((instance) => instance.replacementPending);
+  }
+
+  /** Carry exact custody across nested scopes, without lending invocation authority. */
+  retainInvocation(instance: PluginInstanceHandle): void {
+    this.assertOpen();
+    if (!this.consumers.has(instance)) {
+      this.work?.retain(instance);
+    }
+    this.parent?.retainInvocation?.(instance);
   }
 
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {
     const binding = this.bindings.get(instance);
-    if (binding) {
-      this.assertOpen();
-    }
-    return binding;
+    this.retainInvocation(instance);
+    return binding ?? this.parent?.lookup(instance);
   }
 
   run<T>(run: () => T): T {
@@ -131,7 +158,9 @@ export class PluginInvocationScope {
   /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
   beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
     this.assertOpen();
-    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys());
+    const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys(), {
+      parent: { lookup: () => undefined },
+    });
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks
     // now, but keep their physical completion until the cleanup owner drains.

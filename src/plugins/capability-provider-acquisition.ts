@@ -13,10 +13,7 @@ import {
   resolvePluginRegistryLoadCacheKey,
 } from "./loader.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
-import {
-  collectRegistryInvocationInstances,
-  PluginInvocationScope,
-} from "./plugin-invocation-scope.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
   capturePluginLifecycleAuthority,
@@ -35,7 +32,7 @@ export async function acquirePluginCapabilityProviders<
   const work = new AsyncWorkScope();
   const releases: Array<() => void | Promise<void>> = [];
   const loads = new Map<string, Promise<PluginRegistry>>();
-  const retained = new Map<PluginRegistry, Map<object, PluginInvocationScope> | undefined>();
+  const retained = new Map<PluginRegistry, Map<object, PluginInvocationScope>>();
   const authorities = new Map<PluginRegistry, (() => boolean) | undefined>();
   const captureAuthority = (registry: PluginRegistry) => {
     if (!authorities.has(registry)) {
@@ -61,7 +58,7 @@ export async function acquirePluginCapabilityProviders<
       },
     );
   };
-  const retain = (registry: PluginRegistry | undefined, providerId?: string) => {
+  const retain = (registry: PluginRegistry | undefined) => {
     if (!registry) {
       return undefined;
     }
@@ -72,28 +69,24 @@ export async function acquirePluginCapabilityProviders<
       if (release) {
         releases.push(release);
       }
-      retained.set(registry, release ? new Map() : undefined);
+      // External hosts own physical disposal, not the selected provider's execution custody.
+      retained.set(registry, new Map());
     }
     const invocations = retained.get(registry);
     if (!invocations) {
       return undefined;
     }
     return (provider: CapabilityProviderFor<K>) => {
-      const instance = providerId === undefined ? undefined : getPluginValueInstance(provider);
-      if (providerId !== undefined && !instance) {
+      const instance = getPluginValueInstance(provider);
+      if (!instance) {
         return provider;
       }
-      const key = instance ?? registry;
-      let invocation = invocations.get(key);
+      let invocation = invocations.get(instance);
       if (!invocation) {
         invocation = resources
-          ? resources.createInvocationScope(registry, instance && [instance])
-          : new PluginInvocationScope(
-              registry,
-              instance ? [instance] : collectRegistryInvocationInstances(registry),
-              { retained: true },
-            );
-        invocations.set(key, invocation);
+          ? resources.createInvocationScope(registry, [instance])
+          : new PluginInvocationScope(registry, [instance], { retained: true });
+        invocations.set(instance, invocation);
       }
       return invocation.wrap(provider);
     };
@@ -167,9 +160,7 @@ export async function acquirePluginCapabilityProviders<
   ) =>
     run(() =>
       execute<CapabilityProviderFor<K> | undefined>(
-        preparePluginCapabilityProviderLookup({ ...query, key: params.key }, (registry) =>
-          retain(registry, query.providerId),
-        ),
+        preparePluginCapabilityProviderLookup({ ...query, key: params.key }, retain),
       ),
     );
   try {

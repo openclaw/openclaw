@@ -26,6 +26,7 @@ import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-
 import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { retainAgentHarnessCompactionSource } from "../harness/host-source-authority.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
+import { runInPreparedModelRuntimeLease } from "../prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
@@ -363,345 +364,347 @@ async function compactEmbeddedAgentSessionImpl(
       agentDir: lease.snapshot.agentDir,
     };
     assertQueuedCompactionPreparationActive(inputParams, host);
-    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
-      owner.captureContext();
-      await ensureContextEnginesInitialized();
-      const contextEngine = await owner.resolveEngine(() =>
-        resolveContextEngine(admittedParams.config, {
-          agentDir: admittedParams.agentDir,
-          workspaceDir: resolvedWorkspaceDir,
-        }),
-      );
-      assertQueuedCompactionPreparationActive(admittedParams, host);
-      const params = admittedParams;
-      const agentDir = params.agentDir;
-      const preparedModelRuntime = lease.snapshot;
-      const lockedHarnessRuntime = resolveSessionPinnedHarnessId(params.sessionEntry);
-      if (lockedHarnessRuntime === "auto") {
-        return lockedCompactionRuntimeFailure();
-      }
-      // A concrete model lock does not pin the observed or requested runtime. Only
-      // durable native ownership can forbid a prepared transport's host fallback.
-      const {
-        runtimePolicySessionKey,
-        runtimePolicyAgentId,
-        selectedHarnessRuntime,
-        target: resolvedCompactionTarget,
-        runtimeModelAuth: { plan: reusableRuntimeAuthPlan, modelAuth: initialModelAuth },
-        provider: ceProvider,
-        runtimeProvider: ceRuntimeProvider,
-        contextConfigProvider: ceContextConfigProvider,
-        modelId: ceModelId,
-        attemptNativeHarnessCompaction: selectedNativeHarnessCompaction,
-      } = resolveCompactionRuntimeSelection({
-        ...params,
-        modelId: params.model,
-        boundHarnessRuntime: params.agentHarnessId,
-        preparedRuntimePlan: params.runtimePlan,
-        selectedHarnessRuntime: lockedHarnessRuntime,
-      });
-      const lockedNativeHarness = Boolean(
-        lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw",
-      );
-      // Ensure the policy-selected harness plugin so selection can pick implicit codex.
-      await ensureSelectedAgentHarnessPlugin({
-        config: params.config,
-        provider: ceProvider,
-        modelId: ceModelId,
-        agentId: runtimePolicyAgentId,
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: params.agentHarnessId,
-        agentHarnessRuntimeOverride: selectedHarnessRuntime,
-        workspaceDir: resolvedWorkspaceDir,
-        pluginRegistry: requireActivePluginRegistry(),
-      });
-      assertQueuedCompactionPreparationActive(params, host);
-      const { resolution: modelResolution } = await resolveTieredModel({
-        abortSignal: params.abortSignal,
-        provider: ceRuntimeProvider,
-        modelId: ceModelId,
-        agentDir,
-        config: params.config,
-        workspaceDir: resolvedWorkspaceDir,
-        ...initialModelAuth,
-        preparedModelRuntime,
-      });
-      assertQueuedCompactionPreparationActive(params, host);
-      const { model: ceRuntimeModel, authStorage, modelRegistry } = modelResolution;
-      // Stock compaction prepares auth inside its fallback owner. Checking the primary
-      // here would reject a cooled profile before that owner can select a healthy model.
-      const preparedAuth =
-        contextEngine.info.ownsCompaction ||
-        selectedNativeHarnessCompaction ||
-        host.transcriptBytePreflightHarness
-          ? await prepareCompactionHarnessAuth({
-              ...params,
-              provider: ceProvider,
-              metadataProvider: ceRuntimeProvider,
-              modelId: ceModelId,
-              model: ceRuntimeModel,
-              reusableRuntimeAuthPlan,
-              agentDir,
-              workspaceDir: resolvedWorkspaceDir,
-              authProfileId: resolvedCompactionTarget.authProfileId,
-              runtimePolicyAgentId,
-              runtimePolicySessionKey,
-              agentHarnessRuntimeOverride: selectedHarnessRuntime,
-              convergenceErrorPrefix: "Prepared queued compaction",
-            })
-          : undefined;
-      assertQueuedCompactionPreparationActive(params, host);
-      if (preparedAuth?.ok === false) {
-        return buildCompactionFailureResult(formatErrorMessage(preparedAuth.error));
-      }
-      const preparedHarnessRuntime =
-        preparedAuth?.selectedPreparedHarness.id ?? selectedHarnessRuntime;
-      const transcriptBytePreflightAuthority =
-        preparedAuth && host.transcriptBytePreflightHarness === preparedHarnessRuntime
-          ? resolveTranscriptBytePreflightAuthority(preparedAuth.selectedPreparedHarness)
-          : undefined;
-      if (host.transcriptBytePreflightHarness && !transcriptBytePreflightAuthority) {
-        return lockedCompactionRuntimeFailure(host.transcriptBytePreflightHarness);
-      }
-      const attemptNativeHarnessCompaction =
-        selectedNativeHarnessCompaction && preparedHarnessRuntime !== "openclaw";
-      const runtimeAuthPlan = preparedAuth?.runtimeAuthPreparation.plan ?? reusableRuntimeAuthPlan;
-      const effectiveRuntimeModel = runtimeAuthPlan
-        ? await materializePreparedRuntimeModel<ProviderRuntimeModel>({
-            plan: runtimeAuthPlan,
-            provider: ceProvider,
-            modelId: ceModelId,
-            config: params.config,
+    return await runInPreparedModelRuntimeLease(lease, () =>
+      withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+        owner.captureContext();
+        await ensureContextEnginesInitialized();
+        const contextEngine = await owner.resolveEngine(() =>
+          resolveContextEngine(admittedParams.config, {
+            agentDir: admittedParams.agentDir,
             workspaceDir: resolvedWorkspaceDir,
-            metadataSnapshot: preparedModelRuntime.metadataSnapshot,
-            model: ceRuntimeModel,
-            forceResolve:
-              preparedAuth?.providerUsesProfileScopedModelMetadata &&
-              Boolean(runtimeAuthPlan.selectedAuthMode),
-            resolveModel: async ({ config, authProfileId, authProfileMode }) => {
-              const resolved = await resolveModelAsync(
-                ceRuntimeProvider,
-                ceModelId,
-                agentDir,
-                config,
-                {
-                  abortSignal: params.abortSignal,
-                  authStorage,
-                  modelRegistry,
-                  preparedModelRuntime,
-                  skipAgentDiscovery: true,
-                  allowBundledStaticCatalogFallback: true,
-                  workspaceDir: resolvedWorkspaceDir,
-                  authProfileId,
-                  authProfileMode,
-                },
-              );
-              assertQueuedCompactionPreparationActive(params, host);
-              return resolved;
-            },
-          })
-        : ceRuntimeModel;
-      assertQueuedCompactionPreparationActive(params, host);
-      const preparedParams: QueuedCompactionParams = {
-        ...params,
-        provider: ceProvider,
-        model: ceModelId,
-        agentHarnessId: preparedHarnessRuntime,
-        ...(reusableRuntimeAuthPlan
-          ? {
-              authProfileId: runtimeAuthPlan?.forwardedAuthProfileId,
-              authProfileIdSource: runtimeAuthPlan?.forwardedAuthProfileSource,
-              runtimeAuthPlan,
-            }
-          : {
-              // The executing owner resolves the full attempt set; forwarding one
-              // generated plan would collapse cross-route and direct fallback.
-              authProfileId: resolvedCompactionTarget.authProfileId,
-              authProfileIdSource: resolvedCompactionTarget.authProfileId
-                ? params.authProfileIdSource
-                : undefined,
-              runtimeAuthPlan: undefined,
-              runtimePlan: undefined,
-            }),
-      };
-      const contextTokenBudget = resolveCompactionContextTokenBudget({
-        config: params.config,
-        provider: ceContextConfigProvider,
-        modelId: ceModelId,
-        model: effectiveRuntimeModel,
-        requestedTokenBudget: params.contextTokenBudget,
-      });
-      const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = preparedParams;
-      const contextEngineRuntimeContext: ContextEngineRuntimeContext = {
-        ...runtimeParams,
-        sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
-        ...buildEmbeddedCompactionRuntimeContext({
-          ...preparedParams,
+          }),
+        );
+        assertQueuedCompactionPreparationActive(admittedParams, host);
+        const params = admittedParams;
+        const agentDir = params.agentDir;
+        const preparedModelRuntime = lease.snapshot;
+        const lockedHarnessRuntime = resolveSessionPinnedHarnessId(params.sessionEntry);
+        if (lockedHarnessRuntime === "auto") {
+          return lockedCompactionRuntimeFailure();
+        }
+        // A concrete model lock does not pin the observed or requested runtime. Only
+        // durable native ownership can forbid a prepared transport's host fallback.
+        const {
+          runtimePolicySessionKey,
+          runtimePolicyAgentId,
+          selectedHarnessRuntime,
+          target: resolvedCompactionTarget,
+          runtimeModelAuth: { plan: reusableRuntimeAuthPlan, modelAuth: initialModelAuth },
+          provider: ceProvider,
+          runtimeProvider: ceRuntimeProvider,
+          contextConfigProvider: ceContextConfigProvider,
+          modelId: ceModelId,
+          attemptNativeHarnessCompaction: selectedNativeHarnessCompaction,
+        } = resolveCompactionRuntimeSelection({
+          ...params,
+          modelId: params.model,
+          boundHarnessRuntime: params.agentHarnessId,
+          preparedRuntimePlan: params.runtimePlan,
+          selectedHarnessRuntime: lockedHarnessRuntime,
+        });
+        const lockedNativeHarness = Boolean(
+          lockedHarnessRuntime && lockedHarnessRuntime !== "openclaw",
+        );
+        // Ensure the policy-selected harness plugin so selection can pick implicit codex.
+        await ensureSelectedAgentHarnessPlugin({
+          config: params.config,
+          provider: ceProvider,
+          modelId: ceModelId,
+          agentId: runtimePolicyAgentId,
+          sessionKey: runtimePolicySessionKey,
+          agentHarnessId: params.agentHarnessId,
+          agentHarnessRuntimeOverride: selectedHarnessRuntime,
+          workspaceDir: resolvedWorkspaceDir,
+          pluginRegistry: requireActivePluginRegistry(),
+        });
+        assertQueuedCompactionPreparationActive(params, host);
+        const { resolution: modelResolution } = await resolveTieredModel({
+          abortSignal: params.abortSignal,
+          provider: ceRuntimeProvider,
+          modelId: ceModelId,
           agentDir,
-          modelId: preparedParams.model,
-          harnessRuntime: preparedHarnessRuntime,
-        }),
-        ...resolveContextEngineCapabilities({
-          config: preparedParams.config,
-          sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
-          explicitAgentId: contextEngineAgentId,
-          authProfileId: preparedParams.authProfileId,
-          contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
-          purpose: "context-engine.compaction",
-        }),
-        tokenBudget: contextTokenBudget,
-        currentTokenCount: preparedParams.currentTokenCount,
-      };
-      const contextEngineRuntimeSettings = buildContextEngineRuntimeSettings({
-        contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-        provider: ceProvider,
-        requestedModel: params.model,
-        resolvedModel: ceModelId,
-        selectedContextEngineId: contextEngine.info.id,
-        contextEngineSelectionSource: contextEngine.info.id === "legacy" ? "default" : "configured",
-        promptTokenBudget: contextTokenBudget,
-      });
-      const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-      let requiredPreflightNativeCapabilityUsed = false;
-      const harnessResult =
-        attemptNativeHarnessCompaction &&
-        !transcriptBytePreflightAuthority &&
-        (!contextEngineOwnsCompaction || lockedNativeHarness)
-          ? await runPrimaryNativeCompactionInLanes(
-              preparedParams,
-              expectedEntry,
-              host,
-              async () => {
-                if (params.abortSignal?.aborted) {
-                  return createQueuedCompactionAbortedResult();
-                }
-                return await maybeCompactAgentHarnessSession(
+          config: params.config,
+          workspaceDir: resolvedWorkspaceDir,
+          ...initialModelAuth,
+          preparedModelRuntime,
+        });
+        assertQueuedCompactionPreparationActive(params, host);
+        const { model: ceRuntimeModel, authStorage, modelRegistry } = modelResolution;
+        // Stock compaction prepares auth inside its fallback owner. Checking the primary
+        // here would reject a cooled profile before that owner can select a healthy model.
+        const preparedAuth =
+          contextEngine.info.ownsCompaction ||
+          selectedNativeHarnessCompaction ||
+          host.transcriptBytePreflightHarness
+            ? await prepareCompactionHarnessAuth({
+                ...params,
+                provider: ceProvider,
+                metadataProvider: ceRuntimeProvider,
+                modelId: ceModelId,
+                model: ceRuntimeModel,
+                reusableRuntimeAuthPlan,
+                agentDir,
+                workspaceDir: resolvedWorkspaceDir,
+                authProfileId: resolvedCompactionTarget.authProfileId,
+                runtimePolicyAgentId,
+                runtimePolicySessionKey,
+                agentHarnessRuntimeOverride: selectedHarnessRuntime,
+                convergenceErrorPrefix: "Prepared queued compaction",
+              })
+            : undefined;
+        assertQueuedCompactionPreparationActive(params, host);
+        if (preparedAuth?.ok === false) {
+          return buildCompactionFailureResult(formatErrorMessage(preparedAuth.error));
+        }
+        const preparedHarnessRuntime =
+          preparedAuth?.selectedPreparedHarness.id ?? selectedHarnessRuntime;
+        const transcriptBytePreflightAuthority =
+          preparedAuth && host.transcriptBytePreflightHarness === preparedHarnessRuntime
+            ? resolveTranscriptBytePreflightAuthority(preparedAuth.selectedPreparedHarness)
+            : undefined;
+        if (host.transcriptBytePreflightHarness && !transcriptBytePreflightAuthority) {
+          return lockedCompactionRuntimeFailure(host.transcriptBytePreflightHarness);
+        }
+        const attemptNativeHarnessCompaction =
+          selectedNativeHarnessCompaction && preparedHarnessRuntime !== "openclaw";
+        const runtimeAuthPlan = preparedAuth?.runtimeAuthPreparation.plan ?? reusableRuntimeAuthPlan;
+        const effectiveRuntimeModel = runtimeAuthPlan
+          ? await materializePreparedRuntimeModel<ProviderRuntimeModel>({
+              plan: runtimeAuthPlan,
+              provider: ceProvider,
+              modelId: ceModelId,
+              config: params.config,
+              workspaceDir: resolvedWorkspaceDir,
+              metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+              model: ceRuntimeModel,
+              forceResolve:
+                preparedAuth?.providerUsesProfileScopedModelMetadata &&
+                Boolean(runtimeAuthPlan.selectedAuthMode),
+              resolveModel: async ({ config, authProfileId, authProfileMode }) => {
+                const resolved = await resolveModelAsync(
+                  ceRuntimeProvider,
+                  ceModelId,
+                  agentDir,
+                  config,
                   {
-                    ...preparedParams,
-                    runtimeModel: effectiveRuntimeModel,
-                    contextEngine,
-                    contextTokenBudget,
-                    contextEngineRuntimeContext,
-                  },
-                  {
+                    abortSignal: params.abortSignal,
+                    authStorage,
+                    modelRegistry,
                     preparedModelRuntime,
-                    sourceAuthority: host.sourceAuthority,
-                    ...(preparedParams.preflightRequired === true
-                      ? {
-                          nativeCompactionRequest: "required_preflight",
-                          onNativeCompactionCapabilityUsed: () => {
-                            requiredPreflightNativeCapabilityUsed = true;
-                          },
-                        }
-                      : {}),
+                    skipAgentDiscovery: true,
+                    allowBundledStaticCatalogFallback: true,
+                    workspaceDir: resolvedWorkspaceDir,
+                    authProfileId,
+                    authProfileMode,
                   },
                 );
+                assertQueuedCompactionPreparationActive(params, host);
+                return resolved;
               },
-            )
-          : undefined;
-      // Only the private dispatched native capability may authorize required-preflight
-      // fallback for a locked harness; public result fields cannot escape the lock.
-      if (
-        lockedNativeHarness &&
-        !transcriptBytePreflightAuthority &&
-        !(
-          preparedParams.preflightRequired === true &&
-          requiredPreflightNativeCapabilityUsed &&
-          isRecoverableNativeHarnessBindingFailure(harnessResult)
-        )
-      ) {
-        return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
-      }
-      if (harnessResult) {
-        if (!isRecoverableNativeHarnessBindingFailure(harnessResult)) {
-          return { ...harnessResult, compactionKind: "native-harness" };
-        }
-        log.warn(
-          `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
-        );
-      }
-      if (params.abortSignal?.aborted) {
-        return createQueuedCompactionAbortedResult();
-      }
-      host.assertActive?.();
-      // Budget maintenance may outlive reply preflight only when its engine owns
-      // the transcript and explicitly supports background turn maintenance.
-      if (
-        preparedParams.deferOwningContextEngineCompaction === true &&
-        preparedParams.trigger === "budget" &&
-        contextEngineOwnsCompaction &&
-        contextEngine.info.turnMaintenanceMode === "background" &&
-        typeof contextEngine.maintain === "function"
-      ) {
-        let deferredScheduled = false;
-        let deferredScheduleFailure: unknown;
-        try {
-          await runContextEngineMaintenance({
-            contextEngine,
-            sessionId: preparedParams.sessionId,
-            sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
-            sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
-            sessionFile: preparedParams.sessionFile,
-            reason: "turn",
-            runtimeContext: contextEngineRuntimeContext,
-            runtimeSettings: contextEngineRuntimeSettings,
-            config: preparedParams.config,
-            contextEngineAgentId: preparedParams.contextEngineAgentId,
-            disposeDeferredContextEngineAfterMaintenance: true,
-            factoryResources,
-            onDeferredMaintenance: () => {
-              deferredScheduled = true;
-              owner.transferEngine();
-            },
-            onDeferredMaintenanceFailure: (error) => {
-              deferredScheduleFailure = error;
-            },
-          });
-        } catch (err) {
-          log.warn("failed to defer context-engine budget compaction", {
-            errorMessage: formatErrorMessage(err),
-          });
-        }
-        if (!deferredScheduled || deferredScheduleFailure) {
-          log.warn(
-            `[compaction] failed to schedule context-engine-owned budget compaction background maintenance ` +
-              `(sessionKey=${preparedParams.sessionKey ?? preparedParams.sessionId}` +
-              `${deferredScheduleFailure ? ` error=${formatErrorMessage(deferredScheduleFailure)}` : ""})`,
-          );
-          return buildCompactionFailureResult(
-            "failed to schedule background context-engine maintenance",
-            { reason: "deferred_compaction_not_scheduled" },
-          );
-        }
-        log.info(
-          `[compaction] deferred context-engine-owned budget compaction to background maintenance ` +
-            `(sessionKey=${preparedParams.sessionKey ?? preparedParams.sessionId} ` +
-            `scheduled=${String(deferredScheduled)})`,
-        );
-        return {
-          ok: true,
-          compacted: false,
-          reason: DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+            })
+          : ceRuntimeModel;
+        assertQueuedCompactionPreparationActive(params, host);
+        const preparedParams: QueuedCompactionParams = {
+          ...params,
+          provider: ceProvider,
+          model: ceModelId,
+          agentHarnessId: preparedHarnessRuntime,
+          ...(reusableRuntimeAuthPlan
+            ? {
+                authProfileId: runtimeAuthPlan?.forwardedAuthProfileId,
+                authProfileIdSource: runtimeAuthPlan?.forwardedAuthProfileSource,
+                runtimeAuthPlan,
+              }
+            : {
+                // The executing owner resolves the full attempt set; forwarding one
+                // generated plan would collapse cross-route and direct fallback.
+                authProfileId: resolvedCompactionTarget.authProfileId,
+                authProfileIdSource: resolvedCompactionTarget.authProfileId
+                  ? params.authProfileIdSource
+                  : undefined,
+                runtimeAuthPlan: undefined,
+                runtimePlan: undefined,
+              }),
         };
-      }
-      return await executeQueuedContextEngineCompaction({
-        params,
-        preparedParams,
-        runtimeTarget,
-        expectedEntry,
-        host,
-        contextEngine,
-        contextEngineSessionKey,
-        contextEngineRuntimeContext,
-        contextEngineRuntimeSettings,
-        resolvedWorkspaceDir,
-        preparedModelRuntime,
-        effectiveRuntimeModel,
-        preparedHarnessRuntime,
-        contextTokenBudget,
-        attemptNativeHarnessCompaction,
-        transcriptBytePreflightAuthority,
-      });
-    });
+        const contextTokenBudget = resolveCompactionContextTokenBudget({
+          config: params.config,
+          provider: ceContextConfigProvider,
+          modelId: ceModelId,
+          model: effectiveRuntimeModel,
+          requestedTokenBudget: params.contextTokenBudget,
+        });
+        const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = preparedParams;
+        const contextEngineRuntimeContext: ContextEngineRuntimeContext = {
+          ...runtimeParams,
+          sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
+          ...buildEmbeddedCompactionRuntimeContext({
+            ...preparedParams,
+            agentDir,
+            modelId: preparedParams.model,
+            harnessRuntime: preparedHarnessRuntime,
+          }),
+          ...resolveContextEngineCapabilities({
+            config: preparedParams.config,
+            sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
+            explicitAgentId: contextEngineAgentId,
+            authProfileId: preparedParams.authProfileId,
+            contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
+            purpose: "context-engine.compaction",
+          }),
+          tokenBudget: contextTokenBudget,
+          currentTokenCount: preparedParams.currentTokenCount,
+        };
+        const contextEngineRuntimeSettings = buildContextEngineRuntimeSettings({
+          contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
+          provider: ceProvider,
+          requestedModel: params.model,
+          resolvedModel: ceModelId,
+          selectedContextEngineId: contextEngine.info.id,
+          contextEngineSelectionSource: contextEngine.info.id === "legacy" ? "default" : "configured",
+          promptTokenBudget: contextTokenBudget,
+        });
+        const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+        let requiredPreflightNativeCapabilityUsed = false;
+        const harnessResult =
+          attemptNativeHarnessCompaction &&
+          !transcriptBytePreflightAuthority &&
+          (!contextEngineOwnsCompaction || lockedNativeHarness)
+            ? await runPrimaryNativeCompactionInLanes(
+                preparedParams,
+                expectedEntry,
+                host,
+                async () => {
+                  if (params.abortSignal?.aborted) {
+                    return createQueuedCompactionAbortedResult();
+                  }
+                  return await maybeCompactAgentHarnessSession(
+                    {
+                      ...preparedParams,
+                      runtimeModel: effectiveRuntimeModel,
+                      contextEngine,
+                      contextTokenBudget,
+                      contextEngineRuntimeContext,
+                    },
+                    {
+                      preparedModelRuntime,
+                      sourceAuthority: host.sourceAuthority,
+                      ...(preparedParams.preflightRequired === true
+                        ? {
+                            nativeCompactionRequest: "required_preflight",
+                            onNativeCompactionCapabilityUsed: () => {
+                              requiredPreflightNativeCapabilityUsed = true;
+                            },
+                          }
+                        : {}),
+                    },
+                  );
+                },
+              )
+            : undefined;
+        // Only the private dispatched native capability may authorize required-preflight
+        // fallback for a locked harness; public result fields cannot escape the lock.
+        if (
+          lockedNativeHarness &&
+          !transcriptBytePreflightAuthority &&
+          !(
+            preparedParams.preflightRequired === true &&
+            requiredPreflightNativeCapabilityUsed &&
+            isRecoverableNativeHarnessBindingFailure(harnessResult)
+          )
+        ) {
+          return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+        }
+        if (harnessResult) {
+          if (!isRecoverableNativeHarnessBindingFailure(harnessResult)) {
+            return { ...harnessResult, compactionKind: "native-harness" };
+          }
+          log.warn(
+            `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
+          );
+        }
+        if (params.abortSignal?.aborted) {
+          return createQueuedCompactionAbortedResult();
+        }
+        host.assertActive?.();
+        // Budget maintenance may outlive reply preflight only when its engine owns
+        // the transcript and explicitly supports background turn maintenance.
+        if (
+          preparedParams.deferOwningContextEngineCompaction === true &&
+          preparedParams.trigger === "budget" &&
+          contextEngineOwnsCompaction &&
+          contextEngine.info.turnMaintenanceMode === "background" &&
+          typeof contextEngine.maintain === "function"
+        ) {
+          let deferredScheduled = false;
+          let deferredScheduleFailure: unknown;
+          try {
+            await runContextEngineMaintenance({
+              contextEngine,
+              sessionId: preparedParams.sessionId,
+              sessionKey: contextEngineSessionKey ?? preparedParams.sessionKey,
+              sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
+              sessionFile: preparedParams.sessionFile,
+              reason: "turn",
+              runtimeContext: contextEngineRuntimeContext,
+              runtimeSettings: contextEngineRuntimeSettings,
+              config: preparedParams.config,
+              contextEngineAgentId: preparedParams.contextEngineAgentId,
+              disposeDeferredContextEngineAfterMaintenance: true,
+              factoryResources,
+              onDeferredMaintenance: () => {
+                deferredScheduled = true;
+                owner.transferEngine();
+              },
+              onDeferredMaintenanceFailure: (error) => {
+                deferredScheduleFailure = error;
+              },
+            });
+          } catch (err) {
+            log.warn("failed to defer context-engine budget compaction", {
+              errorMessage: formatErrorMessage(err),
+            });
+          }
+          if (!deferredScheduled || deferredScheduleFailure) {
+            log.warn(
+              `[compaction] failed to schedule context-engine-owned budget compaction background maintenance ` +
+                `(sessionKey=${preparedParams.sessionKey ?? preparedParams.sessionId}` +
+                `${deferredScheduleFailure ? ` error=${formatErrorMessage(deferredScheduleFailure)}` : ""})`,
+            );
+            return buildCompactionFailureResult(
+              "failed to schedule background context-engine maintenance",
+              { reason: "deferred_compaction_not_scheduled" },
+            );
+          }
+          log.info(
+            `[compaction] deferred context-engine-owned budget compaction to background maintenance ` +
+              `(sessionKey=${preparedParams.sessionKey ?? preparedParams.sessionId} ` +
+              `scheduled=${String(deferredScheduled)})`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON,
+          };
+        }
+        return await executeQueuedContextEngineCompaction({
+          params,
+          preparedParams,
+          runtimeTarget,
+          expectedEntry,
+          host,
+          contextEngine,
+          contextEngineSessionKey,
+          contextEngineRuntimeContext,
+          contextEngineRuntimeSettings,
+          resolvedWorkspaceDir,
+          preparedModelRuntime,
+          effectiveRuntimeModel,
+          preparedHarnessRuntime,
+          contextTokenBudget,
+          attemptNativeHarnessCompaction,
+          transcriptBytePreflightAuthority,
+        });
+      }),
+    );
   });
 }

@@ -38,6 +38,7 @@ import {
 import { resolveModelRouteIntent } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
+import { runInPreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -590,21 +591,23 @@ async function acquireCommittedSimpleCompletionModel(
       workspaceDir: lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
       modelResolver,
     });
-    const prepared = await withPluginRuntimeGenerationScope(context.preparedModelRuntime, () => {
-      captureWorkContext();
-      return prepareSimpleCompletionModelCore(
-        {
-          ...params,
-          transport: "simple-completion",
-          provider: selection.provider,
-          modelId: selection.modelId,
-          modelIdSource: "selected",
-          agentDir: selection.agentDir,
-          profileId: selection.profileId,
-        },
-        context,
-      );
-    });
+    const prepared = await runInPreparedModelRuntimeLease(lease, () =>
+      withPluginRuntimeGenerationScope(context.preparedModelRuntime, () => {
+        captureWorkContext();
+        return prepareSimpleCompletionModelCore(
+          {
+            ...params,
+            transport: "simple-completion",
+            provider: selection.provider,
+            modelId: selection.modelId,
+            modelIdSource: "selected",
+            agentDir: selection.agentDir,
+            profileId: selection.profileId,
+          },
+          context,
+        );
+      }),
+    );
     signal?.throwIfAborted();
     if ("error" in prepared) {
       return prepared;

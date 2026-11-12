@@ -60,6 +60,8 @@ export function retainPublishedModelRuntimeOwner(
   if (!pluginGeneration) {
     throw new Error("Published model runtime has no plugin generation");
   }
+  // Inventory publication is physical custody, not an executing turn. Catalog/auth
+  // operations acquire their own exact capability scopes when invoked.
   return {
     snapshot: capturePreparedModelRuntimeCatalog(snapshot, snapshot),
     pluginGeneration,

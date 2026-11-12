@@ -18,6 +18,8 @@ import {
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { buildGatewayReloadPlan } from "./config-reload-plan.js";
+import { createConfigPluginDrainTracker } from "./config-reload-plugin-drain.js";
 import {
   closeTestConfigReloaders,
   createReloaderHarness,
@@ -28,7 +30,10 @@ import {
   makeZeroDebounceHookWrite,
   prepareConfigReloadTest,
 } from "./config-reload.test-support.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
+import {
+  PluginAdmittedWorkTimeoutError,
+  PluginReloadDeferredError,
+} from "./server-plugin-reload-cleanup.js";
 
 vi.mock("../config/io.audit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.audit.js")>()),
@@ -52,6 +57,109 @@ afterEach(async () => {
 });
 
 describe("plugin drain recovery", () => {
+  it("rechecks owner-held cleanup failure instead of waiting forever after a deferred receipt", async () => {
+    const cleanup = createDeferredCore();
+    const onWorkSettled = vi.fn();
+    const tracker = createConfigPluginDrainTracker({
+      signal: new AbortController().signal,
+      onWorkSettled,
+    });
+    tracker.recordDeferred(
+      buildGatewayReloadPlan(["plugins.entries.notes"]),
+      new PluginReloadDeferredError("cleanup pending", [], cleanup.promise),
+    );
+    tracker.observeAfterReceipt();
+    cleanup.reject(new Error("owner cleanup failed"));
+    await vi.waitFor(() => expect(onWorkSettled).toHaveBeenCalledOnce());
+    tracker.clear();
+  });
+
+  it.each(["settle", "supersede", "stop"] as const)(
+    "returns saved/deferred before waiting and retries with fresh admission: %s",
+    async (outcome) => {
+      const initialConfig: OpenClawConfig = {
+        plugins: { entries: { notes: { enabled: true, config: { value: "old" } } } },
+      };
+      let config: OpenClawConfig = {
+        plugins: { entries: { notes: { enabled: true, config: { value: "saved" } } } },
+      };
+      const builder = createTestPluginRegistry();
+      const record = createPluginRecord({ id: "notes", source: "/synthetic/notes.ts" });
+      builder.registry.plugins.push(record);
+      builder.createApi(record, { config: {} });
+      setActivePluginRegistry(builder.registry);
+      const owner = createPluginRegistryOwner(builder.registry);
+      const instance = getPluginInstance(record);
+      assert(instance);
+      const releaseWork = instance.retainWork();
+      const cleanup = createDeferredCore();
+      let cleanupPending = true;
+      let writerActive = true;
+      const writerScope = vi.fn(async <T>(run: () => Promise<T>) => {
+        expect(writerActive).toBe(true);
+        return run();
+      });
+      const application = createRuntimeConfigWriteApplication(writerScope);
+      const harness = createReloaderHarness(async () => makeSnapshot({ config, hash: "saved" }), {
+        initialConfig,
+        onHotReload: async () => {
+          if (instance.retainedWorkCount || cleanupPending) {
+            throw new PluginReloadDeferredError(
+              "Notes is busy; the previous plugin configuration remains active.",
+              [instance],
+              cleanup.promise,
+            );
+          }
+          return "applied";
+        },
+      });
+      try {
+        await harness.reloader.ready;
+        application.recordConfigChange(initialConfig, config);
+        harness.emitWrite(
+          attachRuntimeConfigWriteApplication(makeWrite(config, "saved"), application),
+        );
+        await flushReload(harness.reloader);
+        await expect(application.result).resolves.toMatchObject({
+          status: "deferred",
+          reason: expect.stringContaining("previous plugin configuration remains active"),
+          appliesWhen: expect.stringContaining("cleanup"),
+        });
+        expect(harness.onConfigApplied).not.toHaveBeenCalled();
+        expect(harness.onConfigAccepted.mock.lastCall?.[3]).toMatchObject({ runtimeApplied: false });
+        const scopesAtReceipt = writerScope.mock.calls.length;
+        writerActive = false;
+        if (outcome === "stop") {
+          await harness.reloader.stop();
+        } else if (outcome === "supersede") {
+          config = {
+            plugins: { entries: { notes: { enabled: true, config: { value: "newest" } } } },
+          };
+          await flushWatcherChange(harness);
+        }
+        releaseWork();
+        await flushReload(harness.reloader);
+        expect(harness.onConfigApplied).not.toHaveBeenCalled();
+        cleanupPending = false;
+        cleanup.resolve();
+        await flushReload(harness.reloader);
+        expect(writerScope).toHaveBeenCalledTimes(scopesAtReceipt);
+        if (outcome === "stop") {
+          expect(harness.onConfigApplied).not.toHaveBeenCalled();
+        } else {
+          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+        }
+        await expect(application.result).resolves.toMatchObject({ status: "deferred" });
+      } finally {
+        cleanupPending = false;
+        cleanup.resolve();
+        releaseWork();
+        await harness.reloader.stop();
+        await owner.close();
+      }
+    },
+  );
+
   it("hot-applies model settings without replacing the Codex generation", async () => {
     const initialConfig: OpenClawConfig = {
       plugins: { entries: { codex: { enabled: true } } },

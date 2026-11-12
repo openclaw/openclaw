@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import { createPreparedModelRuntimeLease } from "../agents/prepared-model-runtime.plugin-lifetime.js";
 import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
 import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
+import { createPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -73,6 +76,7 @@ import {
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
 } from "./server-plugin-reload.resources.test-support.js";
+import { PluginReloadDeferredError } from "./server-plugin-reload-cleanup.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
 import {
   createTranscriptFixtures,
@@ -152,6 +156,103 @@ it("flushes failed candidate services before closing their shared resources", ()
   verifyCandidateResourceCleanup(createRecoveryFixture));
 
 registerPluginRetainedWorkReloadTests(createRecoveryFixture);
+
+it("automatically replaces an unused owner while an unrelated admitted lease keeps working", async () => {
+  const fixture = await createRecoveryFixture({ automatic: true, abortOnCandidateStart: false });
+  const registry = fixture.previousRegistry;
+  const first = getPluginInstance(registry.plugins.find(({ id }) => id === "first")!);
+  const sibling = getPluginInstance(registry.plugins.find(({ id }) => id === "sibling")!);
+  assert(first && sibling);
+  const snapshot = createModelRuntimeChoiceOwnerFixture({}, () => true, { pluginRegistry: registry });
+  const lease = createPreparedModelRuntimeLease(snapshot, {
+    pluginRegistry: registry,
+    pluginMetadataSnapshot: snapshot.metadataSnapshot,
+    remoteCatalog: null,
+    inlineProviderModels: [],
+    configuredCatalogEntries: [],
+  });
+  const finish = createDeferredCore();
+  const running = lease.run!(() =>
+    sibling.run(async () => {
+      await finish.promise;
+      return "admitted sibling completed";
+    }),
+  );
+  try {
+    expect(first.retainedWorkCount).toBe(0);
+    expect(sibling.retainedWorkCount).toBe(1);
+    await fixture.reload(
+      { plugins: { entries: { first: { config: { value: "saved" } } } } },
+      ["first"],
+      ["plugins.entries.first.config.value"],
+    );
+    expect(fixture.firstStop).toHaveBeenCalled();
+    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    expect(sibling.retainedWorkCount).toBe(1);
+    finish.resolve();
+    await expect(running).resolves.toBe("admitted sibling completed");
+  } finally {
+    finish.resolve();
+    await running;
+    await lease[Symbol.asyncDispose]();
+  }
+});
+
+it.each(["retained work", "handoff work", "prior cleanup"] as const)(
+  "automatic reload leaves admission open while waiting for %s",
+  async (busy) => {
+    let releaseWork: (() => void) | undefined;
+    const cleanup = createDeferredCore();
+    const prepareConfigEffects = vi.fn(() => ({ retire: vi.fn(), rollback: async () => {} }));
+    let checkpoints = 0;
+    const fixture = await createRecoveryFixture({
+      automatic: true,
+      abortOnCandidateStart: false,
+      prepareConfigEffects,
+      checkpoint: async () => {
+        if (++checkpoints === 5 && busy === "handoff work") {
+          releaseWork = instance.retainWork();
+        }
+      },
+    });
+    const record = fixture.previousRegistry.plugins.find(({ id }) => id === "first");
+    assert(record);
+    const instance = getPluginInstance(record);
+    assert(instance);
+    const claim = fixture.owner.currentClaim();
+    const reserve = vi.spyOn(fixture.owner, "reserve");
+    if (busy === "retained work") {
+      releaseWork = instance.retainWork();
+    } else if (busy === "prior cleanup") {
+      fixture.runtime.kernel.pluginMetadata.retire(createPluginCache(), async () => {
+        await cleanup.promise;
+        return { cleanupCount: 0, failures: [] };
+      });
+    }
+    try {
+      await expect(
+        fixture.reload(
+          { plugins: { entries: { first: { config: { value: "saved" } } } } },
+          ["first"],
+          ["plugins.entries.first.config.value"],
+        ),
+      ).rejects.toBeInstanceOf(PluginReloadDeferredError);
+      expect(claim.isCurrent()).toBe(true);
+      expect(reserve).not.toHaveBeenCalled();
+      expect(fixture.owner.getReloadStatus()).toBeUndefined();
+      expect(instance.acceptingCalls).toBe(true);
+      expect(instance.replacementPending).toBe(false);
+      expect(instance.run(() => "new call accepted")).toBe("new call accepted");
+      expect(fixture.firstStop).not.toHaveBeenCalled();
+      expect(fixture.siblingStop).not.toHaveBeenCalled();
+      expect(prepareConfigEffects).not.toHaveBeenCalled();
+      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    } finally {
+      releaseWork?.();
+      cleanup.resolve();
+    }
+  },
+);
 
 it.each(["commit", "rollback"] as const)(
   "keeps service and lifecycle Cron getters current after %s",

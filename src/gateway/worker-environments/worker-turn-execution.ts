@@ -13,6 +13,7 @@ import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runn
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { runInPreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import {
   ackPendingAgentSteeringItems,
@@ -88,6 +89,10 @@ export async function executeWorkerTurn(
     },
     { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
   );
+  const withRuntimeScope = <T>(run: () => T): T =>
+    runInPreparedModelRuntimeLease(preparedRuntime, () =>
+      withPluginRuntimeGenerationScope(preparedRuntime.snapshot, run),
+    );
   params.assertRunCurrent();
   input.abortSignal?.throwIfAborted();
   const turn = { ...input, config: preparedRuntime.snapshot.config };
@@ -162,8 +167,7 @@ export async function executeWorkerTurn(
       blocked = true;
     },
   };
-  await using contextEngineAdmission = await withPluginRuntimeGenerationScope(
-    preparedRuntime.snapshot,
+  await using contextEngineAdmission = await withRuntimeScope(
     () =>
       admitEmbeddedContextEngine(
         {
@@ -182,14 +186,25 @@ export async function executeWorkerTurn(
   const { manager, history, userMessageAlreadyPersisted } = context;
   let baseLeafId = context.baseLeafId;
 
-  const { model, reasoning, transcriptPolicy, inference } = await prepareWorkerTurnModel({
-    target: transcriptTarget,
-    modelRef,
-    runtimeSnapshot: preparedRuntime.snapshot,
-    inferencePlacement,
-    turn,
-    assertCurrent: assertContextCurrent,
-  });
+  const {
+    model,
+    reasoning,
+    transcriptPolicy,
+    inference: preparedInference,
+  } = await runInPreparedModelRuntimeLease(preparedRuntime, () =>
+    prepareWorkerTurnModel({
+      target: transcriptTarget,
+      modelRef,
+      runtimeSnapshot: preparedRuntime.snapshot,
+      inferencePlacement,
+      turn,
+      assertCurrent: assertContextCurrent,
+    }),
+  );
+  const inference = preparedInference
+    ? (...args: Parameters<typeof preparedInference>) =>
+        withRuntimeScope(() => preparedInference(...args))
+    : undefined;
 
   assertContextCurrent();
   const credential = await waitForTurnOperation({
@@ -334,7 +349,7 @@ export async function executeWorkerTurn(
         });
         placementTools.push(...desktop.tools);
         const availablePlacementTools = new Set(placementTools.map((tool) => tool.name));
-        const tools = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+        const tools = await withRuntimeScope(() =>
           params.environments.createGatewayTools?.({
             identity,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
@@ -412,7 +427,7 @@ export async function executeWorkerTurn(
             copyAgentToolMetadata(tool, {
               ...tool,
               execute: (...args) =>
-                withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+                withRuntimeScope(() =>
                   tool.execute(...args),
                 ),
             }),
@@ -461,7 +476,7 @@ export async function executeWorkerTurn(
       },
       assertCurrent: assertActive,
     };
-    const promptContext = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+    const promptContext = await withRuntimeScope(() =>
       prepareWorkerTurnPrompt(promptPreparation),
     );
     const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
@@ -486,7 +501,7 @@ export async function executeWorkerTurn(
       signal,
     });
     assertActive();
-    const blockedResult = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+    const blockedResult = await withRuntimeScope(() =>
       gateWorkerTurnInput(inputContext, { ...media, prompt: turn.prompt, history }),
     );
     if (blockedResult) {

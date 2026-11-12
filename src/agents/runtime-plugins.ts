@@ -21,6 +21,7 @@ import {
   type PluginLoadOptions,
 } from "../plugins/loader.js";
 import { adoptRuntimeMemoryRegistrations } from "../plugins/memory-state.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
@@ -51,7 +52,12 @@ import {
   type AgentHarnessPluginSelection,
   type RuntimePluginLoadPurpose,
 } from "./harness/runtime-plugin-load-plan.js";
-import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
+import {
+  createRuntimePluginWork,
+  releaseRuntimePluginWork,
+  retainRuntimePluginWork,
+  retainDeferredRuntimePluginCapabilities,
+} from "./runtime-plugin-work.js";
 
 type AgentRuntimePluginRegistryParams = {
   config?: OpenClawConfig;
@@ -245,7 +251,13 @@ export type AcquiredAgentRuntimePluginRegistry =
     };
 
 /** Prepared read-only owners reuse the load plan while owning fresh, uncached registrations. */
-export async function acquireAgentRuntimePluginRegistry(
+export function acquireAgentRuntimePluginRegistry(
+  params: AgentRuntimePluginRegistryParams,
+): Promise<AcquiredAgentRuntimePluginRegistry> {
+  return pluginInvocationContext.exit(() => acquireAgentRuntimePluginRegistryUnscoped(params));
+}
+
+async function acquireAgentRuntimePluginRegistryUnscoped(
   params: AgentRuntimePluginRegistryParams,
 ): Promise<AcquiredAgentRuntimePluginRegistry> {
   const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
@@ -310,6 +322,15 @@ export function loadAgentRuntimePluginRegistryHandle(
   params: AgentRuntimePluginRegistryParams,
   onPrimaryRegistry?: (registry: PluginRegistry) => void,
 ): PluginRegistry {
+  return pluginInvocationContext.exit(() =>
+    loadAgentRuntimePluginRegistryHandleUnscoped(params, onPrimaryRegistry),
+  );
+}
+
+function loadAgentRuntimePluginRegistryHandleUnscoped(
+  params: AgentRuntimePluginRegistryParams,
+  onPrimaryRegistry?: (registry: PluginRegistry) => void,
+): PluginRegistry {
   const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
   const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
   if (reusable) {
@@ -369,11 +390,19 @@ export async function withAgentPluginRegistry<T>(params: {
   // Tool policy dispatches through the global runner; without a process root it
   // would not exist, and this run's before_tool_call hooks would never fire.
   ensureGlobalHookRunner();
+  const work = createRuntimePluginWork();
   const invocations = new PluginInvocationScope(
     pluginRegistry,
     collectRegistryInvocationInstances(pluginRegistry),
+    { work },
   );
-  return await withPluginRuntimeRegistryScope(pluginRegistry, () =>
-    invocations.run(() => params.run(pluginRegistry)),
-  );
+  try {
+    retainDeferredRuntimePluginCapabilities([pluginRegistry], work);
+    return await withPluginRuntimeRegistryScope(pluginRegistry, () =>
+      invocations.run(() => params.run(pluginRegistry)),
+    );
+  } finally {
+    invocations.release();
+    work.release();
+  }
 }

@@ -15,6 +15,12 @@ import {
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginTools } from "../plugins/tools.js";
+import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
+import {
+  createPreparedModelRuntimeLease,
+  retainPreparedPluginGeneration,
+} from "./prepared-model-runtime.plugin-lifetime.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   loadAgentRuntimePluginRegistryHandle,
@@ -145,4 +151,93 @@ it("blocks a tool call through the run's before_tool_call hook when no process r
   });
   expect(outcome.blocked).toBe(true);
   expect(outcome.blocked && outcome.reason).toContain("guarded exec");
+});
+
+it("keeps exact deferred capabilities and resolved tools, not an unused installed instance", async () => {
+  useNoBundledPlugins();
+  const unused = writePlugin({ id: "unused", registration: "" });
+  const tool = writePlugin({
+    id: "selected-tool",
+    registration:
+      'api.registerTool(() => ({ name: "custody_probe", description: "Probe", parameters: { type: "object", properties: {} }, execute: async () => ({ content: [] }) }), { names: ["custody_probe"] });',
+  });
+  fs.writeFileSync(
+    path.join(path.dirname(tool.file), "openclaw.plugin.json"),
+    JSON.stringify({
+      id: tool.id,
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["custody_probe"] },
+    }),
+  );
+  const hook = writePlugin({
+    id: "deferred-hook",
+    registration: 'api.on("agent_end", async () => {});',
+  });
+  const provider = writePlugin({
+    id: "fallback-provider",
+    registration: 'api.registerProvider({ id: "fallback-provider", label: "Fallback", auth: [] });',
+  });
+  const plugins = [unused, tool, hook, provider];
+  const config: OpenClawConfig = {
+    plugins: {
+      allow: plugins.map(({ id }) => id),
+      load: { paths: plugins.map(({ file }) => file) },
+      entries: Object.fromEntries(plugins.map(({ id }) => [id, { enabled: true }])),
+      slots: { memory: "none" },
+    },
+  };
+  const workspaceDir = makePluginLoaderTempDir();
+  const registry = loadAgentRuntimePluginRegistryHandle({ config, workspaceDir });
+  const snapshot = createModelRuntimeChoiceOwnerFixture(config, () => true, {
+    pluginRegistry: registry,
+  });
+  const generation = {
+    pluginRegistry: registry,
+    pluginMetadataSnapshot: snapshot.metadataSnapshot,
+    remoteCatalog: null,
+    inlineProviderModels: [],
+    configuredCatalogEntries: [],
+  };
+  const instances = plugins.map(
+    ({ id }) => getPluginInstance(registry.plugins.find((record) => record.id === id)!)!,
+  );
+  const physical = retainPreparedPluginGeneration(generation);
+  expect(instances.map((instance) => instance.retainedWorkCount)).toEqual([0, 0, 0, 0]);
+  const lease = createPreparedModelRuntimeLease(snapshot, generation);
+  try {
+    expect(instances.map((instance) => instance.retainedWorkCount)).toEqual([0, 0, 1, 1]);
+    const tools = lease.run!(() =>
+      resolvePluginTools({ context: { config, workspaceDir }, runtimeRegistry: registry }),
+    );
+    expect(tools.map(({ name }) => name)).toContain("custody_probe");
+    expect(instances.map((instance) => instance.retainedWorkCount)).toEqual([0, 1, 1, 1]);
+    const releaseReplacement = instances[1]!.reserveReplacement();
+    try {
+      const selected = tools.find(({ name }) => name === "custody_probe")!;
+      await expect(lease.run!(() => selected.execute("call", {}))).resolves.toMatchObject({
+        content: [],
+      });
+      expect(instances[1]!.acceptingCalls).toBe(true);
+      expect(instances[1]!.retainedWorkCount).toBe(1);
+    } finally {
+      releaseReplacement();
+    }
+    const releaseHookReplacement = instances[2]!.reserveReplacement();
+    try {
+      await expect(
+        lease.run!(() =>
+          createHookRunner(registry, { catchErrors: false }).runAgentEnd(
+            { messages: [], success: true },
+            { agentId: "main" },
+          ),
+        ),
+      ).resolves.toBeUndefined();
+    } finally {
+      releaseHookReplacement();
+    }
+  } finally {
+    await lease[Symbol.asyncDispose]();
+    expect(instances.map((instance) => instance.retainedWorkCount)).toEqual([0, 0, 0, 0]);
+    await physical();
+  }
 });

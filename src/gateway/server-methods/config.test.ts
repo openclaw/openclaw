@@ -236,6 +236,53 @@ describe("config.patch effective change receipt", () => {
 });
 
 describe("config application settlement", () => {
+  it.each(["config.set", "config.patch", "config.apply"] as const)(
+    "%s waits for application and returns the saved revision when deferred",
+    async (method) => {
+      const outcome = {
+        status: "deferred" as const,
+        reason: "Plugin fixture still has retained work.",
+        appliesWhen: "Applies after that work finishes or after a Gateway restart.",
+      };
+      let settle!: (value: typeof outcome) => void;
+      const application = new Promise<typeof outcome>((resolve) => {
+        settle = resolve;
+      });
+      const queueFollowUp = vi.fn();
+      configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+        path: "/tmp/openclaw.json",
+        config: { hooks: { enabled: true } },
+        hash: "deferred-hash",
+        application,
+        queueFollowUp,
+      });
+      const { harness, operation } = startConfigWrite(method, {
+        raw: { hooks: { enabled: true } },
+        baseHash: "base-hash",
+      });
+      await vi.waitFor(() => expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalled());
+      expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledWith(
+        expect.objectContaining({ awaitRuntimeApplication: true }),
+      );
+      expect(harness.respond).not.toHaveBeenCalled();
+      settle(outcome);
+      await operation;
+      expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
+        false, undefined, expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining(outcome.reason),
+          details: expect.objectContaining({
+            application: outcome,
+            persistedConfig: expect.objectContaining({
+              hash: expect.any(String), config: { hooks: { enabled: true } },
+            }),
+          }),
+        }),
+      );
+      expect(harness.respond.mock.calls[0]?.[2]?.message).not.toContain("[object Object]");
+      expect(queueFollowUp).toHaveBeenCalledOnce();
+    },
+  );
   it.each([
     { method: "config.patch", outcome: "applied-restart-required" },
     { method: "config.apply", outcome: "restart-pending" },

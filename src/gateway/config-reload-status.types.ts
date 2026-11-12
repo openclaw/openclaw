@@ -13,6 +13,11 @@ type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
 export type GatewayHotReloadApplication =
   | GatewayHotReloadApplicationStatus
   | {
+      status: "deferred";
+      reason: string;
+      appliesWhen: string;
+    }
+  | {
       status: GatewayHotReloadApplicationStatus;
       runtime: import("../plugins/lifecycle.js").PluginRuntimeApplication;
     };

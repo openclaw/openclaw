@@ -77,6 +77,7 @@ import type {
   GatewayConfigReloadCandidate,
   PluginInstallRecords,
 } from "./config-reload.types.js";
+import { PluginReloadDeferredError } from "./server-plugin-reload-cleanup.js";
 import {
   assertConfigReloadWriteSnapshot,
   assertReloadPublicationCurrent,
@@ -340,7 +341,12 @@ export function startGatewayConfigReloader(
       application,
     } = candidate ?? {};
     const settleRuntimeApplication = (result: GatewayHotReloadApplication = "applied") => {
-      const status = typeof result === "string" ? result : result.status;
+      const status =
+        typeof result === "object" && result.status === "deferred"
+          ? result
+          : typeof result === "string"
+            ? result
+            : result.status;
       // A watcher replay must not turn recovery-owned runtime work into a success receipt.
       settleCandidateApplications(
         candidate,
@@ -388,7 +394,7 @@ export function startGatewayConfigReloader(
         leaseRetryDelayMs = 0;
         source.accept(initialEpoch);
       }
-      return { runtime, isCurrent };
+      return { runtime, isCurrent, deferred: false };
     };
     assertInvokerOwned();
     try {
@@ -702,19 +708,45 @@ export function startGatewayConfigReloader(
       return completeApplication();
     }
 
-    pluginDrain.assertCanApply(plan);
     // No-op plans also publish the runtime snapshot before its applied receipt.
     const applyRuntime = isNoopGatewayReloadPlan(plan) ? opts.onNoopConfigCommit : opts.onHotReload;
     await opts.onConfigChange?.(plan, nextConfig);
     let applicationStatus: void | GatewayHotReloadApplication;
     try {
+      pluginDrain.assertCanApply(plan);
       applicationStatus = await applyRuntime(plan, nextConfig, ownership, nextSourceConfig);
     } catch (error) {
       ownership.rollbackRuntimeEnv();
-      pluginDrain.recordFailure(plan, error);
-      throw error;
+      if (!pluginLifecycle && error instanceof PluginReloadDeferredError) {
+        pluginDrain.recordDeferred(plan, error);
+        applicationStatus = {
+          status: "deferred",
+          reason: error.message,
+          appliesWhen: error.appliesWhen,
+        };
+      } else {
+        pluginDrain.recordFailure(plan, error);
+        throw error;
+      }
     }
     await checkpoint();
+    if (typeof applicationStatus === "object" && applicationStatus.status === "deferred") {
+      await commitReloadBaseline({ runtimeApplied: false });
+      // Keep the exact saved revision for a fresh Gateway-owned admission after settlement.
+      // File observations have no RPC claim but need the same retry custody.
+      retryCandidate = candidate ?? {
+        config: candidateRuntimeConfig,
+        compareConfig: nextSourceConfig,
+        persistedHash,
+        snapshot: sourceSnapshot,
+        origin: "file",
+        epoch: initialEpoch,
+      };
+      settleCandidateApplications(candidate, applicationStatus);
+      pluginDrain.observeAfterReceipt();
+      opts.log.info("config reload deferred: " + applicationStatus.reason);
+      return { ...completeApplication(), deferred: true };
+    }
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
     settleRuntimeApplication(applicationStatus ?? "applied");
@@ -839,7 +871,7 @@ export function startGatewayConfigReloader(
       activeConfigCandidate = null;
     }
     await source.acceptPaths(snapshot.includedPaths ?? []);
-    if (applied.isCurrent()) {
+    if (!applied.deferred && applied.isCurrent()) {
       await promoteAcceptedSnapshot(
         snapshot,
         candidate.origin === "write" ? "in-process-write" : "valid-config",
@@ -1037,7 +1069,7 @@ export function startGatewayConfigReloader(
         const applied = await applySnapshot(snapshot, undefined, transactionEpoch, {
           assertInvokerOwned: assertLeaseOwned,
         });
-        if (applied.isCurrent()) {
+        if (!applied.deferred && applied.isCurrent()) {
           await promoteAcceptedSnapshot(snapshot, "valid-config");
         }
       }, observedCandidate ?? undefined);
@@ -1302,6 +1334,7 @@ export function startGatewayConfigReloader(
     },
     onObserved: (observation) => {
       opts.onConfigCandidateObserved?.();
+      pluginDrain.supersedeDeferred();
       const event = observation.write;
       if (!event) {
         if (pendingInProcessConfig || activeConfigCandidate) {
@@ -1466,6 +1499,7 @@ export function startGatewayConfigReloader(
     stop: async () => {
       stopped = true;
       lifecycle.abort(new GatewayConfigReloadSupersededError());
+      pluginDrain.clear();
       settleCandidateApplications(pendingInProcessConfig, "stopped");
       settleCandidateApplications(activeConfigCandidate, "stopped");
       settleCandidateApplications(retryCandidate, "stopped");

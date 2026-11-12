@@ -47,9 +47,26 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => {
 import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
+  respondConfigWriteApplicationOutcome,
   resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
+
+it("renders deferred agent configuration outcomes through the shared adapter", () => {
+  const respond = vi.fn();
+  const outcome = {
+    status: "deferred" as const,
+    reason: "Plugin fixture is in use.",
+    appliesWhen: "Applies after its work settles.",
+  };
+  expect(respondConfigWriteApplicationOutcome({
+    outcome, mode: "Agent configuration", client: null, respond, success: {},
+  })).toBe(true);
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({
+    message: expect.stringContaining(outcome.reason),
+    details: { application: outcome },
+  }));
+});
 
 it("awaits transcript additions and title edits only when the reload owner can apply them", () => {
   const previousConfig: OpenClawConfig = {

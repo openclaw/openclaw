@@ -406,7 +406,15 @@ export class PluginInstance {
   }
 
   private enter<T>(token: object, run: () => T, held?: { registry?: PluginRegistry }): T {
-    pluginInvocationContext.getStore()?.lookup(this);
+    const context = pluginInvocationContext.getStore();
+    if (context?.retainInvocation) {
+      if (!this.calls.get(token)?.cleanup) {
+        context.retainInvocation(this);
+      }
+    } else {
+      // Cleanup-only scopes still validate delayed callbacks against their own lifetime.
+      context?.lookup(this);
+    }
     const current = invocation.getStore();
     const call =
       current?.instance === this && current.token === token ? current : { instance: this, token };

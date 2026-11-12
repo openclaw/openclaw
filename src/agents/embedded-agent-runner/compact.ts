@@ -26,6 +26,7 @@ import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isFallbackSummaryError } from "../model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
+import { runInPreparedModelRuntimeLease } from "../prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "../prepared-model-runtime.js";
 import { prepareAgentPromptProjects } from "../prompt-projects.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
@@ -511,10 +512,12 @@ export async function compactEmbeddedAgentSessionDirect(
         });
         return fallbackResult.result;
       };
-      return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-        owner.captureContext();
-        return compactPrepared();
-      });
+      return await runInPreparedModelRuntimeLease(preparedModelRuntimeLease, () =>
+        withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+          owner.captureContext();
+          return compactPrepared();
+        }),
+      );
     } catch (err) {
       return buildCompactionFailureResult(
         isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),

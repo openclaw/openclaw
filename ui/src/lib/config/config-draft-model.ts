@@ -148,6 +148,16 @@ export function applyConfigSnapshot(
   const currentRevisionHash = snapshot.configRevisionHash ?? snapshot.hash ?? null;
   if (snapshot.appliedConfigHash !== undefined) {
     state.configNeedsApply = currentRevisionHash !== snapshot.appliedConfigHash;
+    if (!state.configNeedsApply) {
+      state.configDeferredApplication = null;
+      if (state.configAutoSaveStatus === "deferred") {
+        state.configAutoSaveStatus = "idle";
+        state.lastError = null;
+      }
+    } else if (state.configDeferredApplication && !state.configFormDirty) {
+      state.configAutoSaveStatus = "deferred";
+      state.lastError = `${state.configDeferredApplication.reason} ${state.configDeferredApplication.appliesWhen}`;
+    }
   }
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   setConfigSnapshot(state, snapshot);
@@ -433,6 +443,7 @@ function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unk
 export function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   if (
     state.configAutoSaveStatus === "saving" ||
+    state.configAutoSaveStatus === "deferred" ||
     state.configAutoSaveStatus === "conflict" ||
     state.configAutoSaveStatus === "paused"
   ) {

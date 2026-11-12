@@ -18,6 +18,11 @@ export function settleCandidateApplications(
   for (const application of candidateApplications(candidate)) {
     application.settle(status);
   }
+  // A saved retry keeps source intent, never the requesting RPC's continuation or authority.
+  if (candidate) {
+    delete candidate.application;
+    delete candidate.carriedApplications;
+  }
 }
 
 export function transferCandidateApplications(

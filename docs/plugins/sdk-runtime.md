@@ -235,6 +235,23 @@ its managed handles. Already admitted calls and streams have a bounded chance
 to finish before disposal; retaining an old function does not make it a current
 runtime handle.
 
+### Reload and saved configuration
+
+A turn retains the exact plugin instances whose capabilities it resolves or invokes,
+not every plugin in its registry. Selected model providers, fallback providers,
+hooks, and context engines retain their captured instances for later callbacks;
+tools retain their instance when resolved, before execution. Physical registry
+custody keeps resources available but does not by itself count as active work.
+Admitted turns keep their selected instances until completion and cleanup.
+
+Automatic configuration changes wait for affected retained work, in-flight calls,
+and unfinished cleanup without closing admission for new turns. A saved change
+can therefore return a deferred application receipt: `{ status: "deferred", reason,
+appliesWhen }`. This is not activation or rollback. The saved configuration and
+hash accompany the receipt; the watcher retries the latest saved candidate after
+work settles. Explicit plugin reloads keep their existing drain and refusal
+contracts. See [Plugin replacement](/plugins/architecture) for recovery details.
+
 ### Plugin value boundary
 
 OpenClaw admits native plugins when it loads and registers them, using the

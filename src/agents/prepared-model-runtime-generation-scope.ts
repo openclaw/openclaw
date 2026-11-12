@@ -39,11 +39,29 @@ export function scopePreparedModelRuntimeLease(lease: PreparedModelRuntimeLease)
       if (!open) {
         throw new Error("Captured reply runtime lease is closed");
       }
-      return withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, () =>
-        open ? lease.snapshot : undefined,
-      );
+      const enter = () =>
+        withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, () =>
+          open ? lease.snapshot : undefined,
+        );
+      return lease.run ? lease.run(enter) : enter();
     },
   };
+}
+
+/** Enter a lease's capability collector without changing generation inheritance. */
+export function runInPreparedModelRuntimeLease<T>(lease: PreparedModelRuntimeLease, run: () => T): T {
+  return lease.run ? lease.run(run) : run();
+}
+
+/** Compose physical generation scope with the lease's exact execution custody. */
+export function withPreparedModelRuntimeLease<T>(
+  lease: PreparedModelRuntimeLease,
+  run: () => T,
+  borrowSnapshot?: () => PreparedModelRuntimeSnapshot | undefined,
+): T {
+  return runInPreparedModelRuntimeLease(lease, () =>
+    withPreparedModelRuntimePluginGenerationScope(lease.pluginGeneration, run, borrowSnapshot),
+  );
 }
 
 /** Keeps the exact admitted generation available to nested embedded agent runs. */

@@ -6,7 +6,11 @@ import {
   retainPluginCache,
   waitForPluginCacheRetirement,
 } from "../plugins/plugin-cache.js";
-import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "../plugins/plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryLifetime,
@@ -38,10 +42,16 @@ import {
   retainPreparedModelRuntimeSnapshotResources,
 } from "./prepared-model-runtime.resources.js";
 import type {
+  PreparedModelRuntimeLease,
+  PreparedModelRuntimeSnapshot,
   PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
+import {
+  createRuntimePluginWork,
+  releaseRuntimePluginWork,
+  retainDeferredRuntimePluginCapabilities,
+} from "./runtime-plugin-work.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 type Lifetime = ReturnType<typeof createLifetime>;
@@ -61,7 +71,7 @@ const { generations, active, retirements, publications } = resolveGlobalSingleto
   }),
 );
 
-function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () => void) {
+function createLifetime(dispose: () => Promise<unknown>) {
   const cleanupWork = new AsyncWorkScope();
   const references = new Set<object>();
   let closing: Deferred | undefined;
@@ -70,22 +80,19 @@ function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () =
     get referenced() {
       return references.size > 0;
     },
-    retain(work = false) {
+    retain() {
       if (closing) {
         throw new PreparedModelRuntimePluginGenerationRetiredError(
           "Prepared plugin generation has retired",
         );
       }
-      const releaseWork = work ? retainWork?.() : undefined;
       const reference = {};
       references.add(reference);
       let releaseCompletion: Promise<void> | undefined;
       return () => {
         if (references.delete(reference)) {
           const completion = references.size === 0 ? lifetime.close() : undefined;
-          releaseCompletion = releaseWork
-            ? releaseRuntimePluginWork(() => completion, releaseWork)
-            : completion;
+          releaseCompletion = completion;
         }
         return releaseCompletion;
       };
@@ -202,7 +209,6 @@ export function ownPreparedPluginGeneration(
         );
       }
     },
-    () => retainRuntimePluginWork(selectedRegistries),
   );
   try {
     for (const registry of selectedRegistries) {
@@ -224,9 +230,65 @@ export function ownPreparedPluginGeneration(
 export function retainPreparedPluginGeneration(
   generation: PreparedModelRuntimePluginGeneration,
 ): () => Promise<void> {
-  const release = ownPreparedPluginGeneration(generation).retain(true);
+  const release = ownPreparedPluginGeneration(generation).retain();
   return async () => {
     await release();
+  };
+}
+
+/** Physical generation retention never marks every installed capability as executing. */
+export function createPreparedModelRuntimeLease(
+  snapshot: PreparedModelRuntimeSnapshot,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  onRelease?: () => void,
+): PreparedModelRuntimeLease {
+  const releaseGeneration = retainPreparedPluginGeneration(pluginGeneration);
+  const work = createRuntimePluginWork();
+  const registries = [
+    pluginGeneration.pluginRegistry,
+    pluginGeneration.inboundPluginRegistry,
+  ].filter((registry) => registry !== undefined);
+  const registryByInstance = new Map(
+    registries.flatMap((registry) =>
+      [...collectRegistryInvocationInstances(registry)].map((instance) => [instance, registry] as const),
+    ),
+  );
+  let scope: PluginInvocationScope | undefined;
+  try {
+    const registry = registries[0];
+    if (registry) {
+      scope = new PluginInvocationScope(registry, registryByInstance.keys(), {
+        work,
+        registryByInstance,
+        parent: pluginInvocationContext.getStore(),
+      });
+    }
+    retainDeferredRuntimePluginCapabilities(registries, work);
+  } catch (error) {
+    scope?.release();
+    void releaseRuntimePluginWork(releaseGeneration, work.release).catch(() => {});
+    throw error;
+  }
+  let released = false;
+  let completion: Promise<void> | undefined;
+  return {
+    snapshot,
+    pluginGeneration,
+    run: <T>(run: () => T): T => {
+      if (released) {
+        throw new Error("Prepared model runtime lease is closed");
+      }
+      return scope ? scope.run(run) : run();
+    },
+    [Symbol.asyncDispose]() {
+      if (!released) {
+        released = true;
+        scope?.release();
+        onRelease?.();
+        completion = releaseRuntimePluginWork(releaseGeneration, work.release);
+      }
+      return completion!;
+    },
   };
 }
 

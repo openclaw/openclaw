@@ -35,7 +35,7 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { createPreparedModelRuntimeLease } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   retirePreparedModelRuntimeOwnerIfUnused,
   type PreparedModelRuntimeOwnerRetention,
@@ -255,11 +255,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       ) {
         // Nested work borrows its still-open parent; it cannot publish or widen that authority.
         assertAdmission();
-        return {
-          snapshot: borrowed,
-          pluginGeneration: options.pluginGeneration,
-          [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
-        };
+        return createPreparedModelRuntimeLease(borrowed, options.pluginGeneration);
       }
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
@@ -369,40 +365,26 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
     const pluginGeneration = owner.pluginGeneration!;
     if (owner.provenance !== provenance) {
-      return {
-        snapshot,
-        pluginGeneration,
-        [Symbol.asyncDispose]: retainPreparedPluginGeneration(pluginGeneration),
-      };
+      return createPreparedModelRuntimeLease(snapshot, pluginGeneration);
     }
     if (provenance === "run" && options.retainIdleRunOwner) {
       context.retainedDirectRunOwners.retain(key, owner, context.owners);
     } else if (provenance === "run" && context.getGatewayLifecycleActive()) {
       context.retainedGatewayRunOwners.retain(key, owner, context.owners);
     }
-    const releaseGeneration = retainPreparedPluginGeneration(pluginGeneration);
+    const lease = createPreparedModelRuntimeLease(snapshot, pluginGeneration, () => {
+      owner.leaseCount = Math.max(0, (owner.leaseCount ?? 1) - 1);
+      retirePreparedModelRuntimeOwnerIfUnused(
+        context.owners,
+        key,
+        owner,
+        context.retainedDirectRunOwners.has(key, owner) ||
+          context.retainedGatewayRunOwners.has(key, owner),
+      );
+    });
     owner.leaseCount = (owner.leaseCount ?? 0) + 1;
     admission.release();
-    let released = false;
-    return {
-      snapshot,
-      pluginGeneration,
-      [Symbol.asyncDispose]: async () => {
-        if (released) {
-          return;
-        }
-        released = true;
-        owner.leaseCount = Math.max(0, (owner.leaseCount ?? 1) - 1);
-        retirePreparedModelRuntimeOwnerIfUnused(
-          context.owners,
-          key,
-          owner,
-          context.retainedDirectRunOwners.has(key, owner) ||
-            context.retainedGatewayRunOwners.has(key, owner),
-        );
-        await releaseGeneration();
-      },
-    };
+    return lease;
   } finally {
     admission.release();
   }

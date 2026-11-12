@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { withPreparedModelRuntimeLease } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
@@ -134,8 +134,8 @@ async function runCronIsolatedAgentTurnInTrace(
   // Accounting, delivery, and teardown use the same metadata as inference. Keep
   // the lease open until cleanup finishes, then fence detached borrowed work.
   try {
-    return await withPreparedModelRuntimePluginGenerationScope(
-      preparedRuntimeLease.pluginGeneration,
+    return await withPreparedModelRuntimeLease(
+      preparedRuntimeLease,
       () =>
         withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, async () => {
           // One invocation owns retries and fallbacks; persistent transcripts outlive that identity.

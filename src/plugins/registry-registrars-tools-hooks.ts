@@ -377,7 +377,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         pluginId: record.id,
         name: hookName,
         event,
-        handler: wrappedHandler,
+        handler: getPluginInstance(record)?.wrap(wrappedHandler) ?? wrappedHandler,
       });
     }
   };

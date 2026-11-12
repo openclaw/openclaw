@@ -1,6 +1,6 @@
 import {
   runOutsidePreparedModelRuntimePluginGenerationScope,
-  withPreparedModelRuntimePluginGenerationScope,
+  withPreparedModelRuntimeLease,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
@@ -72,8 +72,8 @@ export async function runPreparedReply(
   await using lease = preparedRuntime;
   let leaseActive = true;
   try {
-    return await withPreparedModelRuntimePluginGenerationScope(
-      lease.pluginGeneration,
+    return await withPreparedModelRuntimeLease(
+      lease,
       () => withPluginRuntimeGenerationScope(lease.snapshot, execute),
       () => (leaseActive ? lease.snapshot : undefined),
     );

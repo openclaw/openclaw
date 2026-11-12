@@ -166,6 +166,8 @@ export type PreparedModelRuntimeInput = {
 export type PreparedModelRuntimeLease = Readonly<{
   snapshot: PreparedModelRuntimeSnapshot;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  /** Exact capability custody for execution; passive inventory leases omit this. */
+  run?: <T>(run: () => T) => T;
   [Symbol.asyncDispose](): Promise<void>;
 }>;
 

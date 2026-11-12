@@ -146,7 +146,7 @@ it.each(["direct-loader-successor", "prepared"] as const)(
         };
       });
       const resources = getPluginRegistryInspectionResources(acquired.registry)!;
-      const scope = resources.createInvocationScope(acquired.registry);
+      const scope = resources.createInvocationScope(acquired.registry, [liveInstance]);
       try {
         // Both producers borrow the live record rather than another discovery copy.
         expect(acquired.registry.plugins.find((record) => record.id === channelId)).toBe(

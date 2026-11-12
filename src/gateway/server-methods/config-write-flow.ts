@@ -23,11 +23,17 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart } from "../../infra/restart.js";
+import { redactToolDetail } from "../../logging/redact.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
 import { resolveGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
+import { diffGatewayReloadPaths } from "../config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
+} from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
@@ -181,11 +187,11 @@ function isCliRoutedConfigPatch(
  */
 export function respondConfigWriteApplicationOutcome(params: {
   outcome: RuntimeConfigWriteApplicationStatus;
-  mode: "config.patch" | "config.apply";
+  mode: "config.set" | "config.patch" | "config.apply" | "Agent configuration";
   client: Parameters<typeof resolveControlPlaneActor>[0];
   respond: RespondFn;
   success: Record<string, unknown>;
-  persistedConfig: Record<string, unknown>;
+  persistedConfig?: Record<string, unknown>;
 }): boolean {
   const { outcome, mode } = params;
   if (outcome === "applied") {
@@ -195,17 +201,30 @@ export function respondConfigWriteApplicationOutcome(params: {
     params.respond(true, { ...params.success, restartPending: true }, undefined);
     return true;
   }
-  const message =
-    outcome === "applied-restart-required"
+  const deferred =
+    typeof outcome === "object"
+      ? {
+          ...outcome,
+          reason: redactToolDetail(outcome.reason),
+          appliesWhen: redactToolDetail(outcome.appliesWhen),
+        }
+      : undefined;
+  const status = typeof outcome === "object" ? outcome.status : outcome;
+  const message = deferred
+    ? `${mode} saved but deferred: ${deferred.reason} ${deferred.appliesWhen}`
+    : outcome === "applied-restart-required"
       ? `${mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
       : outcome === "restart-pending"
         ? `${mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
-        : `${mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
+        : `${mode} persisted but was not applied to the active Gateway (${status}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
   params.respond(
     false,
     undefined,
     errorShape(ErrorCodes.UNAVAILABLE, message, {
-      details: { persistedConfig: params.persistedConfig },
+      details: {
+        ...(params.persistedConfig ? { persistedConfig: params.persistedConfig } : {}),
+        ...(deferred ? { application: deferred } : {}),
+      },
     }),
   );
   return true;
@@ -213,7 +232,7 @@ export function respondConfigWriteApplicationOutcome(params: {
 
 /** Returns whether a managed config write can settle without restarting the Gateway. */
 export function shouldAwaitGatewayConfigApplication(params: {
-  changedPaths: string[];
+  changedPaths?: string[];
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
 }): boolean {
@@ -221,7 +240,16 @@ export function shouldAwaitGatewayConfigApplication(params: {
   // application could only report failure; the write applies at the next restart.
   return (
     resolveGatewayReloadSettings(params.nextConfig).mode !== "off" &&
-    !resolveConfigRestartRequirement(params).requiresRestart
+    !resolveConfigRestartRequirement({
+      ...params,
+      changedPaths:
+        params.changedPaths ??
+        diffGatewayReloadPaths(
+          params.previousConfig,
+          params.nextConfig,
+          listConfigReloadRefinementPrefixes(),
+        ),
+    }).requiresRestart
   );
 }
 

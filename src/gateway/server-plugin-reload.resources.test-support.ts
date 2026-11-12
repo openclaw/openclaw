@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
 import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
 import { scopePreparedModelRuntimeLease } from "../agents/prepared-model-runtime-generation-scope.js";
+import { createPreparedModelRuntimeLease } from "../agents/prepared-model-runtime.plugin-lifetime.js";
 import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -399,19 +400,19 @@ export function registerPluginRetainedWorkReloadTests(
     const snapshot = createModelRuntimeChoiceOwnerFixture({}, () => true, {
       pluginRegistry: registry,
     });
-    const releaseWork = retainRuntimePluginWork([registry]);
-    const lease = scopePreparedModelRuntimeLease({
-      snapshot,
-      pluginGeneration: {
+    const lease = scopePreparedModelRuntimeLease(
+      createPreparedModelRuntimeLease(snapshot, {
         pluginRegistry: registry,
         pluginMetadataSnapshot: snapshot.metadataSnapshot,
         remoteCatalog: null,
         inlineProviderModels: [],
         configuredCatalogEntries: [],
-      },
-      [Symbol.asyncDispose]: async () => releaseWork(),
+      }),
+    );
+    const runInTurn = lease.run(() => {
+      instance.run(() => undefined);
+      return AsyncLocalStorage.snapshot();
     });
-    const runInTurn = lease.run(() => AsyncLocalStorage.snapshot());
     try {
       expect(runInTurn(() => instance.hasActiveCall)).toBe(false);
       await expect(runInTurn(() => fixture.reload())).rejects.toThrow("own active turn");

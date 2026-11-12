@@ -24,7 +24,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
-import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { withPreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { measureAgentStartup } from "./startup-timing.js";
@@ -106,8 +106,8 @@ export async function runLocalAgentCommand<TResult>(params: {
                       let active = true;
                       try {
                         return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
-                          withPreparedModelRuntimePluginGenerationScope(
-                            lease.pluginGeneration,
+                          withPreparedModelRuntimeLease(
+                            lease,
                             () =>
                               params.run(
                                 {

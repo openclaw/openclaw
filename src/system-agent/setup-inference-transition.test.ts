@@ -12,6 +12,11 @@ describe("setup inference activation recovery", () => {
     { status: "restart-pending", requireApplied: true, outcome: "restored" },
     { status: "applied-restart-required", requireApplied: true, outcome: "restored" },
     { status: "restart-pending", requireApplied: undefined, outcome: "restart" },
+    {
+      status: { status: "deferred", reason: "Plugin fixture is busy.", appliesWhen: "Wait for retained work." },
+      requireApplied: true,
+      outcome: "restored",
+    },
   ] as const)(
     "settles $status with requireApplied=$requireApplied as $outcome",
     async ({ status, requireApplied, outcome }) => {
@@ -56,7 +61,9 @@ describe("setup inference activation recovery", () => {
         throw new Error("Missing activation completion");
       }
       if (outcome === "restored") {
-        await expect(completion.run()).rejects.toThrow(`did not complete activation (${status})`);
+        await expect(completion.run()).rejects.toThrow(
+          typeof status === "object" ? status.reason : `did not complete activation (${status})`,
+        );
         expect(current).toEqual(before);
       } else {
         expect(await completion.run()).toBe(outcome === "restart");
@@ -64,6 +71,36 @@ describe("setup inference activation recovery", () => {
       }
     },
   );
+
+  it("never activates deferred credentials and reports a deferred recovery reason", async () => {
+    const activate = vi.fn();
+    let complete!: () => Promise<boolean>;
+    const deferred = {
+      status: "deferred" as const,
+      reason: "Plugin fixture still has work.",
+      appliesWhen: "Applies when retained work settles.",
+    };
+    await commitSetupInferenceActivation({
+      config: {},
+      requireApplied: true,
+      assertCurrent: () => {},
+      activate,
+      deferCompletion: (run) => { complete = run; },
+      configTarget: {
+        read: async () => ({ config: {}, write: async () => ({}) }),
+        write: async (config, { writeOptions, captureUndo }) => {
+          captureUndo(async (options) => {
+            getRuntimeConfigWriteApplication(options)?.claim()?.settle(deferred);
+            return { config: {}, written: true };
+          });
+          getRuntimeConfigWriteApplication(writeOptions)?.claim()?.settle(deferred);
+          return config;
+        },
+      },
+    });
+    await expect(complete()).rejects.toThrow(deferred.reason);
+    expect(activate).not.toHaveBeenCalled();
+  });
 
   it("keeps config safety diagnostics out of the recovery error shown to users", async () => {
     const config = { gateway: { mode: "local" } } satisfies OpenClawConfig;

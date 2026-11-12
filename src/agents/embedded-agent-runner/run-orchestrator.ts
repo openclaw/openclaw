@@ -49,6 +49,7 @@ import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
   getPreparedModelRuntimePluginGeneration,
+  runInPreparedModelRuntimeLease,
   runOutsidePreparedModelRuntimePluginGenerationScope,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
@@ -599,10 +600,12 @@ async function runEmbeddedAgentForSession(
               });
             };
             const runWithPreparedRuntime = () =>
-              withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-                context = AsyncLocalStorage.snapshot();
-                return runPrepared();
-              });
+              runInPreparedModelRuntimeLease(preparedModelRuntimeLease, () =>
+                withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
+                  context = AsyncLocalStorage.snapshot();
+                  return runPrepared();
+                }),
+              );
             return params.pluginGeneration
               ? await withPreparedModelRuntimePluginGenerationScope(
                   preparedModelRuntimeLease.pluginGeneration,

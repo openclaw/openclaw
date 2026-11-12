@@ -64,6 +64,7 @@ function createPatchServer() {
 
 function createPersistedFailureTransport(
   options: {
+    method?: "config.set" | "config.patch";
     failureDetails?: (ack: unknown) => unknown;
     beforeFailure?: () => Promise<void>;
   } = {},
@@ -82,7 +83,7 @@ function createPersistedFailureTransport(
         frames.push(frame);
         void server.request(frame.method, frame.params).then(
           async (payload) => {
-            const persistedFailure = frame.method === "config.patch" && failAfterPersist;
+            const persistedFailure = frame.method === (options.method ?? "config.patch") && failAfterPersist;
             if (persistedFailure) {
               failAfterPersist = false;
               await options.beforeFailure?.();
@@ -148,6 +149,99 @@ function createPersistedFailureTransport(
 }
 
 describe("config patch recovery", () => {
+  it.each(["config.set", "config.patch"] as const)(
+    "adopts a deferred %s once, retains its reason across reconnect, and only reads for application",
+    async (method) => {
+      vi.useFakeTimers();
+      const application = {
+        status: "deferred", reason: "Plugin fixture has retained work.",
+        appliesWhen: "Applies when that work settles.",
+      };
+      const server = createPersistedFailureTransport({
+        method, failureDetails: (ack) => ({ persistedConfig: ack, application }),
+      });
+      let applied = false;
+      const request: GatewayBrowserClient["request"] = async (nextMethod, params) => {
+        const response = await server.request(nextMethod, params);
+        if (nextMethod === "config.get" && applied) {
+          const snapshot = response as ConfigSnapshot;
+          return { ...snapshot, appliedConfigHash: snapshot.configRevisionHash } as typeof response;
+        }
+        return response;
+      };
+      const { runtimeConfig, publish } = createRecoveryCapability(request);
+      try {
+        await runtimeConfig.ensureLoaded();
+        if (method === "config.set") {
+          runtimeConfig.setRaw('{ "count": 1, "enabled": false }');
+        }
+        await expect(method === "config.set"
+          ? runtimeConfig.save()
+          : runtimeConfig.patch({ raw: { enabled: false }, note: "Disable" }))
+          .resolves.toBe(false);
+        expect(runtimeConfig.state).toMatchObject({
+          configSnapshot: { hash: "hash-2", config: { count: 1, enabled: false } },
+          configFormDirty: false,
+          configNeedsApply: true,
+          configAutoSaveStatus: "deferred",
+          configDeferredApplication: { reason: application.reason, appliesWhen: application.appliesWhen },
+        });
+        await runtimeConfig.refresh();
+        publish(false);
+        publish(true);
+        await runtimeConfig.refresh();
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+        expect(server.store.submissions).toHaveLength(1);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");
+        expect(runtimeConfig.state.lastError).toContain(application.reason);
+        // Simulate the runtime owner applying the saved revision, not another client write.
+        applied = true;
+        await runtimeConfig.refresh();
+        expect(runtimeConfig.state.configNeedsApply).toBe(false);
+        expect(runtimeConfig.state.configDeferredApplication).toBeNull();
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe("idle");
+        expect(server.store.submissions).toHaveLength(1);
+      } finally {
+        runtimeConfig.setWritesSuspended(true);
+        server.transport.stop();
+      }
+    },
+  );
+
+  it("rebases only the acknowledged draft delta when a deferred save races another edit", async () => {
+    vi.useFakeTimers();
+    const persisted = deferred();
+    const reply = deferred();
+    const application = {
+      status: "deferred", reason: "Plugin fixture has retained work.", appliesWhen: "Wait for it.",
+    };
+    const server = createPersistedFailureTransport({
+      method: "config.set",
+      failureDetails: (ack) => ({ persistedConfig: ack, application }),
+      beforeFailure: async () => { persisted.resolve(); await reply.promise; },
+    });
+    const { runtimeConfig } = createRecoveryCapability(server.request);
+    try {
+      await runtimeConfig.ensureLoaded();
+      runtimeConfig.setRaw('{ "count": 2 }');
+      const save = runtimeConfig.save();
+      await persisted.promise;
+      runtimeConfig.setRaw('{ "count": 3 }');
+      reply.resolve();
+      await expect(save).resolves.toBe(false);
+      expect(runtimeConfig.state.configSnapshot).toMatchObject({ hash: "hash-2", config: { count: 2 } });
+      expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual({ count: 3 });
+      expect(runtimeConfig.state.configFormDirty).toBe(true);
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");
+      await runtimeConfig.refresh();
+      expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual({ count: 3 });
+      expect(server.store.submissions).toHaveLength(1);
+    } finally {
+      runtimeConfig.setWritesSuspended(true);
+      server.transport.stop();
+    }
+  });
+
   it.each([
     {
       local: true,

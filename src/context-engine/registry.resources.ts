@@ -1,10 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
-import {
-  collectRegistryInvocationInstances,
-  PluginInvocationScope,
-} from "../plugins/plugin-invocation-scope.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import type { ContextEngineRegistration } from "../plugins/registry-contribution-types.js";
 import {
   getPluginRegistryInspectionResources,
@@ -123,17 +120,18 @@ function retainContextEngineFactorySource(
     if (source && !primary?.coversSource(source)) {
       claims.push(source.retain());
     }
-    const instances = collectRegistryInvocationInstances(registry);
-    if (claims.length === 0 && instances.size === 0) {
+    // The selected factory may be borrowed from another registry (including the fallback).
+    // Physical source claims above remain broad enough for cleanup, but work is exact.
+    const instance = registration && getPluginValueInstance(registration.factory);
+    const instances = instance ? [instance] : [];
+    if (claims.length === 0 && instances.length === 0) {
       return undefined;
     }
     const invocations = primary
-      ? primary.createInvocationScope(registry)
+      ? primary.createInvocationScope(registry, instances)
       : new PluginInvocationScope(registry, instances, {
           // A managed factory owns a logical consumer even on a caller-owned root view.
-          retained:
-            registration !== undefined &&
-            getPluginValueInstance(registration.factory) !== undefined,
+          retained: instance !== undefined,
         });
     return new ContextEngineFactoryResources(claims, invocations);
   } catch (error) {

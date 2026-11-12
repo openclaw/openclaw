@@ -125,6 +125,45 @@ describe("acquireEffectiveToolInventoryRuntimeModelContext", () => {
     expect(() => acquired.run(() => undefined)).toThrow("has been released");
   });
 
+  it("enters the acquired exact capability scope for resolution and inventory projection", async () => {
+    let entered = false;
+    const lease = {
+      ...runtimeMocks.requestLease,
+      run: <T>(run: () => T): T => {
+        entered = true;
+        try {
+          return run();
+        } finally {
+          entered = false;
+        }
+      },
+    };
+    runtimeMocks.acquire.mockResolvedValueOnce(lease);
+    runtimeMocks.resolveModelAsync.mockImplementationOnce(async () => {
+      expect(entered).toBe(true);
+      return {
+        model: {
+          id: "chat-latest",
+          name: "chat-latest",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        },
+      };
+    });
+    const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+      cfg: {},
+      modelProvider: "openai",
+      modelId: "chat-latest",
+    });
+    try {
+      acquired.run(() => expect(entered).toBe(true));
+      expect(entered).toBe(false);
+    } finally {
+      await acquired[Symbol.asyncDispose]();
+    }
+  });
+
   it("skips runtime preparation for a blank model id", async () => {
     const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
       cfg: {},

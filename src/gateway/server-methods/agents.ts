@@ -56,6 +56,7 @@ import {
   writeWorkspaceFileOrRespond,
 } from "./agents-files.js";
 import { agentListHandler } from "./agents-list.js";
+import { respondConfigWriteApplicationOutcome } from "./config-write-flow.js";
 import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
@@ -76,18 +77,13 @@ function createAgentConfigApplication(respond: RespondFn) {
       attachRuntimeConfigWriteApplication(options, application),
     confirm: async () => {
       const outcome = application.claimed ? await application.result : "unclaimed";
-      if (outcome === "applied") {
-        return true;
-      }
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`,
-        ),
-      );
-      return false;
+      return !respondConfigWriteApplicationOutcome({
+        outcome,
+        mode: "Agent configuration",
+        client: null,
+        respond,
+        success: {},
+      });
     },
   };
 }

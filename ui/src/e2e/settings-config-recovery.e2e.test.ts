@@ -42,6 +42,51 @@ const scenario = {
 };
 
 suite.define(() => {
+  it("shows saved-but-deferred config without resubmitting on reconnect", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, scenario);
+      await page.goto(`${suite.server.baseUrl}settings/communications`);
+      const prefix = page.getByRole("textbox", { name: "Outbound Response Prefix" });
+      await prefix.waitFor();
+      await gateway.deferNext("config.set");
+      await prefix.fill("saved deferred");
+      await prefix.press("Tab");
+      await gateway.waitForRequest("config.set");
+      const savedConfig = { ...config, messages: { responsePrefix: "saved deferred" } };
+      const saved = {
+        ...snapshot, config: savedConfig, raw: JSON.stringify(savedConfig),
+        hash: "saved-deferred", configRevisionHash: "saved-deferred", appliedConfigHash: "initial",
+      };
+      await gateway.setMethodResponse("config.get", saved);
+      const reason = "Plugin fixture still has retained work.";
+      await gateway.rejectDeferred("config.set", {
+        code: "UNAVAILABLE", message: reason,
+        details: {
+          persistedConfig: { hash: saved.hash, config: savedConfig },
+          application: { status: "deferred", reason, appliesWhen: "Applies after the work settles." },
+        },
+      });
+      const indicator = page.locator("openclaw-settings-save-indicator");
+      await expect.poll(() => indicator.textContent()).toContain("Saved; waiting to apply");
+      await expect.poll(() => indicator.textContent()).toContain(reason);
+      expect(await indicator.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await expect.poll(() => prefix.inputValue()).toBe("saved deferred");
+      await expect.poll(() => indicator.textContent()).toContain("Saved; waiting to apply");
+      expect((await gateway.findRequests("config.set")).length).toBe(1);
+      // The reconnect read can carry a new public token for the same saved document.
+      await gateway.setMethodResponse("config.get", {
+        ...saved, hash: "applied-deferred", configRevisionHash: "applied-deferred",
+        appliedConfigHash: "applied-deferred",
+      });
+      await gateway.setOnline(false);
+      await gateway.setOnline(true);
+      await expect.poll(() => indicator.textContent()).not.toContain("Saved; waiting to apply");
+      expect((await gateway.findRequests("config.set")).length).toBe(1);
+    });
+  });
+
   it.each(["unknown", "not-restored", "restored"])(
     "Settings config.set preserves the full draft after partial publication (%s)",
     async (rollbackStatus) => {

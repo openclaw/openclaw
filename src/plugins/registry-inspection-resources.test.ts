@@ -389,7 +389,7 @@ describe("owned plugin inspections", () => {
         expect(failed.connection().database.isOpen).toBe(false);
         const invocations = getPluginRegistryInspectionResources(
           inspection.registry,
-        )!.createInvocationScope(inspection.registry);
+        )!.createInvocationScope(inspection.registry, []);
         try {
           expect(
             invocations.run(() =>

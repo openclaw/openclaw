@@ -1,5 +1,6 @@
 import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import { resolveAgentRuntimePluginSelectionOwners } from "./harness/runtime-plugin-load-plan.js";
 import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
@@ -30,7 +31,15 @@ export function acquirePreparedMediaCapabilityProviders(
   };
   assertOpen();
   // Execute through the composed view so nested lookups retain adopted donor registrations.
-  const invocations = source.resources.createInvocationScope(registry);
+  const instances = new Set(
+    Object.values(providers).flatMap((entries) =>
+      (entries ?? []).flatMap((provider) => {
+        const instance = getPluginValueInstance(provider);
+        return instance ? [instance] : [];
+      }),
+    ),
+  );
+  const invocations = source.resources.createInvocationScope(registry, instances);
   const claim = source.resources.retain();
   const wrapProvider = <T>(provider: T) => invocations.wrap(provider);
   return {

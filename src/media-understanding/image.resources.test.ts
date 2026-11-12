@@ -14,6 +14,7 @@ import { registerContextEngineInRegistry } from "../context-engine/registry.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import * as llmStream from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -79,6 +80,8 @@ function nativeImageFixture(
     setupTailReads: 0,
     reasoningOnly: false,
     calls: 0,
+    readInvocation: () => pluginInvocationContext.getStore(),
+    streamRetainedInstances: [] as string[],
     setupReads: 0,
     watchCancellation: false,
     holdWork: false,
@@ -159,6 +162,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
               state.workSettled.resolve();
             });
         }
+        state.streamRetainedInstances = state.readInvocation()?.retainedInstances?.map((instance) => instance.pluginId) ?? [];
         state.calls++;
         state.started.resolve();
         try {
@@ -279,6 +283,32 @@ afterEach(async () => {
   resetPluginLoaderTestStateForTest();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
+
+it("keeps internally acquired execution custody through image streaming and tracked tails", async () => {
+  const fixture = nativeImageFixture();
+  try {
+    await fixture.environment(async () => {
+      useNoBundledPlugins();
+      fixture.state.holdWork = true;
+      const result = describeImageWithModelCore(fixture.request);
+      try {
+        await fixture.state.started.promise;
+        expect(fixture.state.streamRetainedInstances).toContain(fixture.id);
+        fixture.state.finish.resolve();
+        expect(await result).toMatchObject({ text: "native image 42" });
+        expect(fixture.state.connections[0]!.database.isOpen).toBe(true);
+        fixture.state.finishWork.resolve();
+        await fixture.state.workSettled.promise;
+      } finally {
+        fixture.state.finish.resolve();
+        fixture.state.finishWork.resolve();
+        await result;
+      }
+    });
+  } finally {
+    fixture.cleanup();
+  }
+});
 
 it("describes images without evaluating configured memory or context plugins", async () => {
   const fixture = nativeImageFixture();

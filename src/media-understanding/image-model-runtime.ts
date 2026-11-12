@@ -7,6 +7,7 @@ import {
   requireApiKey,
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
+import { runInPreparedModelRuntimeLease } from "../agents/prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
@@ -44,6 +45,7 @@ type PreparedImageRuntime = {
 };
 
 type ImageRuntimeResources = AsyncDisposable & {
+  run?: <T>(run: () => T) => T;
   assertResourcesOpen?: () => void;
 };
 
@@ -229,6 +231,7 @@ export async function resolveImageRuntime(
   const suppliedClaim = suppliedSnapshot
     ? retainPreparedModelRuntimeSnapshotResources(suppliedSnapshot)
     : undefined;
+  let runInRuntime = <T>(run: () => T): T => run();
   const preparedRuntimeLease = suppliedSnapshot
     ? {
         snapshot: suppliedSnapshot,
@@ -262,9 +265,16 @@ export async function resolveImageRuntime(
             ];
           },
         },
-      );
+      ).then((lease) => {
+        runInRuntime = (run) => runInPreparedModelRuntimeLease(lease, run);
+        return lease;
+      });
   // The operation owns release before setup can leave asynchronous cleanup behind.
   onAcquired({
+    run: suppliedSnapshot
+      ? runInRuntime
+      : (run) =>
+          runInRuntime(() => withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, run)),
     [Symbol.asyncDispose]: () => preparedRuntimeLease[Symbol.asyncDispose](),
     ...(suppliedClaim ? { assertResourcesOpen: suppliedClaim.assertOpen } : {}),
   });
@@ -293,29 +303,31 @@ export async function resolveImageRuntime(
     ...(preparedParams.workspaceDir ? { workspaceDir: preparedParams.workspaceDir } : {}),
     ...authProfileOptions,
   };
-  return await withPluginRuntimeGenerationScope(preparedRuntime, async () => {
-    const resolved = await resolveModelAsync(
-      resolvedRef.provider,
-      resolvedRef.model,
-      preparedParams.agentDir,
-      preparedParams.cfg,
-      resolveOptions,
-    );
-    // Setup may have closed during model lookup; do not start auth for a late result.
-    params.signal?.throwIfAborted();
-    const model = requireImageCapableModel({
-      model: resolved.model,
-      resolvedProvider: resolvedRef.provider,
-      resolvedModel: resolvedRef.model,
-      requestedProvider: params.provider,
-      requestedModel: params.model,
-    });
-    return await prepareResolvedImageRuntime(
-      preparedParams,
-      preparedRuntime,
-      model,
-      resolved.authStorage,
-      resolved.modelRegistry,
-    );
-  });
+  return await runInRuntime(() =>
+    withPluginRuntimeGenerationScope(preparedRuntime, async () => {
+      const resolved = await resolveModelAsync(
+        resolvedRef.provider,
+        resolvedRef.model,
+        preparedParams.agentDir,
+        preparedParams.cfg,
+        resolveOptions,
+      );
+      // Setup may have closed during model lookup; do not start auth for a late result.
+      params.signal?.throwIfAborted();
+      const model = requireImageCapableModel({
+        model: resolved.model,
+        resolvedProvider: resolvedRef.provider,
+        resolvedModel: resolvedRef.model,
+        requestedProvider: params.provider,
+        requestedModel: params.model,
+      });
+      return await prepareResolvedImageRuntime(
+        preparedParams,
+        preparedRuntime,
+        model,
+        resolved.authStorage,
+        resolved.modelRegistry,
+      );
+    }),
+  );
 }

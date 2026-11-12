@@ -10,6 +10,7 @@ import {
   acquireAgentRunPreparedModelRuntime,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
+  refreshPreparedModelRuntimeSnapshots,
 } from "../agents/prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
@@ -57,7 +58,13 @@ import * as bootstrap from "./server-plugin-bootstrap.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { reloadGatewayPlugins } from "./server-plugin-reload.js";
+import { PluginReloadDeferredError } from "./server-plugin-reload-cleanup.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
+import {
+  GatewayConfigReloadSupersededError,
+  type GatewayReloadHandlerParams,
+} from "./server-reload-contracts.js";
+import { createGatewayReloadHandlers } from "./server-reload-hot.js";
 import { refreshModelRuntimeAfterHotReload } from "./server-reload-model-runtime-scope.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
@@ -107,7 +114,13 @@ describe("prepared Gateway plugin borrowing", () => {
 
   // Protect prepared-turn custody of Gateway-owned instances through the real loader, auth
   // republication, and reload owners. Existing reload fixtures substitute their own loaders.
-  it.each(["plugins.reload", "auth refresh", "tool handoff"] as const)(
+  it.each([
+    "plugins.reload",
+    "auth refresh",
+    "tool handoff",
+    "automatic busy",
+    "automatic superseded",
+  ] as const)(
     "borrows unchanged Gateway instances into prepared turns across %s",
     async (change) => {
       await withOpenClawTestState({ label: "prepared-gateway-borrow" }, async (state) => {
@@ -285,6 +298,43 @@ describe("prepared Gateway plugin borrowing", () => {
           assert(tool, "the Gateway plugin tool must resolve for the prepared turn");
           return await tool.execute("borrow-probe", {});
         };
+        let preflightPrepared = false;
+        const reloadPlugins: GatewayReloadHandlerParams["reloadPlugins"] = (params) =>
+          reloadGatewayPlugins(
+            {
+              runtime,
+              port: 0,
+              log,
+              loadGatewayPluginBootstrapModule: async () => ({
+                ...bootstrap,
+                prepareGatewayPluginLoad: async (options) => {
+                  const candidate = await bootstrap.prepareGatewayPluginLoad(options);
+                  if (options.loadModules === false) {
+                    preflightPrepared = true;
+                  }
+                  return candidate;
+                },
+              }),
+              prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
+                loaded.push(candidate);
+                return {
+                  publish() {
+                    activatePluginRegistry(
+                      candidate.pluginRegistry,
+                      null,
+                      "gateway-bindable",
+                      state.workspaceDir,
+                      registryOwner.registry,
+                      trackActivationCleanup,
+                    );
+                    registryOwner.publish(candidate.pluginRegistry);
+                  },
+                  afterCommit() {},
+                };
+              },
+            },
+            params,
+          );
         let lease: PreparedModelRuntimeLease | undefined;
         try {
           await withPluginRuntimeRegistryScope(registryOwner.registry, () =>
@@ -311,6 +361,126 @@ describe("prepared Gateway plugin borrowing", () => {
           await expect(executeProbe(lease)).resolves.toMatchObject({
             content: [{ type: "text", text: "generation 1" }],
           });
+
+          if (change === "automatic busy" || change === "automatic superseded") {
+            await lease[Symbol.asyncDispose]();
+            lease = undefined;
+            const publicationEntered = createDeferredCore();
+            const finishPublication = createDeferredCore<OpenClawConfig>();
+            let publication: Promise<unknown> | undefined;
+            let releaseWork: (() => void) | undefined;
+            let current = true;
+            let preparedCheckpoints = 0;
+            const setState = vi.fn();
+            const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+            const handlers = createGatewayReloadHandlers({
+              scheduler,
+              deps: {} as GatewayReloadHandlerParams["deps"],
+              broadcast: vi.fn(),
+              getState: () => ({
+                hooksConfig: null,
+                hookClientIpConfig: { trustedProxies: [], allowRealIpFallback: false },
+                heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
+                cronState: runtime.runtimeState.cronState,
+              }),
+              setState,
+              getPluginRegistry: () => registryOwner.registry,
+              getPluginMetadataSnapshot: () => metadataSnapshot,
+              startChannel: vi.fn(async () => new Map()),
+              stopChannel: vi.fn(async () => {}),
+              releaseChannelRouteHandoffs: vi.fn(),
+              pruneInactiveChannelAccountState: vi.fn(),
+              reloadPlugins,
+              logHooks: logs,
+              logChannels: logs,
+              logCron: logs,
+              logReload: logs,
+              cronReconciliation: {
+                arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
+                invalidate: vi.fn(),
+              },
+              requestRecoveryRestart,
+            });
+            try {
+              const reloading = handlers.applyHotReload(
+                {
+                  ...buildGatewayReloadPlan([]),
+                  reloadPlugins: true,
+                  reloadPluginIds: new Set([toolPluginId]),
+                },
+                config,
+                {
+                  sourceConfig: config,
+                  isCurrent: () => current,
+                  publish: async (commit) => await commit(),
+                  checkpoint: async () => {
+                    if (!preflightPrepared) {
+                      return;
+                    }
+                    if (++preparedCheckpoints === 1) {
+                      // Suspend a real publication before plugin acquisition. Early config
+                      // effects would cancel it and replace its gate without a rollback.
+                      publication = withPluginRuntimeRegistryScope(registryOwner.registry, () =>
+                        refreshPreparedModelRuntimeSnapshots(
+                          () => {
+                            publicationEntered.resolve();
+                            return finishPublication.promise;
+                          },
+                          {
+                            catalogMode: "static",
+                            joinSupersedingPublication: true,
+                            allowGatewaySubagentBinding: true,
+                            pluginMetadataSnapshot: metadataSnapshot,
+                          },
+                        ),
+                      ).then(
+                        () => undefined,
+                        (error: unknown) => error,
+                      );
+                      await publicationEntered.promise;
+                    } else if (preparedCheckpoints === 2) {
+                      if (change === "automatic busy") {
+                        releaseWork = oldInstance.retainWork();
+                      } else {
+                        current = false;
+                      }
+                    }
+                  },
+                },
+              );
+              if (change === "automatic busy") {
+                await expect(reloading).rejects.toBeInstanceOf(PluginReloadDeferredError);
+              } else {
+                await expect(reloading).rejects.toMatchObject({
+                  cause: expect.any(GatewayConfigReloadSupersededError),
+                  details: { phase: "prepare", committed: false },
+                });
+              }
+              expect(preparedCheckpoints).toBe(2);
+              expect(setState).not.toHaveBeenCalled();
+              expect(requestRecoveryRestart).not.toHaveBeenCalled();
+              expect(registryOwner.registry).toBe(initial.pluginRegistry);
+              expect(runtime.kernel.pluginRuntimeGeneration.getReloadStatus()).toBeUndefined();
+              expect(oldInstance.acceptingCalls).toBe(true);
+              expect(oldInstance.replacementPending).toBe(false);
+              expect(oldInstance.run(() => "still serving")).toBe("still serving");
+              assert(publication);
+              finishPublication.resolve(config);
+              expect(await publication).toBeUndefined();
+              // Normal entry points must still acquire and execute after the deferred
+              // operation, without a repair refresh that could hide a stranded gate.
+              lease = await acquireTurn();
+              await expect(executeProbe(lease)).resolves.toMatchObject({
+                content: [{ type: "text", text: "generation 1" }],
+              });
+            } finally {
+              finishPublication.resolve(config);
+              await publication;
+              releaseWork?.();
+              handlers.stopRestartRetries();
+            }
+            return;
+          }
 
           if (change === "auth refresh") {
             // Credential changes republish the owner while reusing its plugin generation.
@@ -344,54 +514,29 @@ describe("prepared Gateway plugin borrowing", () => {
 
           // plugins.reload queues behind the admitted turn instead of disposing its instance.
           const startReload = () =>
-            reloadGatewayPlugins(
-              {
-                runtime,
-                port: 0,
-                log,
-                loadGatewayPluginBootstrapModule: async () => bootstrap,
-                prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
-                  loaded.push(candidate);
-                  return {
-                    publish() {
-                      activatePluginRegistry(
-                        candidate.pluginRegistry,
-                        null,
-                        "gateway-bindable",
-                        state.workspaceDir,
-                        registryOwner.registry,
-                        trackActivationCleanup,
-                      );
-                      registryOwner.publish(candidate.pluginRegistry);
-                    },
-                    afterCommit() {},
-                  };
-                },
+            reloadPlugins({
+              nextConfig: config,
+              sourceConfig: config,
+              changedPaths: [],
+              pluginLifecycle: {
+                pluginIds: [toolPluginId],
+                reason: "reload",
+                operationId: "borrow-reload",
               },
-              {
-                nextConfig: config,
-                sourceConfig: config,
-                changedPaths: [],
-                pluginLifecycle: {
-                  pluginIds: [toolPluginId],
-                  reason: "reload",
-                  operationId: "borrow-reload",
+              prepareConfigEffects: () => ({
+                retire: () => {
+                  markPreparedModelRuntimeSnapshotsStale("plugin reload", {
+                    waitForReplacement: true,
+                  });
                 },
-                prepareConfigEffects: () => ({
-                  retire: () => {
-                    markPreparedModelRuntimeSnapshotsStale("plugin reload", {
-                      waitForReplacement: true,
-                    });
-                  },
-                  rollback: async () => {},
-                }),
-                env,
-                commitRuntime: async (publication) => {
-                  publication?.publish();
-                  publication?.afterCommit?.();
-                },
+                rollback: async () => {},
+              }),
+              env,
+              commitRuntime: async (publication) => {
+                publication?.publish();
+                publication?.afterCommit?.();
               },
-            );
+            });
           if (change === "tool handoff") {
             const sessionKey = "agent:main:reload-handoff";
             const sessionId = "reload-handoff-session";
@@ -815,11 +960,11 @@ describe("published Gateway plugin services", () => {
               { catalogMode: "static", pluginGeneration: published.pluginGeneration },
             ),
           );
-          const tool = resolveTools().find(({ name }) => name === toolName);
+          const tool = runLease.run!(() => resolveTools().find(({ name }) => name === toolName));
           assert(tool, "enabled tool must resolve for the owner agent");
-          const result = await tool.execute("visitor-revoke-call", {
+          const result = await runLease.run!(() => tool.execute("visitor-revoke-call", {
             email: "absent@example.test",
-          });
+          }));
           expect(result).toMatchObject({
             content: [
               {
