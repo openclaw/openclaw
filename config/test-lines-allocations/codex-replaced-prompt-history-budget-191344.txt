@@ -1,4 +1,0 @@
-# A before_prompt_build systemPrompt replacement frees the reserved OpenClaw base for selected
-# history: the replaced turn keeps history the base-inclusive allowance rejects, and the same
-# history still rejects without the replacement.
-32

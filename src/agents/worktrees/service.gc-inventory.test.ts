@@ -174,45 +174,48 @@ describe("worktree GC inventories", () => {
     expect(getRegistryWorktree(env, records[1]!.id)?.gcProtection).toBeUndefined();
   });
 
-  it("rescans protected checkouts only when their root or HEAD changes", async () => {
-    const {
-      repo: repoRoot,
-      env,
-      records: [nested, moved],
-    } = await fixture(["nested", "moved"]);
-    await fs.mkdir(path.join(nested!.path, "inner", ".git"), { recursive: true });
-    await git(moved!.path, "checkout", "-b", "external-branch");
-    await git(repoRoot, "pack-refs", "--all");
-    const service = new ManagedWorktreeService({ env });
-    const inspections = vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout");
+  it.each(["inner", ".openclaw/tmp/inner"])(
+    "retries nested-repository protection after removing %s",
+    async (nestedPath) => {
+      const {
+        repo: repoRoot,
+        env,
+        records: [nested, moved],
+      } = await fixture(["nested", "moved"]);
+      await fs.mkdir(path.join(nested!.path, nestedPath, ".git"), { recursive: true });
+      await git(moved!.path, "checkout", "-b", "external-branch");
+      await git(repoRoot, "pack-refs", "--all");
+      const service = new ManagedWorktreeService({ env });
+      const inspections = vi.spyOn(checkoutInspection, "inspectManagedWorktreeCheckout");
 
-    const first = await service.gc();
-    expect(first.removed).toEqual([]);
-    expect(first.protectionReasons).toEqual({
-      "worktree contains a nested repository": 1,
-      "branch-moved": 1,
-    });
-    expect(inspections).toHaveBeenCalled();
-    inspections.mockClear();
-    // Packing an unrelated branch must not invalidate these unchanged checkout tips.
-    await git(repoRoot, "update-ref", "refs/heads/unrelated", "HEAD");
-    await git(repoRoot, "pack-refs", "--all");
-    expect((await service.gc()).removed).toEqual([]);
-    expect(inspections).not.toHaveBeenCalled();
+      const first = await service.gc();
+      expect(first.removed).toEqual([]);
+      expect(first.protectionReasons).toEqual({
+        "worktree contains a nested repository": 1,
+        "branch-moved": 1,
+      });
+      expect(inspections).toHaveBeenCalled();
+      inspections.mockClear();
+      // Packing an unrelated branch must not invalidate these unchanged checkout tips.
+      await git(repoRoot, "update-ref", "refs/heads/unrelated", "HEAD");
+      await git(repoRoot, "pack-refs", "--all");
+      expect((await service.gc()).removed).toEqual([]);
+      expect(inspections).not.toHaveBeenCalled();
 
-    // External repair changes the checkout fingerprint, not its registry revision.
-    await fs.rm(path.join(nested!.path, "inner"), { recursive: true });
-    expect(getRegistryWorktree(env, nested!.id)?.lastActiveAt).toBe(1);
-    expect((await service.gc()).removed).toEqual([nested!.id]);
-    expect(inspections.mock.calls.length).toBeGreaterThan(0);
-    expect(inspections.mock.calls.every(([record]) => record.id === nested!.id)).toBe(true);
-    inspections.mockClear();
-    await git(moved!.path, "checkout", moved!.branch);
-    expect(getRegistryWorktree(env, moved!.id)?.lastActiveAt).toBe(1);
-    expect((await service.gc()).removed).toEqual([moved!.id]);
-    expect(inspections.mock.calls.length).toBeGreaterThan(0);
-    expect(inspections.mock.calls.every(([record]) => record.id === moved!.id)).toBe(true);
-  });
+      // External repair changes the checkout fingerprint, not its registry revision.
+      await fs.rm(path.join(nested!.path, nestedPath), { recursive: true });
+      expect(getRegistryWorktree(env, nested!.id)?.lastActiveAt).toBe(1);
+      expect((await service.gc()).removed).toEqual([nested!.id]);
+      expect(inspections.mock.calls.length).toBeGreaterThan(0);
+      expect(inspections.mock.calls.every(([record]) => record.id === nested!.id)).toBe(true);
+      inspections.mockClear();
+      await git(moved!.path, "checkout", moved!.branch);
+      expect(getRegistryWorktree(env, moved!.id)?.lastActiveAt).toBe(1);
+      expect((await service.gc()).removed).toEqual([moved!.id]);
+      expect(inspections.mock.calls.length).toBeGreaterThan(0);
+      expect(inspections.mock.calls.every(([record]) => record.id === moved!.id)).toBe(true);
+    },
+  );
 
   async function addLeasedWorktree(env: NodeJS.ProcessEnv, root: string, id: string) {
     await seedWorktreeRunLease(

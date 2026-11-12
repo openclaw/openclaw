@@ -501,7 +501,8 @@ export function buildCliRunResult(params: {
   usedHistoryPrompt: boolean;
   userTurnHandled: boolean;
   sessionBindingDisabled: boolean;
-  preparedContextAgentMeta: { contextTokens?: number };
+  /** Turn facts settled before the result: context size and the transcript-priced cost. */
+  preparedContextAgentMeta: { contextTokens?: number; costUsd?: number };
 }): EmbeddedAgentRunResult {
   const {
     assistantTranscriptOwned,
@@ -706,6 +707,7 @@ export function buildCliRunResult(params: {
         usage: output.usage,
         ...(output.usage ? { lastCallUsage: output.usage } : {}),
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
+        ...output.nativeCompaction,
         ...(persistedCliSessionId
           ? {
               cliSessionBinding: buildCliSessionBinding(

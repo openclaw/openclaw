@@ -415,6 +415,8 @@ export function createAgentHarnessHostCapabilities(params: {
         ...effectiveOptions,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
+        // Native harnesses own creation-time listings and have no embedded prompt pin.
+        githubPublicationConfigurationAware: undefined,
         // One host owns selection and launch. A plugin's mutable config or exec
         // overrides cannot replace the identity captured before its handoff.
         exec: { ...effectiveOptions.exec, preparedRunEnvironment },

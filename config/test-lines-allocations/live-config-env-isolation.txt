@@ -1,2 +1,0 @@
-# Exercise valid config environment isolation through the real loader.
-3

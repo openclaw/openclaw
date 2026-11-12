@@ -7,6 +7,7 @@ import {
   captureWorktreeRunEndContext,
   withWorktreeRunEnd,
 } from "../../agents/worktrees/run-end-lifecycle.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -372,6 +373,7 @@ export async function stageLocalWorkspaceCheckpoint(
 }
 
 export async function prepareLocalWorkspaceCheckpoint(params: {
+  operation: "prepare" | "reuse";
   baselineRef: string | null;
   synchronize: (
     target: LocalWorkspaceSyncTarget,
@@ -380,13 +382,17 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
   current: () => LocalWorkspaceProjection;
   signal: AbortSignal;
 }) {
+  const phase = `attempt.setup.sandbox.workspace_selection.${params.operation}.reconcile.checkpoint`;
+  using phases = observeDiagnosticsTimelinePhases(`${phase}.directory`);
   await assertLocalWorkspaceDirectory(params.current().projection_path);
   const selected = params.current();
   if (selected.rejectedResult && selected.pending_target === "projection") {
     // Preparation can import a corrected host source before exporting guest edits.
+    phases.mark(`${phase}.repair`);
     await params.synchronize("projection", { captureRejected: true });
   }
   if (params.baselineRef) {
+    phases.mark(`${phase}.canonical`);
     try {
       await timeWorktreePreparationPhase("synchronizeCanonical", () =>
         params.synchronize("canonical"),
@@ -404,6 +410,7 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
       return params.current().projection_path;
     }
   }
+  phases.mark(`${phase}.projection`);
   await timeWorktreePreparationPhase("synchronizeProjection", () =>
     params.synchronize("projection"),
   );

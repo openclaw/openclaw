@@ -282,7 +282,8 @@ export function messageMarkdownRenderOptions(
   return {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
-    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
+    codeBlockInteraction:
+      role === "assistant" ? "interactive" : role === "user" ? "wrap" : "static",
     fileLinks: true,
     humanMentions: markdown === preparation.displayMarkdown ? preparation.humanMentions : undefined,
     interactiveImages: opts.onOpenImage !== undefined,
