@@ -12,8 +12,7 @@ import {
   createPluginCommandRuntime,
   type PluginCommandCatalogDecision,
 } from "../plugins/plugin-command-runtime.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { pluginInvocationContext } from "../plugins/plugin-invocation-scope.js";
+import { getPluginInstance, pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
