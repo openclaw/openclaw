@@ -14,6 +14,7 @@ import type {
   PluginHookContextWindow,
 } from "./hook-agent-context.types.js";
 import type {
+  PluginHookBeforeAgentRunEvent,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -60,6 +61,7 @@ export type {
 } from "./hook-agent-context.types.js";
 
 export type {
+  PluginHookBeforeAgentRunEvent,
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
@@ -781,24 +783,6 @@ type PluginHookBeforeInstallResult = {
   findings?: PluginInstallFinding[];
   block?: boolean;
   blockReason?: string;
-};
-
-/** Event payload for the before_agent_run gate hook. */
-export type PluginHookBeforeAgentRunEvent = {
-  /** The user's message that triggered this run. */
-  prompt: string;
-  /** Loaded session history before the current prompt is submitted. */
-  messages: unknown[];
-  /** Active system prompt prepared for this run. */
-  systemPrompt?: string;
-  /** Account identity when available. */
-  accountId?: string;
-  /** Channel the message came from. */
-  channelId?: string;
-  /** Sender identity when available. */
-  senderId?: string;
-  /** Trusted sender identity bit when available. */
-  senderIsOwner?: boolean;
 };
 
 /** Result type for before_agent_run. Returns pass/block or void (= pass). */

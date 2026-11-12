@@ -162,18 +162,10 @@ export async function executeWorkerTurn(
       blocked = true;
     },
   };
-  const workerAdmission = bootstrapReceipt.protocolFeatures.includes(
-    WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
-  );
-  let blockedResult = workerAdmission
-    ? undefined
-    : await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-        gateWorkerTurnInput(inputContext),
-      );
-  if (blockedResult) {
-    await releaseClaimIfOwned(params.placements, params.turnClaim);
-    return blockedResult;
-  }
+  // Project the wire handshake; the receipt also carries storage-only provenance.
+  const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+  const workerAdmission = protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
+  let blockedResult: Awaited<ReturnType<typeof gateWorkerTurnInput>>;
   await using contextEngineAdmission = await withPluginRuntimeGenerationScope(
     preparedRuntime.snapshot,
     () =>
@@ -190,7 +182,7 @@ export async function executeWorkerTurn(
       ),
   );
   assertContextCurrent();
-  const context = await readWorkerTurnInputContext(inputContext, workerAdmission);
+  const context = await readWorkerTurnInputContext(inputContext);
   const { manager, history, userMessageAlreadyPersisted } = context;
   let baseLeafId = context.baseLeafId;
 
@@ -490,6 +482,16 @@ export async function executeWorkerTurn(
       isAuthorized,
       signal,
     });
+    assertActive();
+    blockedResult = workerAdmission
+      ? undefined
+      : await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+          gateWorkerTurnInput(inputContext, { ...media, prompt: turn.prompt, history }),
+        );
+    if (blockedResult) {
+      await releaseClaimIfOwned(params.placements, params.turnClaim);
+      return blockedResult;
+    }
     const skillResources = await prepareSkillResourceDelivery(
       turn.skillsSnapshot,
       () => {
@@ -514,7 +516,6 @@ export async function executeWorkerTurn(
         media,
         assertRunCurrent: assertActive,
         isAuthorized,
-        workerAdmission,
         userMessageAlreadyPersisted,
         baseLeafId,
       });
@@ -543,8 +544,6 @@ export async function executeWorkerTurn(
       );
       throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
     }
-    // Project the wire handshake; the receipt also carries storage-only provenance.
-    const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
     githubGrant = await bindWorkerGitHubTurn({
       session: placement,
       fact: readGitHubPublicationFact(placement),
