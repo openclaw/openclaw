@@ -4096,7 +4096,10 @@ Bundled session-entry patches use the agent executor for snapshot reads,
 CAS validation, mutation, and COMMIT. Usage accounting, compaction
 accounting, restart cleanup, activity recaps, and the entry owner's prepared
 upsert, replacement, and route-metadata operations share this default path.
-The host runs each updater once and retains live authority. Recap transcript
+The host runs each updater once and retains live authority. Captured entry targets
+carry their physical identity and birthtime into execution without rediscovering
+the file. The native owner checks that identity before and after each host grant;
+host patch callbacks do not poll the filesystem. Recap transcript
 predicates run inside the write transaction before CAS. Bounded provisional
 result transfers precede the final grant; a compact native receipt certifies the
 exact committed result. Publication, committed callbacks, and identity observers
