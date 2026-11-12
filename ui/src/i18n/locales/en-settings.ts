@@ -437,13 +437,15 @@ const enSettings = {
     transcription: {
       title: "Speech to text",
       description:
-        "Transcribes dictation and Talk audio. Shared with inbound voice notes (tools.media).",
+        "Speech to text for Talk dictation and inbound voice notes (tools.media). Status shows the provider Talk uses.",
       unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
       failedHint: "Couldn’t check speech-to-text readiness.",
       noProvider: "No speech-to-text model is configured yet.",
       modelTitle: "Speech-to-text model",
       modelDescription:
-        "Preferred transcription model. Automatic tries configured audio models in order.",
+        "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",
+      invalidModel:
+        "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
       automatic: "Automatic",
       custom: "Other model (provider/model)",
       keyMissing: "Key needed",

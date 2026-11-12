@@ -7,7 +7,7 @@
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo } from "solid-js";
+import { createMemo, createSignal } from "solid-js";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsRow,
@@ -49,10 +49,8 @@ export function resolveTalkTranscriptionSelection(configObject: Record<string, u
 
 /** `provider/model`, split at the first slash (OpenRouter model ids contain slashes). */
 function splitModelRef(ref: string): AudioModelEntry | null {
-  const slash = ref.indexOf("/");
-  return slash > 0 && slash < ref.length - 1
-    ? { provider: ref.slice(0, slash), model: ref.slice(slash + 1) }
-    : null;
+  const match = /^([^\s/]+)\/(\S+)$/.exec(ref);
+  return match ? { provider: match[1]!, model: match[2]! } : null;
 }
 
 type TranscriptionProps = {
@@ -65,24 +63,28 @@ type TranscriptionProps = {
  * Picking a model makes it the preferred audio entry; a `provider/model` ref
  * with no matching entry is appended as an audio-tagged entry first, so the
  * runtime can resolve it. Automatic clears only the preference: the entries
- * stay and the runtime tries them in configured order.
+ * stay and the runtime tries them in configured order. A ref that is not
+ * `provider/model` is rejected without touching the saved preference, since
+ * the runtime could never match it. Returns whether the value was accepted.
  */
 function changeTranscriptionModel(
   runtimeConfig: ReturnType<typeof useApplication>["runtimeConfig"],
   configObject: Record<string, unknown>,
   value: string,
-) {
+): boolean {
   const ref = value.trim();
   if (!ref) {
     runtimeConfig.removeFormValue(["tools", "media", "audio", "preferredModel"]);
-    return;
+    return true;
+  }
+  const parsed = splitModelRef(ref);
+  if (!parsed) {
+    return false;
   }
   const selection = resolveTalkTranscriptionSelection(
     runtimeConfig.state.configForm ?? configObject,
   );
-  const parsed = splitModelRef(ref);
   if (
-    parsed &&
     !selection.entries.some(
       (entry) => entry.provider === parsed.provider && entry.model === parsed.model,
     )
@@ -94,6 +96,7 @@ function changeTranscriptionModel(
     });
   }
   runtimeConfig.patchForm(["tools", "media", "audio", "preferredModel"], ref);
+  return true;
 }
 
 /**
@@ -184,6 +187,7 @@ function TranscriptionStatusRow(props: {
 
 export function TalkTranscriptionSection(props: TranscriptionProps) {
   const context = useApplication();
+  const [rejectedModel, setRejectedModel] = createSignal<string | null>(null);
   const selection = createMemo(() => resolveTalkTranscriptionSelection(props.configObject));
   const options = createMemo(() => {
     const { entries, preferredModel } = selection();
@@ -208,7 +212,12 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
       <TranscriptionStatusRow catalog={props.catalog} selection={selection()} />
       <SettingsRow
         title={t("talkPage.transcription.modelTitle")}
-        description={t("talkPage.transcription.modelDescription")}
+        description={
+          rejectedModel() === null
+            ? t("talkPage.transcription.modelDescription")
+            : t("talkPage.transcription.invalidModel", { value: rejectedModel()! })
+        }
+        role={rejectedModel() === null ? undefined : "alert"}
         control={
           <ModelPicker
             label={t("talkPage.transcription.modelTitle")}
@@ -219,9 +228,14 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
               label: t("talkPage.transcription.custom"),
               placeholder: "openrouter/openai/whisper-large-v3-turbo",
               commit: "change",
+              invalid: rejectedModel() !== null,
             }}
             onChange={(value) =>
-              changeTranscriptionModel(context.runtimeConfig, props.configObject, value)
+              setRejectedModel(
+                changeTranscriptionModel(context.runtimeConfig, props.configObject, value)
+                  ? null
+                  : value.trim(),
+              )
             }
           />
         }

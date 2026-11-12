@@ -7,6 +7,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -378,6 +379,35 @@ it("reports a missing key for the chosen speech-to-text provider and links to Mo
   );
   open!.click();
   expect(navigate).toHaveBeenCalledWith("model-providers", { search: "?provider=openrouter" });
+});
+
+it("rejects a malformed custom speech-to-text model without changing the preference", async () => {
+  const { page, runtimeConfig } = createTalkMutationHarness();
+  const picker = await waitForSolid(() => {
+    const found = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+      (candidate) => candidate.params.label === t("talkPage.transcription.modelTitle"),
+    );
+    expect(found).toBeDefined();
+    return found!;
+  });
+  picker.params.onChange("openrouter/");
+  flush();
+  const audioWrites = () =>
+    runtimeConfig.patchForm.mock.calls.filter(([path]) => path[0] === "tools");
+  expect(audioWrites()).toEqual([]);
+  expect(page.textContent).toContain(
+    t("talkPage.transcription.invalidModel", { value: "openrouter/" }),
+  );
+
+  picker.params.onChange("openrouter/openai/whisper-large-v3-turbo");
+  flush();
+  expect(audioWrites().map(([path]) => path.join("."))).toEqual([
+    "tools.media.models.0",
+    "tools.media.audio.preferredModel",
+  ]);
+  expect(page.textContent).not.toContain(
+    t("talkPage.transcription.invalidModel", { value: "openrouter/" }),
+  );
 });
 
 describe("Talk catalog boundaries", () => {
