@@ -1,2 +1,2 @@
-297
-# Regression proof that confirmed deliveries keep a named media reference (not a false delivery-failed card) when media cannot be embedded, plus the unconfirmed path keeping its honest failure card, the text-reference fallback, preservation of independently meaningful preparation failures, and the long-attachment-name prepare-cause coverage in the embedding warning.
+364
+# Regression proof that confirmed deliveries keep a named media reference (not a false delivery-failed card) when media cannot be embedded, plus the unconfirmed path keeping its honest failure card, the text-reference fallback, preservation of independently meaningful preparation failures, pre-delivery failures keeping their failure cards, and the long-attachment-name prepare-cause coverage in the embedding warning.

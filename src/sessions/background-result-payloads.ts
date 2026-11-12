@@ -3,11 +3,18 @@ import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyMediaFailure,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   attachManagedOutgoingMediaToMessage,
+  buildManagedMediaFailureBlock,
   removeManagedOutgoingMediaBlocks,
 } from "../gateway/managed-image-attachments.js";
 import {
@@ -149,6 +156,12 @@ async function buildResultDisplayContent(params: {
   assertCurrent?: () => void;
 }): Promise<Record<string, unknown>[]> {
   const documentReferences = new Map<string, Record<string, unknown>>();
+  // Failures recorded before the channel accepted this payload (for example a
+  // rejected file URL removed during reply-media normalization) describe media
+  // that never reached the channel. They keep their failure cards and are never
+  // converted into delivered references; only embedding failures produced while
+  // projecting the accepted media are converted below.
+  const preDeliveryFailures: ReplyMediaFailure[] = [];
   const displayPayloads = params.payloads.map((payload) => {
     const documentNames: string[] = [];
     // Split each payload's media into embeddable entries and document references.
@@ -176,7 +189,7 @@ async function buildResultDisplayContent(params: {
       return false;
     });
     const payloadText = resolveOutboundPayloadMirrorText(payload);
-    return copyReplyPayloadMetadata(payload, {
+    const display = copyReplyPayloadMetadata(payload, {
       ...payload,
       text: documentNames.length
         ? (resolveMirroredTranscriptText({ text: payloadText, mediaUrls: documentNames }) ??
@@ -186,6 +199,12 @@ async function buildResultDisplayContent(params: {
       mediaUrls: media.map(({ url }) => url),
       attachments: media.map(({ attachment }) => attachment ?? {}),
     });
+    const preDelivery = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
+    if (preDelivery.length === 0) {
+      return display;
+    }
+    preDeliveryFailures.push(...preDelivery);
+    return setReplyPayloadMetadata(display, { assistantMediaFailures: undefined });
   });
   if (!displayPayloads.some((payload) => collectReplyMediaEntries(payload).length > 0)) {
     const { assistantContent } = await buildAssistantReplyContent({
@@ -216,7 +235,18 @@ async function buildResultDisplayContent(params: {
     const displayContent = params.deliveryConfirmed
       ? retainDeliveredMediaReferences(assistantContent ?? [])
       : (assistantContent ?? []);
-    return [...displayContent, ...documentReferences.values()];
+    return [
+      ...displayContent,
+      ...documentReferences.values(),
+      ...preDeliveryFailures.map((failure) =>
+        buildManagedMediaFailureBlock({
+          code: failure.code,
+          kind: failure.kind,
+          label: failure.label,
+          ...(failure.mimeType ? { mimeType: failure.mimeType } : {}),
+        }),
+      ),
+    ];
   } finally {
     scope.release();
   }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -207,6 +208,78 @@ describe("background result payload projection", () => {
         }),
       );
       expect(display).toContainEqual({ type: "text", text: "Chart" });
+    });
+  });
+
+  it("keeps failures recorded before the channel send as failure cards when delivery is confirmed", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const dir = tempDirs.make("openclaw-bg-payload-");
+      const storePath = path.join(dir, "agents", "main", "sessions", "sessions.json");
+      await replaceSessionEntry(
+        { sessionKey: DESTINATION_KEY, storePath },
+        { sessionId: DESTINATION_SESSION_ID, updatedAt: 1 },
+      );
+      // A valid base64 image/png whose content cannot be read is accepted by the
+      // channel but fails to embed (a newly produced embedding failure), while a
+      // rejected file URL was removed by reply-media normalization and recorded as a
+      // delivery-failed outcome before the send.
+      const payload = setReplyPayloadMetadata(
+        {
+          text: "Report",
+          mediaUrls: ["data:image/png;base64,iVBORw0KGgpub3QgYSByZWFsIHBuZyBwYXlsb2Fk"],
+        },
+        {
+          assistantMediaFailures: [
+            { code: "delivery-failed", kind: "audio", label: "probe.mp3", mimeType: "audio/mpeg" },
+          ],
+        },
+      );
+      const result = await commitBackgroundPayloadsToSession({
+        agentId: "main",
+        sessionKey: DESTINATION_KEY,
+        expectedGeneration: { sessionId: DESTINATION_SESSION_ID, lifecycleRevision: undefined },
+        payloads: [payload],
+        idempotencyKey: "confirmed-pre-delivery-failure:0",
+        deliveryConfirmed: true,
+        config: {
+          session: { store: storePath },
+          agents: { defaults: { workspace: state.workspaceDir } },
+        },
+      });
+      expect(result).toEqual({ ok: true });
+      const messages = (
+        await loadTranscriptEvents({
+          sessionKey: DESTINATION_KEY,
+          sessionId: DESTINATION_SESSION_ID,
+          storePath,
+        })
+      )
+        .map(readTranscriptEventMessage)
+        .filter(Boolean);
+      expect(messages).toHaveLength(1);
+      const display = readAssistantDisplayContent(messages[0]);
+      // The new embedding failure for the accepted image is converted to a visible reference.
+      expect(display).toContainEqual({
+        type: "attachment",
+        attachment: { kind: "image", label: "Generated image 1" },
+      });
+      const referenceText = display
+        .filter((block) => block.type === "text")
+        .map((block) => (block as { text?: string }).text ?? "")
+        .join("\n");
+      expect(referenceText).toContain("Generated image 1");
+      // The pre-delivery failure (a rejected source that never reached the channel)
+      // keeps its failure card and is not converted into a delivered reference.
+      expect(display).toContainEqual(
+        expect.objectContaining({
+          type: "attachment_error",
+          attachment: expect.objectContaining({
+            code: "delivery-failed",
+            kind: "audio",
+            label: "probe.mp3",
+          }),
+        }),
+      );
     });
   });
 });
