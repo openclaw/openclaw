@@ -324,8 +324,13 @@ export function expectSanitizedAssistantContext(context: unknown, text: string) 
 
 export function expectSeedOnlyUserContext(context: unknown) {
   expect(contextMessages(context)).toEqual([
-    expect.objectContaining({ role: "user", content: [{ type: "text", text: "seed" }] }),
-    expect.objectContaining({ role: "user" }),
+    expect.objectContaining({
+      role: "user",
+      content: [
+        { type: "text", text: "seed" },
+        { type: "text", text: expect.stringContaining(MATH_QUESTION) },
+      ],
+    }),
   ]);
 }
 

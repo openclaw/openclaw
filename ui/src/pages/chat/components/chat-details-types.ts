@@ -92,6 +92,8 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "onScrollPortRef"
   > & {
     cachedDetails?: ChatDetailsSnapshot;
+    /** The session observation has accepted current facts; cached rows are display only. */
+    sessionFactsReady?: boolean;
     onDetailsSnapshot?: (patch: DetailsSnapshotPatch) => void;
     desktopPresentation?: ChatDetailsDesktopPresentation;
     desktopDisclosures?: ChatDetailsDesktopDisclosures;

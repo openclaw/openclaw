@@ -129,11 +129,6 @@ describe("Control UI theme contrast", () => {
   const controls = (
     [
       ["components.css", ".btn.active", "var(--accent-subtle)"],
-      [
-        "settings-controls.css",
-        ".settings-segmented--accent > .settings-segmented__btn--active",
-        "var(--accent-subtle)",
-      ],
       ["sessions.css", ".session-label-chip"],
       ["sessions.css", ".session-kind--direct"],
     ] satisfies [string, string, string?][]

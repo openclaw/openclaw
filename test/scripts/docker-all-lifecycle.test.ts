@@ -46,12 +46,12 @@ beforeEach(async () => {
   diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
   restore = () => {
     Object.defineProperty(process, "platform", platform);
-    process.exitCode = previousExitCode;
+    process.exitCode = previousExitCode ?? 0;
     vi.restoreAllMocks();
   };
   scheduler = await import("../../scripts/test-docker-all.mts");
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-  process.exitCode = undefined;
+  process.exitCode = 0;
   spawnSyncMock.mockReset();
   child = new EventEmitter() as ChildProcess;
   Object.defineProperty(child, "pid", { value: 42 });
@@ -138,7 +138,7 @@ describe("Docker scheduler Windows child shutdown", () => {
       } else {
         await vi.advanceTimersByTimeAsync(1_200);
         if (completion === "signal after failure") {
-          expect(process.exitCode).toBeUndefined();
+          expect(process.exitCode).toBe(0);
           expect(diagnostic).not.toHaveBeenCalled();
           handlers.get("SIGINT")!();
           await vi.advanceTimersByTimeAsync(0);

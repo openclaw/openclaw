@@ -16,6 +16,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { delegateMemoryAudience, isHostMemoryAudience } from "../memory-audience.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
@@ -45,6 +46,18 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     throw new Error("Plugin embedded-agent memory audience must be host-minted.");
   }
   params.abortSignal?.throwIfAborted();
+  // Plugin turns can outlive both the triggering request root and its async work scope.
+  return runWithGatewayDetachedWorkContinuation(
+    () => runPluginEmbeddedAgentTurn(pluginId, params),
+    `plugin:${pluginId}:run-embedded-agent`,
+    params.abortSignal,
+  );
+};
+
+async function runPluginEmbeddedAgentTurn(
+  pluginId: string,
+  params: Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0],
+) {
   const config = params.config ?? getRuntimeConfig();
   // The child run owns its delegated grant: it binds the child's current incarnation
   // and close() releases it, so a reset child cannot keep reading memory.
@@ -180,4 +193,4 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
       close();
     }
   }
-};
+}

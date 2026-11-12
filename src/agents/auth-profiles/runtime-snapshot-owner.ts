@@ -357,12 +357,18 @@ export function runtimeAuthMetadataState(
   store: RuntimeAuthProfileStore,
   includeAvailability = true,
 ) {
+  // Startup loads stores without external overlays; resolving them and finding none names the
+  // same profiles, so only a non-empty external set is catalog identity.
+  const externalProfileIds = store.runtimeExternalProfileIds?.length
+    ? store.runtimeExternalProfileIds
+    : undefined;
   return {
     order: store.order,
     profiles: store.profiles,
     runtimePersistedProfileIds: store.runtimePersistedProfileIds,
-    runtimeExternalProfileIds: store.runtimeExternalProfileIds,
-    runtimeExternalProfileIdsAuthoritative: store.runtimeExternalProfileIdsAuthoritative,
+    runtimeExternalProfileIds: externalProfileIds,
+    runtimeExternalProfileIdsAuthoritative:
+      externalProfileIds && store.runtimeExternalProfileIdsAuthoritative,
     runtimeLocalProfileIds: store.runtimeLocalProfileIds,
     runtimeLocalOrderProviderIds: store.runtimeLocalOrderProviderIds,
     availability: includeAvailability

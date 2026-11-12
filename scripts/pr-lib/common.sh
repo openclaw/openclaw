@@ -460,7 +460,8 @@ try {
   const inputParent = path.dirname(input);
   const resolvedParent = stat(inputParent) ? fs.realpathSync(inputParent) : inputParent;
   const leaf = path.basename(input);
-  if (!/^pr-[1-9][0-9]*$/.test(leaf) || resolvedParent !== parent) {
+  const selectedTask = purpose === "task-cleanup";
+  if (!(selectedTask ? /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(leaf) : /^pr-[1-9][0-9]*$/.test(leaf)) || resolvedParent !== parent) {
     throw new Error("non-canonical PR-worktree path");
   }
   const target = path.join(parent, leaf);
@@ -553,11 +554,11 @@ has_worktree_merge_output() {
 }
 
 require_worktree_cleanup_evidence() (
-  local path="$1" pr
+  local path="$1" pr="${2:-}"
   has_worktree_merge_output "$path" || return 0
   # Keep loader state separate from an uninterrupted merge's live outcome owner.
   # Even an empty capture can be the only evidence of an earlier dispatch.
-  if pr=$(pr_number_from_worktree_dir "$path") &&
+  if { [ -n "$pr" ] || pr=$(pr_number_from_worktree_dir "$path"); } &&
     merge_outcome_load_local "$pr" && [ -n "$MERGE_OUTCOME_OID" ]; then
     return 0
   fi
@@ -567,12 +568,14 @@ require_worktree_cleanup_evidence() (
 
 remove_worktree_if_present() {
   local path="$1" state registered_path registration admin dirty failed_template template_admin
-  state=$(pr_worktree_state "$path") || return $?
+  local expected_head="${3:-}" selected_pr="${4:-}" purpose=cleanup
+  [ -z "$expected_head" ] || purpose=task-cleanup
+  state=$(pr_worktree_state "$path" "" "$purpose") || return $?
   registered_path=$(printf '%s\n' "$state" | jq -r '.path') || return $?
   admin=$(printf '%s\n' "$state" | jq -r '.admin') || return $?
   failed_template=$(printf '%s\n' "$state" | jq -r '.failedTemplateClone') || return $?
   registration=$(worktree_registration_state "$registered_path") || return $?
-  require_worktree_cleanup_evidence "$path" || return $?
+  require_worktree_cleanup_evidence "$path" "$selected_pr" || return $?
   if [ "$registration" = absent ] &&
     printf '%s\n' "$state" | jq -e '.present == false and .admin == ""' >/dev/null; then
     return 0
@@ -582,6 +585,20 @@ remove_worktree_if_present() {
     return 1
   fi
   if [ -d "$path" ]; then
+    if [ -n "$expected_head" ]; then
+      [ "$failed_template" = false ] && [ "$(pr_git -C "$path" rev-parse HEAD)" = "$expected_head" ] || {
+        echo "Preserving $path: expected worktree HEAD changed." >&2
+        return 1
+      }
+      # The finalized-task inventory has approved only selected contents and
+      # their empty ancestors. Recheck for file bytes, including ignored files,
+      # without Git collapsing those now-empty ancestors into directory entries.
+      dirty=$(pr_git -C "$path" ls-files --others) || return $?
+      [ -z "$dirty" ] || {
+        echo "Preserving $path: unselected ignored or untracked contents remain." >&2
+        return 1
+      }
+    fi
     if [ "$failed_template" = true ]; then
       template_admin=$(printf '%s\n' "$state" | jq -r '.templateAdmin') || return $?
       # Templates refresh in place. Compare against this PR's retained seed,
@@ -647,8 +664,11 @@ EOF_NODE
   fi
   # One native removal owns both the path and its exact admin entry. A partial
   # deletion still fails; neither repository-wide prune nor orphan trash is safe.
+  if [ -n "${PR_OPERATION_LOCK_REF:-}" ]; then
+    pr_operation_lock_owner_is_current "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+  fi
   pr_git worktree remove -- "$registered_path" || return $?
-  state=$(pr_worktree_state "$path" "$admin") || return $?
+  state=$(pr_worktree_state "$path" "$admin" "$purpose") || return $?
   registration=$(worktree_registration_state "$registered_path") || return $?
   if [ "$registration" != absent ] ||
     ! printf '%s\n' "$state" | jq -e --arg path "$registered_path" \

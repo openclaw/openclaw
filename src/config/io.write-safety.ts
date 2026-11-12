@@ -8,6 +8,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -91,7 +92,7 @@ export function captureConfigFileWritePathProof(
     capture(parent);
     let realParent: string;
     try {
-      realParent = ioFs.realpathSync(parent);
+      realParent = ioFs.realpathSync.native(parent);
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
@@ -148,7 +149,8 @@ export function captureConfigRootWriteTarget(filePath: string, ioFs: typeof fs) 
   const directory = path.dirname(filePath);
   let realDirectory: string;
   try {
-    realDirectory = ioFs.realpathSync(directory);
+    // Match fs-safe's native spelling; Windows' JS resolver preserves input casing.
+    realDirectory = ioFs.realpathSync.native(directory);
   } catch (error) {
     if (!isMissingPathError(error)) {
       throw error;
@@ -234,6 +236,7 @@ export function createConfigFileWriteGuard(
     preserveDirectoryMode?: boolean;
     stateDirectory?: ConfigStateDirectory;
     targetPathProof?: ReturnType<typeof captureConfigFileWritePathProof>;
+    validateUtf8?: boolean;
   },
 ) {
   const includePathProofs = new Map(
@@ -285,6 +288,7 @@ export function createConfigFileWriteGuard(
           fsModule,
           publication?.includeGraph,
           includePathProofs,
+          publication?.validateUtf8,
         );
       }
     } catch (error) {
@@ -385,7 +389,12 @@ export function assertBaseSnapshotStillCurrent(
   ioFs: typeof fs,
   includeGraph?: { hashes: Record<string, string>; targets: Record<string, string> },
   includePathProofs?: ReadonlyMap<string, ReturnType<typeof captureConfigFileWritePathProof>>,
+  validateUtf8 = false,
 ): void {
+  const readSource = (pathname: string) =>
+    validateUtf8
+      ? decodeUtf8Input(ioFs.readFileSync(pathname), pathname)
+      : ioFs.readFileSync(pathname, "utf-8");
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
       retryable: false,
@@ -401,7 +410,7 @@ export function assertBaseSnapshotStillCurrent(
       }
       const pathProof = includePathProofs?.get(includePath);
       pathProof?.assertCurrent();
-      if (!pathProof && path.normalize(ioFs.realpathSync(includePath)) !== expectedTarget) {
+      if (!pathProof && path.normalize(ioFs.realpathSync.native(includePath)) !== expectedTarget) {
         throw new ConfigMutationConflictError("included config target changed since last load", {
           retryable: false,
         });
@@ -410,7 +419,7 @@ export function assertBaseSnapshotStillCurrent(
       if (expectedTarget === configPath) {
         continue;
       }
-      if (hashConfigIncludeRaw(ioFs.readFileSync(expectedTarget, "utf-8")) !== expectedHash) {
+      if (hashConfigIncludeRaw(readSource(expectedTarget)) !== expectedHash) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
     } catch (error) {
@@ -427,8 +436,10 @@ export function assertBaseSnapshotStillCurrent(
   const expectedHash = snapshot.raw === null ? null : hashConfigRaw(snapshot.raw);
   let currentRaw: string | null = null;
   let currentExists = true;
+  // Owned fallback bytes may end mid-character until the next short write completes.
   try {
-    currentRaw = ioFs.readFileSync(configPath, "utf-8");
+    currentRaw =
+      snapshot.raw === null ? ioFs.readFileSync(configPath, "utf-8") : readSource(configPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;

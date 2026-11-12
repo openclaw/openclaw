@@ -6,13 +6,15 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   relocateCurrentRuntimeContextCarrierToTail,
   resolvePendingRuntimeContextReplay,
   stripHistoricalRuntimeContextCustomMessages,
   stripInternalRuntimeContext,
   SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
 } from "./internal-runtime-context.js";
+
+const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+  "This context is runtime-generated, not user-authored. Keep internal details private.";
 
 function carrier(content = "runtime ctx") {
   return {

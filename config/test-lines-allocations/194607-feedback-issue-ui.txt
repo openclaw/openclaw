@@ -1,0 +1,5 @@
+232
+# Exact net regression-test LF growth for the privacy-safe Control UI issue links.
+# Covers safe encoded destinations/referrers, private-error exclusion, visible bug glyphs,
+# and real-browser recovery/report hit targets plus full-width mobile discard recovery.
+# No spare credit and no reconciliation of inherited test-line debt.

@@ -93,8 +93,8 @@ it.each([
 });
 
 it.each([
-  ["local", "Repository worker required", "Choose worker…"],
-  ["failed", "Runner failed", "Stop cloud worker…"],
+  ["local", "This repository needs a device", "Choose device…"],
+  ["failed", "Couldn’t continue this session", "Stop cloud device…"],
 ] as const)("offers the matching composer action for %s placement", (state, title, actionLabel) => {
   const onRecover = vi.fn();
   const onReclaim = vi.fn();
@@ -177,7 +177,10 @@ it.each(["retry", "missing-receipt", "reconciling", "read-only"] as const)(
       state: { kind: "move-failed" },
       blocksSend: true,
       busyMessage: null,
-      disabledBanner: { title: "Move failed", text: "Workspace reconciliation failed." },
+      disabledBanner: {
+        title: "Couldn’t move this session. Try again.",
+        text: "Workspace reconciliation failed.",
+      },
     });
     if (scenario === "missing-receipt" || scenario === "reconciling") {
       expect(result.disabledBanner?.onAction).toBeUndefined();

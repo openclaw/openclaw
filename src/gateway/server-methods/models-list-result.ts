@@ -56,7 +56,7 @@ import { captureRuntimeConfig } from "../../config/runtime-source-projection.js"
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
-import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
+import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 import { prepareChatAccountSelection } from "./chat-account-selection.js";
@@ -64,11 +64,13 @@ import type { ChatMetadataSessionEntry } from "./chat-metadata-contract.js";
 import { resolveSessionCatalogProfiles } from "./chat-metadata-session-projection.js";
 import { resolveModelProviderCapabilities } from "./model-provider-capabilities.js";
 import { createModelsListProviderFilter, listDecisionModels } from "./models-list-capabilities.js";
+import { readModelsListCatalog } from "./models-list-catalog.js";
 import type { BuildModelsListResultParams } from "./models-list-context.js";
 import {
   buildPublicModelProjection,
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
+  retainModelChoiceAccountPin,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
 import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
@@ -145,7 +147,7 @@ export async function prepareModelsListResult({
   }
   const ownerSnapshot =
     source.kind === "gateway" && !usedPreloadedCatalog
-      ? await readPreparedCatalog(source.context, initialAgentId)
+      ? await readModelsListCatalog(source.context, initialAgentId, authority)
       : undefined;
   await withCurrentReadAuthority(authority, () => {});
   if (!publishedOwner && !usedPreloadedCatalog && !ownerSnapshot) {
@@ -278,10 +280,9 @@ export async function prepareModelsListResult({
       );
     }
     await withCurrentReadAuthority(authority, () => {});
-    const catalog = dedupeModelCatalogEntries([
-      ...preparedCatalog.catalog,
-      ...projector.snapshot.entries,
-    ]).filter((entry) => entry.inference?.chat !== false);
+    const { routeVariants, providerOutcomes, entries: snapshotEntries } = projector.snapshot;
+    const allRows = dedupeModelCatalogEntries([...preparedCatalog.catalog, ...snapshotEntries]);
+    const catalog = allRows.filter((entry) => entry.inference?.chat !== false);
     const { evaluateNative } = projector;
     const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
       config: cfg,
@@ -290,11 +291,11 @@ export async function prepareModelsListResult({
       provider: params.params.provider,
     });
     const decisionModels = availableDecisionModels.filter(matchesProvider);
-    const { routeVariants, providerOutcomes } = projector.snapshot;
     const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
     const visibilityPolicy = createModelVisibilityPolicy({
       cfg,
-      catalog,
+      // The policy needs typed-only rows to tell them from refs no catalog knows.
+      catalog: allRows,
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel,
       agentId,
@@ -302,26 +303,24 @@ export async function prepareModelsListResult({
       manifestPlugins: metadataSnapshot,
     });
     draft?.assertCurrent();
-    const defaultModels =
-      (params.params.includeDefaultModels ??
-      (view === "configured" && !params.params.sessionKey && !params.params.authProfileId))
-        ? await resolveDefaultModelsPreview({
-            cfg,
-            agentId,
-            agentDir: sourceOwner?.agentDir,
-            workspaceDir,
-            metadataSnapshot,
-            preparedAuthStore,
-            preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
-            preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
-            pluginRegistry: preparedPluginRegistry,
-            snapshot,
-            isCurrent,
-          })
-        : undefined;
+    const modelPreviews = await resolveDefaultModelsPreview({
+      cfg,
+      agentId,
+      agentDir: sourceOwner?.agentDir,
+      workspaceDir,
+      metadataSnapshot,
+      preparedAuthStore,
+      preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
+      preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
+      pluginRegistry: preparedPluginRegistry,
+      snapshot,
+      isCurrent,
+      request: params.params,
+      view,
+    });
     draft?.assertCurrent();
     const outcomeProjection = {
-      ...(defaultModels ? { defaultModels } : {}),
+      ...modelPreviews,
       ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
     };
     const readAccountSelection =
@@ -516,7 +515,7 @@ export async function prepareModelsListResult({
                 baseUrl: route.baseUrl,
               })
             : undefined;
-        return {
+        const choice: ModelChoice = {
           ...preparedEntry,
           ...(supportsFastMode === undefined ? {} : { supportsFastMode }),
           ...(speedPolicy.supportsServiceTierRecovery === true
@@ -552,6 +551,7 @@ export async function prepareModelsListResult({
               }
             : {}),
         };
+        return retainModelChoiceAccountPin(choice, decisions.hasPinnedAccount(entry));
       };
     };
 
@@ -587,7 +587,6 @@ export async function prepareModelsListResult({
         }),
       };
     }
-    const { evaluateEntry } = projector;
     const evaluations = new Map<string, ModelAuthAvailabilityEvaluation>();
     const runtimeChoiceReaders = new Map<string, () => ModelRuntimeChoice[]>();
     const twinRoutes = new Map<string, CliRuntimeTwinRoute>();
@@ -648,7 +647,7 @@ export async function prepareModelsListResult({
                 modelBaseUrl: entry.baseUrl,
               }).runtime
             : undefined;
-          const preparedHost = evaluateEntry(entry, variants, baseRuntime);
+          const preparedHost = projector.evaluateEntry(entry, variants, baseRuntime);
           // Picker alternatives never change the configured row when a session selects a sibling.
           const host = baseRuntime
             ? { ...preparedHost, requestedRuntimeId: undefined }

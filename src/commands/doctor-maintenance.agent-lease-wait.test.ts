@@ -22,6 +22,7 @@ import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import * as leaseInspection from "../state/openclaw-agent-db-lease-inspection.js";
 import { claimOpenClawAgentDatabaseLease } from "../state/openclaw-agent-db-lease.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
@@ -95,6 +96,7 @@ function holdState(databasePath: string, gateway = false) {
 }
 
 function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
+  const leaseReads = vi.spyOn(leaseInspection, "readActiveOpenClawAgentDatabaseLeasesReadOnly");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -133,6 +135,12 @@ function startDoctor(waitForMaintenance = false, assertCurrent?: () => void) {
     advanceTo: async (ms = now) => {
       now = ms;
       await vi.advanceTimersToNextTimerAsync();
+      // A poll now awaits a real child read before it can log or arm its next timer.
+      await Promise.allSettled(
+        leaseReads.mock.results.flatMap((attempt) =>
+          attempt.type === "return" ? [attempt.value] : [],
+        ),
+      );
     },
     logged,
     firstWait: logged("Waiting"),

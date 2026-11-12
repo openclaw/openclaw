@@ -1,0 +1,2 @@
+# Advertise terminal.open so both recovery rows exercise their own availability guard.
+4

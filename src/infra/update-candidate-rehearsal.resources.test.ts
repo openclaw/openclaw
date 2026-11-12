@@ -98,6 +98,23 @@ async function fixture(sizeMiB = 0, ids = ["main"], worker = true) {
   return { root, stateDir, files, file: files[0]! };
 }
 
+it("records deferred credential availability in the snapshot receipt", async () => {
+  const f = await fixture();
+  const config: OpenClawConfig = {
+    secrets: {
+      providers: { vault: { source: "exec", command: path.join(f.root, "missing-resolver") } },
+    },
+  };
+  const original = structuredClone(config);
+  await withRehearsal(prepare(f, { config }), async (rehearsal) => {
+    expect(rehearsal.snapshotWarnings).toContain(
+      "Update rehearsal leaves exec SecretRef providers cold; credential availability is not verified.",
+    );
+    expect((await readConfig(rehearsal.configPath)).secrets).toEqual(config.secrets);
+    expect(config).toEqual(original);
+  });
+});
+
 it.each([
   { table: "retained", index: "retained_value", fullIntegrityCheck: undefined, rejects: false },
   { table: "retained", index: "retained_value", fullIntegrityCheck: true, rejects: true },

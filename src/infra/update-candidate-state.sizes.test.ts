@@ -74,8 +74,8 @@ it("rejects without partial results or another child when canceled during a late
 
 it("shares an aggregate deadline and stops launching when it expires", async () => {
   const { file, options } = await fixture();
-  let now = Date.now();
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  let monotonic = performance.now();
+  vi.spyOn(performance, "now").mockImplementation(() => monotonic);
   const timeouts: number[] = [];
   const run = commands.runUtf8CommandWithTimeout;
   vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, opts) => {
@@ -84,7 +84,7 @@ it("shares an aggregate deadline and stops launching when it expires", async () 
     }
     timeouts.push(opts.timeoutMs);
     const result = await run(argv, opts);
-    now += timeouts.length === 1 ? opts.timeoutMs - 2000 : opts.timeoutMs + 1;
+    monotonic += timeouts.length === 1 ? opts.timeoutMs - 2000 : opts.timeoutMs + 1;
     return result;
   });
   await expect(readUpdateStateDatabaseSizes(Array(12_000).fill(file), options)).rejects.toThrow(
@@ -93,4 +93,36 @@ it("shares an aggregate deadline and stops launching when it expires", async () 
   expect(timeouts).toHaveLength(2);
   expect(timeouts[1]).toBe(2000);
   expect(timeouts[0]).toBeGreaterThan(timeouts[1]!);
+});
+
+it("does not stretch the inventory deadline when the wall clock rewinds", async () => {
+  const { file, options } = await fixture();
+  const startedAt = Date.now();
+  const wallClock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+  const controller = new AbortController();
+  const timeouts: number[] = [];
+  const run = commands.runUtf8CommandWithTimeout;
+  let rewound = false;
+  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, opts) => {
+    if (typeof opts === "number" || opts.timeoutMs === undefined) {
+      throw new Error("Expected a bounded inventory child");
+    }
+    timeouts.push(opts.timeoutMs);
+    if (!rewound) {
+      rewound = true;
+      wallClock.mockReturnValue(startedAt - 300_000);
+    }
+    if (timeouts.length === 2) {
+      controller.abort(new Error("observed the rewind-bounded budget"));
+    }
+    return run(argv, opts);
+  });
+  await expect(
+    readUpdateStateDatabaseSizes(Array(12_000).fill(file), {
+      ...options,
+      signal: controller.signal,
+    }),
+  ).rejects.toThrow("observed the rewind-bounded budget");
+  expect(rewound).toBe(true);
+  expect(timeouts[1]).toBeLessThanOrEqual(timeouts[0]!);
 });

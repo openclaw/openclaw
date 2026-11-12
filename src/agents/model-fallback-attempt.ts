@@ -7,6 +7,7 @@ import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import { readAgentTerminalSnapshot, withAgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { isOpenClawAbortableWrapper } from "./embedded-agent-runner/run/abortable.js";
 import {
@@ -19,7 +20,6 @@ import {
   type FallbackAttemptRecord,
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
-import type { FailoverReason } from "./failover/signal.js";
 import {
   MissingAgentHarnessError,
   isAgentHarnessPreflightError,
@@ -38,6 +38,7 @@ import type {
   FallbackAttempt,
   ModelCandidate,
   ModelFallbackAttemptProvenance,
+  ModelFallbackResultClassification,
 } from "./model-fallback.types.js";
 import { modelKey } from "./model-ref-shared.js";
 import { isCliRuntimeAlias } from "./model-runtime-aliases.js";
@@ -114,21 +115,6 @@ export type ModelFallbackErrorHandler = (
 ) => void | Promise<void>;
 
 export type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
-
-export type ModelFallbackResultClassification =
-  | {
-      message: string;
-      reason?: FailoverReason;
-      status?: number;
-      code?: string;
-      rawError?: string;
-      rateLimitRetriesExhausted?: number;
-      preserveResultOnExhaustion?: boolean;
-      preserveResultPriority?: number;
-    }
-  | { error: unknown }
-  | null
-  | undefined;
 
 /** Internal fallback execution also accepts producer-owned terminal causes. */
 type ModelFallbackAttemptClassification =
@@ -371,14 +357,17 @@ function resolveResultClassificationError(
   }
   const message = normalizeOptionalString(classification.message);
   return message
-    ? new FailoverError(message, {
-        reason: classification.reason ?? "unknown",
-        ...context,
-        status: classification.status,
-        code: classification.code,
-        rawError: classification.rawError,
-        rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
-      })
+    ? withAgentTerminalSnapshot(
+        new FailoverError(message, {
+          reason: classification.reason ?? "unknown",
+          ...context,
+          status: classification.status,
+          code: classification.code,
+          rawError: classification.rawError,
+          rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
+        }),
+        classification.agentTerminal,
+      )
     : null;
 }
 
@@ -640,21 +629,24 @@ export function throwFallbackFailureSummary(params: {
     reason: attempt.reason ?? "unknown",
   }));
   const lastAttempt = attempts.at(-1);
-  throw new FailoverError(message, {
-    reason: lastAttempt?.reason ?? "unknown",
-    provider: lastAttempt?.provider,
-    model: lastAttempt?.model,
-    // Recovery must not infer OAuth from the provider after candidate errors collapse here.
-    authMode: lastAttempt?.authMode,
-    status: lastAttempt?.status,
-    rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
-    code: lastAttempt?.code,
-    cause: params.lastError instanceof Error ? params.lastError : undefined,
-    sessionId: params.attribution?.sessionId,
-    lane: params.attribution?.lane,
-    attempts,
-    soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
-  });
+  throw withAgentTerminalSnapshot(
+    new FailoverError(message, {
+      reason: lastAttempt?.reason ?? "unknown",
+      provider: lastAttempt?.provider,
+      model: lastAttempt?.model,
+      // Recovery must not infer OAuth from the provider after candidate errors collapse here.
+      authMode: lastAttempt?.authMode,
+      status: lastAttempt?.status,
+      rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
+      code: lastAttempt?.code,
+      cause: params.lastError instanceof Error ? params.lastError : undefined,
+      sessionId: params.attribution?.sessionId,
+      lane: params.attribution?.lane,
+      attempts,
+      soonestCooldownExpiry: params.soonestCooldownExpiry ?? null,
+    }),
+    readAgentTerminalSnapshot(params.lastError),
+  );
 }
 
 export async function resolveFallbackSoonestCooldownExpiry(params: {

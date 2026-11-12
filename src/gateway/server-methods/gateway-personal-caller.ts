@@ -12,6 +12,17 @@ export function isSyntheticGatewayCaller(client: GatewayClient | null): boolean 
   );
 }
 
+/** Creation-only defaults require a direct profiled operator, not a delegated transport. */
+export function isAttendedSessionCreator(client: GatewayClient | null): boolean {
+  return Boolean(
+    client?.authenticatedUserProfile?.profileId &&
+    client.connect.role === "operator" &&
+    !client.internal?.remoteIngressPrincipal &&
+    !client.internal?.sessionCreation?.requesterSessionKey &&
+    !isSyntheticGatewayCaller(client),
+  );
+}
+
 /** Handshake-attested person identity; callers still own current request and target authority. */
 export function resolveAuthenticatedPersonalGatewayProfileId(
   client: GatewayClient | null,

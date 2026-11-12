@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJobsListResult } from "../api/types.ts";
 import {
@@ -29,6 +30,12 @@ import {
 } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+const groupOrder = (page: Page) =>
+  page
+    .locator('[data-session-section^="category:"]')
+    .evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-session-section")),
+    );
 
 suite.define(() => {
   it("keeps long group titles on one line and reveals them on hover", async () => {
@@ -59,28 +66,29 @@ suite.define(() => {
       const header = group.locator(":scope > .sidebar-recent-sessions__head");
       const label = header.locator(".sidebar-recent-sessions__label-text");
       await group.waitFor({ state: "visible", timeout: 10_000 });
+      const text = label.locator(".hover-marquee__text");
       await expect
-        .poll(() => label.evaluate((element) => getComputedStyle(element).maskImage))
-        .toContain("linear-gradient");
+        .poll(() =>
+          label.evaluate((element) => element.classList.contains("hover-marquee--overflowing")),
+        )
+        .toBe(true);
       await captureUiProof(suite, page, "sidebar-group-title-resting.png");
 
       const resting = await label.evaluate((element) => {
         const style = getComputedStyle(element);
+        const titleText = element.querySelector(".hover-marquee__text")!;
         return {
           clientWidth: element.clientWidth,
           height: element.getBoundingClientRect().height,
           lineHeight: Number.parseFloat(style.lineHeight),
-          scrollWidth: element.scrollWidth,
-          maskImage: style.maskImage,
+          scrollWidth: titleText.scrollWidth,
           whiteSpace: style.whiteSpace,
         };
       });
       expect(resting.whiteSpace).toBe("nowrap");
-      expect(resting.maskImage).toContain("linear-gradient");
       expect(resting.height).toBeLessThanOrEqual(resting.lineHeight + 1);
       expect(resting.scrollWidth).toBeGreaterThan(resting.clientWidth);
 
-      const text = label.locator(".hover-marquee__text");
       const offset = () =>
         text.evaluate((element) => {
           const transform = getComputedStyle(element).transform;
@@ -339,7 +347,7 @@ suite.define(() => {
       // matches compact automation names without involving FTS.
       const cronRequestsBeforePalette = (await gateway.getRequests("cron.list")).length;
       const transcriptRequestsBeforePalette = (await gateway.getRequests("sessions.search")).length;
-      await page.getByRole("button", { name: "Command palette" }).click();
+      await page.getByRole("button", { name: "Search" }).click();
       const paletteInput = page.locator(".cmd-palette__input");
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
       await paletteInput.fill("nightly invoices");
@@ -351,7 +359,7 @@ suite.define(() => {
 
       // Command palette is the single search surface: metadata and indexed
       // conversation text share one field, and selecting either navigates.
-      await page.getByRole("button", { name: "Command palette" }).click();
+      await page.getByRole("button", { name: "Search" }).click();
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
       await paletteInput.fill("view-only handshake");
       await page.clock.runFor(50);
@@ -556,7 +564,7 @@ suite.define(() => {
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group" }));
       // The rename runs in the owned dialog, prefilled with the name it is
       // changing; a native prompt here would be a regression.
-      const renameDialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
+      const renameDialog = page.getByRole("dialog", { name: "Rename group “Research”" });
       await renameDialog.waitFor({ state: "visible" });
       await expect
         .poll(() => page.locator("openclaw-modal-dialog input").inputValue())
@@ -568,15 +576,7 @@ suite.define(() => {
         name: "Research",
         to: "Projects",
       });
-      await expect
-        .poll(() =>
-          page
-            .locator('[data-session-section^="category:"]')
-            .evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("data-session-section")),
-            ),
-        )
-        .toEqual(["category:Apps", "category:Projects"]);
+      await expect.poll(() => groupOrder(page)).toEqual(["category:Apps", "category:Projects"]);
       const projectsGroup = groups.filter({ hasText: "Projects" });
       await expect.poll(() => projectsGroup.locator(".sidebar-recent-session").count()).toBe(2);
 
@@ -591,7 +591,7 @@ suite.define(() => {
       // The confirm names the group and what happens to its sessions, and only
       // the operator's answer sends sessions.groups.delete.
       await page
-        .getByRole("dialog", { name: 'Delete group "Projects"' })
+        .getByRole("dialog", { name: "Delete group “Projects”?" })
         .waitFor({ state: "visible" });
       const deleteConfirm = page.locator("openclaw-modal-dialog");
       await expect
@@ -601,15 +601,7 @@ suite.define(() => {
       await deleteConfirm.getByRole("button", { name: "Delete", exact: true }).click();
       const deleteRequest = await gateway.waitForRequest("sessions.groups.delete");
       expect(requireRecord(deleteRequest.params)).toMatchObject({ name: "Projects" });
-      await expect
-        .poll(() =>
-          page
-            .locator('[data-session-section^="category:"]')
-            .evaluateAll((elements) =>
-              elements.map((element) => element.getAttribute("data-session-section")),
-            ),
-        )
-        .toEqual(["category:Apps"]);
+      await expect.poll(() => groupOrder(page)).toEqual(["category:Apps"]);
       await expect
         .poll(() =>
           page.locator('[data-session-section="ungrouped"] .sidebar-recent-session').count(),
@@ -700,7 +692,7 @@ suite.define(() => {
       await researchGroup.locator(".sidebar-recent-sessions__head").hover();
       await researchGroup.getByRole("button", { name: "Group options for Research" }).click();
       await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Rename group" }));
-      const dialog = page.getByRole("dialog", { name: 'Rename group "Research"' });
+      const dialog = page.getByRole("dialog", { name: "Rename group “Research”" });
       const field = dialog.getByRole("textbox");
       await field.fill("Projects");
       await field.press("Enter");
@@ -709,8 +701,9 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: "rejected group rename",
       });
+      await page.locator("openclaw-toast-host").getByRole("alert").waitFor();
       await expect
-        .poll(() => dialog.getByRole("alert").textContent())
+        .poll(() => dialog.locator('.callout.danger[role="alert"]').textContent())
         .toContain("rejected group rename");
       expect(await field.inputValue()).toBe("Projects");
       expect(await field.isEnabled()).toBe(true);
@@ -845,12 +838,7 @@ suite.define(() => {
       await gamma.locator(".sidebar-session-group-toggle").dragTo(alpha, {
         targetPosition: { x: 4, y: 2 },
       });
-      const customGroupOrder = () =>
-        page
-          .locator('[data-session-section^="category:"]')
-          .evaluateAll((elements) =>
-            elements.map((element) => element.getAttribute("data-session-section")),
-          );
+      const customGroupOrder = () => groupOrder(page);
       await expect
         .poll(customGroupOrder)
         .toEqual(["category:Gamma", "category:Alpha", "category:Beta"]);

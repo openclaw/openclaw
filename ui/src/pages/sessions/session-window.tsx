@@ -116,6 +116,7 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
     },
     scrollToFn: elementScroll,
     overscan: 3,
+    useAnimationFrameWithResizeObserver: true,
     onChange: publish,
   });
   const pinFocus = (pinnedExpandedKey: string | null, pinnedMenuKey: string | undefined) => {
@@ -189,12 +190,13 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
   );
   // Inventory changes reuse the viewport geometry; only layout invalidation reads it again.
   createLayoutMeasurement(
-    () => ({ windowed: windowed(), columns: columnCount() }),
+    () => ({ windowed: windowed(), columns: columnCount(), phone: props.phoneLayout === true }),
     (next) => {
       if (!next?.windowed) {
         return undefined;
       }
-      scroller = start.closest<HTMLElement>(".data-table-container");
+      // The phone list has no scroller of its own; rows scroll with the page.
+      scroller = start.closest<HTMLElement>(next.phone ? ".content" : ".data-table-container");
       const margin = scroller
         ? start.getBoundingClientRect().top -
           scroller.getBoundingClientRect().top +
@@ -322,7 +324,35 @@ export function SessionWindow(props: SessionsProps & { entries: SessionEntry[] }
     return (
       <tbody
         ref={(node) => (element = node)}
-        onFocusIn={() => {
+        onFocusIn={(event) => {
+          if (windowed() && expanded()) {
+            const target = event.target;
+            // WebKit can reveal only the caret in tall details.
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                if (target !== document.activeElement || !scroller) {
+                  return;
+                }
+                const field = target.getBoundingClientRect();
+                const viewport = scroller.getBoundingClientRect();
+                // A newer scroll that hides the control wins over this queued reveal.
+                if (
+                  field.bottom > viewport.top &&
+                  field.top < viewport.bottom &&
+                  (field.top < viewport.top || field.bottom > viewport.bottom)
+                ) {
+                  target.scrollIntoView({ block: "nearest", inline: "nearest" });
+                  // Native scrolling can round away a subpixel reveal.
+                  const revealed = target.getBoundingClientRect();
+                  if (revealed.top < viewport.top) {
+                    scroller.scrollTop -= Math.ceil(viewport.top - revealed.top);
+                  } else if (revealed.bottom > viewport.bottom) {
+                    scroller.scrollTop += Math.ceil(revealed.bottom - viewport.bottom);
+                  }
+                }
+              });
+            });
+          }
           if (focusedKey === item.entry.key) {
             return;
           }

@@ -18,6 +18,7 @@ import {
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import { withPreparedTranscriptCorrection } from "../../config/sessions/session-transcript-correction.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -465,7 +466,9 @@ export async function persistAbortedPartial(params: {
         activeWriterRunId: snapshot.runId,
       },
     };
-    const manager = await withoutSessionTranscriptReadFence(() => SessionManager.openAsync(target));
+    const manager = await withoutSessionTranscriptReadFence(() =>
+      withSessionTranscriptHydrationCaller("correction", () => SessionManager.openAsync(target)),
+    );
     const messages = manager.buildSessionContext().messages;
     const start = messages.findLastIndex((message) => message.role === "user");
     for (const result of repairToolUseResultPairing(messages.slice(Math.max(0, start)), {

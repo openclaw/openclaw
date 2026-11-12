@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import type { ReloadAnimationSample } from "./warm-reload-frames.ts";
 
 export const proofRegions = {
@@ -10,8 +11,80 @@ export const proofRegions = {
   dashboard: "openclaw-board-view",
 };
 
+/** Summarize the existing pane-chrome sampler after its first populated Details frame. */
+export function summarizeDetailsGeometry(
+  frames: ReturnType<ReturnType<typeof installPaneChromeProbe>["read"]>["detailsFrames"],
+) {
+  const firstIndex = frames.findIndex((frame) => frame.sections.some((row) => row.height > 0));
+  const populated = firstIndex < 0 ? [] : frames.slice(firstIndex);
+  let topMovementPx = 0;
+  let heightMovementPx = 0;
+  let sectionInsertions = 0;
+  let sectionRemovals = 0;
+  const sectionTopMovementPx: Record<string, number> = {};
+  let environmentHeightMovementPx = 0;
+  let outputsTopMovementPx = 0;
+  let automationsTopMovementPx = 0;
+  for (let index = 1; index < populated.length; index++) {
+    const before = new Map(populated[index - 1]!.sections.map((row) => [row.section, row]));
+    const after = new Map(populated[index]!.sections.map((row) => [row.section, row]));
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+      const from = before.get(id);
+      const to = after.get(id);
+      if (from && to) {
+        const movement = Math.abs(to.top - from.top);
+        topMovementPx += movement;
+        sectionTopMovementPx[id] = (sectionTopMovementPx[id] ?? 0) + movement;
+        if (id === "outputs") {
+          outputsTopMovementPx += movement;
+        }
+        if (id === "automations") {
+          automationsTopMovementPx += movement;
+        }
+      } else if (to) {
+        sectionInsertions++;
+      } else {
+        sectionRemovals++;
+      }
+      heightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+      if (id === "environment") {
+        environmentHeightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+      }
+    }
+  }
+  const first = populated[0];
+  const firstEnvironment = first?.sections.find((row) => row.section === "environment");
+  return {
+    firstPopulatedMs: first?.at ?? null,
+    firstHasAutomations: first?.sections.some((row) => row.section === "automations") ?? false,
+    firstProcessHeightPx: first?.sections.find((row) => row.section === "processes")?.height ?? 0,
+    firstSubagentHeightPx: first?.sections.find((row) => row.section === "subagents")?.height ?? 0,
+    finalSubagentHeightPx:
+      populated.at(-1)?.sections.find((row) => row.section === "subagents")?.height ?? 0,
+    sectionTopMovementPx,
+    firstEnvironmentHeightPx: firstEnvironment?.height ?? null,
+    firstEnvironmentBranchVisible: firstEnvironment?.environmentBranchVisible ?? null,
+    lastEnvironmentHeightPx:
+      populated.at(-1)?.sections.find((row) => row.section === "environment")?.height ?? null,
+    environmentHeightMovementPx,
+    outputsTopMovementPx,
+    automationsTopMovementPx,
+    topMovementPx,
+    heightMovementPx,
+    totalVerticalMovementPx: topMovementPx + heightMovementPx,
+    sectionInsertions,
+    sectionRemovals,
+    frames: populated,
+  };
+}
+
 /** Serialized into the top document before its application modules execute. */
-export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint = false) {
+export function installWarmReloadBrowserProbe(
+  route: string,
+  transcriptLatePaint = false,
+  composerContext = false,
+  sampleGeometry = true,
+) {
   if (window !== window.top) {
     return undefined;
   }
@@ -20,7 +93,44 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     firstMainDomMs: null as number | null,
     firstTranscriptDomMs: null as number | null,
     firstDashboardContentDomMs: null as number | null,
+    boardWidgetSkeletonMs: null as number | null,
+    allBoardWidgetsVisibleMs: null as number | null,
+    cachedBoardLayoutMs: null as number | null,
     firstPaintedRowsMs: null as number | null,
+    firstDetailsDomMs: null as number | null,
+    firstDetailsPaintMs: null as number | null,
+    detailsFrames: [] as Array<{
+      atMs: number;
+      populated: boolean;
+      docked: boolean;
+      height: number;
+      sections: number;
+    }>,
+    bottomParagraphPaintMs: null as number | null,
+    transcriptTextPaintMs: null as number | null,
+    pluginsCompleteMs: null as number | null,
+    textPaints: [] as Array<{ atMs: number; tag: string }>,
+    pluginMarks: [] as Array<{ atMs: number; name: string }>,
+    pluginStates: [] as Array<{
+      atMs: number;
+      status: string;
+      pages: number;
+      panels: number;
+      accessories: number;
+      widgets: number;
+      replacements: number;
+      selected: string[];
+      errors: number;
+    }>,
+    transcriptGeometry: [] as Array<{
+      atMs: number;
+      scrollTop: number;
+      distanceFromEnd: number;
+      width: number;
+      height: number;
+      rowHeight: number;
+      bottomVisible: boolean;
+    }>,
     finalRowsDomMs: null as number | null,
     helloPublishedMs: null as number | null,
     helloHandledMs: null as number | null,
@@ -56,6 +166,20 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       width: number;
     }>,
     animationSamples: [] as ReloadAnimationSample[],
+    contextRingFrames: [] as Array<{
+      atMs: number;
+      composer: { x: number; y: number; width: number; height: number };
+      controls: Array<{ selector: string; x: number; width: number; text: string }>;
+      ring: {
+        label: string | null;
+        opacity: string;
+        dashOffset: string | null;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      } | null;
+    }>,
     animationProbeMs: 0,
     animationPolicy:
       "Recognized skeleton shimmer or opacity/visibility-only fades with at most 64 elements; fades containing images, canvas, video or iframes are excluded. Signatures retain content, attributes, appearance and geometry, except intermediate opacity. No whole-page animation mask.",
@@ -75,7 +199,7 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     stopped: false,
   };
   Reflect.set(window, "__warmReloadProof", data);
-  if (transcriptLatePaint) {
+  if (transcriptLatePaint && sampleGeometry) {
     for (const operation of ["get", "getAll", "getAllKeys", "put"] as const) {
       const original = IDBObjectStore.prototype[operation];
       Object.defineProperty(IDBObjectStore.prototype, operation, {
@@ -144,8 +268,41 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
   observe("element", (entry) => {
     const identifier: unknown = Reflect.get(entry, "identifier");
     const renderTime: unknown = Reflect.get(entry, "renderTime");
-    if (identifier === "openclaw-transcript" && typeof renderTime === "number" && renderTime > 0) {
+    const element: unknown = Reflect.get(entry, "element");
+    const intersection: DOMRectReadOnly | undefined = Reflect.get(entry, "intersectionRect");
+    if (
+      typeof renderTime !== "number" ||
+      renderTime <= 0 ||
+      !intersection?.width ||
+      !intersection.height
+    ) {
+      return;
+    }
+    if (
+      typeof identifier === "string" &&
+      identifier.startsWith("openclaw-transcript") &&
+      element instanceof Element &&
+      element.closest(".chat-virtual-row")
+    ) {
       data.firstPaintedRowsMs ??= renderTime;
+    }
+    if (identifier === "openclaw-details") {
+      data.firstDetailsPaintMs ??= renderTime;
+    }
+    if (identifier === "openclaw-transcript-bottom") {
+      data.bottomParagraphPaintMs ??= renderTime;
+    }
+  });
+  observe("largest-contentful-paint", (entry) => {
+    const element: unknown = Reflect.get(entry, "element");
+    if (element instanceof Element && element.matches(".chat-text p, .chat-text p *")) {
+      data.transcriptTextPaintMs ??= entry.startTime;
+      data.textPaints.push({ atMs: entry.startTime, tag: element.tagName });
+    }
+  });
+  observe("mark", (entry) => {
+    if (entry.name.startsWith("warm-reload-plugin:")) {
+      data.pluginMarks.push({ atMs: entry.startTime, name: entry.name });
     }
   });
   let firstShift = 0;
@@ -175,6 +332,7 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     data.loafBlockingMs += blockingMs;
   });
   let stopGateway: (() => void) | undefined;
+  let stopPlugins: (() => void) | undefined;
   const receiveContext = (event: Event) => {
     const provider = event as Event & { context?: unknown; contextTarget?: HTMLElement };
     if (provider.context !== "openclaw.application" || !provider.contextTarget) {
@@ -197,6 +355,35 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
                 });
               }
             });
+            if (!sampleGeometry) {
+              return;
+            }
+            let previous = "";
+            const plugins = () => {
+              const runtime = context.plugins;
+              const state = {
+                status: runtime.registryStatus,
+                pages: runtime.registrations("pages").length,
+                panels: runtime.registrations("panels").length,
+                accessories: runtime.registrations("accessories").length,
+                widgets: runtime.registrations("widgets").length,
+                replacements: runtime.registrations("replacements").length,
+                selected: (
+                  ["transcript", "workspace", "composer", "session-list"] as const
+                ).flatMap((surface) => (runtime.selectedReplacement(surface) ? [surface] : [])),
+                errors: runtime.errors.length,
+              };
+              const signature = JSON.stringify(state);
+              if (signature !== previous) {
+                data.pluginStates.push({ atMs: performance.now(), ...state });
+                previous = signature;
+              }
+              if (state.status === "complete") {
+                data.pluginsCompleteMs ??= performance.now();
+              }
+            };
+            stopPlugins = context.plugins.subscribe(plugins);
+            plugins();
           },
         }),
       );
@@ -206,40 +393,79 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
     window.removeEventListener("context-provider", receiveContext);
   };
   window.addEventListener("context-provider", receiveContext);
-  window.addEventListener("pagehide", () => stopGateway?.(), { once: true });
+  window.addEventListener(
+    "pagehide",
+    () => {
+      stopGateway?.();
+      stopPlugins?.();
+    },
+    { once: true },
+  );
   let domVersion = 0;
   const textObserver = new MutationObserver((records) => {
+    if (data.stopped) {
+      textObserver.disconnect();
+      return;
+    }
     domVersion++;
+    const selector = ".chat-virtual-row, .chat-details-session";
+    const roots = new Set<Element>();
     for (const record of records) {
-      for (const node of record.addedNodes) {
+      const nodes = record.type === "characterData" ? [record.target] : record.addedNodes;
+      for (const node of nodes) {
         const element = node instanceof Element ? node : node.parentElement;
-        if (
-          !element ||
-          (!element.closest(".chat-virtual-row") && !element.querySelector(".chat-virtual-row"))
-        ) {
-          continue;
+        if (element) {
+          roots.add(element);
         }
-        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      }
+    }
+    for (const root of roots) {
+      let ancestor = root.parentElement;
+      while (ancestor && !roots.has(ancestor)) {
+        ancestor = ancestor.parentElement;
+      }
+      if (ancestor) {
+        continue;
+      }
+      const context = root.closest(selector);
+      const scopes = context
+        ? [root]
+        : root.childElementCount
+          ? root.querySelectorAll(selector)
+          : [];
+      for (const scope of scopes) {
+        const identifier = (context ?? scope).matches(".chat-details-session")
+          ? "openclaw-details"
+          : "openclaw-transcript";
+        const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
         let text: Node | null;
         while ((text = walker.nextNode())) {
           const parent = text.parentElement;
-          if (
-            text.textContent?.trim() &&
-            parent?.closest(".chat-virtual-row") &&
-            !parent.hasAttribute("elementtiming")
-          ) {
-            parent.setAttribute("elementtiming", "openclaw-transcript");
+          if (parent && !parent.hasAttribute("elementtiming") && text.textContent?.trim()) {
+            parent.setAttribute("elementtiming", identifier);
           }
         }
       }
+    }
+    const bottom = sampleGeometry
+      ? [...document.querySelectorAll(".chat-group.assistant .chat-text p")].at(-1)
+      : undefined;
+    if (
+      bottom?.textContent?.startsWith("Synthetic paragraph 18.") &&
+      bottom.getAttribute("elementtiming") !== "openclaw-transcript-bottom"
+    ) {
+      bottom.setAttribute("elementtiming", "openclaw-transcript-bottom");
     }
   });
   textObserver.observe(document, {
     childList: true,
     subtree: true,
-    attributes: true,
+    attributes: sampleGeometry,
     characterData: true,
   });
+  if (!sampleGeometry) {
+    return data;
+  }
   document.fonts.addEventListener("loadingdone", () => domVersion++);
   const hash = (text: string) => {
     let value = 2166136261;
@@ -385,14 +611,82 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
   };
   let previous = "";
   let previousRows = "";
+  let previousContextRing = "";
+  let previousDetails = "";
   const sample = () => {
     if (data.stopped) {
       stopGateway?.();
+      stopPlugins?.();
       textObserver.disconnect();
       return;
     }
     Reflect.get(window, "__paneChrome").sample(performance.now());
     sampleAnimations();
+    if (composerContext) {
+      const composer = document.querySelector(".agent-chat__input");
+      const box = composer?.getBoundingClientRect();
+      if (
+        composer &&
+        box &&
+        box.width > 0 &&
+        box.height > 0 &&
+        box.bottom > 0 &&
+        box.top < innerHeight &&
+        composer.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+      ) {
+        const ring = composer.querySelector(".context-ring");
+        const ringBox = ring?.getBoundingClientRect();
+        const state = {
+          composer: { x: box.x, y: box.y, width: box.width, height: box.height },
+          controls: [
+            ".agent-chat__composer-lead",
+            ".agent-chat__composer-trail",
+            ".agent-chat__composer-controls",
+            ".context-usage",
+            "[data-chat-model-select]",
+            "[data-chat-thinking-select]",
+            "[data-chat-permission-select]",
+            ".agent-chat__composer-actions",
+            ".agent-chat__input-btn--attach",
+            ".chat-send-btn--voice",
+            ".chat-send-btn--stop",
+            ".chat-send-btn--send",
+          ].flatMap((selector) => {
+            const element = composer.querySelector(selector);
+            const rect = element?.getBoundingClientRect();
+            return element && rect?.width
+              ? [
+                  {
+                    selector,
+                    x: rect.x,
+                    width: rect.width,
+                    text: element.textContent?.trim() ?? "",
+                  },
+                ]
+              : [];
+          }),
+          ring:
+            ring && ringBox
+              ? {
+                  label: ring.getAttribute("aria-label"),
+                  opacity: getComputedStyle(ring).opacity,
+                  dashOffset:
+                    ring.querySelector(".context-ring__fill")?.getAttribute("stroke-dashoffset") ??
+                    null,
+                  x: ringBox.x,
+                  y: ringBox.y,
+                  width: ringBox.width,
+                  height: ringBox.height,
+                }
+              : null,
+        };
+        const signature = JSON.stringify(state);
+        if (signature !== previousContextRing) {
+          data.contextRingFrames.push({ atMs: performance.now(), ...state });
+          previousContextRing = signature;
+        }
+      }
+    }
     const answer = transcriptLatePaint
       ? [...document.querySelectorAll(".chat-group.assistant .chat-text")].at(-1)
       : undefined;
@@ -419,7 +713,51 @@ export function installWarmReloadBrowserProbe(route: string, transcriptLatePaint
       }
     }
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
+    const lastAssistant = [...document.querySelectorAll(".chat-group.assistant")].at(-1);
+    const scroller = lastAssistant?.closest<HTMLElement>(".chat-thread");
+    if (
+      scroller &&
+      lastAssistant &&
+      lastAssistant.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+    ) {
+      const rowBox = lastAssistant.getBoundingClientRect();
+      const box = scroller.getBoundingClientRect();
+      const bottom = [...lastAssistant.querySelectorAll(".chat-text p")]
+        .at(-1)
+        ?.getBoundingClientRect();
+      data.transcriptGeometry.push({
+        atMs: performance.now(),
+        scrollTop: scroller.scrollTop,
+        distanceFromEnd: scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+        width: box.width,
+        height: box.height,
+        rowHeight: rowBox.height,
+        bottomVisible: Boolean(bottom && bottom.bottom > box.top && bottom.top < box.bottom),
+      });
+    }
     const rows = rowElements.length;
+    const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
+    if (panel) {
+      const session = panel.querySelector(".chat-details-session");
+      const populated = Boolean(
+        session?.textContent?.trim() &&
+        session.checkVisibility({ checkOpacity: true, visibilityProperty: true }),
+      );
+      const details = {
+        populated,
+        docked: panel.classList.contains("chat-details--docked"),
+        height: populated ? session!.getBoundingClientRect().height : 0,
+        sections: panel.querySelectorAll("[data-details-group]").length,
+      };
+      const signature = JSON.stringify(details);
+      if (signature !== previousDetails) {
+        data.detailsFrames.push({ atMs: performance.now(), ...details });
+        previousDetails = signature;
+      }
+      if (populated) {
+        data.firstDetailsDomMs ??= performance.now();
+      }
+    }
     const sidebarRowElements = [
       ...document.querySelectorAll("openclaw-app-sidebar [data-session-key]"),
     ];

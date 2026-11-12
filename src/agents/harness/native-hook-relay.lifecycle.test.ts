@@ -920,7 +920,7 @@ describe("native hook execution admission", () => {
     },
   );
 
-  it.each(["blocked", "rewritten", "failed"] as const)(
+  it.each(["blocked", "unappliable rewrite", "failed"] as const)(
     "does not retain execution custody for a %s policy result",
     async (result) => {
       const admit = vi.fn();
@@ -935,7 +935,7 @@ describe("native hook execution admission", () => {
           }
           return result === "blocked"
             ? { blocked: true, kind: "veto", reason: "fixture policy blocked" }
-            : { blocked: false, params: { command: "rewritten" } };
+            : { blocked: false, params: { command: "true", workdir: "/" } };
         },
       });
       const invocation = invokeNativeHookRelay({
@@ -953,6 +953,30 @@ describe("native hook execution admission", () => {
       expect(admit).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    { refusal: undefined, decision: "allow" },
+    { refusal: "fixture custody refused", decision: "deny" },
+  ])("admits a rewrite before returning it ($decision)", async ({ refusal, decision }) => {
+    const admit = vi.fn(() => () => refusal);
+    const relay = registerOwnedNativeHookRelay({
+      provider: "codex",
+      sessionId: "execution-admission",
+      runId: "execution-admission",
+      executionAdmission: { toolNames: ["exec"], admit },
+      runBeforeToolCall: async () => ({ blocked: false, params: { command: "rewritten" } }),
+    });
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: { tool_name: "Bash", tool_use_id: "call", tool_input: { command: "true" } },
+    });
+    const output = JSON.parse(response.stdout).hookSpecificOutput;
+    expect(admit).toHaveBeenCalledOnce();
+    expect(output.permissionDecision).toBe(decision);
+    expect(output.updatedInput).toEqual(refusal ? undefined : { command: "rewritten" });
+  });
 
   it("cancels deferred approval when execution custody is retired", async () => {
     const onResolution = vi.fn();

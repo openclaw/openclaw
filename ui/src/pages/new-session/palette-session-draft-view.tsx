@@ -3,6 +3,7 @@ import { createChatAttachmentInputHandle } from "../chat/components/chat-attachm
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
 import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
 import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import type { PaletteSessionDraft } from "./palette-session-draft.ts";
 import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
@@ -62,7 +63,12 @@ export function PaletteSessionAttachments(props: DraftProps) {
   });
   return (
     <Show when={preview()}>
-      <div class="cmd-palette__attachments">
+      <div
+        class="cmd-palette__attachments"
+        onOpenclaw-comment-action={(event: CustomEvent<ChatCommentAction>) =>
+          props.draft.removeComment(event.detail)
+        }
+      >
         <AttachmentPreview {...preview()!} readRevision={props.revision} />
       </div>
     </Show>

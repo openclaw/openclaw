@@ -52,8 +52,7 @@ export class OpenAILiveDelegationQueue {
         this.stop();
         this.options.onError(new Error("GPT-Live could not request missing delegation input"));
       }
-    }, INPUT_WAIT_MS);
-    timeout.unref?.();
+    }, INPUT_WAIT_MS).unref();
     this.pending.set(id, timeout);
     this.resume();
   }

@@ -107,6 +107,17 @@ async function prepareHistoryRead(
       );
       return () => ({ kind: request.kind, result: read() });
     }
+    case "transcript-replay-groups": {
+      const { readSessionTranscriptReplayGroupsCore } =
+        await import("./session-transcript-replay.kernel.js");
+      return () =>
+        runWithSessionTranscriptReadFence(request.admission, () => ({
+          kind: request.kind,
+          result: readSessionTranscriptReplayGroupsCore(request.scope, request.selection, {
+            resolvedScope: request.resolved,
+          }),
+        }));
+    }
     case "transcript-visible-delta": {
       const { readSessionTranscriptVisibleMessageDeltaCore } =
         await import("./session-accessor.sqlite-active-events.js");
@@ -264,7 +275,7 @@ async function prepareHistoryRead(
     }
     case "context-messages": {
       const [
-        { readSessionTranscriptContextMessages },
+        { readSessionTranscriptContextMessages, readSessionTranscriptContextSeed },
         { resolveSqliteTranscriptReadScope, toDatabaseOptions },
         { resolveOpenClawAgentSqlitePath },
         { readDatabasePathIdentitySync },
@@ -287,6 +298,9 @@ async function prepareHistoryRead(
             );
           } else if (readDatabasePathIdentitySync(databasePath).key.startsWith("file:")) {
             throw new Error("Session context changed its captured database owner");
+          }
+          if (request.seed) {
+            return readSessionTranscriptContextSeed(request.target, request.seed);
           }
           return readSessionTranscriptContextMessages(
             request.target,

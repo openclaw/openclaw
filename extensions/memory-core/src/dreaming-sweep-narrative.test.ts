@@ -188,6 +188,7 @@ async function createSweep(
       subagent: {
         complete,
         forkSession: unexpectedSessionCall,
+        runForkedTurn: unexpectedSessionCall,
         run: unexpectedSessionCall,
         waitForRun: unexpectedSessionCall,
         getSessionMessages: unexpectedSessionCall,
@@ -219,7 +220,7 @@ async function createSweep(
   const service = registerService.mock.calls.find(
     ([entry]) => entry.id === "memory-core-dreaming",
   )?.[0];
-  if (!service?.stop) {
+  if (!service?.stop || service.apiVersion !== 2) {
     throw new Error("dreaming service lifecycle was not registered");
   }
   const serviceContext = {

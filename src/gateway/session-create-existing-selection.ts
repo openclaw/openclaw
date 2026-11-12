@@ -1,13 +1,28 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentDir } from "../agents/agent-scope.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+  type ErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { resolveAgentConfig, resolveAgentDir } from "../agents/agent-scope.js";
 import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+import { resolveAttendedSessionPermissionDefault } from "./session-create-permission-default.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 /** Project requested settings without turning omitted fields into clearing mutations. */
 export function buildSessionCreateSettingsPatch(
@@ -68,7 +83,7 @@ export function sessionCreatePolicyAdoptionError(
   return undefined;
 }
 
-export async function existingSessionSelectionWouldChange(params: {
+async function existingSessionSelectionWouldChange(params: {
   agentId: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
@@ -192,4 +207,90 @@ export async function existingSessionSelectionWouldChange(params: {
   return (
     resolved.provider !== existingProvider || resolved.model !== existingModel || profileWouldChange
   );
+}
+
+/** Select only new attended defaults; retain a guard independent of model selection. */
+export function prepareSessionCreatePermissionSelection(
+  request: CreateGatewaySessionParams,
+  target: {
+    agentId: string;
+    existingEntry?: SessionEntry;
+    creation: CreateGatewaySessionParams["creation"];
+    operatorAuthority?: AdmittedRunOperatorAuthority;
+  },
+):
+  | { ok: true; mode?: SessionEntry["permissionMode"]; assertCurrent?: () => void }
+  | { ok: false; error: ErrorShape } {
+  const authority = target.operatorAuthority;
+  if (
+    target.existingEntry ||
+    request.permissionMode !== undefined ||
+    !request.applyAgentPermissionDefault ||
+    target.creation?.via !== "operator" ||
+    request.fork === true ||
+    request.initialEntry ||
+    request.catalogTarget ||
+    request.authorizedPluginId ||
+    !authority
+  ) {
+    return { ok: true, mode: request.permissionMode };
+  }
+  const configuredMode = resolveAgentConfig(request.cfg, target.agentId)?.newSessionPermissionMode;
+  const mode = resolveAttendedSessionPermissionDefault(configuredMode, authority.scopes);
+  if (!mode) {
+    return { ok: true };
+  }
+  authority.assertCurrent();
+  if (mode === "full" && !authority.scopes.includes(ADMIN_SCOPE)) {
+    return {
+      ok: false,
+      error: missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
+    };
+  }
+  const assertCurrent = () => {
+    authority.assertCurrent();
+    if (
+      resolveAgentConfig(request.getCurrentConfig?.() ?? request.cfg, target.agentId)
+        ?.newSessionPermissionMode !== configuredMode
+    ) {
+      throw new SessionMutationAuthorizationChangedError(
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "New-session permission default changed; retry creation.",
+          { retryable: true },
+        ),
+      );
+    }
+  };
+  assertCurrent();
+  return { ok: true, mode, assertCurrent };
+}
+
+/** Existing-key adoption preserves selection unless the caller can change settings. */
+export async function validateExistingSessionCreateSelection(
+  request: CreateGatewaySessionParams,
+  target: { agentId: string; sessionKey: string; existingEntry: SessionEntry },
+): Promise<ErrorShape | undefined> {
+  const defaults = resolveDefaultModelForAgent({ cfg: request.cfg, agentId: target.agentId });
+  const changed = await existingSessionSelectionWouldChange({
+    agentId: target.agentId,
+    cfg: request.cfg,
+    catalogModel: normalizeOptionalString(request.catalogTarget?.model),
+    defaultModel: defaults.model,
+    defaultProvider: defaults.provider,
+    existingEntry: target.existingEntry,
+    loadGatewayModelCatalogSnapshot: request.loadGatewayModelCatalogSnapshot,
+    requestedModel: request.model,
+    requestedAgentRuntime: request.agentRuntime,
+    requestedContextWindow: request.contextWindow,
+    requestedCyberAccessProgram: request.cyberAccessProgram,
+    requestedFastMode: request.fastMode,
+    requestedThinkingLevel: request.thinkingLevel,
+    subagentModelHint: isSubagentSessionKey(target.sessionKey)
+      ? resolveSubagentConfiguredModelSelection({ cfg: request.cfg, agentId: target.agentId })
+      : undefined,
+  });
+  return changed
+    ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
+    : undefined;
 }

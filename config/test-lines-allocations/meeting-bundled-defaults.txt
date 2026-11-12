@@ -1,0 +1,2 @@
+# Extend the existing startup regression to keep three unused meeting plugins off.
+2

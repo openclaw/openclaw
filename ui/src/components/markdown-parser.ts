@@ -29,11 +29,13 @@ import {
   markdownInlineChildren,
   replaceMarkdownTextMatches,
 } from "./markdown-text-replacements.ts";
+import { installMarkdownWindowsPaths } from "./markdown-windows-paths.ts";
 
 // formatAudioTranscriptForAgent stores this model-facing label in conversation history.
 const AUDIO_TRANSCRIPT_PREFIX = '[Audio transcript (machine-generated, untrusted)]: "';
 
-const HEX_COLOR_RE = /#(?:[\da-f]{8}|[\da-f]{6}|[\da-f]{4}|[\da-f]{3})(?![\da-f])/gi;
+// Only #RRGGBB previews; shorter forms collide with issue/PR numbers like #2536.
+const HEX_COLOR_RE = /#[\da-f]{6}(?![\da-f])/gi;
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
@@ -48,6 +50,7 @@ const BARE_URL_CLASS = "markdown-bare-url";
 // Code-span URLs use the same generated labels as autolinks.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
+const FILE_REFERENCE_MARKER_RE = /[/\\:]/;
 
 // Label shortening needs every file target before applying any label.
 type MarkdownFileLinkDecoration = {
@@ -172,6 +175,7 @@ export function createMarkdownParser(): MarkdownItParser {
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
+  installMarkdownWindowsPaths(markdownParser);
 
   // Bare filenames such as README.md are not web destinations.
   markdownParser.linkify.set({ fuzzyLink: false });
@@ -378,7 +382,11 @@ export function createMarkdownParser(): MarkdownItParser {
         }
         if (token.type === "link_open") {
           const href = String(token.attrGet("href") ?? "");
-          if (href && !token.attrGet("data-session-href")) {
+          if (
+            href &&
+            !token.attrGet("data-session-href") &&
+            !token.attrGet("data-template-package")
+          ) {
             let decodedHref = href;
             try {
               decodedHref = decodeURIComponent(href);
@@ -433,7 +441,8 @@ export function createMarkdownParser(): MarkdownItParser {
           }
           continue;
         }
-        if (token.type !== "text") {
+        // Prose references need a path separator or a bare filename's :line suffix.
+        if (token.type !== "text" || !FILE_REFERENCE_MARKER_RE.test(token.content)) {
           continue;
         }
 

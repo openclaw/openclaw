@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-download-and-install"
+description = "Enables the download_and_install command without any pre-configured scope."
+commands.allow = ["download_and_install"]
+
+[[permission]]
+identifier = "deny-download-and-install"
+description = "Denies the download_and_install command without any pre-configured scope."
+commands.deny = ["download_and_install"]

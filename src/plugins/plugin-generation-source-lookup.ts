@@ -4,7 +4,6 @@ import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
-import { getPluginCache } from "./plugin-cache.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type {
   PluginFrozenSourceSnapshot,
@@ -29,6 +28,7 @@ import {
   type PluginPackageCapture,
 } from "./plugin-package-metadata-capture.js";
 import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
+import { readPluginCapturedCode } from "./plugin-source-file.js";
 import type { PluginCapturedSourceFact } from "./plugin-source-verification.js";
 // These owner-defined operations copy captured source trees; their cost scales with
 // package size and filesystem latency rather than the ordinary method deadline.
@@ -48,17 +48,57 @@ type SourceCustody = {
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
 };
 export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
-type PluginGenerationCaptureArguments = [
-  rootDir: string,
-  entryFile?: string | readonly string[],
-  execute?: <V>(run: () => V) => V,
-  moduleSource?: (filename: string) => string,
-  nativeRecovery?: PluginNativeRecovery,
-  dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
-];
 const sourceCustody = new AsyncLocalStorage<{
-  sources: Map<string, SourceCustody>;
+  closing: boolean;
+  prepared: Map<object, Map<string, Promise<PreparedSourceCustody>>>;
 }>();
+
+type PreparedSourceCustody = {
+  captureId: number;
+  sourceDigest: string;
+  disposeAsync(): Promise<void>;
+};
+
+export function hasPluginGenerationSourceCustody(): boolean {
+  return sourceCustody.getStore() !== undefined;
+}
+
+/** Retain an unexecuted worker source; each caller still prepares its own private artifact. */
+export async function retainPreparedPluginGenerationSource(
+  owner: object,
+  key: string,
+  create: () => Promise<PreparedSourceCustody>,
+): Promise<PreparedSourceCustody | undefined> {
+  const scope = sourceCustody.getStore();
+  if (!scope) {
+    return undefined;
+  }
+  if (scope.closing) {
+    throw new Error("Plugin source custody has closed");
+  }
+  let sources = scope.prepared.get(owner);
+  if (!sources) {
+    sources = new Map();
+    scope.prepared.set(owner, sources);
+  }
+  let preparing = sources.get(key);
+  if (!preparing) {
+    preparing = create();
+    sources.set(key, preparing);
+  }
+  try {
+    const source = await preparing;
+    if (scope.closing) {
+      throw new Error("Plugin source custody has closed");
+    }
+    return source;
+  } catch (error) {
+    if (sources.get(key) === preparing) {
+      sources.delete(key);
+    }
+    throw error;
+  }
+}
 
 /** Retain files across management phases, without retaining their callback instances or leases. */
 export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>): Promise<T> {
@@ -75,81 +115,22 @@ export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>
 
 function createPluginGenerationSourceCustody() {
   const scope = {
-    sources: new Map<string, SourceCustody>(),
+    closing: false,
+    prepared: new Map<object, Map<string, Promise<PreparedSourceCustody>>>(),
     async disposeAsync() {
+      this.closing = true;
       const results = await Promise.allSettled(
-        [...this.sources.values()].map(({ source }) => source.disposeAsync()),
+        [...this.prepared.values()].flatMap((sources) =>
+          [...sources.values()].map(async (source) => (await source).disposeAsync()),
+        ),
       );
+      this.prepared.clear();
       throwSettledAggregate(results, "Plugin source custody cleanup failed");
-      this.sources.clear();
     },
   };
   return {
     run: <T>(run: () => T): T => sourceCustody.run(scope, run),
     disposeAsync: () => scope.disposeAsync(),
-  };
-}
-
-/** Bind scoped file custody around an instance's independently constructed module graph. */
-export function createPluginGenerationCapture<
-  T extends {
-    retainSourceCustody(): SourceCustody;
-    dispose(): void;
-  },
->(
-  create: (
-    ...args: [
-      ...PluginGenerationCaptureArguments,
-      retained?: PluginSourceCustodyFork,
-      captureForCustody?: boolean,
-    ]
-  ) => T,
-) {
-  return (...args: PluginGenerationCaptureArguments): T => {
-    const [rootDir, entryFile, execute, moduleSource, nativeRecovery, dependencyLookupBoundary] =
-      args;
-    const custody =
-      execute && !nativeRecovery && !dependencyLookupBoundary && sourceCustody.getStore();
-    if (!custody) {
-      return create(...args);
-    }
-    const key = JSON.stringify([
-      path.resolve(rootDir),
-      typeof entryFile === "string"
-        ? path.resolve(entryFile)
-        : entryFile?.map((file) => path.resolve(file)),
-    ]);
-    let retained = custody.sources.get(key);
-    if (!retained) {
-      // This namespace is never executed; no instance can mutate the retained source bytes.
-      const seed = create(
-        rootDir,
-        entryFile,
-        (run) => run(),
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        true,
-      );
-      try {
-        retained = seed.retainSourceCustody();
-        custody.sources.set(key, retained);
-      } finally {
-        seed.dispose();
-      }
-    }
-    const fork = retained.source.fork();
-    try {
-      fork.native?.retain(getPluginCache());
-      return create(rootDir, entryFile, execute, moduleSource, undefined, undefined, {
-        source: fork,
-        files: retained.files,
-      });
-    } catch (error) {
-      fork.dispose();
-      throw error;
-    }
   };
 }
 
@@ -463,6 +444,7 @@ export function createPluginGenerationSourceLookup({
 /** Keep first-demand module lookup and admission with the captured source graph. */
 export function createPluginGenerationModuleLookup({
   capturedPaths,
+  capturedDirectories,
   originalSources,
   moduleCaptures,
   metadataCapture,
@@ -474,6 +456,7 @@ export function createPluginGenerationModuleLookup({
   directory,
 }: {
   capturedPaths: Map<string, string>;
+  capturedDirectories: ReadonlySet<string>;
   originalSources: ReadonlyMap<string, string>;
   moduleCaptures: ReadonlyMap<string, PluginModuleCapture>;
   metadataCapture: ReturnType<typeof createPluginPackageMetadataCapture>;
@@ -495,6 +478,10 @@ export function createPluginGenerationModuleLookup({
       originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
     assertModuleAvailable,
     prepareModule: markPluginSourcePreparationOperation((filename: string) => {
+      // Directory capture is valid, but selecting that directory as a module is not.
+      if (capturedDirectories.has(filename)) {
+        readPluginCapturedCode(filename, true);
+      }
       const owner = packageForFile(filename);
       const source = originalSources.get(filename);
       const needsEntry =

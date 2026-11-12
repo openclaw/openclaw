@@ -25,6 +25,23 @@ function mountSubagents(initial: readonly Row[], mobile = false) {
   return { view, setRows, setCollapsed, openChild, openCollection };
 }
 
+it.each([false, true])("shimmers only working names as status changes (mobile=%s)", (mobile) => {
+  const { view, setRows } = mountSubagents(
+    [{ key: "child", label: "Review", status: "running" }],
+    mobile,
+  );
+  const name = () => view.container.querySelector(".chat-details-subagents__name")!;
+  expect(name().classList.contains("text-shimmer")).toBe(true);
+  for (const status of ["waiting", "queued", "done", "failed", "stopped", "running"] as const) {
+    setRows([{ key: "child", label: "Review", status }]);
+    flush();
+    expect(name().textContent).toBe("Review");
+    expect(name().classList.contains("text-shimmer")).toBe(
+      status === "running" || status === "waiting",
+    );
+  }
+});
+
 it.each([
   { mobile: false, limit: 5 },
   { mobile: true, limit: 3 },
@@ -35,10 +52,17 @@ it.each([
       key: `child-${index}`,
       label: "Review",
       status: index === 1 ? "running" : "done",
+      session: { startedAt: Date.now() - 3000 },
     }));
     const { view, setRows, openChild, openCollection } = mountSubagents(initial, mobile);
     const buttons = view.getAllByRole("button");
     expect(buttons).toHaveLength(limit);
+    expect(buttons[0]!.getAttribute("aria-label")).toBe("Review Working");
+    expect(buttons[0]!.querySelector(".chat-details-subagents__status")?.classList).toContain(
+      "sr-only",
+    );
+    expect(buttons[0]!.querySelector(".chat-details-subagents__spinner")).not.toBeNull();
+    expect(buttons[0]!.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy();
     buttons[0]!.click();
     expect(openChild).toHaveBeenLastCalledWith("child-1");
     buttons[1]!.click();
@@ -56,8 +80,7 @@ it.each([
     flush();
     expect(view.getAllByRole("button")).toHaveLength(1);
     view.getByRole("button", { name: `All subagents. ${limit + 1} Done` }).click();
-    expect(openCollection).toHaveBeenCalledTimes(2);
-    expect(openChild).toHaveBeenCalledTimes(2);
+    expect([openCollection, openChild].map((fn) => fn.mock.calls.length)).toEqual([2, 2]);
   },
 );
 
@@ -68,14 +91,43 @@ it("omits empty content and removes collapsed activity when the last waiting chi
   setRows([{ key: "waiting-child", label: "Waiting child", status: "waiting" }]);
   flush();
   expect(view.getByRole("img", { name: "1 subagent running" })).toBeTruthy();
-  expect(view.queryByRole("button")).toBeNull();
-  expect(view.container.textContent).toBe("");
+  expect([view.queryByRole("button"), view.container.textContent]).toEqual([null, ""]);
   setRows([{ key: "waiting-child", label: "Waiting child", status: "done" }]);
   flush();
   expect(view.container.childElementCount).toBe(0);
   setCollapsed(false);
   flush();
   expect(view.getByRole("button", { name: "Waiting child Done" })).toBeTruthy();
+});
+
+it("summarizes at most two statuses and never shows Stopped", () => {
+  const working = (key: string): Row => ({ key, label: key, status: "running" });
+  const waiting = (key: string): Row => ({ key, label: key, status: "waiting" });
+  const queued = (key: string): Row => ({ key, label: key, status: "queued" });
+  const done = (key: string): Row => ({ key, label: key, status: "done" });
+  const stopped = (key: string): Row => ({ key, label: key, status: "stopped" });
+  const summary = () =>
+    [...view.container.querySelectorAll(".chat-details-subagents__count")].map(
+      (count) => count.textContent,
+    );
+  const { view, setRows } = mountSubagents([
+    working("a"),
+    waiting("b"),
+    queued("c"),
+    done("d"),
+    stopped("e"),
+    working("f"),
+  ]);
+  expect(summary()).toEqual(["3 Working", "1 Queued"]);
+  setRows([working("a"), waiting("b"), done("d"), stopped("e"), done("f"), working("g")]);
+  flush();
+  expect(summary()).toEqual(["3 Working", "3 Done"]);
+  setRows([done("a"), stopped("b"), done("c"), done("d"), done("e"), done("f")]);
+  flush();
+  expect(summary()).toEqual(["6 Done"]);
+  setRows(["a", "b", "c", "d", "e", "f"].map(stopped));
+  flush();
+  expect(summary()).toEqual(["6 Done"]);
 });
 
 it("folds failed runs into Done without changing child outcomes", () => {
@@ -88,11 +140,11 @@ it("folds failed runs into Done without changing child outcomes", () => {
     { key: "f", label: "F", status: "stopped" },
   ];
   const { view, setRows, openChild } = mountSubagents(initial);
-  expect(
-    view.getByRole("button", {
-      name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 2 Done, 1 Stopped",
-    }),
-  ).toBeTruthy();
+  view.getByRole("button", {
+    name: "All subagents. 2 Working, 1 Queued",
+  });
+  const shimmering = view.container.querySelectorAll(".chat-details-subagents__count.text-shimmer");
+  expect([...shimmering].map((count) => count.getAttribute("data-status"))).toEqual(["running"]);
   setRows([initial[4]!]);
   flush();
   view.getByRole("button", { name: "E Failed" }).click();

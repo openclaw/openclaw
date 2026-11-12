@@ -204,6 +204,7 @@ async function fetchNpmRegistryWithRetry(params, reader) {
         ![
           "ECONNRESET",
           "ECONNREFUSED",
+          "EPIPE",
           "ETIMEDOUT",
           "EAI_AGAIN",
           "UND_ERR_SOCKET",

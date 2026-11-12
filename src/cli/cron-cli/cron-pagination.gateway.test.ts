@@ -8,7 +8,8 @@ import { createMockCronStateForJobs } from "../../cron/service.test-harness.js";
 import { listPage } from "../../cron/service/ops-read.js";
 import type { CronJob } from "../../cron/types.js";
 import { callCron } from "../../gateway/server-methods/cron-read.test-support.js";
-import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 
 const mocks = await vi.hoisted(async () => ({

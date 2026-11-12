@@ -85,6 +85,7 @@ it.each([false, true])(
       const result = await params.stagedPackage.run({
         root: fixture.root,
         installKind: "package",
+        installTarget: target,
         tag: artifact,
         timeoutMs: 30_000,
         startedAt: params.startedAt,

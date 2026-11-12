@@ -259,14 +259,21 @@ export function isSubagentEnvelopeSession(
 /** Visible spawns are interactive sessions; a dashboard key alone grants nothing. */
 export function isVisibleSpawnedSession(
   sessionKey: string,
-  opts?: { cfg?: OpenClawConfig; store?: SessionCapabilityStore },
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: SessionCapabilityStore;
+    entry?: SessionCapabilityEntry;
+  },
 ): boolean {
   if (!isDashboardSessionKey(sessionKey)) {
     return false;
   }
-  const entry = resolveSessionCapabilityEntry({ sessionKey, ...opts });
+  const entry =
+    opts?.entry ??
+    resolveSessionCapabilityEntry({ sessionKey, cfg: opts?.cfg, store: opts?.store });
   return (
-    entry?.createdVia === "spawn" && isStoredSubagentEnvelopeSession({ sessionKey, ...opts, entry })
+    entry?.createdVia === "spawn" &&
+    isStoredSubagentEnvelopeSession({ sessionKey, cfg: opts?.cfg, store: opts?.store, entry })
   );
 }
 
