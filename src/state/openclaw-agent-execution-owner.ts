@@ -363,7 +363,7 @@ export function createAgentDatabaseExecution(
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
-      if (fileIdentity) {
+      if (fileIdentity && creatingTarget) {
         assertExistingDatabaseIdentity(
           borrowedPath,
           `file:${fileIdentity.physicalIdentity}`,

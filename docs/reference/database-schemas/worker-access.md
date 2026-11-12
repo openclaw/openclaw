@@ -102,7 +102,10 @@ Durable actor acquisition prepares cold storage through that writer and transfer
 the retained execution into the actor. Attempt and pending-input callers consume
 its admitted physical identity instead of resolving the pathname again. Warm
 write reservations retain the schema-admitted generation through settlement;
-unknown files and unhosted workers keep their physical admission checks.
+unknown files and unhosted workers keep their physical admission checks. Warm
+execution borrowers consume their existing file owner without restatting its path;
+the native worker checks physical identity before each command. Explicit creation
+witnesses still validate the observed target when captured.
 Slow direct-reservation warnings label session-manager, actor-command, and selected
 history-read callers. The `openclaw.agent-database.reservation` diagnostic channel
 publishes holder timing without paths, session identities, or message content.
