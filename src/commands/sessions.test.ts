@@ -138,10 +138,11 @@ describe("sessionsCommand", () => {
     );
     const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
     Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
-    onTestFinished(() =>
-      columns
-        ? Object.defineProperty(process.stdout, "columns", columns)
-        : Reflect.deleteProperty(process.stdout, "columns"),
+    onTestFinished(
+      () =>
+        void (columns
+          ? Object.defineProperty(process.stdout, "columns", columns)
+          : Reflect.deleteProperty(process.stdout, "columns")),
     );
     const { runtime, logs } = makeRuntime();
     await run({ store, ...options }, runtime);
@@ -285,16 +286,15 @@ describe("sessionsCommand", () => {
       const spawnedWorkspaceDir =
         gatewayState === "other-workspace" ? "/workspace/spawned" : undefined;
       const work = new AsyncWorkScope();
-      if (gatewayState === "interrupted") {
-        work.beginClose();
-      }
       if (gatewayState === "uninspectable") {
         catalogState.readActiveGatewayLockIdentity.mockRejectedValue(
           new Error("Gateway lock payload could not be verified"),
         );
       } else if (gatewayState !== "absent") {
         catalogState.readActiveGatewayLockIdentity.mockResolvedValue(gatewayOwner);
-        if (gatewayState === "unreachable" || gatewayState === "interrupted") {
+        if (gatewayState === "interrupted") {
+          catalogState.callGateway.mockImplementation(() => Promise.reject(work.beginClose()));
+        } else if (gatewayState === "unreachable") {
           catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
         } else {
           catalogState.callGateway.mockResolvedValue({
