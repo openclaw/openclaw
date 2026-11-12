@@ -67,3 +67,11 @@ it("limits listed-model chat rejections to deterministic 400, 403 and 404 respon
   }
   expect(isListedModelChatRejection(400, "Invalid value for 'temperature'.")).toBe(false);
 });
+
+it("reads a retirement notice behind a long id-like run in linear time", () => {
+  const run = "-a".repeat(32_000);
+  const started = performance.now();
+  expectMessages(false, [run, "a:".repeat(32_000)]);
+  expectMessages(true, [`${run} was retired at 2026-09-25 00:00:00 -0700 PDT (ref: synthetic)`]);
+  expect(performance.now() - started).toBeLessThan(500);
+});

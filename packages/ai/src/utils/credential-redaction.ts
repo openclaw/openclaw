@@ -42,8 +42,14 @@ const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]
 const COOKIE_HEADER_RE = /\b((?:set-)?cookie\s*:\s*)([^\r\n]+)/giu;
 const QUOTED_CREDENTIAL_HEADER_RE =
   /(["'])((?:[A-Za-z][A-Za-z0-9_.-]*[_.-])?(?:api[_.-]?key|authorization|passphrase|passwd|password|private[_.-]?key|secret(?:[_.-]?access)?[_.-]?key|signing[_.-]?key|token))\1\s*:\s*([^,}\r\n]+)/giu;
-const CREDENTIAL_HEADER_RE =
-  /\b((?:[A-Za-z][A-Za-z0-9_.-]*[_.-])?(?:api[_.-]?key|authorization|passphrase|passwd|password|private[_.-]?key|secret(?:[_.-]?access)?[_.-]?key|signing[_.-]?key|token))\s*:\s*([^\r\n]+)/giu;
+const CREDENTIAL_HEADER_NAME = String.raw`api[_.-]?key|authorization|passphrase|passwd|password|private[_.-]?key|secret(?:[_.-]?access)?[_.-]?key|signing[_.-]?key|token`;
+// Find the header name and colon first, then look back for an optional `x-`-style prefix.
+// Starting at the prefix walked a long id-like run from each of its positions. The prefix
+// stays outside the match, so the redacted text is unchanged.
+const CREDENTIAL_HEADER_RE = new RegExp(
+  String.raw`(?=(?:${CREDENTIAL_HEADER_NAME})\s*:)(?<=\b|\b[A-Za-z][A-Za-z0-9_.-]*[_.-])(${CREDENTIAL_HEADER_NAME})\s*:\s*([^\r\n]+)`,
+  "giu",
+);
 const LOOSE_QUOTED_CREDENTIAL_PAIR_RE =
   /\b((?!(?:api|endpoint|method|model|provider|status|type)=)[A-Za-z][A-Za-z0-9_.-]{0,64})=(["'])([A-Za-z0-9+/._~%=-]{16,})\2/giu;
 const LOOSE_CREDENTIAL_PAIR_RE =
