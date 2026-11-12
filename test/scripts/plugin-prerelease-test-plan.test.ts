@@ -460,7 +460,9 @@ export const createExtensionTestShards = () => [{
       const legacyMatrix = legacy.output
         .split("\n")
         .find((line) => line.startsWith("plugin_prerelease_extension_matrix="));
-      expect(JSON.parse(expectDefined(legacyMatrix).split("=")[1]!).include).toEqual([
+      expect(
+        JSON.parse(expectDefined(legacyMatrix, "legacy extension matrix").split("=")[1]!).include,
+      ).toEqual([
         expect.objectContaining({ check_name: "extensions-fixture", task: "extensions-batch" }),
       ]);
       expect(legacyMatrix).not.toContain('"test_runtime":');
