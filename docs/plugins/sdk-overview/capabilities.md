@@ -523,8 +523,8 @@ stops future evaluations, not already-dispatched work or use of its result. The
 host supplies `context.isAdmissible()` for ongoing consumer authority, model
 selection, and provider configuration/credential generation checks; the Labs
 toggle is not part of those ongoing checks. Providers performing external I/O
-must call it synchronously immediately before sending,
-after any lazy loading, DNS, or other awaited preparation. A false result closes
+call it when the request starts, and again after a queue wait or before a retry.
+A request that passed the check may finish. A false result closes
 that evaluation; a thrown authority assertion is terminal. The host remembers
 either observation across provider cleanup, so revocation cannot become a provider
 health failure or a later successful result. Omission preserves explicit
