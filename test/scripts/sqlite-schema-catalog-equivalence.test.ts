@@ -15,6 +15,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db
 import { getOpenClawAgentMigrationSchema } from "../../src/state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
+import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import {
   getOpenClawStateRuntimeSchema,
   getOpenClawStatePredecessorSchema,
@@ -122,7 +123,9 @@ describe("generated SQLite schema catalogs", () => {
     const current = getOpenClawStateRuntimeSchema(options);
     const historical = getOpenClawStateRuntimeSchema(
       options,
-      withLegacyWorkspaceBootstrapDeferred(OPENCLAW_STATE_SCHEMA_SQL),
+      withLegacyWorkspaceBootstrapDeferred(
+        withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL),
+      ),
     );
     expect(createHash("sha256").update(historical).digest("hex")).toBe(
       "d99906589af97e0bc4e77af6f5e155e6eb689abfde8ef42d8534862f0c0f4d7d",

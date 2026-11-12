@@ -41,11 +41,16 @@ import {
 } from "../node-command-policy.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { captureQueuedOperatorRecoverySource } from "../operator-run-recovery-source.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import { formatForLog } from "../ws-log.js";
-import { listWorkerProfilesWithMachines } from "./environments.profiles.js";
+import {
+  listWorkerProfilesWithMachines,
+  requireActiveCloudProfile,
+} from "./environments.profiles.js";
 import { environmentsSessionExecHandlers } from "./environments.session-exec.js";
 import { environmentsSessionHandlers } from "./environments.session.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
@@ -74,17 +79,6 @@ async function listSuggestedWorkerProfile(
     providerId: suggestion.profile.provider,
     ...(suggestion.providerDisplayId ? { providerDisplayId: suggestion.providerDisplayId } : {}),
   };
-}
-
-async function requireActiveCloudProfile(context: GatewayRequestContext) {
-  const summaries = await listWorkerProfilesWithMachines(context);
-  const profile = summaries.find((summary) => summary.id === "cloud");
-  if (!profile) {
-    throw new Error(
-      "The cloud worker profile is saved but is not active on this Gateway. Wait for the Gateway to restart, then retry; if it does not restart, restart it manually.",
-    );
-  }
-  return profile;
 }
 
 const adoptSuggestedWorkerProfile = defineValidatedGatewayHandler(
@@ -594,8 +588,31 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "environments.create": defineEnvironmentMutation(
     "create",
     validateEnvironmentsCreateParams,
-    async ({ params }, service) =>
-      summarizeWorkerEnvironment(await service.create(params.profileId, params.idempotencyKey)),
+    async (options, service) => {
+      const invocation = readGatewayRequestMutationAuthority(options);
+      const captured = await captureGatewayOperatorRunAuthority({
+        client: options.client,
+        context: options.context,
+        hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+        invocationAuthority: { assertCurrent: invocation.assertCurrent },
+      });
+      try {
+        return summarizeWorkerEnvironment(
+          await service.createWithRequest({
+            ...options.params,
+            provisionSource: captureQueuedOperatorRecoverySource(captured?.authority) ?? {
+              kind: "unavailable",
+            },
+            beforeProvision: () => {
+              invocation.assertCurrent();
+              captured?.authority.assertCurrent();
+            },
+          }),
+        );
+      } finally {
+        captured?.release();
+      }
+    },
   ),
   "environments.prepare": defineEnvironmentMutation(
     "prepare",

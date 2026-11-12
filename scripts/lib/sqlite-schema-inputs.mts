@@ -29,6 +29,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema
 import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-storage-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
+import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -61,7 +62,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
   for (const version of [40, 39, 38, 37, 36, 35, 31, 27, 26]) {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
-  const beforeBootstrap = withLegacyWorkspaceBootstrapDeferred(OPENCLAW_STATE_SCHEMA_SQL);
+  const beforeBootstrap = withLegacyWorkspaceBootstrapDeferred(
+    withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL),
+  );
   add("state-before-bootstrap-deferred", "state", beforeBootstrap);
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);
   add("daemon-runtime-pins-v1", "daemon", DAEMON_RUNTIME_PIN_SCHEMA_SQL);

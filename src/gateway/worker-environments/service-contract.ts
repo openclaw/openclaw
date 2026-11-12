@@ -36,6 +36,7 @@ import type {
   WorkerPlacementExecutionMode,
 } from "./placement-record.js";
 import type { WorkerPlacementCancellationTarget } from "./placement-target.js";
+import type { WorkerEnvironmentCreateRequest } from "./service.types.js";
 import type {
   WorkerEnvironmentAttachment,
   WorkerEnvironmentAttachmentRecord,
@@ -185,6 +186,9 @@ export type WorkerEnvironmentServiceContract = {
     signal?: AbortSignal,
     os?: string,
     runSetupScript?: boolean,
+  ): Promise<WorkerEnvironmentServiceRecord>;
+  createWithRequest(
+    request: WorkerEnvironmentCreateRequest,
   ): Promise<WorkerEnvironmentServiceRecord>;
   destroy(environmentId: string): Promise<WorkerEnvironmentServiceRecord>;
   /** Stop session work and return after provider acceptance; physical cleanup remains owned. */
