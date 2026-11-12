@@ -1426,6 +1426,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/process/supervisor/service-child-relay-host.owned-worker.test.ts",
   "src/worker/worker.runtime.test.ts",
   "src/node-host/node-worker-supervisor.startup.test.ts",
+  "src/node-host/node-worker-filesystem.test.ts",
+  "src/node-host/node-worker-supervisor.filesystem.integration.test.ts",
   "src/node-host/runtime.worker-supervisor.test.ts",
   "src/node-host/runner.inventory.test.ts",
   "src/node-host/node-worker-workspace-retention.test.ts",

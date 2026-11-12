@@ -1,0 +1,3 @@
+267
+# Launcher contract and real OpenShell worker isolation and cleanup.
+# 260 new lines plus exactly 7 lines of verified comparison-base debt.
