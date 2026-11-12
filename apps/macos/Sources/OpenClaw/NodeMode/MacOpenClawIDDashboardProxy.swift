@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import OpenClawKit
-import OSLog
 import Synchronization
 
 /// Loopback HTTP/WebSocket proxy that lets the dashboard WebView reach the claw over the Mac's
@@ -21,7 +20,6 @@ final class MacOpenClawIDDashboardProxy: Sendable {
     private let tunnel: OpenClawIDNodeTunnel
     private let state = Mutex<(stopping: Bool, clients: [UUID: Task<Void, Never>], accept: Task<Void, Never>?)>(
         (false, [:], nil))
-    private let logger = Logger(subsystem: "ai.openclaw", category: "ocid-dashboard-proxy")
 
     private init(listener: Int32, port: UInt16, tunnel: OpenClawIDNodeTunnel, logicalOrigin: URL) throws {
         var bytes = [UInt8](repeating: 0, count: 32)
