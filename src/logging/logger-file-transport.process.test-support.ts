@@ -28,7 +28,10 @@ await runWithWorkerStartObserver(
     const logger = getLogger();
     const counts: Record<string, number> = {};
     const restore: Array<() => void> = [];
-    for (const key of Object.keys(fs).filter((name) => name.endsWith("Sync"))) {
+    // Linux exposes unsupported methods such as lchmodSync as undefined.
+    for (const key of Object.keys(fs).filter(
+      (name) => name.endsWith("Sync") && typeof Reflect.get(fs, name) === "function",
+    )) {
       const descriptor = Object.getOwnPropertyDescriptor(fs, key)!;
       Object.defineProperty(fs, key, {
         ...descriptor,

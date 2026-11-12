@@ -79,7 +79,10 @@ try {
     const counts = {};
     const restore = [];
     if (command.mode === "counts") {
-      for (const key of Object.keys(fs).filter((name) => name.endsWith("Sync"))) {
+      // Linux exposes unsupported methods such as lchmodSync as undefined.
+      for (const key of Object.keys(fs).filter(
+        (name) => name.endsWith("Sync") && typeof Reflect.get(fs, name) === "function",
+      )) {
         const descriptor = Object.getOwnPropertyDescriptor(fs, key);
         Object.defineProperty(fs, key, {
           ...descriptor,
