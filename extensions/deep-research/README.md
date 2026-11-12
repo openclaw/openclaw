@@ -1,6 +1,11 @@
 # Deep Research
 
 A default-enabled, lazy bundled research tool. Existing plugin allowlists and tool policy still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
+Select `$deep-research`, `/skill deep-research`, or `/deep_research` in chat to
+use the bundled manual workflow with the current conversation’s sources and budget.
+The workflow stays out of automatic skill selection; selecting it is not a job receipt.
+Existing skill allowlists and tool policy still apply.
+
 Supply a question; the host selects its configured model and isolated agent runtime.
 An explicit model override requires the existing plugin LLM policy permission.
 The controller uses `llm.complete` with `execution.mode: "isolated-agent-runtime"`

@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-ranges.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
 import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import {
@@ -69,10 +70,17 @@ function isEscapedReference(text: string, index: number): boolean {
 }
 
 function* skillReferenceNames(text: string): IterableIterator<string> {
+  let codeRegions: ReturnType<typeof findCodeRegions> | undefined;
   for (const match of text.matchAll(/\$([-a-zA-Z0-9_:]+)/gu)) {
     const name = match[1]?.replace(/:+$/gu, "");
     const index = match.index;
-    if (name && index !== undefined && !isEscapedReference(text, index) && /[a-z]/u.test(name)) {
+    if (
+      name &&
+      index !== undefined &&
+      !isEscapedReference(text, index) &&
+      /[a-z]/u.test(name) &&
+      !isInsideCode(index, (codeRegions ??= findCodeRegions(text)))
+    ) {
       yield name;
     }
   }
