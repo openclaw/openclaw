@@ -155,7 +155,7 @@ async function restorePostgresExports(
     throw new Error("PostgreSQL archive restore requires its captured configuration.");
   }
   const configPath = path.join(targetPath, recoveryConfigPath);
-  if (!isPathInside(targetPath, await fs.realpath(configPath))) {
+  if (!isPathInside(await fs.realpath(targetPath), await fs.realpath(configPath))) {
     throw new Error("PostgreSQL recovery configuration must be inside the restored archive.");
   }
   const {
