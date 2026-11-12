@@ -51,6 +51,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "infra/database-engine/port-command.entry.worker",
     ),
     stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
+    fileLog: runtimeProcessEntrypoint("logging/logger-file.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
     openclawIdTunnel: runtimeProcessEntrypoint("gateway/openclaw-id/tunnel-child/entry"),
     shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
@@ -72,6 +73,11 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     packageActivationRecovery: runtimeProcessEntrypoint(
       "infra/package-update-activation-sealed",
       "package-update-activation-recovery",
+      ".mjs",
+    ),
+    managedHandoffPostgresBridge: runtimeProcessEntrypoint(
+      "infra/update-managed-service-handoff-postgres.worker",
+      "managed-handoff-postgres-bridge.worker",
       ".mjs",
     ),
     managedHandoffRuntime: runtimeProcessEntrypoint(
@@ -105,8 +111,10 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
+    execRealpath: runtimeProcessEntrypoint("infra/exec-realpath.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
+    secretFileRead: runtimeProcessEntrypoint("infra/secret-file-read.worker"),
     ttsPreferences: runtimeProcessEntrypoint("tts/tts-settings-write.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
@@ -437,6 +445,14 @@ export const pluginRuntimeProcessManifest = {
     sourceWorkerName: "telegram-ingress-worker.runtime",
     distWorkerPath: "telegram-ingress-worker.runtime.js",
   },
+  telegramWidgetCheck: {
+    ...pluginRuntimeProcess(
+      "telegram",
+      "src/widgets/widget-check",
+      "src/widgets/widget-check.worker",
+    ),
+    sourceWorkerName: "widget-check.worker",
+  },
   onnxInference: pluginRuntimeProcess("onnx", "index", "src/inference.worker"),
   teamReportsStore: pluginRuntimeProcess("team-reports", "index", "src/store.worker"),
   teamReportsRun: pluginRuntimeProcess("team-reports", "index", "src/run.worker"),
@@ -458,6 +474,7 @@ export const runtimeProcessDeployManifest = {
     source: "src/worker/worker-deploy-client-credentials.ts",
     split: false,
   },
+  "file-log.worker": { source: "src/worker/worker-deploy-file-log.ts", split: false },
   "file-tool-planning.worker": {
     source: "src/worker/worker-deploy-file-tool-planning.ts",
     split: false,
@@ -498,6 +515,10 @@ export const runtimeProcessHelperManifest = {
 
 // Each sealed bootstrap selects only the sibling entries it owns.
 export const runtimeProcessSealedManifest = {
+  managedHandoff: {
+    ownerSource: "src/infra/update-managed-service-handoff-sealed.ts",
+    entries: [["postgresBridge", "managedHandoffPostgresBridge"]],
+  },
   worker: {
     ownerSource: "src/worker/worker-deploy-runtime.ts",
     entries: [
@@ -505,6 +526,7 @@ export const runtimeProcessSealedManifest = {
       ["codeModeNode", "code-mode-node.worker"],
       ["stateRead", "openclaw-state-read.worker"],
       ["workerNativeLifecycle", "worker-native-lifecycle.worker"],
+      ["fileLog", "file-log.worker"],
       ["fileToolPlanning", "file-tool-planning.worker"],
       ["fileToolRead", "file-tool-read.worker"],
       ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker"],
@@ -526,20 +548,14 @@ export const runtimeProcessSealedManifest = {
     ownerSource: string;
     entries: readonly (readonly [
       keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
-      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
+      (
+        | keyof typeof runtimeProcessDeployManifest
+        | keyof typeof runtimeProcessHelperManifest
+        | keyof ReturnType<typeof createRuntimeProcessEntrypoints>
+      ),
     ])[];
   }
 >;
-
-export function createSealedRuntimeProcessEntrypoints(
-  group: keyof typeof runtimeProcessSealedManifest,
-  currentModuleUrl: string,
-) {
-  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
-    name,
-    url: new URL(`./${entry}.mjs`, currentModuleUrl),
-  }));
-}
 
 /** Source-only build workers are declared without entering the packaged runtime graph. */
 export const runtimeProcessToolingEntrypoints = {

@@ -385,7 +385,7 @@ describe("collapseCompletedTurnWork", () => {
     });
     expect(items[boundary ? 0 : 1]).toMatchObject(
       boundary
-        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens" }
+        ? { kind: "divider", label: "Context compacted", metric: "saved 875.3k tokens (97.3%)" }
         : { compaction: "complete", label: "Context compacted" },
     );
     if (!boundary) {

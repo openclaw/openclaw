@@ -1,3 +1,0 @@
-565
-# Parallel Decisions native/OpenRouter protocol, refusal/estimate, catalog and real socket authority regressions.
-# Exact measured net test LF growth; shared scalar unchanged and no spare ceiling credit.

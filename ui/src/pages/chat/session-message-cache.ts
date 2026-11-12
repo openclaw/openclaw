@@ -70,6 +70,7 @@ export function projectChatTranscriptMetadata(row: GatewaySessionRow): ChatTrans
     lastRunId: row.lastRunId,
     status: row.status,
     runtimeMs: row.runtimeMs,
+    abortedLastRun: row.abortedLastRun,
     contextTokens: row.contextTokens,
     sessionId: row.sessionId,
     archived: row.archived,

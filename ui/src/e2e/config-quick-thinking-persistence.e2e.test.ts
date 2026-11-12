@@ -45,8 +45,7 @@ const group = (page: Page, fast: boolean) => {
 const radio = (container: Locator, name: string) =>
   container.getByRole("radio", { name, exact: true });
 async function expectChecked(button: Locator) {
-  await button.waitFor();
-  expect(await button.isChecked()).toBe(true);
+  await expect.poll(() => button.isChecked()).toBe(true);
 }
 
 suite.define(() => {
@@ -110,9 +109,11 @@ suite.define(() => {
           agents: { defaults: { fastModeDefault: value } },
         });
         // PATCH custody and the later applied-state GET must describe the same save.
+        const priorReads = (await gateway.getRequests("config.get")).length;
         await gateway.setMethodResponse("config.get", saved);
         await gateway.resolveDeferred("config.patch");
-        await expect.poll(() => radio(speed, label).isChecked()).toBe(true);
+        await gateway.waitForRequest("config.get", { after: priorReads });
+        await expectChecked(radio(speed, label));
       }
       expect(await gateway.getRequests("config.patch")).toHaveLength(2);
       const fresh = await context.newPage();

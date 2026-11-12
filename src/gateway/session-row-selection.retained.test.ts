@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import * as pinPolicy from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import * as sessionKeys from "../routing/session-key.js";
 import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import { getSessionListBaseMiss } from "./session-list-diagnostics.js";
 import * as listFilters from "./session-list-filters.js";
@@ -60,6 +61,7 @@ function fixture() {
         id: identity(previous),
         key,
         agentId: previous.agentId,
+        storePath: previous.storeTarget.storePath,
         row: undefined,
       });
       rows.delete(key);
@@ -95,6 +97,7 @@ function fixture() {
       id: identity(row),
       key,
       agentId,
+      storePath: row.storeTarget.storePath,
       row: selectionRow(row),
       scope: "session-entry",
     });
@@ -312,7 +315,7 @@ it("keeps concurrent audience baselines under a daytime roster's selection press
   }
 });
 
-it("reads only the requested archive partitions without an eager roster copy", () => {
+it("streams archive partitions and trusts admitted agent identities", () => {
   const state = fixture();
   for (let index = 0; index < 1024; index++) {
     state.put(`agent:main:stream-${index}`, {
@@ -321,6 +324,7 @@ it("reads only the requested archive partitions without an eager roster copy", (
       archivedAt: index % 2 ? 0 : undefined,
     });
   }
+  state.put("agent:ops:other-agent", { sessionId: "other-agent", updatedAt: now });
   const partitions = state.selection.read().partitions!;
   const largestPartition = Math.max(...partitions.map((part) => part.entries.size));
   let archived: boolean | "all" = false;
@@ -350,6 +354,7 @@ it("reads only the requested archive partitions without an eager roster copy", (
   });
   let filtered = 0;
   const filter = listFilters.filterSessionEntries;
+  using normalized = vi.spyOn(sessionKeys, "normalizeAgentId");
   using _ = vi.spyOn(listFilters, "filterSessionEntries").mockImplementation((params) => {
     expect(read).toBe(filtered);
     const result = filter(params);
@@ -360,9 +365,14 @@ it("reads only the requested archive partitions without an eager roster copy", (
   try {
     for (archived of [false, true, "all"] as const) {
       read = filtered = 0;
-      const result = state.select(state.selection, { archived, limit: 10 }, new Map());
+      const result = state.select(
+        state.selection,
+        { archived, limit: 10, agentId: " MAIN " },
+        new Map(),
+      );
       expect(result.totalCount).toBe(archived === "all" ? 1024 : 512);
-      expect(read).toBe(result.totalCount);
+      expect(read).toBe(result.totalCount + Number(archived !== true));
+      expect(new Set(normalized.mock.calls.map(([id]) => id))).toEqual(new Set([" MAIN "]));
       expect(result.entries.map(([, entry]) => entry.sessionId)).toEqual(
         Array.from({ length: 10 }, (_value, index) =>
           String(1023 - Number(archived === false) - index * (archived === "all" ? 1 : 2)),

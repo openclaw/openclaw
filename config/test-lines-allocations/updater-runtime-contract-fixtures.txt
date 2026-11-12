@@ -1,2 +1,0 @@
-21
-# Restore existing updater runtime-selection, admission, and diagnostic contracts.

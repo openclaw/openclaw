@@ -679,7 +679,6 @@
   "ui/src/i18n/locales/en-session-placement.ts",
   "ui/src/i18n/locales/en-sidebar-attention.ts",
   "ui/src/i18n/locales/en.ts",
-  "ui/src/lib/agents/creation-recovery.ts",
   "ui/src/lib/agents/display.ts",
   "ui/src/lib/agents/identity.ts",
   "ui/src/lib/agents/index.ts",
@@ -1314,6 +1313,7 @@
   "src/shared/run-failure-notice.ts",
   "src/shared/search-case.ts",
   "src/shared/skill-workshop-change-notice.ts",
+  "src/shared/template-install-notice.ts",
   "src/shared/text/citation-control-markers.ts",
   "src/shared/tool-approval-reviews.ts",
   "src/shared/transcript-only-openclaw-assistant.ts",
@@ -1938,8 +1938,7 @@
   "ui/src/styles/mcp-app-extensions.css",
   "ui/src/styles/session-panel-rail.css",
   "ui/src/styles/sidebar-markdown.css",
-  "ui/src/styles/skill-file-hovercard.css",
-  "ui/src/styles/template-creator.css"
+  "ui/src/styles/skill-file-hovercard.css"
  ],
  "entries": {
   "shared": [

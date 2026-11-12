@@ -176,10 +176,9 @@ export async function waitForControlUiSettingsTakeover(
   pathname = "/settings/appearance",
 ): Promise<{ search: Locator; sidebar: Locator }> {
   await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
-  const appSidebar = page.locator("openclaw-app-sidebar");
   const sidebar = page.locator(".settings-sidebar");
   const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-  await appSidebar.waitFor({ state: "detached" });
+  await page.locator(".sidebar-shell").waitFor({ state: "hidden" });
   await search.waitFor({ state: "visible" });
   return { search, sidebar };
 }

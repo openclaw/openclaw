@@ -62,7 +62,7 @@ function composerControls(state: ChatPageHost, agentDefaultModel?: string) {
 }
 
 describe("mounted pane session event ownership", () => {
-  it("keeps completed-work metadata when the retained roster omits the observed conversation", async () => {
+  it("keeps completed-work timing when the retained roster omits the observed conversation", async () => {
     const row: GatewaySessionRow = {
       key: "agent:main:dashboard:observed-work",
       agentId: "main",
@@ -71,13 +71,16 @@ describe("mounted pane session event ownership", () => {
       label: "Observed work",
       status: "done",
       lastRunId: "work-run",
-      runtimeMs: 180_000,
     };
     const history = {
       sessionId: row.sessionId,
       sessionInfo: row,
       messages: [
-        nativeMessage("user", "Review the report", 1_000, { id: "request", seq: 1 }),
+        nativeMessage("user", "Review the report", 1_000, {
+          id: "request",
+          seq: 1,
+          idempotencyKey: "work-run:user",
+        }),
         {
           role: "toolResult",
           toolName: "read",
@@ -91,8 +94,7 @@ describe("mounted pane session event ownership", () => {
           role: "assistant",
           runId: "work-run",
           content: "Report reviewed",
-          timestamp: 3_000,
-          __openclaw: { seq: 3 },
+          __openclaw: { seq: 3, recordTimestampMs: 181_000 },
         },
       ],
     };

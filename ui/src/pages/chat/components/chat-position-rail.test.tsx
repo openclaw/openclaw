@@ -699,8 +699,8 @@ describe("conversation position rail", () => {
     const marks = part(container, "marks")!;
     measure(marks, { clientHeight: 600 });
     emitTranscriptResize(marks, 44, 600);
-    await settleFrames();
-    expect(observed.has(streamBubble)).toBe(true);
+    // Observer registration follows settled refs and queued layout, not a fixed frame budget.
+    await waitForSolid(() => expect(observed.has(streamBubble)).toBe(true));
     const queryBubbles = vi.spyOn(root, "querySelectorAll");
     props.stream = "Draft **updated** response";
     rerender();
@@ -726,8 +726,7 @@ describe("conversation position rail", () => {
     const persistedBubble = query('[data-entry-id="persisted-answer"]')!;
     // Ref retirement releases the old target before queued additions and layout.
     expect(observed.has(streamBubble)).toBe(false);
-    await settleFrames();
-    expect(observed.has(persistedBubble)).toBe(true);
+    await waitForSolid(() => expect(observed.has(persistedBubble)).toBe(true));
     marker().click();
     await settleFrames();
     expect(persistedBubble.classList.contains("chat-bubble--reply-target")).toBe(true);

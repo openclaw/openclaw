@@ -395,6 +395,7 @@ export interface WebSocketLike {
   ): void;
   send(data: string): void;
   close(): void;
+  terminate(): void;
 }
 
 /**
@@ -610,6 +611,9 @@ export class ReefInboxConnection {
       const url = this.client.websocketUrl();
       const signature = new URL(url).searchParams.get("sig") ?? "";
       const socket = this.webSocketFactory(url);
+      const closed = new Promise<void>((done) => {
+        socket.addEventListener("close", () => done());
+      });
       const workAbort = new AbortController();
       // Emit each state transition at most once per socket and never after this
       // invocation settles, so late events from an abandoned socket cannot
@@ -629,7 +633,7 @@ export class ReefInboxConnection {
         }
         aborting = true;
         markDisconnected();
-        socket.close();
+        socket.terminate();
         // Older socket work can still own the shared serial tail. Waiting here
         // prevents a replacement channel from dispatching the same cursor range.
         void this.processing.then(
@@ -646,11 +650,8 @@ export class ReefInboxConnection {
           clearInterval(keepalive);
         }
         signal?.removeEventListener("abort", abortListener);
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
+        // A close handshake can retain TLS and its timeout after the account settles.
+        void closed.then(() => (error ? reject(error) : resolve()));
       };
       const markDisconnected = () => {
         if (disconnected) {
@@ -666,14 +667,13 @@ export class ReefInboxConnection {
           return;
         }
         markDisconnected();
-        // An abort waits for the class-wide serial tail. A close event emitted
-        // synchronously by socket.close() must not finish this invocation early.
+        // A synchronous close on terminate must still wait for the class-wide serial tail.
         if (aborting) {
           return;
         }
         finish(error);
         if (error) {
-          socket.close();
+          socket.terminate();
         }
       };
       const pump = () => {

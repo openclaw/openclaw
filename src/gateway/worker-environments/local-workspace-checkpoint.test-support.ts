@@ -11,6 +11,7 @@ import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.t
 import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
+import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
@@ -22,6 +23,101 @@ const expectText = async (directory: string, relative: string, expected: string)
   expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(expected);
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
+
+async function proveReconcilePauseWindow(owner: LocalWorkspaceOwner) {
+  const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const registry = await import("../../agents/sandbox/registry.js");
+  const engine = await import("../../agents/sandbox/container-engine.js");
+  const worker = await import("./workspace-manifest-worker.js");
+  const recovery = await import("./workspace-reconcile-recovery.js");
+  const reconciliation = await import("./workspace-reconcile.js");
+  const core = await import("./workspace-reconcile-core.js");
+  let measuredPhase: string | undefined;
+  const reconcile = reconciliation.applyStagedWorkerWorkspace;
+  vi.spyOn(reconciliation, "applyStagedWorkerWorkspace").mockImplementation((params) =>
+    reconcile({
+      ...params,
+      onPhase: (phase) => {
+        measuredPhase = phase;
+        params.onPhase?.(phase);
+      },
+    }),
+  );
+  const preflight = core.preflightWorkspaceApply;
+  vi.spyOn(core, "preflightWorkspaceApply").mockImplementation((params) => {
+    expect(measuredPhase, "Every preflight must have truthful pause attribution").toBe("preflight");
+    return preflight(params);
+  });
+  vi.stubEnv("DOCKER_HOST", "unix:///synthetic/reconcile-docker.sock");
+  vi.stubEnv("DOCKER_CONTEXT", undefined);
+  let paused = false;
+  vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
+    if (args[0] === "pause") {
+      paused = true;
+    }
+    if (args[0] === "unpause") {
+      paused = false;
+    }
+    return {
+      code: 0,
+      stderr: "",
+      stdout:
+        args[0] === "inspect"
+          ? args.includes("{{.State.Paused}}")
+            ? String(paused)
+            : `${"a".repeat(64)} true ${paused}`
+          : "",
+    };
+  });
+  await registry.updateRegistry({
+    containerName: "reconcile-fixture",
+    backendId: "docker",
+    sessionKey: owner.sessionKey,
+    workspaceDir: projection,
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    image: "fixture",
+  });
+  const patch = worker.prepareWorkspacePatch;
+  const capture = worker.captureWorkspaceManifest;
+  let targetCaptures = 0;
+  vi.spyOn(worker, "captureWorkspaceManifest").mockImplementation(async (params) => {
+    if (params.root === projection) {
+      targetCaptures++;
+    }
+    return capture(params);
+  });
+  let concurrentEdit = false;
+  vi.spyOn(worker, "prepareWorkspacePatch").mockImplementation(async (params) => {
+    expect(paused, "Git patch preparation must not freeze the guest").toBe(false);
+    const result = await patch(params);
+    if (concurrentEdit) {
+      await writeText(projection, "source.txt", "guest edit\n");
+    }
+    return result;
+  });
+  const apply = recovery.applyWorkspacePatch;
+  vi.spyOn(recovery, "applyWorkspacePatch").mockImplementation(async (params) => {
+    expect(paused, "Guest filesystem mutation needs the pause").toBe(true);
+    return apply(params);
+  });
+  await writeText(owner.worktree.path, "source.txt", "host edit\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.synchronize("projection"));
+  await expectText(projection, "source.txt", "host edit\n");
+  expect(targetCaptures, "The frozen target needs only one complete inventory capture").toBe(1);
+  expect(paused).toBe(false);
+  concurrentEdit = true;
+  await writeText(owner.worktree.path, "source.txt", "next host edit\n");
+  await expect(
+    withLocalWorkspaceProjection(owner, (state) => state.synchronize("projection")),
+  ).rejects.toThrow("changed while cloud reconciliation was being prepared");
+  await expectText(projection, "source.txt", "guest edit\n");
+  expect((await readLocalWorkspaceProjection(owner.worktree.id))?.journal_json).toBeNull();
+  expect(paused).toBe(false);
+  concurrentEdit = false;
+  await writeText(projection, "source.txt", "host edit\n");
+  await withLocalWorkspaceProjection(owner, (state) => state.settle());
+}
 
 async function proveUnchangedSandboxCommandCheckpoints(
   owner: LocalWorkspaceOwner,
@@ -414,6 +510,8 @@ export function registerSandboxCheckpointTests(
   logObserver: typeof checkpointLog,
 ) {
   checkpointLog = logObserver;
+  it("keeps the guest running during reconcile patch preparation and fences concurrent edits", () =>
+    proveReconcilePauseWindow(owner()));
   it("keeps unchanged commands running while checkpointing edits and deletions", () =>
     proveUnchangedSandboxCommandCheckpoints(owner()));
 

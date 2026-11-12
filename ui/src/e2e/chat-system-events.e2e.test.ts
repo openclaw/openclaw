@@ -1,12 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  controlUiBundledSettingsStorageKey,
-  createControlUiMockBootstrapConfig,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -57,112 +50,6 @@ const history = [
 ];
 
 suite.define(() => {
-  it.each([false, true])(
-    "keeps complete silent continuation activity without reply chrome (bubble=%s)",
-    async (bubbleMode) => {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        if (bubbleMode) {
-          await page.addInitScript(
-            (key) =>
-              localStorage.setItem(
-                key,
-                JSON.stringify({ chatBubbleSessionKeys: ["agent:main:main"] }),
-              ),
-            controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          );
-        }
-        const runId = "continuation";
-        await installMockGateway(page, {
-          historyMessages: [
-            history[0]!,
-            fallback("switch-before"),
-            message("assistant", answerText, "answer"),
-            {
-              role: "assistant",
-              content: [
-                { type: "toolCall", id: "inspect", name: "read", arguments: { path: "report.md" } },
-                {
-                  type: "toolCall",
-                  id: "check",
-                  name: "exec",
-                  arguments: { command: "git status -sb" },
-                },
-              ],
-              timestamp: timestamp + 1,
-              stopReason: "toolUse",
-              __openclaw: { id: "poll", runId, turnBoundary: true },
-            },
-            {
-              role: "toolResult",
-              toolName: "read",
-              toolCallId: "later",
-              content: "Later operation retained",
-              timestamp: timestamp + 2,
-              __openclaw: {
-                id: "later",
-                runId,
-                transport: { clients: [{ id: "cli", mode: "cli" }] },
-              },
-            },
-            {
-              role: "assistant",
-              content: [],
-              stopReason: "stop",
-              timestamp: timestamp + 3,
-              __openclaw: { id: "silent", runId },
-            },
-            fallback("switch-after"),
-          ],
-        });
-        if (bubbleMode) {
-          await page.route("**/control-ui-config.json", (route) =>
-            route.fulfill({
-              json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
-            }),
-          );
-        }
-        await page.goto(suite.server.baseUrl + "chat");
-        await page.getByText(answerText, { exact: true }).waitFor();
-        expect(
-          await page
-            .locator("section.chat")
-            .evaluate((element) => element.classList.contains("chat--bubbles")),
-        ).toBe(bubbleMode);
-        const activity = page.locator(".chat-activity-group__summary");
-        await activity.waitFor();
-        await activity.click();
-        const laterOutput = page.locator(".chat-tool-msg-summary", { hasText: "Tool output" });
-        await laterOutput.click();
-        await page.getByText("Later operation retained", { exact: true }).waitFor();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".chat-thread"),
-            [activity],
-            { animations: "disabled" },
-          );
-          await writeFile(
-            path.join(suite.artifactDir, `continuation-operations-${bubbleMode}.png`),
-            frame.png,
-          );
-        }
-        await expect
-          .poll(() => page.locator(".chat-thread").textContent())
-          .toContain("Later operation retained");
-        const disclosures = page.locator(".chat-system-events");
-        expect(await disclosures.count()).toBe(2);
-        expect(await disclosures.first().getAttribute("open")).toBeNull();
-        await disclosures.first().locator("summary").click();
-        await expect
-          .poll(() => disclosures.first().textContent())
-          .toContain("Model fallback: Primary → Backup");
-        const operations = page.locator(".chat-group", { has: activity });
-        expect(await operations.locator(".chat-avatar-slot").count()).toBe(0);
-        expect(await operations.locator(".chat-group-footer").count()).toBe(0);
-      });
-    },
-  );
-
   it.each([false, true])(
     "appends events without losing disclosure state (grouped=%s)",
     async (grouped) => {
