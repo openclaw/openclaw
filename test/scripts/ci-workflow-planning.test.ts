@@ -2673,39 +2673,56 @@ describe("ci workflow guards", () => {
     };
     const projectEnv = (eventName: "schedule" | "workflow_dispatch", paths: string[] | null) =>
       Object.fromEntries(
-        Object.entries(expectDefined(manifestStep.env, "manifest env")).map(([key, value]) => [
-          key,
-          String(
-            evaluateWorkflowExpression(value, {
-              eventName,
-              repository: "openclaw/openclaw",
-              runAttempt: 1,
-              workflowSha: sha,
-              sha,
-              targetRef: sha,
-              validationTier: "main",
-              requestedRunnerBackend: "boat",
-              ciShape: "main",
-              includeAndroid: true,
-              steps: {
-                checkout_ref: { outputs: { sha } },
-                runner_profile: {
-                  outputs: {
-                    ...profile.outputs,
-                    ci_qualification: eventName === "schedule" ? "false" : "true",
+        Object.entries(expectDefined(manifestStep.env, "manifest env"))
+          // Neither scheduled nor exact-main qualification has PR labels or an author payload.
+          .filter(
+            ([key]) =>
+              ![
+                "OPENCLAW_CI_RELEASE_FAST_LANE_LABEL",
+                "OPENCLAW_CI_FULL",
+                "OPENCLAW_CI_HEAD_REPOSITORY",
+                "OPENCLAW_CI_PR_AUTHOR_TYPE",
+              ].includes(key),
+          )
+          .map(([key, value]) => [
+            key,
+            String(
+              evaluateWorkflowExpression(value, {
+                eventName,
+                repository: "openclaw/openclaw",
+                runAttempt: 1,
+                workflowSha: sha,
+                sha,
+                targetRef: sha,
+                validationTier: "main",
+                requestedRunnerBackend: "boat",
+                ciShape: "main",
+                includeAndroid: true,
+                steps: {
+                  checkout_ref: { outputs: { sha } },
+                  diff_base: { outputs: { sha } },
+                  release_correction_base: { outputs: {} },
+                  historical_target: { outputs: {} },
+                  release_candidate_target: { outputs: {} },
+                  target_context_target: { outputs: {} },
+                  hosted_health: { outputs: {} },
+                  runner_profile: {
+                    outputs: {
+                      ...profile.outputs,
+                      ci_qualification: eventName === "schedule" ? "false" : "true",
+                    },
+                  },
+                  qualification_dispatch: {
+                    outputs: { eligible: eventName === "schedule" ? "false" : "true" },
+                  },
+                  docs_scope: { outputs: { docs_only: "true", docs_changed: "false" } },
+                  changed_scope: {
+                    outputs: { changed_paths_file: "", changed_paths_json: JSON.stringify(paths) },
                   },
                 },
-                qualification_dispatch: {
-                  outputs: { eligible: eventName === "schedule" ? "false" : "true" },
-                },
-                docs_scope: { outputs: { docs_only: "true", docs_changed: "false" } },
-                changed_scope: {
-                  outputs: { changed_paths_file: "", changed_paths_json: JSON.stringify(paths) },
-                },
-              },
-            }),
-          ),
-        ]),
+              }) ?? "",
+            ),
+          ]),
       );
     const scheduled = runCiManifestFixture({
       ...fixture,
@@ -5956,7 +5973,17 @@ describe("ci workflow guards", () => {
       "  *) exit 64 ;;",
       "esac",
     ]);
-    for (const scenario of scenarios) {
+    for (const entry of scenarios) {
+      const scenario = {
+        ref: "refs/heads/qualification-branch",
+        refName: "qualification-branch",
+        validationTier: "full",
+        candidateRef: "",
+        contextRef: "",
+        prNumber: "123",
+        targetRef: sha,
+        ...entry,
+      };
       const output = path.join(root, "output");
       writeFileSync(output, "");
       const result = runWorkflowShellScript(expectDefined(step.run, "dispatch script"), {
@@ -5968,21 +5995,21 @@ describe("ci workflow guards", () => {
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
           GITHUB_ACTOR: "maintainer",
           GITHUB_SHA: scenario.githubSha ?? sha,
-          GITHUB_REF: scenario.ref ?? "refs/heads/qualification-branch",
-          GITHUB_REF_NAME: scenario.refName ?? "qualification-branch",
+          GITHUB_REF: scenario.ref,
+          GITHUB_REF_NAME: scenario.refName,
           CI_SHAPE: scenario.ciShape ?? "default",
-          VALIDATION_TIER: scenario.validationTier ?? "full",
+          VALIDATION_TIER: scenario.validationTier,
           REQUESTED_RUNNER_PROFILE: scenario.requestedProfile ?? "runson",
           RELEASE_SCOPE: scenario.releaseScope ?? "full",
           HISTORICAL_TARGET_TAG: scenario.historicalTag ?? "",
-          RELEASE_CANDIDATE_REF: scenario.candidateRef ?? "",
-          TARGET_CONTEXT_REF: scenario.contextRef ?? "",
+          RELEASE_CANDIDATE_REF: scenario.candidateRef,
+          TARGET_CONTEXT_REF: scenario.contextRef,
           GITHUB_REPOSITORY: scenario.repository ?? "openclaw/openclaw",
           GITHUB_OUTPUT: output,
           RUNNER_TEMP: root,
           RELEASE_GATE: String(scenario.releaseGate ?? true),
-          PULL_REQUEST_NUMBER: scenario.prNumber ?? "123",
-          TARGET_REF: scenario.targetRef ?? sha,
+          PULL_REQUEST_NUMBER: scenario.prNumber,
+          TARGET_REF: scenario.targetRef,
           WORKFLOW_REVISION: scenario.workflowRevision ?? sha,
           MOCK_PERMISSION: scenario.permission ?? "write",
           MOCK_API_FAILURE: scenario.apiFailure ?? "",
@@ -6059,14 +6086,15 @@ describe("ci workflow guards", () => {
       { author: "other-maintainer", starter: "vincentkoc", admitted: false },
       { author: "vincentkoc", starter: "other-maintainer", admitted: false },
       { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
-    ].map((scenario) => ({
-      ...scenario,
-      eventName: "workflow_dispatch" as const,
-      configuredProfile: "hybrid",
-      requestedProfile: "boat" as const,
-      ciShape: "main" as const,
-      qualificationDispatch: true,
-    })),
+    ].map((scenario) =>
+      Object.assign(scenario, {
+        eventName: "workflow_dispatch" as const,
+        configuredProfile: "hybrid",
+        requestedProfile: "boat" as const,
+        ciShape: "main" as const,
+        qualificationDispatch: true,
+      }),
+    ),
     { author: "vincentkoc", starter: "vincentkoc", admitted: true },
     { author: "contributor", starter: "vincentkoc", admitted: false },
     { author: "vincentkoc", starter: "contributor", admitted: false },
