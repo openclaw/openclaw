@@ -1,0 +1,5 @@
+60
+# LOCAL 2026.11.8 row 53; source b6efe7beb7fe3bcab5cfbaca8da00438ab1d3651.
+# Utility-only selection now continues to agent model selection while retaining staged utility credentials, the admitted pending-agent target, and deferred persistence. Failed candidates remain replaced rather than layered.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.

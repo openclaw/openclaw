@@ -142,6 +142,66 @@ describe("runSetupModelAuthStep", () => {
     expect(prepared.persistAuthProfiles).not.toHaveBeenCalled();
   });
 
+  it("re-prompts after failed and utility-only setup, keeping pending-agent credentials scoped", async () => {
+    const workspaceDir = "/tmp/robby-workspace";
+    const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
+    const profile = (provider: string) => ({
+      profileId: `${provider}:default`,
+      credential: { type: "api_key" as const, provider, key: `test-${provider}-key` },
+    });
+    const utilityProfile = profile("levanto"),
+      agentProfile = profile("anthropic");
+    const utility = {
+      ...candidate(config, [utilityProfile]),
+      utilityModelOverride: "levanto/sage",
+    };
+    const agent = candidate(config, [agentProfile]);
+    const prompter = createWizardPrompter();
+    const error = new Error("Claude CLI is not authenticated on this host.");
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("anthropic-cli")
+      .mockResolvedValueOnce("levanto-api-key")
+      .mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce(utility)
+      .mockImplementationOnce(async (args) => ({ ...agent, config: args.config }));
+    promptDefaultModel.mockResolvedValueOnce({ model: "anthropic/claude-test" });
+    const pendingAgent = { name: "Robby!", workspaceDir };
+    const result = await runStep({ config, prompter, pendingAgent });
+    const target = {
+      agentId: "robby",
+      agentDir: expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/),
+    };
+    expect(ensureAuthProfileStore).not.toHaveBeenCalled();
+    expect(applyAuthChoice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ...target, workspaceDir }),
+    );
+    expectCall(promptDefaultModel, { ...target, workspaceDir });
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+      expect.anything(),
+      prompter,
+      expect.objectContaining(target),
+    );
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(3);
+    expect(prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining(error.message),
+      "Provider setup failed",
+    );
+    expect(result.config.agents?.defaults).toMatchObject({
+      utilityModel: "levanto/sage",
+      model: { primary: "anthropic/claude-test" },
+    });
+    expect(result.authProfiles).toEqual([utilityProfile, agentProfile]);
+    await result.persistAuthProfiles();
+    expect(utility.persistAuthProfiles).toHaveBeenCalledOnce();
+    expect(agent.persistAuthProfiles).toHaveBeenCalledOnce();
+    // Live verification renames the selected credential before saving it.
+    const verificationProfile = { ...agentProfile, profileId: "anthropic:setup-test" };
+    await result.persistAuthProfiles([verificationProfile]);
+    expect(agent.persistAuthProfiles).toHaveBeenLastCalledWith([verificationProfile]);
+  });
+
   it("scopes pending-agent credential preparation to its selected workspace", async () => {
     const workspaceDir = "/tmp/robby-workspace";
     const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
