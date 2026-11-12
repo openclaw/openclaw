@@ -44,7 +44,6 @@ describe("image generation credential availability", () => {
           },
           agentDir,
           workspaceDir: state.workspaceDir,
-          authProfileStoreSource,
         });
         assert(tool);
 

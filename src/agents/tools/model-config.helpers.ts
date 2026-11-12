@@ -83,7 +83,6 @@ export function hasAuthForProvider(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
 }): boolean {
@@ -150,7 +149,6 @@ export function hasAuthProfileForProvider(params: {
 export async function prepareToolAuthProfileStore(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): Promise<AuthProfileStore | undefined> {
   return (
     options?.authProfileStore ??
