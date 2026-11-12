@@ -6,7 +6,7 @@ import {
   type ErrorShape,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";

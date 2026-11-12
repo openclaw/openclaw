@@ -145,6 +145,14 @@ when the first bound is reached. Deviate only for a documented platform retry
 horizon, preserved shipped replay-guard window, expected volume or disk budget,
 or non-replay transport, and cover the retention contract with tests.
 
+Queue-cap policy drops are intentional non-outcomes. The shared drain records
+their reason for replay protection without calling a channel's dead-letter
+notification hook or asking the sender to retry. Health and Doctor dead-letter
+counts exclude these rows. `listFailed()` still includes them for inspection.
+The failed-row cap applies separately to policy drops and actual failures, with
+the same failed-row TTL for both. Telegram therefore retains at most 1,000 of
+each, so a flood of policy drops cannot evict its actual dead letters.
+
 ### At-least-once side effects
 
 Drain dispatch runs command side effects before the ingress row reaches its

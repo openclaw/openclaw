@@ -287,6 +287,13 @@ export function createSlackDurableIngress(
         releaseChannel?.();
         lifecycle.abortSignal.removeEventListener("abort", settleTurn);
       };
+      const settleRoutedTurn = async (settle: () => void | Promise<void>) => {
+        try {
+          await settle();
+        } finally {
+          settleTurn();
+        }
+      };
       const retainChannelTurn = () => {
         if (releaseChannel) {
           return;
@@ -351,27 +358,19 @@ export function createSlackDurableIngress(
           await previousTurn;
           lifecycle.abortSignal.throwIfAborted();
         },
-        onAdopted: async () => {
-          try {
-            await lifecycle.onAdopted();
-          } finally {
-            settleTurn();
-          }
-        },
+        onAdopted: () => settleRoutedTurn(() => lifecycle.onAdopted()),
         onDeferred: () => {
           lifecycle.onDeferred();
           // Reply handoff releases session order; migration remains fenced
-          // until the durable turn is actually adopted or abandoned.
+          // until the durable turn is adopted, abandoned, or dropped.
           settleSession();
           monitor.requestDrain();
         },
-        onAbandoned: async () => {
-          try {
-            await lifecycle.onAbandoned();
-          } finally {
-            settleTurn();
-          }
-        },
+        onAbandoned: () => settleRoutedTurn(() => lifecycle.onAbandoned()),
+        onDropped: (reason) =>
+          settleRoutedTurn(() =>
+            lifecycle.onDropped ? lifecycle.onDropped(reason) : lifecycle.onAbandoned(),
+          ),
       };
       try {
         const event = raw.kind === "events-api" ? asOptionalRecord(raw.body)?.event : undefined;

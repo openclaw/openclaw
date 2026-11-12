@@ -1,5 +1,6 @@
 import { action, createOptimistic, createSignal, Show } from "solid-js";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
@@ -44,14 +45,12 @@ export function ChatGPTUsageLimit(props: { presented: boolean; kind: "business" 
         }}
       >
         <div class="chatgpt-usage-limit">
-          <button
-            class="btn btn--icon chatgpt-usage-limit__close"
-            type="button"
-            aria-label={t("common.close")}
+          <IconButton
+            class="chatgpt-usage-limit__close"
+            icon="x"
+            label={t("common.close")}
             onClick={() => setOpen(false)}
-          >
-            <Icon name="x" />
-          </button>
+          />
           <ProviderBrandIcon provider="openai" class="chatgpt-usage-limit__logo" />
           <h2>{t("chat.usageLimit.title")}</h2>
           <p>{body()}</p>

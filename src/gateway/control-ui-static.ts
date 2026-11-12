@@ -10,26 +10,20 @@ import {
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { buildPdfPreviewWorkerCspHeader } from "./control-ui-csp.js";
-import type { ControlUiRootAsset } from "./control-ui-file.js";
+import { isControlUiCompressibleAsset, type ControlUiRootAsset } from "./control-ui-file.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 import { matchesHttpIfModifiedSince } from "./http-conditional.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
 } from "./ingress-attribution.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
+
+const CONTROL_UI_ASSETS_MISSING_MESSAGE =
+  "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
-const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
-  ".css",
-  ".html",
-  ".js",
-  ".json",
-  ".svg",
-  ".txt",
-  ".wasm",
-  ".webmanifest",
-]);
 
 const CONTROL_UI_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -72,10 +66,6 @@ export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEnc
   );
 }
 
-export function isControlUiCompressibleAsset(filePath: string): boolean {
-  return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
-}
-
 type ControlUiRepresentation = {
   file: ControlUiRootAsset["file"];
   encoding?: ControlUiContentEncoding;
@@ -116,11 +106,11 @@ function resolveControlUiRepresentation(
 
 function setControlUiEncodingHeaders(
   res: ServerResponse,
-  extension: string,
+  filePath: string,
   encoding: ControlUiRepresentationEncoding,
 ) {
   res.setHeader("Vary", "Accept-Encoding");
-  if (!CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension)) {
+  if (!isControlUiCompressibleAsset(filePath)) {
     return;
   }
   if (encoding !== "identity") {
@@ -147,7 +137,7 @@ function setControlUiFileHeaders(
   if (options?.lastModifiedMs !== undefined) {
     res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
   }
-  setControlUiEncodingHeaders(res, extension, options?.encoding ?? "identity");
+  setControlUiEncodingHeaders(res, filePath, options?.encoding ?? "identity");
 }
 
 /** Revalidate no-cache static assets without generating entity tags. */
@@ -298,6 +288,22 @@ function cachedCompressedControlUiHtml(
   return compression;
 }
 
+export function respondControlUiAssetsUnavailable(res: ServerResponse, root?: ControlUiRootState) {
+  const message =
+    root?.kind === "preparing"
+      ? "Control UI assets are being prepared. Try again shortly."
+      : root?.kind === "failed"
+        ? "Control UI assets could not be prepared. Check the Gateway logs or run `openclaw doctor --fix`."
+        : root?.kind === "invalid" && root.path
+          ? `Control UI assets not found at ${root.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`
+          : CONTROL_UI_ASSETS_MISSING_MESSAGE;
+  if (root?.kind === "preparing") {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Retry-After", "1");
+  }
+  respondPlainText(res, 503, message);
+}
+
 export function respondControlUiNotAcceptable(res: ServerResponse) {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Vary", "Accept-Encoding");
@@ -315,7 +321,7 @@ export async function sendControlUiHtmlBody(
     respondControlUiNotAcceptable(res);
     return;
   }
-  setControlUiEncodingHeaders(res, ".html", encoding);
+  setControlUiEncodingHeaders(res, "index.html", encoding);
   const encoded =
     encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
   const ingress = getRemoteControlUiIngressContext(req);

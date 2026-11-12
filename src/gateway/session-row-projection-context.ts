@@ -102,6 +102,14 @@ export function createSessionRowProjectionContext(
   }
   return {
     dispose: subagentIndex.dispose,
+    adoptPresentationConfig(rows: Iterable<records.Row>, cfg: records.Inputs["cfg"]) {
+      // Display commits replace config ownership without rebuilding facts or waiting for readers.
+      for (const row of rows) {
+        if (row.materialized && row.materialized.source.cfg !== cfg) {
+          row.materialized = replaceSessionRowFacts(row.materialized, undefined, { cfg });
+        }
+      }
+    },
     readPrepared(epoch: number): SessionListRowContext | undefined {
       return preparedEpoch === epoch &&
         parentRevision === subagentIndex.revision &&
@@ -236,11 +244,7 @@ export function createSessionRowProjectionContext(
     preparePresentation(
       row: records.MaterializedRow,
       readChildLinks: (row: records.Row) => readonly SessionChildLink[],
-      cfg = row.materialized.source.cfg,
     ) {
-      if (row.materialized.source.cfg !== cfg) {
-        row.materialized = replaceSessionRowFacts(row.materialized, undefined, { cfg });
-      }
       if (row.profileRevision !== profileRevision) {
         row.materialized = refreshSessionRowProfiles(row.materialized);
         row.profileRevision = profileRevision;

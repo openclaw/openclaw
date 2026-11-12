@@ -430,3 +430,51 @@ it("retains the Access selection without borrowing entitlement from another runt
   options()[0]?.click();
   expect(onSelect).not.toHaveBeenCalled();
 });
+
+it.each(["api_key", "oauth"] as const)(
+  "keeps a selected saved %s account ahead of native Claude metadata",
+  async (type) => {
+    const view = await controls({
+      modelCatalog: [
+        { id: "primary", name: "primary", provider: "example", supportsFastMode: true },
+        { id: "other", name: "other", provider: "example", supportsFastMode: true },
+        { id: "claude-test", name: "Claude test", provider: "claude-cli" },
+      ],
+      accountSelection: {
+        kind: "shared",
+        authProfileId: "anthropic:selected",
+        label: "Saved account",
+      },
+      modelAuthStatusResult: {
+        ts: 1,
+        providers: [
+          {
+            provider: "claude-cli",
+            displayName: "Claude CLI",
+            status: "ok",
+            profiles: [],
+            nativeAuth: { kind: "subscription", plan: "Max" },
+          },
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            status: "static",
+            profiles: [
+              {
+                profileId: "anthropic:selected",
+                type,
+                status: "static",
+                displayName: "Saved subscription",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(
+      view.container.querySelector(
+        '[data-chat-model-provider-group="claude-cli"] .chat-controls__auth-meta-label',
+      )?.textContent,
+    ).toBe(type === "api_key" ? "API" : "Saved subscription");
+  },
+);

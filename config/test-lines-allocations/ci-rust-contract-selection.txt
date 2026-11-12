@@ -1,0 +1,3 @@
+# Exact workflow-script and job-admission proof for independent contract owners
+# with shared, deletion, malformed, capped, API-error and missing-output fallback.
+147

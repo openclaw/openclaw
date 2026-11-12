@@ -173,6 +173,7 @@ export async function withNodeGateway(
         transportBaseUrl: "http://127.0.0.1:1",
         enabledPluginIds: [options.plugin.id],
         controlUiEnabled: false,
+        ...(options.receiverUsers ? { rpcPassword: gatewayToken } : {}),
         runtimeEnvPatch: {
           // This fixture selects trusted-proxy auth; the QA owner's token default is incompatible.
           ...(options.receiverUsers ? { OPENCLAW_GATEWAY_TOKEN: undefined } : {}),
@@ -191,7 +192,7 @@ export async function withNodeGateway(
                   trustedProxies: ["127.0.0.1", "::1"],
                   auth: {
                     mode: "trusted-proxy" as const,
-                    password: receiverConfig.gateway?.auth?.token,
+                    password: gatewayToken,
                     identityScopes: options.receiverUsers,
                     trustedProxy: {
                       userHeader: "x-forwarded-user",
@@ -224,7 +225,11 @@ export async function withNodeGateway(
         );
       }
       options.onPhase?.("receiver:ready");
-      context = { ...source, gatewayToken: receiver.token, gatewayUrl: receiver.wsUrl };
+      context = {
+        ...source,
+        gatewayToken: options.receiverUsers ? gatewayToken : receiver.token,
+        gatewayUrl: receiver.wsUrl,
+      };
     } else {
       if (!claim) {
         throw new Error("in-process Gateway requires a port claim");

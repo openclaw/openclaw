@@ -53,6 +53,11 @@ JIT, bytecode, and AOT compilation pass the module inventory through a build
 driver, so large plugin selections do not hit the operating system's
 command-line argument limit.
 
+Native package exports are captured after bundling in a fresh process using the
+same compiler. This keeps export discovery independent of the bundler's resolver
+cache. Unexpected resolution failures stop the build before an incomplete
+export map or executable can be published.
+
 On macOS, the builder uses `scripts/build-mac-sqlite.sh` and the pin in
 `scripts/lib/sqlite-macos.json` to include `runtime/lib/libsqlite3.dylib` for the
 target architecture. It respects `OPENCLAW_MACOS_DEPLOYMENT_TARGET` (default
@@ -158,8 +163,13 @@ do not match their declared types. Type errors still stop compilation.
 
 AOT-only options apply to either input mode:
 
-- `--trim` removes unused compiler/runtime features. `--trim-locales <locale,...>`
-  requires `--trim` or `--trim-allow` and retains the selected locales.
+- `--trim` removes unused compiler/runtime features. Trimmed AOT builds retain
+  the interpreter and the password, TOML, YAML, JSON5, and JSONC APIs for fetched
+  plugins and same-executable children. The builder supplies these
+  `compile.trim.allow` entries because code loaded after compilation cannot
+  retain the features it needs. No API is called eagerly to keep it alive.
+  `--trim-locales <locale,...>` requires `--trim` or `--trim-allow` and retains
+  the selected locales.
 - `--trim-allow run[,jit]` enables trimming while retaining Bun's subprocess runner
   and, optionally, its JIT. Both AOT modes pass these retention options through
   the compiler's build API. The JIT support companion does not inherit AOT options.
@@ -169,13 +179,11 @@ AOT-only options apply to either input mode:
   `=strict` also denies VM string execution. The strict option breaks host NodeVM
   execution. These settings do not prohibit every guest interpreter.
 - `--explain[=<report>]` writes compiler diagnostics. It can be repeated.
-- `--aot-disable <name,...>` forwards Bun's supported compiler-step opt-outs and
-  can be repeated. For large graphs whose whole-program analysis exceeds the
-  build's memory budget, `--aot-disable=flow-results` skips that analysis and its
-  optimizations. Code still compiles ahead of time, with the same runtime behavior
-  and hardening options; the executable can be larger or slower. Bun validates
-  the names. Qualify the resulting artifact and record this option in build
-  comparisons.
+- Compiler analysis uses Bun's defaults. `--aot-disable <name,...>` is an explicit
+  diagnostic opt-out and can be repeated. Bun defines and validates the names;
+  a name supported by one compiler revision may not exist in another. Use an
+  opt-out only for a measured build limitation, then qualify the resulting
+  artifact and record the option in build comparisons.
 - `--aot-log-type-mismatches` inventories mismatches and changes generated code;
   rebuild without it for performance measurements.
 
@@ -558,19 +566,23 @@ executable metadata supplies bundled plugin source checks and Doctor contract
 hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
-Standalone builds retain native plugin loading, Jiti, and its lazy Babel transformer
-in one host-owned package under
+Standalone builds retain Jiti and its lazy Babel transformer in one host-owned package under
 `runtime/node_modules/@openclaw/plugin-loader/`. The package loads only when a
-plugin needs source transformation or an AOT host loads an external module.
+plugin needs source transformation.
 Native plugin loading leaves Jiti and Babel uninitialized. The `pluginLoader`
 resource category includes the bundle, package metadata, and license.
 
 AOT builds keep bundled plugins and the host SDK in the compiled image. Fetched
-plugins load through the declared external loader and run interpreted against
-that same SDK; installing one does not change the executable. Existing plugin
+plugins run interpreted and receive the compiled SDK's exports through the
+existing module resolver. Disk code never imports the image's virtual files,
+and the host and plugins share the same SDK instances. Installing a plugin does
+not change the executable. Existing plugin
 admission and generation ownership still apply. A paired AOT/JIT build keeps the
 same loader resource snapshot in both sidecars. Strict code-generation policies
 can still reject interpreted plugins with runtime execution guidance.
+
+Due to a compiler limitation, query or fragment imports of disk modules in AOT
+builds do not create separate module instances.
 
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,

@@ -118,6 +118,10 @@
       "identities": []
     },
     {
+      "name": "session_creation_operations",
+      "identities": []
+    },
+    {
       "name": "session_entry_snapshots",
       "identities": []
     },
@@ -169,6 +173,10 @@
     },
     {
       "name": "session_suggestions",
+      "identities": []
+    },
+    {
+      "name": "session_transcript_active_event_facts",
       "identities": []
     },
     {
@@ -466,41 +474,41 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        32362,
-        32545
+        33249,
+        33432
       ]
     },
     {
       "name": "standing_intents_fts_after_delete",
       "table": "standing_intents",
       "range": [
-        29902,
-        30149
+        30353,
+        30600
       ]
     },
     {
       "name": "standing_intents_fts_after_insert",
       "table": "standing_intents",
       "range": [
-        29685,
-        29900
+        30136,
+        30351
       ]
     },
     {
       "name": "standing_intents_fts_after_update",
       "table": "standing_intents",
       "range": [
-        30151,
-        30527
+        30602,
+        30978
       ]
     }
   ],
   "preData": [
     0,
-    30396
+    31102
   ],
   "postData": [
-    30396,
-    46142
+    31102,
+    47459
   ]
 }

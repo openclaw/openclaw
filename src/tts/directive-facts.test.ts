@@ -11,9 +11,7 @@ it("loads and cleans streamed text without provider discovery", async () => {
     vi.doMock("./provider-registry.js", () => {
       throw new Error("streamed directive text loaded provider discovery");
     });
-    const { createTtsDirectiveTextStreamCleaner: createCleaner } =
-      await import("./directive-facts.js");
-    const cleaner = createCleaner();
+    const cleaner = (await import("./directive-facts.js")).createTtsDirectiveTextStreamCleaner();
     expect(
       cleaner.push("Visible [[tts:provider=missing voice=example]]text") + cleaner.flush(),
     ).toBe("Visible text");
@@ -84,6 +82,8 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
   it.each([
     ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
     ["Use `", "[[tts:literal", " speech]]", "` here."],
+    ["Use `", "`[[tts:literal", " speech]]", "`` here."],
+    ["Use ``", "[[tts:literal speech]]`` here."],
     ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
     ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
   ])("preserves code literals across chunks: %j", (...chunks) => {

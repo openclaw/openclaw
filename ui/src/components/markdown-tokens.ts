@@ -45,6 +45,8 @@ const attrs = new Set([
   "data-file-kind",
   "data-file-line",
   "data-file-path",
+  "data-template-package",
+  "aria-haspopup",
   "data-session-key",
   "data-session-href",
   "data-github-kind",

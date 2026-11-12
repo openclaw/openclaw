@@ -225,12 +225,7 @@ export class WidgetSandboxHost {
 
   private async loadDocument(): Promise<void> {
     const { loadDocument } = this.options;
-    if (
-      this.loaded ||
-      this.pendingDocument !== null ||
-      this.activeLoad !== null ||
-      !this.frame.contentWindow
-    ) {
+    if (this.loaded || this.pendingDocument !== null || this.activeLoad !== null) {
       return;
     }
     const controller = new AbortController();

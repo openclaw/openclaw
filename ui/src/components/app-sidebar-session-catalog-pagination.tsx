@@ -1,9 +1,8 @@
 import { Show } from "solid-js";
 import type { SessionCatalogSession } from "../../../packages/gateway-protocol/src/index.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { CATALOG_SESSION_GROUP_LIMIT } from "./app-sidebar-session-catalog-row.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
-
-export const CATALOG_SESSION_GROUP_LIMIT = 5;
 
 export function CatalogPagination(props: {
   host: Pick<SessionCatalogGroupsParams["host"], "sessionData" | "setVisibleSessionLimit">;

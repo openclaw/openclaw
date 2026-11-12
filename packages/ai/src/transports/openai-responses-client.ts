@@ -101,6 +101,7 @@ import {
 } from "./provider-transport-turn-state.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
+  awaitProviderLifecycleCallback,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
@@ -229,7 +230,10 @@ function createResponsesTransportExecutor(config: {
         const prepareRequest = async (request: ReturnType<typeof config.buildRequest>) => {
           let params = request;
           const preserveUsers = v2Compaction?.preserveUsers(request.input ?? []);
-          const nextParams = await options?.onPayload?.(params, model);
+          const nextParams = await awaitProviderLifecycleCallback(
+            options?.onPayload ? () => options.onPayload?.(params, model) : undefined,
+            options?.signal,
+          );
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
           }

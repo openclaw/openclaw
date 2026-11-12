@@ -1,0 +1,7 @@
+# OpenClaw ID Gateway core: new membership authority, publication, People events,
+# Gateway-start device-token binding enforcement and Labs-off tests for new surface
+# (src/gateway/openclaw-id). No existing tests replaced.
+# Repair proof: OCID identity isolation, profile migration, expiry retention, real SQLite rollback/reopen, escaped/Unicode caps.
+# Bounded state: invite sweep, mailbox revocation replay, full-caps claw record size and row-split tests.
+# Lifecycle: turning remote access off while a Discovery request or owner notice is prepared sends nothing.
+4532

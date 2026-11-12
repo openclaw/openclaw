@@ -3,14 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/package-root-modules.mts";
 import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
-import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/vitest-worker-declarations.mts";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   createOpenClawTestState,
@@ -170,25 +170,26 @@ export async function cleanupUpdateLeaseHarness(): Promise<void> {
   await state.cleanup();
 }
 
+let preparedHost: ReturnType<typeof prepareCompiledSdkHost> | undefined;
+
 async function prepareCandidateDoctorRuntime(): Promise<void> {
-  const installed = createCompiledSdkHost(
-    [
-      runtimeProcessEntrypoints.updateMigratedFinalize,
-      runtimeProcessEntrypoints.workerNativeLifecycle,
-      runtimeProcessEntrypoints.sqliteWriterAdmission,
-      runtimeProcessEntrypoints.sqliteStore,
-      runtimeProcessEntrypoints.sqliteIntegrity,
-      runtimeProcessEntrypoints.sqliteReadOnly,
-      runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
-      runtimeProcessEntrypoints.sqliteSnapshotStaging,
-      runtimeProcessEntrypoints.sqliteSourceRevision,
-      runtimeProcessEntrypoints.sharedStateStore,
-      runtimeProcessEntrypoints.stateOwnership,
-      runtimeProcessEntrypoints.stateLeaseHeartbeat,
-      runtimeProcessEntrypoints.stateRead,
-    ],
-    () => state.root,
-  );
+  preparedHost ??= prepareCompiledSdkHost([
+    runtimeProcessEntrypoints.updateMigratedFinalize,
+    runtimeProcessEntrypoints.workerNativeLifecycle,
+    runtimeProcessEntrypoints.spawnBroker,
+    runtimeProcessEntrypoints.sqliteWriterAdmission,
+    runtimeProcessEntrypoints.sqliteStore,
+    runtimeProcessEntrypoints.sqliteIntegrity,
+    runtimeProcessEntrypoints.sqliteReadOnly,
+    runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
+    runtimeProcessEntrypoints.sqliteSnapshotStaging,
+    runtimeProcessEntrypoints.sqliteSourceRevision,
+    runtimeProcessEntrypoints.sharedStateStore,
+    runtimeProcessEntrypoints.stateOwnership,
+    runtimeProcessEntrypoints.stateLeaseHeartbeat,
+    runtimeProcessEntrypoints.stateRead,
+  ]);
+  const installed = preparedHost(() => state.root);
   if (!installed) {
     throw new Error("The candidate lease fixture requires the prepared compiled worker graph.");
   }
@@ -360,7 +361,16 @@ export function expectDoctorDiagnostics(): void {
 export function expectSuccess(lane: Lane, doctorExpected = true): void {
   expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   const result = reportedResult(lane);
-  expect(result, JSON.stringify(result, null, 2)).toMatchObject(
+  const phases = vi
+    .mocked(defaultRuntime.error)
+    .mock.calls.flat()
+    .filter((value): value is string => typeof value === "string")
+    .flatMap((value) => value.split("\n"))
+    .filter((line) => line.startsWith("doctor fixture phase: "))
+    .slice(-32)
+    .join("\n")
+    .slice(-4096);
+  expect(result, `${JSON.stringify(result, null, 2)}\n${phases}`).toMatchObject(
     lane === "resume"
       ? { status: "ok" }
       : { status: "ok", postUpdate: { plugins: { status: "ok" } } },

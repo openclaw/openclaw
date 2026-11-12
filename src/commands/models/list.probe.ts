@@ -21,6 +21,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
+import { CONNECTION_CHECK_PROMPT } from "../../agents/connection-check.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
@@ -59,8 +60,6 @@ import { redactStatusSecrets as redactAuthProbeError } from "../status-all/forma
 import { createAuthProbeWork, disposeAuthProbeDirectory } from "./list.probe.cleanup.js";
 import { buildProbeCandidateMap, selectProbeModel } from "./list.probe.models.js";
 import { formatMs } from "./shared.js";
-
-const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 export { redactAuthProbeError };
 
@@ -135,7 +134,8 @@ export type AuthProbeOptions = {
   includeDirectKeys?: boolean;
   timeoutMs: number;
   concurrency: number;
-  maxTokens: number;
+  /** Optional output cap; unset sends no cap, matching chat (see CONNECTION_CHECK_PROMPT). */
+  maxTokens?: number;
 };
 
 const ELIGIBILITY_PROBE_ERRORS = {
@@ -745,11 +745,11 @@ export async function runAuthProbes(
                   // Preserve the existing raw transport and persistent credential-refresh owner.
                   agentHarnessRuntimeOverride: "openclaw",
                   systemPrompt: "",
-                  prompt: PROBE_PROMPT,
+                  prompt: CONNECTION_CHECK_PROMPT,
                   timeoutMs,
                   abortSignal: probeAbortSignal,
                   thinkLevel: "off",
-                  streamParams: { maxTokens },
+                  ...(maxTokens !== undefined ? { streamParams: { maxTokens } } : {}),
                   outputTextPolicy: "strict-visible",
                   onRequestComplete: (durationMs) => {
                     latencyMs = Math.round(durationMs);

@@ -70,7 +70,14 @@ export function createComposerKeyDownHandler({
     }
 
     if (goalComposer.active) {
-      if (event.key === "Escape") {
+      if (
+        (event.key === "Backspace" || event.key === "Delete") &&
+        target.value.length === 0 &&
+        goalComposer.restoreCommand()
+      ) {
+        event.preventDefault();
+        state.slashMenu.update(target.value, slashMenuHost);
+      } else if (event.key === "Escape") {
         event.preventDefault();
         goalComposer.cancel();
       } else if (

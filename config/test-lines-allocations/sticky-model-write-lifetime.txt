@@ -1,0 +1,2 @@
+# Real plugin-invocation regression: requested config updates survive the selecting scope closing.
+40

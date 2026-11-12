@@ -1,0 +1,3 @@
+# Exact 21-line synthetic Linux containment fixture isolation in PR #197232.
+# Preserves fail-closed containment assertions when the host has no prlimit.
+21

@@ -1,0 +1,2 @@
+# Doctor route regression for a real executable failing with a loader diagnostic.
+29

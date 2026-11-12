@@ -1,0 +1,2 @@
+# Advertise reads required by the existing Agent Tools loading scenario; no new cases.
+6

@@ -251,6 +251,7 @@ export function createCodexNativeHookRelay(params: {
   let remoteCleanup: Promise<void> | undefined;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
+    requireForegroundTurn: true,
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,
       sessionId: params.sessionId,

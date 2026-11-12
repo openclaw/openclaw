@@ -1,6 +1,5 @@
 import * as personal from "../gateway/github-personal-publication-store.worker.js";
 import { selectGitHubPublicationDeferralsInDatabase } from "../gateway/github-publication-defer.worker.js";
-import { captureGitHubPublicationChanges } from "../gateway/github-publication-events.js";
 import { githubPublicationEffectFacts } from "../gateway/github-publication-execution-effects.js";
 import {
   claimGitHubPublicationExecutionInDatabase,
@@ -12,7 +11,10 @@ import {
 import * as repository from "../gateway/github-repository-publication-store.worker.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
-import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
+import {
+  captureGitHubPublicationMutation,
+  commitGitHubPublicationBookkeeping,
+} from "./github-publication-bookkeeping.worker.js";
 import { publicationRequestOperations } from "./github-publication-request.worker.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import type { GitHubPublicationSourcePredicate } from "./github-publication-source-contract.js";
@@ -31,10 +33,7 @@ import type {
   PublicationMutationResult,
 } from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "./openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 function assertCustody(database: OpenClawStateDatabase) {
@@ -57,29 +56,16 @@ function mutate(
     throw new Error("GitHub publication action requires a typed source.");
   }
   const source = input.source;
-  const capture = () =>
-    captureGitHubPublicationWorkerReceipt(sqlPublicationAnchor(database.db), () => {
-      const { value, changes } = captureGitHubPublicationChanges(write);
-      return { ...value, changes };
-    });
   if (source) {
     return withGitHubPublicationSourceTransaction(database, source, () => {
       assertGitHubPublicationWorkerSourceCurrent(database.db);
-      const receipt = capture();
+      const receipt = captureGitHubPublicationMutation(database, write);
       assertMutationSource(database, receipt, source);
       assertGitHubPublicationWorkerSourceCurrent(database.db);
       deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database.db), receipt);
     });
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // Accepted bookkeeping can settle after caller revocation; it grants no GitHub action.
-      const receipt = capture();
-      deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(db), receipt);
-    },
-    { database },
-    { operationLabel: `github-publication.${input.operation}` },
-  );
+  return commitGitHubPublicationBookkeeping(database, input.operation, write);
 }
 
 function assertMutationSource(
@@ -187,11 +173,6 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
         ),
       ];
     }
-    case "restart":
-      return personal.requirePersonalGitHubPublicationConfirmationInDatabase(
-        database,
-        input.instanceId,
-      );
     case "report": {
       const row = personal.markPersonalGitHubPublicationReportedInDatabase(
         database,

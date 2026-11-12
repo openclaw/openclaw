@@ -4,12 +4,12 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const PROFILES = {
-  "check-focused": { runner: "blacksmith-4vcpu-ubuntu-2404", minutes: 60 },
-  "check-routine": { runner: "blacksmith-8vcpu-ubuntu-2404", minutes: 120 },
-  check: { runner: "blacksmith-16vcpu-ubuntu-2404", minutes: 240 },
-  "check-memory": { runner: "blacksmith-32vcpu-ubuntu-2404", minutes: 240 },
+  "check-focused": { runner: "blacksmith-2vcpu-ubuntu-2404", minutes: 60 },
+  "check-routine": { runner: "blacksmith-2vcpu-ubuntu-2404", minutes: 120 },
+  check: { runner: "blacksmith-4vcpu-ubuntu-2404", minutes: 240 },
+  "check-memory": { runner: "blacksmith-8vcpu-ubuntu-2404", minutes: 240 },
   arm: { runner: "blacksmith-16vcpu-ubuntu-2404-arm", minutes: 120 },
-  build: { runner: "blacksmith-16vcpu-ubuntu-2404", minutes: 35 },
+  build: { runner: "blacksmith-4vcpu-ubuntu-2404", minutes: 35 },
   windows: { runner: "blacksmith-16vcpu-windows-2025", minutes: 75 },
 };
 const WINDOWS_RUNNERS = new Set([

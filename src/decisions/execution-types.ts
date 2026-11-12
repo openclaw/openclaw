@@ -23,6 +23,12 @@ export type DecisionEvaluateOptions = {
   /** Budget includes preparation; provider cleanup remains physically awaited. */
   readonly timeoutMs: number;
   readonly signal: AbortSignal;
+  /**
+   * Caller-owned authority (for example a revocable data grant). The host calls it
+   * before preparation, at every physical dispatch and retry, and before completion;
+   * a throw ends the request and rejects with that error.
+   */
+  readonly assertCurrent?: () => void;
 };
 
 /** Adds only provider-declared reasoning to the established caller contract. */

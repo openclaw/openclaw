@@ -189,9 +189,11 @@ keep the existing synchronous fallback.
     const blob = await blobs.lookup("artifact-1");
     ```
 
-    Gateway close fences new plugin shared-state operations, including resident
-    reads, with terminal `STATE_DATABASE_READ_ADMISSION_INVALIDATED` errors.
-    Accepted operations finish before shared-state retirement. SDK retry runners
+    Gateway close joins accepted connection work and its custody finalizers before
+    the SDK host fences new shared-state operations, including resident reads,
+    with terminal `STATE_DATABASE_READ_ADMISSION_INVALIDATED` errors. Cancelling
+    ingress or scheduler work does not revoke those finalizers' state admission.
+    Accepted state operations finish before shared-state retirement. SDK retry runners
     do not retry this refusal or a retiring shared-state worker. Custom recovery
     loops can use `isStateDatabaseAdmissionClosedError` from
     `openclaw/plugin-sdk/retry-runtime` to stop at the same boundary.

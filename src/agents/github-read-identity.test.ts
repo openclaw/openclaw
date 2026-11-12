@@ -326,6 +326,35 @@ describe("prepared GitHub read authority", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, "other.ghe.example.test"])(
+    "keeps publication token extraction bound to its verified issuer (ambient host: %s)",
+    async (ambientHost) => {
+      const host = "ghe.example.test";
+      const config = { gateway: { github: { host, apiBaseUrl: `https://${host}/api/v3` } } };
+      setRuntimeConfigSnapshot(config);
+      run.mockImplementation(async () => commandResult("native-enterprise-publication"));
+      const publication = await prepareGitHubPublicationIdentity(
+        readOptions({
+          config,
+          env: {
+            GH_HOST: ambientHost,
+            GH_TOKEN: undefined,
+            GITHUB_TOKEN: undefined,
+            GH_ENTERPRISE_TOKEN: undefined,
+            GITHUB_ENTERPRISE_TOKEN: undefined,
+          },
+        }),
+      );
+      expect(run.mock.calls[0]?.[0]).toEqual(["gh", "auth", "token", "--hostname", host]);
+      expect(fetch).toHaveBeenCalledWith(`https://${host}/api/v3/user`, expect.anything());
+      await expect(readNativeGitHubToken(publication.env, true, publication.host)).resolves.toBe(
+        "native-enterprise-publication",
+      );
+      expect(run).toHaveBeenCalledOnce();
+      expect(publication.env.GH_HOST).toBe(host);
+    },
+  );
+
   it("caches native reads for 60 seconds but reads publication tokens live", async () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);

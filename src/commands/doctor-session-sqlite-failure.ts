@@ -75,9 +75,10 @@ function collectFailureReportIssues(
   for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
     issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
   }
+  const replacements = failureReportPathReplacements(target);
   const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => ({
     code: issue.code,
-    message: sanitizeFailureIssueMessage(issue, target),
+    message: sanitizeFailureIssueMessage(issue, replacements),
     sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
   });
   return {
@@ -114,14 +115,15 @@ export function createSessionSqliteMigrationFailureIssue(
         manifestPath,
         manifest,
         "session SQLite migration failed",
-        targets.map((target) =>
-          createFailureReportTarget(target, {
+        targets.map((target) => {
+          const replacements = failureReportPathReplacements(target);
+          return createFailureReportTarget(target, {
             issues: target.issues.map((issue) => ({
               code: issue.code,
-              message: sanitizeFailureIssueMessage(issue, target),
+              message: sanitizeFailureIssueMessage(issue, replacements),
             })),
-          }),
-        ),
+          });
+        }),
       ),
     );
   const body = [
@@ -314,18 +316,39 @@ function shortenFailureReportPath(filePath: string): string {
   return filePath;
 }
 
-function sanitizeFailureIssueMessage(
-  issue: DoctorSessionSqliteIssue,
+/**
+ * Resolves a target's path rewrites once. A target can carry one move per legacy file
+ * (tens of thousands), so rewriting every path inside every issue message was
+ * quadratic and could hold doctor recovery for hours (#194621). A plain home-prefix
+ * rewrite equals what redactAbsoluteHomePaths applies to every message anyway, so only
+ * rewrites that also normalize the path need a per-message pass.
+ */
+function failureReportPathReplacements(
   target: SessionSqliteMigrationTargetManifest,
-): string {
-  let message = issue.message;
+): ReadonlyArray<readonly [string, string]> {
+  const home = process.env.HOME;
+  const replacements = new Map<string, string>();
   for (const filePath of [
     target.storePath,
     target.sqlitePath,
     ...target.plannedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
     ...target.completedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
   ]) {
-    message = message.split(filePath).join(shortenFailureReportPath(filePath));
+    const shortened = shortenFailureReportPath(filePath);
+    if (shortened !== filePath && (!home || shortened !== `~${filePath.slice(home.length)}`)) {
+      replacements.set(filePath, shortened);
+    }
+  }
+  return [...replacements];
+}
+
+function sanitizeFailureIssueMessage(
+  issue: DoctorSessionSqliteIssue,
+  replacements: ReadonlyArray<readonly [string, string]>,
+): string {
+  let message = issue.message;
+  for (const [filePath, shortened] of replacements) {
+    message = message.split(filePath).join(shortened);
   }
   if (issue.sessionKey) {
     message = message.split(issue.sessionKey).join(redactSessionKey(issue.sessionKey));

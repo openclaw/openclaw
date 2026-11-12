@@ -1,4 +1,5 @@
 import { types } from "node:util";
+import type { GatewayOperatorAccessCause } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   PluginGatewayAccessAuthority,
   PluginGatewayAccessPolicy,
@@ -27,13 +28,22 @@ function observeNativeAbort(source: AbortSignal, relay: WeakRef<() => void>, tok
   return release;
 }
 
-function bindAccessSignal(signal: AbortSignal, instance: PluginInstanceHandle): AbortSignal {
+function bindAccessSignal(
+  signal: AbortSignal,
+  instance: PluginInstanceHandle,
+  recordFailure: (cause: GatewayOperatorAccessCause) => void,
+): AbortSignal {
   if (types.isProxy(signal) || !(signal instanceof AbortSignal)) {
     throw new TypeError("Gateway access authority requires a native AbortSignal");
   }
   const source = AbortSignal.any([signal, instance.lifecycle.signal]);
   const controller = new AbortController();
   const relay = () => {
+    recordFailure(
+      instance.disposing || instance.lifecycle.signal.aborted
+        ? "plugin-lifetime-retired"
+        : "grant-revoked",
+    );
     let reason: unknown;
     try {
       // Reading/projecting a plugin-owned reason can execute accessors or Proxy
@@ -72,10 +82,28 @@ function bindAccessAuthority(
   const assertCurrent = () => {
     authority.assertCurrent();
   };
+  let failureCause: GatewayOperatorAccessCause | undefined;
   return {
     grantId,
-    signal: bindAccessSignal(authority.signal, instance),
-    assertCurrent: () => instance.run(assertCurrent),
+    signal: bindAccessSignal(authority.signal, instance, (cause) => {
+      failureCause ??= cause;
+    }),
+    get failureCause() {
+      return failureCause;
+    },
+    assertCurrent: () => {
+      try {
+        return instance.run(assertCurrent);
+      } catch (error) {
+        failureCause ??=
+          instance.disposing ||
+          instance.lifecycle.signal.aborted ||
+          error instanceof PluginInstanceUnavailableError
+            ? "plugin-lifetime-retired"
+            : "policy-check-failed";
+        throw error;
+      }
+    },
   };
 }
 

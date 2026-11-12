@@ -1,0 +1,2 @@
+# Protect independent Gradle/SDK cache authority and reject invalid cache modes.
+41

@@ -327,6 +327,9 @@ export function createTelegramMessageContextRuntime({
       : undefined;
   };
 
+  const getCachedMessage = (chatId: number | string, messageId: string) =>
+    messageCache.get({ accountId, chatId, messageId });
+
   const buildReplyChainForMessage = (msg: Message) =>
     buildTelegramReplyChain({ cache: messageCache, accountId, chatId: msg.chat.id, msg });
 
@@ -504,6 +507,7 @@ export function createTelegramMessageContextRuntime({
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,
+    getCachedMessage,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,

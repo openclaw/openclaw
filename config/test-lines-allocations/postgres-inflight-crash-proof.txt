@@ -1,0 +1,4 @@
+# PostgreSQL: prove accepted unfinished Cron work survives a real Gateway SIGKILL.
+# Exact +105 lines extend the existing completed-job crash case and its provider.
+# Reuse both Gateway boots, the automatic probe, cleanup and the 90-second deadline.
+105

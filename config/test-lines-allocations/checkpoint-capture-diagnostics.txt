@@ -1,0 +1,3 @@
+# Rendered capture path/timing diagnostics through the real checkpoint owner.
+# Covers adaptive, snapshot, unavailable backend/clone, nested fallback and acceptance failure.
+83

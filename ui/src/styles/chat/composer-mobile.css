@@ -167,7 +167,7 @@
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__composer-combobox
-  > textarea {
+  > :is(textarea, .agent-chat__plugin-draft-overlay) {
   overflow: hidden;
   scrollbar-gutter: auto;
   white-space: nowrap;
@@ -238,11 +238,6 @@
   grid-column: 1 / -1;
   padding: 0 6px 6px;
   transform: none;
-}
-
-.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input[data-incognito="true"] {
-  border-style: dashed;
-  border-color: var(--chat-composer-hairline);
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue {

@@ -50,7 +50,7 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
+import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool-shared.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
@@ -403,6 +403,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   const previousContextTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
+    let localRoots: readonly string[] | undefined;
     const hydrated = await hydratePromptMediaMessages(messages, {
       workspaceDir: input.effectiveWorkspace,
       agentWorkspaceDir: attempt.workspaceDir,
@@ -412,7 +413,11 @@ export function installEmbeddedAttemptContextGuards(input: {
       workspaceOnly: input.effectiveFsWorkspaceOnly,
       localRoots: input.effectiveFsWorkspaceOnly
         ? undefined
-        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+        : () =>
+            (localRoots ??= getAgentScopedMediaLocalRoots(
+              attempt.config ?? {},
+              input.sessionAgentId,
+            )),
       sandbox:
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

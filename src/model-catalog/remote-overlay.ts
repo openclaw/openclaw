@@ -5,7 +5,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
 import { AsyncContext } from "../shared/async-context.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
@@ -73,7 +73,7 @@ function selectCompatibleRemoteModelCatalog(
     bundle.generatedAt > bundledGeneratedAt
       ? projectRemoteModelCatalog(bundle)
       : { providers: {}, pricing: {}, upstreamPricing: {} };
-  return freezeJsonSnapshot({
+  return freezeTrustedJsonSnapshot({
     sourceUrl: stored.source_url,
     generatedAt: bundle.generatedAt,
     revision: createHash("sha256").update(stored.bundle_json).digest("hex"),

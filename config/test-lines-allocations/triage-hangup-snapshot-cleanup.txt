@@ -1,0 +1,2 @@
+# Exact net regression growth: triage drains its snapshot cleanup and exits 129 on a terminal hangup, stops before starting a repair agent once the signal is accepted, and other commands keep their default hangup disposition.
+65

@@ -1,0 +1,3 @@
+# Rendered open-menu settlement/rejected refresh/owner retirement, postcommit warnings, typed CI fixtures.
+# Exact net owned test growth from 13bb0fb7348b298b3412b06f19b7efed16f963e4; no inherited debt.
+186

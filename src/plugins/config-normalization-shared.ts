@@ -81,7 +81,7 @@ function normalizePluginHooks(value: unknown): NormalizedPluginEntry["hooks"] {
     return undefined;
   }
   const hooks: NonNullable<NormalizedPluginEntry["hooks"]> = {};
-  for (const key of ["allowPromptInjection", "allowConversationAccess"] as const) {
+  for (const key of ["allowPromptModification", "allowConversationAccess"] as const) {
     if (typeof value[key] === "boolean") {
       hooks[key] = value[key];
     }

@@ -280,7 +280,7 @@ function parseMediaDataUrl(
 
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits.maxBytes);
   const base64 = base64Part.replace(/\s+/g, "");
-  const padding = Math.min(/=+$/u.exec(base64)?.[0].length ?? 0, 2);
+  const padding = Math.min(/[=]+$/u.exec(base64)?.[0].length ?? 0, 2);
   assertManagedMediaByteLimit(
     Math.floor((base64.length * 3) / 4) - padding,
     mediaKind,

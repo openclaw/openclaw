@@ -11,7 +11,7 @@ import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-rea
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { registerNodeSkillWorkspace } from "../test-support/node-skill-workspace.js";
-import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../test-support/workshop-config.test-support.js";
 import {
   expandExplicitSkillReferences,
   listSkillCommandsForWorkspace,

@@ -24,6 +24,8 @@ const createRecoveryCapability = (request: Parameters<typeof configHarness>[0]) 
   loadedConfig(request, true);
 function createPersistedFailureTransport(
   options: {
+    method?: "config.set" | "config.patch";
+    message?: string;
     failureDetails?: (ack: unknown) => unknown;
     beforeFailure?: () => Promise<void>;
   } = {},
@@ -36,7 +38,7 @@ function createPersistedFailureTransport(
     (frame) => {
       return server.request(frame.method, frame.params).then(
         async (payload) => {
-          if (frame.method !== "config.patch" || !failAfterPersist) {
+          if (frame.method !== (options.method ?? "config.patch") || !failAfterPersist) {
             return { ok: true, payload };
           }
           failAfterPersist = false;
@@ -48,7 +50,9 @@ function createPersistedFailureTransport(
               details: options.failureDetails
                 ? options.failureDetails(payload)
                 : { persistedConfig: payload },
-              message: "config.patch persisted but was not applied to the active Gateway",
+              message:
+                options.message ??
+                "config.patch persisted but was not applied to the active Gateway",
             },
           };
         },
@@ -75,6 +79,35 @@ function createPersistedFailureTransport(
   return { ...server, request, responseErrors };
 }
 describe("config patch recovery", () => {
+  it.each(["config.set", "config.patch"] as const)(
+    "keeps %s saved-but-deferred feedback and revision instead of reporting saved",
+    async (method) => {
+      const message =
+        "Configuration saved but deferred: plugin advisor still has retained work. It applies after that work finishes or after a Gateway restart.";
+      const { request, store } = createPersistedFailureTransport({
+        method,
+        message,
+        failureDetails: (ack) => ({ persistedConfig: ack, application: { status: "deferred" } }),
+      });
+      const { runtimeConfig, state } = await createRecoveryCapability(request);
+      if (method === "config.set") {
+        runtimeConfig.patchForm(["enabled"], false);
+      }
+      await expect(
+        method === "config.set" ? runtimeConfig.save() : runtimeConfig.patch(disableFeature),
+      ).resolves.toBe(false);
+      expectFeedback(state, "deferred", expect.stringContaining(message));
+      expect(state).toMatchObject({
+        configSnapshot: { hash: "hash-2", config: { enabled: false } },
+        configFormDirty: false,
+        configNeedsApply: true,
+        configSaveReceipts: 0,
+      });
+      await expectStoredConfig(store, { count: 1, enabled: false });
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+      expect(store.submissions).toHaveLength(1);
+    },
+  );
   it.each([
     [true, { persistedConfig: { hash: "unconfirmed", config: { enabled: false } } }],
     ...[

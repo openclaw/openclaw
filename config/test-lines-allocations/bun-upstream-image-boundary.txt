@@ -1,0 +1,2 @@
+113
+# Cover image-entry routing, lazy bridge registration, and disk plugin identity in the existing owner fixture.

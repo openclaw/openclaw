@@ -58,9 +58,11 @@ function createFixture(
 ) {
   const fixture = createDeclarationFixture(command, groups, root, extraEntrypoints);
   if (extraEntrypoints?.includes("tsdown.ai.config.ts")) {
-    // The real AI build copies its bundled SDK's license alongside every output.
-    const license = "node_modules/@mistralai/mistralai/LICENSE";
-    fixture.write(license, fs.readFileSync(license, "utf8"));
+    // The real AI build copies its bundled dependencies' licenses alongside every output.
+    for (const name of ["@mistralai/mistralai", "openai", "ws"]) {
+      const license = `node_modules/${name}/LICENSE`;
+      fixture.write(license, fs.readFileSync(license, "utf8"));
+    }
   }
   return { ...fixture, run: (source: string) => runModule(command, fixture.root, source) };
 }

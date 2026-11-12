@@ -1,0 +1,2 @@
+# Preserve template catalog empty/search behavior and existing Apps/Labs assertions.
+13

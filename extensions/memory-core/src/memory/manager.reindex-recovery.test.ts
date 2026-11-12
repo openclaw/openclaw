@@ -5,6 +5,7 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
@@ -29,7 +30,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { resetMemoryDatabase } from "./manager-db.js";
@@ -68,7 +68,7 @@ type ReindexHarness = {
   cache: { enabled: boolean; maxEntries?: number };
   database: MemoryIndexDatabase;
   providerKey: string | null;
-  provider: EmbeddingProvider | null;
+  provider: MemoryEmbeddingProvider | null;
   dirty: boolean;
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
@@ -85,7 +85,7 @@ describe("memory manager reindex recovery", () => {
   let onEmbedBatch: ((inputs: Array<string | EmbeddingInput>) => void) | undefined;
   let batchEmbeddingCalls: string[][] = [];
 
-  function createProvider(id: string): EmbeddingProvider {
+  function createProvider(id: string): MemoryEmbeddingProvider {
     return {
       id,
       model: "mock-embed",

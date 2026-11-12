@@ -1,0 +1,3 @@
+# MCP Tool Search input hints: real and hostile remote schemas, batch budget, and the MCP ranking and validation boundaries.
+# Net of seven obsolete host-denial waiting-path test lines removed after #196435.
+114

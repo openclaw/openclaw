@@ -1,0 +1,2 @@
+32
+# Preserve plugin metadata mutability and nested sharing snapshot isolation while removing duplicate copies.

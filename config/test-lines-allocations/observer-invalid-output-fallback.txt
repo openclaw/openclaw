@@ -1,0 +1,2 @@
+# Invalid observer schema output must reach a healthy configured fallback.
+42

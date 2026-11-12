@@ -29,6 +29,7 @@ import {
   prepareCandidateCommandEnv,
   resolveBuildEnv,
   resolveDevPreflightLintEnv,
+  resolveGitNoLazyFetchArgs,
   resetPreflightCandidateWorktree,
   type StepFactory,
   shouldInstallWithoutScriptsOnWindows,
@@ -55,6 +56,7 @@ type GitCandidatePreflightResult =
       status: "ok";
       candidateSha: string;
       selectedDevUpstream: string | null;
+      selectedDevSource: GitFetchTarget | null;
       localDevBranchExists: boolean | null;
     }
   | { status: "error" | "skipped"; reason: NonNullable<UpdateRunResult["reason"]> };
@@ -420,6 +422,7 @@ export async function runGitCandidatePreflight(params: {
     : null;
   let candidates: string[];
   let selectedDevUpstream: string | null = null;
+  let selectedDevSource: GitFetchTarget | null = null;
   let localDevBranchExists: boolean | null = null;
   let localDevBranchSha: string | undefined;
   if (params.targetRevision) {
@@ -473,16 +476,22 @@ export async function runGitCandidatePreflight(params: {
     if (!source || (source.remote !== "." && !params.refreshedRemotes.includes(source.remote))) {
       return { status: "skipped", reason: "no-upstream" };
     }
-    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, source);
-    if (!upstreamRef) {
+    selectedDevSource = { remote: source.remote, mergeRef: source.mergeRef };
+    // Keep the cache ref identity separate from the fetched source revision.
+    const upstreamRef = await resolveGitUpdateTrackingRef(readGit, DEV_BRANCH, {
+      remote: source.remote,
+      mergeRef: source.mergeRef,
+    });
+    const revision = source.revision ?? upstreamRef;
+    if (!revision) {
       return { status: "skipped", reason: "no-upstream" };
     }
-    const upstreamSha = await readGit("rev-parse", "--verify", `${upstreamRef}^{commit}`);
+    const upstreamSha = await readGit("rev-parse", "--verify", `${revision}^{commit}`);
     if (!upstreamSha) {
       return { status: "error", reason: "no-upstream-sha" };
     }
     // Local branches are operator state, not remote cache refs to publish after admission.
-    selectedDevUpstream = upstreamRef.startsWith("refs/heads/") ? null : upstreamRef;
+    selectedDevUpstream = upstreamRef?.startsWith("refs/heads/") ? null : upstreamRef;
     const revListStep = await runStep(
       step("git-rev-list", "rev-list", `--max-count=${PREFLIGHT_MAX_COMMITS}`, upstreamSha),
     );
@@ -510,8 +519,12 @@ export async function runGitCandidatePreflight(params: {
       : undefined;
 
   if (rebaseFrom && !params.referenceSource) {
+    const noLazyFetchArgs = await resolveGitNoLazyFetchArgs(params.runCommand, {
+      cwd: params.gitRoot,
+      timeoutMs: params.timeoutMs,
+    });
     const relation = await runClassifiedGitStep(
-      step("preflight-local-history", "--no-lazy-fetch", "merge-base", rebaseFrom, candidates[0]!),
+      step("preflight-local-history", ...noLazyFetchArgs, "merge-base", rebaseFrom, candidates[0]!),
       (result) => {
         if (
           result.exitCode === 1 &&
@@ -708,6 +721,7 @@ export async function runGitCandidatePreflight(params: {
     status: "ok",
     candidateSha: tested.candidateSha,
     selectedDevUpstream,
+    selectedDevSource,
     localDevBranchExists,
   };
 }

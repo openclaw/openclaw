@@ -16,16 +16,22 @@ import {
 } from "../../infra/fs-safe-env.js";
 import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../../state/artifact-preserving-state-reads.js";
 import { formatCliCommand } from "../command-format.js";
 import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
+import { findGatewayRunFlagError, type GatewayRunFlagOpts } from "./run-flag-checks.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 type GatewayRunGuardParams = {
-  opts: GatewayRunPreBootstrapOptions & Pick<GatewayRunOpts, "allowUnconfigured" | "dev">;
+  opts: GatewayRunPreBootstrapOptions &
+    GatewayRunFlagOpts &
+    Pick<GatewayRunOpts, "allowUnconfigured" | "dev">;
   runtime: RuntimeEnv;
 };
 
@@ -186,31 +192,33 @@ async function readGuardedGatewayRunConfig(
     "cli.environment.config-import",
     () => import("../../config/io.factory.js"),
   );
-  return await withArtifactPreservingStateReads(async () => {
-    const current = await measureGatewayBootstrapStep("cli.environment.config-read", () =>
-      createConfigIO({
-        env: cloneEnvWithPlatformSemantics(process.env),
-        observe: false,
-        pluginValidation: "core-only",
-        measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
-      }).readConfigFileSnapshot(),
-    );
-    const guard = (snapshot: ConfigFileSnapshot) =>
-      enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
-    if (!guard(current)) {
-      return null;
-    }
-    const recovery = await measureGatewayBootstrapStep("cli.environment.config-recovery", () =>
-      createConfigIO({
-        configPath: current.path,
-        env: cloneEnvWithPlatformSemantics(process.env),
-        observe: false,
-        pluginValidation: "core-only",
-        measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
-      }).prepareConfigRecovery(current),
-    );
-    return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
-  });
+  return await withLiveStateReads(() =>
+    withArtifactPreservingStateReads(async () => {
+      const current = await measureGatewayBootstrapStep("cli.environment.config-read", () =>
+        createConfigIO({
+          env: cloneEnvWithPlatformSemantics(process.env),
+          observe: false,
+          pluginValidation: "core-only",
+          measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+        }).readConfigFileSnapshot(),
+      );
+      const guard = (snapshot: ConfigFileSnapshot) =>
+        enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
+      if (!guard(current)) {
+        return null;
+      }
+      const recovery = await measureGatewayBootstrapStep("cli.environment.config-recovery", () =>
+        createConfigIO({
+          configPath: current.path,
+          env: cloneEnvWithPlatformSemantics(process.env),
+          observe: false,
+          pluginValidation: "core-only",
+          measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+        }).prepareConfigRecovery(current),
+      );
+      return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
+    }),
+  );
 }
 
 function describeGatewayRunConfigChange(
@@ -601,6 +609,13 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
 }
 
 export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams): Promise<boolean> {
+  // Startup preflight refuses missing config; report bad flags first, as run.ts would.
+  const flagError = findGatewayRunFlagError(params.opts);
+  if (flagError) {
+    params.runtime.error(flagError);
+    params.runtime.exit(1);
+    return false;
+  }
   preparedGatewayRunReset = undefined;
   // Stop the early proxy before selection can choose another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.

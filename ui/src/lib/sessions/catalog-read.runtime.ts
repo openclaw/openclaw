@@ -17,6 +17,7 @@ export async function lookupCatalogSession(params: {
   key: CatalogSessionKey;
   agentId: string;
   profileRelation?: SessionCatalogProfileRelation;
+  listMethod?: string;
   isCurrent: () => boolean;
   signal?: AbortSignal;
 }) {
@@ -29,7 +30,7 @@ export async function lookupCatalogSession(params: {
       return null;
     }
     const listed = await client.request<SessionsCatalogListResult>(
-      "sessions.catalog.list",
+      params.listMethod ?? "sessions.catalog.list",
       {
         agentId,
         catalogId: key.catalogId,

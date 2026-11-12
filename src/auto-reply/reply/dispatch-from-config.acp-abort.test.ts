@@ -703,7 +703,11 @@ describe("dispatchReplyFromConfig ACP abort", () => {
             code: "aborted_for_supersession",
           });
         }
-        await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
+        if (abort === "abortForRestart") {
+          await expect(dispatchPromise).rejects.toBe(operation?.abortSignal.reason);
+        } else {
+          await expect(dispatchPromise).resolves.toMatchObject(expectedNoQueuedReplyResult());
+        }
         expect(runState.agentTurnOwner).toBe(operation);
         expect(resolveReplyOperationAgentTurn(runState)).toBe(expected);
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();

@@ -108,6 +108,23 @@ describe("Browser panel", () => {
     expect(panel.browserPanelIsOpen()).toBe(true);
   });
 
+  it("keeps initial browser failure details collapsed beside the recovery action", async () => {
+    const { panel } = mountPanel({
+      client: createBrowserClient(async () => {
+        throw new Error("Synthetic initial browser failure");
+      }).client,
+    });
+    await waitForSolid(() =>
+      expect(panel.querySelector(".empty-state__description")?.textContent).toBe(
+        "Couldn’t complete the browser action. Try again.",
+      ),
+    );
+    const details = panel.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("Synthetic initial browser failure");
+    expect(panel.querySelector(".empty-state button")?.textContent).toContain("Refresh");
+  });
+
   it("renders async page loads and retains the page and focus through successful and failed refreshes", async () => {
     stubScreenshotMedia();
     const response = createDeferred<unknown>();
@@ -170,11 +187,10 @@ describe("Browser panel", () => {
     expect(document.activeElement).toBe(input);
 
     failure.reject(new Error("Refresh connection interrupted"));
-    await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).toBe("false"));
+    await waitForSolid(() => expect(reload?.getAttribute("aria-busy")).not.toBe("true"));
 
     expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
     expect(panel.querySelector(".bp-shot")).toBe(preview);
-    expect(reload?.getAttribute("aria-busy")).toBe("false");
     expect(panel.querySelector('[role="alert"]')?.textContent).toContain(
       "Refresh connection interrupted",
     );
@@ -436,7 +452,7 @@ describe("Browser panel", () => {
       });
       if (outcome === "failed") {
         await panel.updateComplete;
-        expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Could not paste");
+        expect(panel.querySelector('[role="alert"]')?.textContent).toContain("Couldn’t paste");
         expect(panel.textContent).not.toContain(text);
       }
     });

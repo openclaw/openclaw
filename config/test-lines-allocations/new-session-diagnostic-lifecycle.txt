@@ -1,0 +1,2 @@
+# Native Vitest hooks and real Chromium prove failure capture finishes before context teardown, preserves private diagnostics, and permits the next test; removes duplicate opener cleanup.
+139

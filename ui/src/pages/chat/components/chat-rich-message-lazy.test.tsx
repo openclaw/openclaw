@@ -21,6 +21,29 @@ it("keeps ordinary transcript text synchronous", () => {
   expect(view.container.querySelector(".chat-text")?.textContent?.trim()).toBe("Ready immediately");
 });
 
+it("renders submitted App references synchronously when a user message acquires saved context", () => {
+  const [appContext, setAppContext] = createSignal<Array<{ title: string }>>([]);
+  const view = mountSolid(() => (
+    <GroupedMessage
+      preparation={prepareChatMessageRender({
+        role: "user",
+        content: "Describe this shell.",
+        __openclaw: { appContext: appContext() },
+      })}
+      messageKey="selected-shell"
+      options={{ isStreaming: false, showReasoning: false }}
+    />
+  ));
+  onTestFinished(view.unmount);
+  expect(view.container.textContent).toContain("Describe this shell.");
+  expect(view.container.querySelector(".mcp-app-context")).toBeNull();
+  setAppContext([{ title: "Helmet shell" }, { title: "Tiger cowrie" }]);
+  flush();
+  expect(
+    [...view.container.querySelectorAll(".mcp-app-context__label")].map((item) => item.textContent),
+  ).toEqual(["Helmet shell", "Tiger cowrie"]);
+});
+
 it("renders rich history immediately and retires a superseded message", () => {
   const question = {
     role: "assistant",

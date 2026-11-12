@@ -482,7 +482,10 @@ async function appendPreparedSessionTranscriptTurn(
             : undefined;
         },
         toDatabaseOptions(resolved),
-        { operationLabel: "session.transcript.append-turn" },
+        {
+          operationLabel: "session.transcript.append-turn",
+          diagnosticContext: { messages: messages.length },
+        },
       );
       try {
         publish?.();

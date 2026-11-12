@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
@@ -74,13 +75,24 @@ it("prepares shared-ID input through its transcript owner and retains intervenin
   });
 });
 
-it.each([false, true])(
-  "commits initialized first input from an absent preimage (warm=%s)",
-  async (warm) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it.each([
+  { warm: false, logical: false },
+  { warm: true, logical: false },
+  { warm: false, logical: true },
+])(
+  "commits initialized first input from an absent preimage (warm=$warm, logical=$logical)",
+  async ({ warm, logical }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
       const f = fixture();
-      const scope = { ...f.scope, sessionKey: "agent:main:first-input", sessionId: "first-input" };
+      const legacySelector = state.statePath("agents", "main", "sessions", "sessions.json");
+      const scope = {
+        ...f.scope,
+        storePath: logical ? legacySelector : f.scope.storePath,
+        sessionKey: "agent:main:first-input",
+        sessionId: "first-input",
+      };
+      expect(fs.existsSync(legacySelector)).toBe(false);
       const input = expectDefined(
         await acquireSessionInputActor(
           { ...scope, target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] } },
@@ -124,6 +136,7 @@ it.each([false, true])(
             .map((row) => JSON.parse(row.eventJson))
             .filter((event) => event.type === "message"),
         ).toHaveLength(1);
+        expect(fs.existsSync(legacySelector)).toBe(false);
       } finally {
         await input.actor.release();
       }

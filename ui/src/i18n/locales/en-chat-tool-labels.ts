@@ -4,6 +4,12 @@ import { en } from "./en.ts";
 const enChatToolLabels = {
   chat: {
     toolCards: {
+      patch: {
+        move: "Move {source} → {path}",
+        add: "Add {path}",
+        delete: "Delete {path}",
+        update: "Update {path}",
+      },
       tool: "Tool",
       canvas: "Canvas",
       summary: "Summary",
@@ -41,12 +47,12 @@ const enChatToolLabels = {
       downloadFile: "Download file",
       copyAsImage: "Copy as image",
       downloadAsImage: "Download as image",
-      widgetExportRerender: "This widget needs to be re-rendered to export as an image.",
+      widgetExportRerender: "Render this widget again to export it as an image.",
       widgetExportHtmlFallback: "Image unavailable. Downloaded the widget as HTML instead.",
-      widgetExportFailed: "Widget export failed. Try again.",
+      widgetExportFailed: "Couldn’t export this widget. Try again.",
       pinToDashboard: "Pin to dashboard",
       pinToDashboardPending: "Pinning…",
-      pinToDashboardFailed: "Could not pin to dashboard. Try again.",
+      pinToDashboardFailed: "Couldn’t pin to dashboard. Try again.",
       pinnedToDashboard: "Pinned",
       fileChanges: "File changes",
       attemptedChanges: "Attempted changes",
@@ -61,7 +67,7 @@ const enChatToolLabels = {
       blocked: "Blocked",
       outcomeUnknown: "Outcome unknown",
       exitCode: "Exit code {code}",
-      noOutputSucceeded: "No output — tool completed successfully.",
+      noOutputSucceeded: "No output — tool completed.",
       noResult: "No result available.",
       review: {
         reviewing: "{reviewer} reviewing",

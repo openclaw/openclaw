@@ -1,11 +1,7 @@
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
-import { quickIntegrityVerificationKey } from "./sqlite-database-admission-seal.js";
-import {
-  publishSqliteDatabaseAdmission,
-  recordSqliteDatabaseIntegrity,
-} from "./sqlite-database-admission.js";
+import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
 import {
   consumeSqliteMaintenanceIntegrity,
@@ -37,14 +33,7 @@ export type SqliteIntegrityCheck = SqliteIntegrityCheckOptions & {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  because?: string;
-  integrityGateReason?:
-    | "revoked"
-    | "stale-lease-full"
-    | "process-death"
-    | "dirty-receipt"
-    | SqliteCleanCloseSealRefusal
-    | "lease-class";
+  integrityGateReason?: "revoked" | "dirty-receipt" | SqliteCleanCloseSealRefusal | "lease-class";
   integrityGateMode?: "quick" | "full" | "deferred";
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed" | "cached" | "pending";
@@ -72,14 +61,11 @@ export function* sqliteIntegrityCheckSteps(
     return;
   }
   const startedAt = performance.now();
-  // WAL owner death alone is not corruption evidence. Explicit maintenance keeps its policy.
-  const processDeathQuick =
-    diagnostics?.integrityGateReason === "process-death" && options.check === undefined;
   const check: SqliteIntegrityCheck = {
     database,
     databaseLabel,
     ...options,
-    check: options.check ?? (processDeathQuick ? "quick" : "full"),
+    check: options.check ?? "full",
   };
   if (diagnostics) {
     check.timing = {};
@@ -92,19 +78,7 @@ export function* sqliteIntegrityCheckSteps(
     delete diagnostics.integrityOutsideWorkerMs;
   }
   try {
-    try {
-      yield check;
-    } catch (error) {
-      if (!processDeathQuick) {
-        throw error;
-      }
-      check.check = "full";
-      diagnostics.integrityGateMode = "full";
-      yield check;
-    }
-    if (processDeathQuick && check.check === "quick") {
-      publishSqliteDatabaseAdmission(database, quickIntegrityVerificationKey, Date.now());
-    }
+    yield check;
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "healthy";
     }
@@ -258,7 +232,7 @@ export function assertSqliteIntegrity(
   } = {},
 ): SqliteIntegrityChecks {
   if (options.check === "quick" && options.schemaOnly) {
-    // The owner only widens a stored CHECK; unchanged payloads and FKs need no scan.
+    // Schema-only migrations leave existing payloads and FKs unchanged.
     runSqliteCheck(database, databaseLabel, "quick_check", "schema_meta");
     return { integrityCheck: "ok" };
   }

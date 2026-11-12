@@ -68,7 +68,10 @@ function assertSafeTempAncestors(
   const fs = process.getBuiltinModule("fs");
   const lstat = options.lstatSync ?? fs.lstatSync;
   // Supplied filesystem observations may describe virtual paths rather than host paths.
-  const canonicalRoot = options.lstatSync ? path.resolve(root) : fs.realpathSync.native(root);
+  const canonicalRoot =
+    options.lstatSync && options.lstatSync !== fs.lstatSync
+      ? path.resolve(root)
+      : fs.realpathSync.native(root);
   for (let directory = path.dirname(canonicalRoot); ; directory = path.dirname(directory)) {
     const stat = lstat(directory);
     if (stat.mode !== undefined && (stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
@@ -124,5 +127,34 @@ export function resolvePreferredOpenClawTmpDir(
       `No safe OpenClaw temp root is available. Default root: ${String(rejected)} State fallback ${JSON.stringify(stateDir)}: ${String(error)}`,
       { cause: error },
     );
+  }
+}
+
+/** Inspect the same preferred/fallback roots without creating or repairing directories. */
+export function resolveExistingPreferredOpenClawTmpDir(
+  options: Pick<
+    ResolvePreferredOpenClawTmpDirOptions,
+    "preferredDir" | "tmpdir" | "platform" | "warn"
+  > = {},
+): string | undefined {
+  const fs = process.getBuiltinModule("fs");
+  const missing = new Error("No existing OpenClaw temp root.");
+  try {
+    // Supplying observations disables fs-safe's descriptor repair; creation is denied explicitly.
+    return resolvePreferredOpenClawTmpDir({
+      ...options,
+      accessSync: fs.accessSync,
+      lstatSync: fs.lstatSync,
+      mkdirSync: () => {
+        throw missing;
+      },
+    });
+  } catch (error) {
+    for (let cause = error; cause instanceof Error; cause = cause.cause) {
+      if (cause === missing) {
+        return undefined;
+      }
+    }
+    throw error;
   }
 }

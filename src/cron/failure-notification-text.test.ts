@@ -19,6 +19,23 @@ describe("cronFailureDetailLines", () => {
   });
 
   it.each([
+    [
+      "route_unavailable",
+      "The provider cannot serve this model right now. Choose another model for this automation or ask the provider operator to restore the route, then run it again.",
+    ],
+    [
+      "billing",
+      "Ask the provider account owner to resolve the billing error, or choose another provider for this automation, then run it again.",
+    ],
+    [
+      "server_error",
+      "The AI service is having trouble. Wait a moment and run the automation again, or choose another provider.",
+    ],
+  ] as const)("gives %s failures an actionable recovery step", (reason, guidance) => {
+    expect(cronFailureDetailLines(reason)).toEqual([`Cause: ${reason}`, guidance]);
+  });
+
+  it.each([
     [{ kind: "command-exit", exitCode: 7 } as const, "Cause: command exited with code 7"],
     [{ kind: "command-timeout", mode: "wall-clock" } as const, "Cause: command timed out"],
     [

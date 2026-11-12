@@ -1,7 +1,7 @@
 /**
  * Locates local OpenClaw docs/source roots for references shown to agents.
  */
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -26,15 +26,13 @@ export async function resolveOpenClawReferencePaths(
   docsPath: string | null;
   sourcePath: string | null;
 }> {
-  const resolveReference = (directory: string, marker: string): string | null => {
-    if (!fs.existsSync(path.join(directory, marker))) {
-      return null;
-    }
-    if (!params.sandbox?.enabled) {
-      return directory;
-    }
+  const resolveReference = async (directory: string, marker: string) => {
     try {
-      const hostPath = fs.realpathSync(directory);
+      await fs.access(path.join(directory, marker));
+      if (!params.sandbox?.enabled) {
+        return directory;
+      }
+      const hostPath = await fs.realpath(directory);
       const bridge = params.sandbox.fsBridge;
       if (!bridge) {
         return null;
@@ -45,8 +43,8 @@ export async function resolveOpenClawReferencePaths(
       const backingPath = mappings ? mapped?.hostPath : resolved.hostPath;
       // Preserve mount aliases, but reject shadows and symlinks outside the selected source.
       return backingPath &&
-        fs.realpathSync(backingPath) === hostPath &&
-        (!mapped || isPathInside(fs.realpathSync(mapped.mapping.hostRoot), hostPath))
+        (await fs.realpath(backingPath)) === hostPath &&
+        (!mapped || isPathInside(await fs.realpath(mapped.mapping.hostRoot), hostPath))
         ? resolved.containerPath
         : null;
     } catch {
@@ -57,8 +55,10 @@ export async function resolveOpenClawReferencePaths(
   const workspaceDir = params.workspaceDir?.trim();
   return {
     docsPath:
-      (workspaceDir ? resolveReference(path.join(workspaceDir, "docs"), "docs.json") : null) ??
-      (packageRoot ? resolveReference(path.join(packageRoot, "docs"), "docs.json") : null),
-    sourcePath: packageRoot ? resolveReference(packageRoot, ".git") : null,
+      (workspaceDir
+        ? await resolveReference(path.join(workspaceDir, "docs"), "docs.json")
+        : null) ??
+      (packageRoot ? await resolveReference(path.join(packageRoot, "docs"), "docs.json") : null),
+    sourcePath: packageRoot ? await resolveReference(packageRoot, ".git") : null,
   };
 }

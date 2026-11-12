@@ -1,0 +1,2 @@
+# Late persistence must still finish core retirement after both diagnostic grace windows.
+27

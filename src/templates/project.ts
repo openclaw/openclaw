@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -110,7 +110,7 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
 
 async function discoverTemplateProjectRoot(projectPath: string): Promise<string> {
   const input = resolve(projectPath);
-  const inputStat = await lstat(input).catch(() => undefined);
+  const inputStat = await stat(input).catch(() => undefined);
   if (!inputStat) {
     throw new TemplateProjectError(
       "project_not_found",
@@ -311,25 +311,14 @@ export async function validateTemplateProject(
   if (!template.ok) {
     return { ok: false, root, diagnostics: template.diagnostics };
   }
-  const excludedSource = [
-    ...(template.snapshot.openClawProfile
-      ? [
-          {
-            path: template.snapshot.openClawProfile.sourcePath,
-            diagnosticPath: "$.metadata.openclaw.config",
-          },
-        ]
-      : []),
-    ...template.snapshot.workspaceSources.map((source) => ({
-      path: source.sourcePath,
-      diagnosticPath: "$.workspace",
-    })),
-  ].find((source) => isExcludedProjectSource(source.path));
+  const excludedSource = template.snapshot.workspaceSources.find((source) =>
+    isExcludedProjectSource(source.sourcePath),
+  );
   if (excludedSource) {
     return failure(
       "project_excluded_source",
-      excludedSource.diagnosticPath,
-      `Selected project source ${JSON.stringify(excludedSource.path)} cannot come from .git or node_modules.`,
+      "$.workspace",
+      `Selected project source ${JSON.stringify(excludedSource.sourcePath)} cannot come from .git or node_modules.`,
     );
   }
   const reservedPackageSource = template.snapshot.workspaceSources.find(
@@ -380,8 +369,10 @@ export async function validateTemplateProject(
     "CLAW.md",
     ...(license ? ["LICENSE"] : []),
     ...(template.packageBootstrap ? ["BOOTSTRAP.md"] : []),
-    ...(template.snapshot.openClawProfile ? [template.snapshot.openClawProfile.sourcePath] : []),
     ...template.snapshot.workspaceSources.map((source) => source.sourcePath),
+    ...(template.snapshot.bundledSources ?? []).flatMap((source) =>
+      source.snapshot.files.map((file) => `${source.path}/${file.path}`),
+    ),
   ];
   const portableSelectedPaths = new Map<string, string>();
   for (const path of selectedPathList) {

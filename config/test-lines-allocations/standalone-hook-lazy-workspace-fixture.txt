@@ -1,0 +1,3 @@
+# Four lines isolate the bundled literal workspace import in the extracted hook-loader VM fixture.
+# Retains executable-only handler, physical-open rejection, and admission assertions.
+4

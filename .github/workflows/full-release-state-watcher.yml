@@ -1,0 +1,187 @@
+name: Full Release State Watcher
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        required: true
+      runner_label:
+        type: string
+        required: true
+      fail_fast:
+        type: boolean
+        required: true
+      release_profile:
+        type: string
+        required: true
+      rerun_group:
+        type: string
+        required: true
+      target_sha:
+        type: string
+        required: true
+      qualification_workflow_sha:
+        type: string
+        required: true
+      npm_preparation_result:
+        type: string
+        required: true
+      npm_qualification_result:
+        type: string
+        required: true
+      plugin_npm_preparation_result:
+        type: string
+        required: true
+      docker_preparation_result:
+        type: string
+        required: true
+    outputs:
+      state:
+        value: ${{ jobs.watch.outputs.state }}
+      normal_ci_conclusion:
+        value: ${{ jobs.watch.outputs.normal_ci_conclusion }}
+      plugin_prerelease_independent_conclusion:
+        value: ${{ jobs.watch.outputs.plugin_prerelease_independent_conclusion }}
+      plugin_prerelease_candidate_conclusion:
+        value: ${{ jobs.watch.outputs.plugin_prerelease_candidate_conclusion }}
+      release_checks_independent_conclusion:
+        value: ${{ jobs.watch.outputs.release_checks_independent_conclusion }}
+      release_checks_candidate_conclusion:
+        value: ${{ jobs.watch.outputs.release_checks_candidate_conclusion }}
+      npm_telegram_conclusion:
+        value: ${{ jobs.watch.outputs.npm_telegram_conclusion }}
+      performance_conclusion:
+        value: ${{ jobs.watch.outputs.performance_conclusion }}
+
+permissions:
+  actions: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  GH_REPO: ${{ github.repository }}
+  NODE_VERSION: "24.22.1"
+  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
+  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"
+
+jobs:
+  watch:
+    name: Watch
+    if: >-
+      always() && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' &&
+      (github.workflow_ref == 'openclaw/openclaw/.github/workflows/full-release-validation.yml@refs/heads/main' ||
+      startsWith(github.workflow_ref, 'openclaw/openclaw/.github/workflows/full-release-validation.yml@refs/heads/release-ci/')) &&
+      (inputs.mode == 'decision' || inputs.mode == 'drain')
+    runs-on: >-
+      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
+      toJSON(inputs.runner_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404')) }}
+    timeout-minutes: 720
+    env:
+      RELEASE_STATE_SCRIPT: ${{ inputs.qualification_workflow_sha != '' && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
+    outputs:
+      state: ${{ steps.state.outputs.state }}
+      normal_ci_conclusion: ${{ steps.state.outputs.normalCi_conclusion }}
+      plugin_prerelease_independent_conclusion: ${{ steps.state.outputs.pluginPrereleaseIndependent_conclusion }}
+      plugin_prerelease_candidate_conclusion: ${{ steps.state.outputs.pluginPrereleaseCandidate_conclusion }}
+      release_checks_independent_conclusion: ${{ steps.state.outputs.releaseChecksIndependent_conclusion }}
+      release_checks_candidate_conclusion: ${{ steps.state.outputs.releaseChecksCandidate_conclusion }}
+      npm_telegram_conclusion: ${{ steps.state.outputs.npmTelegram_conclusion }}
+      performance_conclusion: ${{ steps.state.outputs.productPerformance_conclusion }}
+    steps:
+      - name: Checkout release state tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Checkout admitted qualification verifier
+        if: ${{ inputs.qualification_workflow_sha != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.qualification_workflow_sha }}
+          path: qualification-verifier
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Download immutable release execution plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: full-release-execution-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/full-release-execution-plan
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Evaluate release state
+        id: state
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ inputs.qualification_workflow_sha != '' && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          FAIL_FAST: ${{ inputs.mode == 'decision' && inputs.fail_fast || false }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+          NPM_PREPARATION_RESULT: ${{ inputs.npm_preparation_result }}
+          NPM_QUALIFICATION_RESULT: ${{ inputs.npm_qualification_result }}
+          PLUGIN_NPM_PREPARATION_RESULT: ${{ inputs.plugin_npm_preparation_result }}
+          DOCKER_PREPARATION_RESULT: ${{ inputs.docker_preparation_result }}
+          FULL_RELEASE_STATE_MODE: ${{ inputs.mode }}
+          FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
+          FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-${{ inputs.mode == 'decision' && 'decision/full-release-decision.json' || 'diagnostics/full-release-diagnostic-manifest.json' }}
+        run: |
+          set -euo pipefail
+          node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"
+
+      - name: Summarize locale validation
+        if: always() && inputs.mode == 'drain' && steps.state.outputs.state != ''
+        env:
+          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const diagnostics = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_DRAIN_PATH, "utf8"));
+          const jobs = diagnostics.children.normalCi?.timing.jobs ?? [];
+          const lines = ["## Generated locale validation", "", "| Job | Result |", "| --- | --- |"];
+          const warnings = [];
+          for (const name of ["control-ui-i18n", "native-i18n"]) {
+            const result = jobs.find((job) => job.name === name)?.conclusion || "not recorded";
+            lines.push(`| ${name} | ${result} |`);
+            if (!["success", "skipped", "not recorded"].includes(result)) {
+              console.log(`::warning::${name}: ${result}. Inspect the strict locale job; generated-locale drift must not prevent FRV dispatch.`);
+              warnings.push("", "> [!WARNING]", `> ${name}: ${result}. Generated-locale drift does not block dispatch; the strict job still fails validation.`);
+            }
+          }
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [...lines, ...warnings].join("\n") + "\n");
+          NODE
+
+      - name: Upload release state
+        if: always() && steps.state.outputs.state != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: full-release-${{ inputs.mode == 'decision' && 'decision' || 'diagnostics' }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/full-release-${{ inputs.mode == 'decision' && 'decision' || 'diagnostics' }}
+          if-no-files-found: error
+
+      - name: Enforce release state
+        if: always()
+        env:
+          RELEASE_STATE_MODE: ${{ inputs.mode }}
+          RELEASE_STATE: ${{ steps.state.outputs.state }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_STATE" == "passed" ]] || [[ "$RELEASE_STATE_MODE" == "drain" && "$RELEASE_STATE" == "blocked_complete" ]]; then
+            exit 0
+          fi
+          echo "::error::Release ${RELEASE_STATE_MODE} ended in ${RELEASE_STATE:-orchestration_error}."
+          exit 1

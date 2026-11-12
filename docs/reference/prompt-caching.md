@@ -386,7 +386,7 @@ Live AWS acceptance proof remains a gap until a maintainer with Bedrock access r
 
 For `openrouter/anthropic/*` model refs, including `openrouter/~anthropic/*-latest` aliases, both Chat Completions builders apply the [shared marker layout](#chat-completions-cache-markers), but only when the request still targets a verified OpenRouter route (`openrouter` on its default endpoint, or any provider/base URL that resolves to `openrouter.ai`). Repointing the model at an arbitrary OpenAI-compatible proxy URL stops automatic marker injection. `cacheRetention: "long"` requests `ttl: "1h"` on these verified routes; `"none"` disables markers. See [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
 
-For `openrouter/google/gemini*` refs (including `~google/` aliases and `:variant` suffixes), both builders send one `cache_control: { type: "ephemeral" }` breakpoint on the stable system/developer prefix. Gemini uses only the last breakpoint, so tools and conversation history are not marked: a later marker would supersede the stable-prefix boundary and include the volatile system suffix. Without a split boundary, the complete system prompt is marked. The same verified-route restriction applies; direct Google routes are unchanged. `"none"` disables markers; `"short"` and `"long"` use the provider's default cache window without a TTL override. Gemini's model-specific minimum cacheable size still applies.
+For `openrouter/google/gemini*` refs (including `~google/` aliases and `:variant` suffixes), both builders mark the complete system/developer message with one `cache_control: { type: "ephemeral" }` breakpoint. OpenClaw moves only producer-delimited Runtime facts to the first eligible user turn; other instructions keep their system authority. If no user carrier is emitted, the Runtime facts stay in the system message. [OpenRouter caches Gemini's whole `systemInstruction`](https://openrouter.ai/docs/guides/best-practices/prompt-caching), so marking a stable block inside a message would not isolate a dynamic tail. Tools and history receive no marker. The same verified-route restriction applies; direct Google routes are unchanged. `"none"` disables markers; `"short"` and `"long"` use the provider's default cache window without a TTL override. Gemini's model-specific minimum cacheable size still applies.
 
 `contextPruning.mode: "cache-ttl"` is allowed for `openrouter/anthropic/*`, `openrouter/deepseek/*`, `openrouter/moonshot/*`, `openrouter/moonshotai/*`, `openrouter/x-ai/*`, `openrouter/zai/*`, `openrouter/google/gemini-2.5*`, and `openrouter/google/gemini-3*` model refs. Older Gemini models and other `google/*` models (for example Gemma) remain excluded from cache-TTL pruning eligibility.
 
@@ -425,19 +425,24 @@ If a provider does not support any of the above cache modes, `cacheRetention` ha
 OpenAI-compatible routes with `compat.cacheControlFormat: "anthropic"` share one
 marker policy across the managed transport, SDK builder, and provider wrappers.
 
-OpenRouter Gemini uses only the stable system checkpoint described above; other
+OpenRouter Gemini uses the whole system checkpoint described above; other
 routes use the following layout.
 
 - The last tool definition is marked when the route supports tool markers; tools remain sorted by name.
 - The stable system/developer block is marked, with the volatile suffix in a separate unmarked block.
+- On an opening OpenRouter Anthropic turn, producer-delimited session-shared guidance gets a second system checkpoint before Runtime facts. Later turns omit it to reserve the four-marker budget for conversation history.
 - The latest eligible user text or tool result is marked, advancing through tool loops and new turns while skipping transient runtime-context carriers.
 
-The layout normally uses three markers and stays within the four-breakpoint
-budget. `cacheRetention: "none"` emits none. A conversation checkpoint covers
+The layout normally uses three markers; the opening OpenRouter Anthropic turn can
+use four. `cacheRetention: "none"` emits none. A conversation checkpoint covers
 all preceding tools, system content, and messages, so changing the volatile
 system suffix still invalidates that later checkpoint; the earlier stable-system
 checkpoint remains reusable where the backend supports block-level caching.
 Backend token minimums and cache lifetimes still apply.
+
+DeepInfra keeps the three-marker layout. Its public docs describe automatic
+prefix matching but do not establish independent cache checkpoints within one
+system message, so a fourth shared-system marker there has no verified contract.
 
 With `compat.requiresStringContent: true`, managed requests keep message content
 as strings and omit message-block markers, including through provider wrappers.
@@ -615,7 +620,9 @@ The route part names the first changed element: `provider`, `model`, `api`,
 tokens are reported, never profile IDs, route-key contents, or prompt text.
 Routes without a system-prompt series omit the field.
 
-The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; active sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
+History baselines share a 16 MiB budget for fingerprint strings and container overhead, in addition to the 512-tracker limit. The least recently used baselines are released when either limit is reached; a single history exceeding the byte budget is not retained and can also evict older baselines. Evicted sessions start a fresh diagnostic baseline on their next request. Provider prompt observations retain bounded digests and wire metadata, not request payloads.
+
+The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; resident sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 
 For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
 

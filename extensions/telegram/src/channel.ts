@@ -109,7 +109,7 @@ import { telegramSetupWizard } from "./setup-surface.js";
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
-import { telegramThreadBindingLifecycle } from "./thread-bindings-channel.js";
+import { telegramThreadBindingSupport } from "./thread-bindings-channel.js";
 import { buildTelegramThreadingToolContext } from "./threading-tool-context.js";
 import { resolveTelegramToken } from "./token.js";
 import {
@@ -425,7 +425,7 @@ export const telegramPlugin = createChatChannelPlugin({
         const entryTarget = parseTelegramTarget(entryTo);
         return entryTarget.chatId !== requesterTarget.chatId;
       },
-      ...telegramThreadBindingLifecycle,
+      ...telegramThreadBindingSupport,
     },
     groups: {
       resolveRequireMention: resolveTelegramGroupRequireMention,

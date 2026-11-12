@@ -109,7 +109,6 @@ export async function withSessionEntriesAsync<T>(
                           kind: "resolved",
                           profileId: profile.profileId,
                           avatarUrl: "",
-                          hasUploadedAvatar: false,
                         }
                       : undefined,
                   );

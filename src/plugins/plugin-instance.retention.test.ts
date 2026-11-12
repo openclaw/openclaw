@@ -2,12 +2,12 @@ import { AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, onTestFinished } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectLiveObjects } from "../test-utils/retention.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import {
   createOwnedInstance,
-  expectLiveObjects,
   readRegistryLabel,
   selectRegistry,
   throwing,
@@ -22,8 +22,11 @@ import {
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
-class RetainedRegistry {
-  readonly fixtureLabel = "RetainedRegistry";
+const retainedRegistries: WeakRef<object>[] = [];
+function createRetainedRegistry() {
+  const registry = {};
+  retainedRegistries.push(new WeakRef(registry));
+  return registry;
 }
 
 it("releases completed reload preludes while disposed instance signals remain reachable", async () => {
@@ -32,12 +35,15 @@ it("releases completed reload preludes while disposed instance signals remain re
   onTestFinished(() => {
     Reflect.set(Error, "stackTraceLimit", stackTraceLimit);
   });
-  class ReloadRegistry {
-    readonly fixtureLabel = "ReloadRegistry";
+  const reloadRegistries: WeakRef<object>[] = [];
+  function createReloadRegistry() {
+    const registry = {};
+    reloadRegistries.push(new WeakRef(registry));
+    return registry;
   }
   async function retire() {
     const { record, instance } = createOwnedInstance("retirement-stack");
-    const registry = selectRegistry(record, "retired", new ReloadRegistry());
+    const registry = selectRegistry(record, "retired", createReloadRegistry());
     expect(
       (await disposePluginRegistryInstances(registry, undefined, { cfg: {} })).failures,
     ).toEqual([]);
@@ -48,7 +54,7 @@ it("releases completed reload preludes while disposed instance signals remain re
     retired.push(await retire());
   }
   // Inspect before error matchers render the lazy abort stack and hide the retained callback.
-  await expectLiveObjects(ReloadRegistry, 0);
+  await expectLiveObjects(reloadRegistries, 0);
   for (const instance of retired) {
     expect(instance.owner?.registry).toBeUndefined();
     expect(instance.lifecycle.signal.aborted).toBe(true);
@@ -61,13 +67,13 @@ it("releases completed reload preludes while disposed instance signals remain re
 
 it("keeps owner work independent of its caller and follows adopted registry custody", async () => {
   const { record, instance } = createOwnedInstance("owner-work");
-  selectRegistry(record, "initial", new RetainedRegistry());
+  selectRegistry(record, "initial", createRetainedRegistry());
   const caller = instance.retainConsumer();
   const authority = caller.run(() => instance.retainOwnerWork());
   caller.release();
   selectRegistry(record, "successor");
   try {
-    await expectLiveObjects(RetainedRegistry, 0);
+    await expectLiveObjects(retainedRegistries, 0);
     instance.quiesce();
     await instance.waitForIdle(new AbortController().signal);
     expect(authority.run(readRegistryLabel)).toBe("successor");
@@ -144,7 +150,7 @@ it("retains an adopted selection until a pending call rejects", async () => {
   const resume = createDeferredCore();
   const failure = new Error("callback failed");
   let observed: string | undefined;
-  selectRegistry(record, "intermediate", new RetainedRegistry());
+  selectRegistry(record, "intermediate", createRetainedRegistry());
   const pending = instance.run(async () => {
     await resume.promise;
     observed = readRegistryLabel();
@@ -153,11 +159,11 @@ it("retains an adopted selection until a pending call rejects", async () => {
   selectRegistry(record, "successor");
   void pending.catch(() => {});
   try {
-    await expectLiveObjects(RetainedRegistry, 1);
+    await expectLiveObjects(retainedRegistries, 1);
     resume.resolve();
     await expect(pending).rejects.toBe(failure);
     expect(observed).toBe("intermediate");
-    await expectLiveObjects(RetainedRegistry, 0);
+    await expectLiveObjects(retainedRegistries, 0);
     expect(instance.run(readRegistryLabel)).toBe("successor");
   } finally {
     resume.resolve();
@@ -174,13 +180,13 @@ it("keeps resolved value identity and independent registry custody for concurren
   const nestedValue = Object.freeze({ selection: "nested" });
   const concurrentValue = Object.freeze({ selection: "concurrent" });
   const startNested = () => {
-    selectRegistry(record, "nested", new RetainedRegistry());
+    selectRegistry(record, "nested", createRetainedRegistry());
     const nested = instance.run(async () => {
       await nestedResume.promise;
       expect(readRegistryLabel()).toBe("nested");
       return nestedValue;
     });
-    selectRegistry(record, "concurrent", new RetainedRegistry());
+    selectRegistry(record, "concurrent", createRetainedRegistry());
     return nested;
   };
   const first = consumer.run(async () => await startNested());
@@ -191,13 +197,13 @@ it("keeps resolved value identity and independent registry custody for concurren
   });
   adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
   try {
-    await expectLiveObjects(RetainedRegistry, 2);
+    await expectLiveObjects(retainedRegistries, 2);
     nestedResume.resolve();
     await expect(first).resolves.toBe(nestedValue);
-    await expectLiveObjects(RetainedRegistry, 1);
+    await expectLiveObjects(retainedRegistries, 1);
     concurrentResume.resolve();
     await expect(second).resolves.toBe(concurrentValue);
-    await expectLiveObjects(RetainedRegistry, 0);
+    await expectLiveObjects(retainedRegistries, 0);
   } finally {
     nestedResume.resolve();
     concurrentResume.resolve();
@@ -232,7 +238,7 @@ it.each(["sync", "promise", "thenable"] as const)(
       expect(instance.hasActiveCall).toBe(true);
       observed = readRegistryLabel();
     };
-    selectRegistry(record, "nested", new RetainedRegistry());
+    selectRegistry(record, "nested", createRetainedRegistry());
     const nested = resource.runInAsyncScope(() =>
       instance.run(() => {
         if (kind === "sync") {
@@ -270,13 +276,13 @@ it.each(["sync", "promise", "thenable"] as const)(
       if (kind === "sync") {
         expect(nested).toBe(payload);
       }
-      await expectLiveObjects(RetainedRegistry, kind === "sync" ? 0 : 1);
+      await expectLiveObjects(retainedRegistries, kind === "sync" ? 0 : 1);
       expect([outerSettled, instance.ordinaryCallCount]).toEqual([false, 0]);
       nestedFinish.resolve();
       expect(await outcome).toBe(payload);
       expect(observed).toBe("nested");
       expect([thenReads, thenCalls]).toEqual(kind === "thenable" ? [1, 1] : [0, 0]);
-      await expectLiveObjects(RetainedRegistry, 0);
+      await expectLiveObjects(retainedRegistries, 0);
       expect(outerSettled).toBe(false);
     } finally {
       nestedFinish.resolve();
@@ -295,7 +301,7 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
   const consumer = instance.retainConsumer();
   const resource = consumer.run(() => new AsyncResource("completed-consumer-scope"));
   const resume = createDeferredCore();
-  selectRegistry(record, "late", new RetainedRegistry());
+  selectRegistry(record, "late", createRetainedRegistry());
   const pending = resource.runInAsyncScope(() =>
     instance.run(async () => {
       await resume.promise;
@@ -304,10 +310,10 @@ it("gives a completed consumer context fresh finite custody when it re-enters", 
   );
   adoptPluginRegistryRecords({ ...createEmptyPluginRegistry(), plugins: [record] });
   try {
-    await expectLiveObjects(RetainedRegistry, 1);
+    await expectLiveObjects(retainedRegistries, 1);
     resume.resolve();
     await expect(pending).resolves.toBe("late");
-    await expectLiveObjects(RetainedRegistry, 0);
+    await expectLiveObjects(retainedRegistries, 0);
     expect(resource.runInAsyncScope(() => instance.run(() => "still admitted"))).toBe(
       "still admitted",
     );

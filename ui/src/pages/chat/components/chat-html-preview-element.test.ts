@@ -295,7 +295,7 @@ describe("ordinary HTML preview transport", () => {
       path: "/sender/report/index.html",
       refs: ["a.png", "missing.png"],
     });
-    expect(assetStatus(view)?.textContent).toContain("Some assets couldn't be loaded (1)");
+    expect(assetStatus(view)?.textContent).toContain("Couldn’t load 1 assets. Try again.");
     expect(view.html).toBe(html);
   });
 

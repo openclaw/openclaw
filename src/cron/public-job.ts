@@ -9,6 +9,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     ownerTransferPending: _ownerTransferPending,
     sourceConversation: _sourceConversation,
     streamSandbox: _streamSandbox,
+    streamOperatorSource: _streamOperatorSource,
     skillLibrarySelections: _skillLibrarySelections,
     createdActor: _createdActor,
     toolsAllowProvenance: _toolsAllowProvenance,

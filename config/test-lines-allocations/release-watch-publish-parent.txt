@@ -1,0 +1,2 @@
+# Fixture proof for #192564 release:watch child discovery, gates and failed jobs.
+131

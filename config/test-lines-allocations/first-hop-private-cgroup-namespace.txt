@@ -1,0 +1,2 @@
+# Exercise Docker namespace custody and published setup/candidate registry isolation.
+73

@@ -110,6 +110,11 @@ Metadata discovery still does not execute plugin code. See
 
 ### Process and network utilities
 
+`getAsyncWorkSignal()` from `openclaw/plugin-sdk/concurrency-runtime` returns the
+active host work scope's cancellation signal, or `undefined` outside a managed
+scope. Pass it to cancellable reads and check it before publishing their results.
+Already-accepted mutations retain their owner's settlement policy.
+
 `runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
 work in the host's context-free async root. Use it at an independently admitted
 service request boundary when a long-lived listener can retain its startup

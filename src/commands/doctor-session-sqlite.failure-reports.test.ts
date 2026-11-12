@@ -439,6 +439,35 @@ describe("runDoctorSessionSqlite", () => {
     });
   });
 
+  it("rewrites report paths once per target, not once per issue (#194621)", () => {
+    const store = createLegacyStore();
+    const manifestPath = path.join(store.tempDir, "many-moves.json");
+    const sessionsDir = path.dirname(store.storePath);
+    const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");
+    const plannedMoves = Array.from({ length: 200 }, (_, index) => ({
+      archivePath: path.join(archiveDir, `s${index}.jsonl`),
+      kind: "transcript" as const,
+      sourcePath: path.join(sessionsDir, `s${index}.jsonl`),
+    }));
+    const issues = plannedMoves.map(({ sourcePath }) => ({
+      code: "deferred",
+      message: sourcePath,
+    }));
+    const [target] = failureManifest(store, "many-moves").targets;
+    const manifest = failureManifest(store, "many-moves", {
+      targets: [{ ...expectDefined(target, "failure target"), issues, plannedMoves }],
+    });
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+    vi.stubEnv("HOME", store.tempDir);
+    using relative = vi.spyOn(path, "relative");
+    const { jsonPath } = writeSessionSqliteMigrationFailureReports(manifestPath, { reason: "x" });
+    vi.unstubAllEnvs();
+    expect(relative.mock.calls.length).toBeLessThan(plannedMoves.length * 4);
+    expect(JSON.parse(fs.readFileSync(jsonPath, "utf8")).targets[0].issues[0].message).toMatch(
+      /^~/,
+    );
+  });
+
   it("keeps bounded GitHub issue bodies on a valid UTF-16 boundary", () => {
     const store = createLegacyStore();
     const manifestPath = path.join(store.tempDir, "failed-migration.json");
@@ -447,20 +476,18 @@ describe("runDoctorSessionSqlite", () => {
     const writeManifest = (messages: string[]) => {
       const manifest = failureManifest(store, "utf16-boundary", {
         manifestVersion: 2,
-        targets: Array.from({ length: Math.ceil(messages.length / 10) }, (_, index) => {
-          return {
-            agentId: `agent-${index}`,
-            completedMoves: [],
-            issues: messages.slice(index * 10, (index + 1) * 10).map((message) => ({
-              code: "startup_failure",
-              message,
-            })),
-            plannedMoves: [],
-            sqlitePath: path.join(store.tempDir, "openclaw-agent.sqlite"),
-            storePath: store.storePath,
-            validationBeforeArchive: "failed",
-          };
-        }),
+        targets: Array.from({ length: Math.ceil(messages.length / 10) }, (_, index) => ({
+          agentId: `agent-${index}`,
+          completedMoves: [],
+          issues: messages.slice(index * 10, (index + 1) * 10).map((message) => ({
+            code: "startup_failure",
+            message,
+          })),
+          plannedMoves: [],
+          sqlitePath: path.join(store.tempDir, "openclaw-agent.sqlite"),
+          storePath: store.storePath,
+          validationBeforeArchive: "failed",
+        })),
       });
       fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     };

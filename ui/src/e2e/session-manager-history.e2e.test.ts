@@ -43,6 +43,12 @@ suite.define(() =>
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "sessions.search"],
         historyMessages: [{ role: "assistant", content: [{ type: "text", text }], timestamp }],
         methodResponses: {
+          "sessions.list": {
+            cases: [
+              { match: { search: "Research" }, response: support.sessionsListResponse([research]) },
+              { match: {}, response: support.sessionsListResponse([main, research]) },
+            ],
+          },
           "sessions.patch": {},
           "sessions.search": { results: [hit] },
         },
@@ -64,8 +70,17 @@ suite.define(() =>
       await filters.locator(".header-search__toggle").click();
       const rosterFilter = filters.getByRole("searchbox");
       await rosterFilter.fill("Research");
-      await expect.poll(() => mainRow.count()).toBe(0);
-      await researchRow.waitFor({ state: "visible" });
+      await gateway.waitForRequest("sessions.list", { match: { search: "Research" } });
+      await expect
+        .poll(() =>
+          page.locator(".session-data-row").evaluateAll((rows) =>
+            rows.map((element) => ({
+              label: element.querySelector(".session-label-chip")?.getAttribute("title"),
+              visible: element.checkVisibility({ visibilityProperty: true }),
+            })),
+          ),
+        )
+        .toEqual([{ label: research.label, visible: true }]);
       await captureUiProof(page, "01-session-filter.png");
       await rosterFilter.fill("");
       await mainRow.waitFor({ state: "visible" });
@@ -106,13 +121,15 @@ suite.define(() =>
       await support.activateSelfRemovingControl(
         ui.menuItem(page.locator("openclaw-session-menu"), "Archive session", false),
       );
-      await ui.sessionPatch(gateway, research.key, { archived: true });
       const toast = page
         .locator("openclaw-toast-host .app-toast")
         .filter({ hasText: "Session archived" });
       await toast.waitFor({ state: "visible", timeout: 10_000 });
       await ui.visible(ui.button(toast, "Undo", false));
       await captureUiProof(page, "03-session-archive-feedback.png");
+      expect(await ui.requestCount(gateway, "sessions.patch")).toBe(0);
+      await ui.closeArchiveUndoToast(page);
+      await ui.sessionPatch(gateway, research.key, { archived: true });
     });
   }),
 );

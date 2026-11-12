@@ -1,0 +1,2 @@
+# First-visit lazy transcript loading and deferred-import recovery coverage.
+6

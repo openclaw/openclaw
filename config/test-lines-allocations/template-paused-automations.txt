@@ -1,0 +1,3 @@
+# Paused Template authoring, schedule disclosure, native installation/activation,
+# same-job setup, and browser review regressions (CLAW-1285).
+170

@@ -539,3 +539,72 @@ it.each([
   scheduler.start();
   expect(scheduler.tick(now + elapsed * minute, elapsed * minute).accepted).toHaveLength(accepted);
 });
+
+it("backs off one deferred occurrence through restart and runs it once when admission clears", async () => {
+  const dueAt = now + 1_000;
+  const scheduler = singleJobScheduler("waiting", dueAt, {
+    payload: { kind: "agentTurn", message: "Synthetic pending occurrence" },
+    state: { nextRunAtMs: dueAt, lastRunStatus: "ok", consecutiveErrors: 0 },
+  });
+  scheduler.start();
+  let atMs = dueAt;
+  let launch = scheduler.tick(atMs, atMs - now).launches[0]!;
+  const finish = (deferred: boolean) =>
+    withinWorker(() =>
+      finalizeCronRunsInWorker(database, {
+        storeKey: scheduler.storeKey,
+        snapshot: {
+          nowMs: atMs,
+          outcomes: [
+            {
+              jobId: launch.job.id,
+              job: launch.job,
+              runReceipt: launch.runReceipt,
+              startedAt: launch.runReceipt.startedAtMs,
+              endedAt: atMs,
+              status: deferred ? "skipped" : "ok",
+              completionStatus: deferred ? "failed" : "succeeded",
+              errorReason: undefined,
+              deliveryState: {
+                status: "not-requested",
+                failureNotification: { status: "not-requested" },
+              },
+              ...(deferred
+                ? { admissionDeferred: true, executionStarted: false, summary: "Agent is busy" }
+                : {}),
+            },
+          ],
+        },
+      }),
+    );
+  for (const [index, delay] of [30_000, 60_000, 120_000, 240_000, 300_000, 300_000].entries()) {
+    finish(true);
+    expect(scheduler.tick(atMs + 2_000, atMs + 2_000 - now).launches).toEqual([]);
+    expect(scheduler.job("waiting").state).toMatchObject({
+      nextRunAtMs: dueAt,
+      lastRunStatus: "ok",
+      consecutiveErrors: 0,
+      admissionDeferred: {
+        reason: "Agent is busy",
+        sinceMs: dueAt,
+        attempts: index + 1,
+        retryAtMs: atMs + delay,
+      },
+    });
+    expect(scheduler.receipts()).toHaveLength(1);
+    atMs += delay;
+    if (index === 5) {
+      // An elapsed wait remains the same occurrence, even with agent catch-up deferral enabled.
+      await scheduler.restart(atMs + 1, { deferAgentWork: true });
+      expect(scheduler.job("waiting").state.nextRunAtMs).toBe(dueAt);
+      atMs += 2;
+    }
+    launch = scheduler.tick(atMs, atMs - now).launches[0]!;
+    expect(launch).toBeDefined();
+  }
+  finish(false);
+  expect(scheduler.job("waiting").state.admissionDeferred).toBeUndefined();
+  expect(scheduler.job("waiting").state.lastRunStatus).toBe("ok");
+  expect(scheduler.tick(atMs + 2_000, atMs + 2_000 - now).launches).toEqual([]);
+  expect(scheduler.receipts()).toHaveLength(1);
+});

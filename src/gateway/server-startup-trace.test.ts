@@ -202,7 +202,7 @@ describe("gateway startup trace", () => {
         "database-admission",
         () => Promise.resolve(),
         (name, run) => measureCliCommandStartup(name, run),
-        () => ({ agents: 200 }),
+        () => ({ agents: 200, stateIntegrityReason: "schema-mismatch" }),
       );
     }
     const info = vi.fn();
@@ -227,7 +227,9 @@ describe("gateway startup trace", () => {
     const admissionStep = messages.find((message) =>
       message.startsWith("startup trace: process.bootstrap.cli.bootstrap.database-admission "),
     );
-    expect(admissionStep).toMatch(/start=\d+\.\dms calls=2\.0 agents=400\.0$/);
+    expect(admissionStep).toMatch(
+      /start=\d+\.\dms calls=2\.0 agents=400\.0 stateIntegrityReason=schema-mismatch$/,
+    );
     expect(admissionStep).not.toContain("rssMb=");
     expect(messages.find((message) => message.startsWith("startup trace: ready "))).toContain(
       "cli.bootstrap.database-admission:",

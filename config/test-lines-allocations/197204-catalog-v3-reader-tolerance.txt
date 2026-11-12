@@ -1,0 +1,5 @@
+# Regression for the v3 reader's frozen-parser defects, red on the base: one unknown provider api,
+# passthroughOnly, duplicate recommendation or pricing key rejected the whole catalog, and unknown
+# pricing/status/decision values or nulls dropped rows. Net growth after folding the unknown-key test
+# into it and making the retired-default overlay test cover v1 and v2. Exact for PR #197204.
+57

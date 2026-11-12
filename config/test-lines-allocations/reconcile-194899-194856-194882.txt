@@ -1,0 +1,3 @@
+# #194899 selected publication credits, #194856 activity ordering, and #194882 queued live registry coverage.
+# Exact remaining debt at 34bb0cfb5103: 127 + 20 + 48 added - 119 prior slack - 54 later reductions = 22.
+22

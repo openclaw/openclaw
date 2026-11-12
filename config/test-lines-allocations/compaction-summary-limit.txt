@@ -1,0 +1,2 @@
+# Config/RPC boundaries and persisted/replayed summary limits, including CJK window safety.
+207

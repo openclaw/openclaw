@@ -1,0 +1,2 @@
+# Clock setup, neighbor autosave resumption, settled Apply polling, and resize-animation completion preserve full idle windows and existing E2E assertions while removing real waits.
+12

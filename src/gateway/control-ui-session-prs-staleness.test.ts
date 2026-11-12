@@ -94,15 +94,14 @@ it.each(["list", "warm metadata", "cold metadata"])(
         const load = () =>
           loadControlUiSessionPullRequests(
             { sessionKey },
-            {
-              resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }),
-            },
+            { resolveGitContext: async () => ({ ...testGitContext, branch: "stale-preview" }) },
           );
         const fresh = failure === "cold metadata" ? undefined : await load();
         if (fresh) {
           expect(fresh.pullRequests[0]?.state).toBe(metadata ? "open" : "merged");
         }
         failed = true;
+        vi.setSystemTime(Date.now() - (metadata ? 0 : 60_000));
         vi.advanceTimersByTime(91_000);
         if (metadata) {
           // Task-PR reads can cache a failed detail request before the branch list succeeds.

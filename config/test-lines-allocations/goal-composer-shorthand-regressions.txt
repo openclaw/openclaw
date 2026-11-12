@@ -1,0 +1,7 @@
+# PR #193472: objective-only Goal shorthand and empty-command restoration.
+# Exactly this PR's +221 LF regression-test lines: +93 production-browser flow,
+# +99 composer state/command boundaries, +27 saved-mode codec, +2 literal admission.
+# The native typing/caret/undo/reload flow needs browser proof; the parameterized
+# owner tests cover command aliases, empty entry/restoration, and persisted manual modes.
+# Keep config/test-lines-baseline.txt unchanged; retire this record with the coverage.
+221

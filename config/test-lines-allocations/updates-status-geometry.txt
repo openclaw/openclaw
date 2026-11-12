@@ -1,0 +1,2 @@
+# Keep the existing routed update-refresh test checking that pending and final status text stay aligned.
+7

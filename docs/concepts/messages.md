@@ -81,6 +81,8 @@ Multiple devices/channels can map to the same session, but history is not fully 
 
 If publishing a live transcript update fails after an agent message is saved, OpenClaw keeps the saved message and logs a warning. Reload the session to refresh its transcript; the failed notification is not replayed automatically.
 
+If an accepted chat message never starts its own turn, a later turn can still read it from history. Recovering that input keeps the original message visible without rewriting it into the next message or rebuilding history just to replace it. Provider retries preserve that input alongside the current message. Providers that require alternating roles receive the combined text only when the request is sent; the stored messages remain separate. Deliberately sending the same text again creates another user turn.
+
 If a run fails or times out before an assistant reply is saved, its transcript receives one visible failure notice. Nested runs retain their own failure notices even after the requesting turn has ended.
 
 Failure notices remain in chat history without becoming user instructions in later model requests. This also applies to notices saved by earlier versions; stored transcript bytes remain unchanged.
@@ -147,6 +149,8 @@ Channel plugins may preserve ordering, debounce input, and apply transport backp
 Once a turn is durably accepted, an unexpected failure before its answer produces a compact error reply in direct chats and explicitly addressed conversations where automatic replies are enabled. Progress acknowledgments do not replace that final outcome. The turn remains failed and is not replayed as a new inbound message; delivery policies and replies already sent through the message tool still apply.
 
 A final source reply completes only the input it answers. When another input steers the same running agent, its answer or failure remains visible even if an earlier input already received a final reply through the message tool.
+
+Successful local message-tool sends retain the delivered answer in the source session transcript, including sends prepared by channel plugins for core delivery. When the send belongs to an admitted source turn, `final=true` (or omitted `final` under the normal default) makes the answer available to accepted-turn context capture and prevents unchanged answered requests from being injected again as recent channel history. Progress replies (`final=false`, or omitted `final` when the run disables final-by-default), failed or partial sends, dry runs, and deliveries to other conversations do not mark that source turn answered.
 
 When delivery of the current input's reply is pending, OpenClaw waits for its outcome before sending a replacement answer or failure message.
 

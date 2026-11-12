@@ -16,6 +16,7 @@ import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
@@ -44,7 +45,7 @@ type SqliteFollowState = {
   selection: TailSelection;
 };
 
-type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM";
+type FollowOutcome = "ERROR" | "SIGINT" | "SIGTERM" | "ABORTED";
 
 const DEFAULT_TAIL_COUNT = 80;
 const SESSION_KEY_PAD = 30;
@@ -216,6 +217,7 @@ function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] 
 function followSelections(
   states: SqliteFollowState[],
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ): Promise<FollowOutcome> {
   return new Promise((resolve) => {
     let finished = false;
@@ -240,13 +242,19 @@ function followSelections(
         clearInterval(interval);
         process.off("SIGINT", stopSigint);
         process.off("SIGTERM", stopSigterm);
+        signal?.removeEventListener("abort", stopAbort);
         resolve(outcome);
       }
     };
     const stopSigint = () => finish("SIGINT");
     const stopSigterm = () => finish("SIGTERM");
+    const stopAbort = () => finish("ABORTED");
     process.once("SIGINT", stopSigint);
     process.once("SIGTERM", stopSigterm);
+    signal?.addEventListener("abort", stopAbort, { once: true });
+    if (signal?.aborted) {
+      stopAbort();
+    }
   });
 }
 
@@ -333,7 +341,9 @@ export async function sessionsTailCommand(
   }
 
   if (opts.follow) {
-    const outcome = await followSelections(followStates, runtime);
-    runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    const outcome = await followSelections(followStates, runtime, getAsyncWorkSignal());
+    if (outcome !== "ABORTED") {
+      runtime.exit(outcome === "ERROR" ? 1 : outcome === "SIGINT" ? 130 : 143);
+    }
   }
 }

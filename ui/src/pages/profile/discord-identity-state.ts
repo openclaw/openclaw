@@ -6,6 +6,7 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { reserveExternalWindowForDeferredNavigation } from "../../lib/open-external-url.ts";
 
@@ -84,7 +85,7 @@ export class DiscordIdentityState {
   }
   private request(params: UsersChannelIdentityParams) {
     if (!this.client || !this.available) {
-      throw new Error("Reconnect to manage your Discord identity.");
+      throw new Error(t("profilePage.discord.reconnect"));
     }
     return this.client.request<UsersChannelIdentityResult>("users.channelIdentity", params);
   }
@@ -144,7 +145,7 @@ export class DiscordIdentityState {
         return;
       }
       if (!result.requestId || !result.authorizationUrl) {
-        throw new Error("Discord sign-in could not be started. Try again.");
+        throw new Error(t("profilePage.discord.startFailed"));
       }
       this.flow = { requestId: result.requestId, accountId, nonce, url: result.authorizationUrl };
       if (popup) {
@@ -190,7 +191,7 @@ export class DiscordIdentityState {
       if (result.status === "linked") {
         await this.load();
       } else {
-        this.error = result.message ?? "Discord sign-in was not completed. Try again.";
+        this.error = result.message ?? t("profilePage.discord.incomplete");
       }
     } catch (error) {
       if (generation === this.generation && this.flow === flow) {

@@ -377,6 +377,18 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
         }
         return;
       }
+      if (event.data?.method === "ui/notifications/sandbox-activation-query") {
+        // Transient activation reaches this frame only from input inside its own
+        // widget (activation propagates to ancestors), so the host can bind a
+        // widget request to a gesture in that widget. The widget cannot forge
+        // the answer: this proxy never relays its sandbox- notifications.
+        window.parent.postMessage({
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-activation",
+          params: { id: event.data.params?.id, active: navigator.userActivation?.isActive === true },
+        }, hostOrigin);
+        return;
+      }
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;
       // A frame whose root color-scheme differs from its embedding element gets
       // an opaque UA canvas. Follow the host theme (widget theme messages, or

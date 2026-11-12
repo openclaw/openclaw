@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -16,6 +16,7 @@ import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -50,31 +51,17 @@ async function fixtureReadyBeforeSettlement(ready: string, operation: Promise<un
   await Promise.race([receipts.waitFor(ready, "ready"), settled]);
 }
 
-const reclamationChildren: Promise<ChildProcess>[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
-    try {
-      for (const child of await Promise.all(reclamationChildren)) {
-        expect(child).toMatchObject({ exitCode: 0, signalCode: null });
-      }
-    } finally {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      cleanup();
-    }
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    cleanup();
   });
 });
 let cacheRoot: string;
 beforeEach(async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  reclamationChildren.length = 0;
-  processMocks.execFile.mockReset().mockImplementation((file, args, options, callback) => {
-    const child = actual.execFile(file, args, options, callback);
-    if (isWorkerMode(args, "reclaim")) {
-      reclamationChildren.push(once(child, "close").then(() => child));
-    }
-    return child;
-  });
+  processMocks.execFile.mockReset().mockImplementation(actual.execFile);
   vi.mocked(spawn).mockClear();
   vi.mocked(spawnSync).mockReset().mockImplementation(actual.spawnSync);
   cacheRoot = tempDirs.make("openclaw-readonly-cancellation-cache-");
@@ -94,10 +81,6 @@ function installWorker(
         import fs from "node:fs";
         import path from "node:path";
         ${receipt ? fixtureReceiptClientSource(receipts.endpoint) : ""}
-        if (process.argv[3] === "reclaim") {
-          process.stdout.write(JSON.stringify({ ok: true, warnings: [] }));
-          process.exit(0);
-        }
         const reply = ${JSON.stringify(reply)};
         ${reply === "valid" ? "" : 'process.on("SIGTERM", () => {});'}
         const block = (stagingRoot, id) => {
@@ -222,7 +205,11 @@ it.skipIf(process.platform === "win32")(
       expect(() => process.kill(snapshotPid, 0)).toThrow(
         expect.objectContaining({ code: "ESRCH" }),
       );
-      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      expect(
+        fs.readdirSync(
+          resolvePrivateSqliteSnapshotStagingRoot({ ...process.env, XDG_CACHE_HOME: root }),
+        ),
+      ).toEqual([]);
       expect(fs.readFileSync(source)).toEqual(original);
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
@@ -248,7 +235,7 @@ it("joins an idle child that ignores graceful shutdown after its bounded fallbac
     inspectionFinished = true;
   });
   expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 
 it.for([
@@ -301,7 +288,7 @@ it.for([
         await expect(operation).rejects.toThrow("scope closed");
       }
       expect(fs.existsSync(fs.readFileSync(ready, "utf8"))).toBe(false);
-      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     } finally {
       controller.abort(reason);
       await Promise.allSettled([operation]);
@@ -342,7 +329,7 @@ it("reports failed owned cleanup and keeps it retryable", async () => {
     expect(prepared.cleanup()).toBe(true);
   }
   expect(fs.readFileSync(source)).toEqual(before);
-  expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
 });
 it.each(["sync", "async", "scoped"] as const)(
   "bounds the %s child and removes its unpublished copy",
@@ -412,7 +399,7 @@ it.each(["sync", "async", "scoped"] as const)(
       expect(performance.now() - started).toBeLessThan(8_000);
       expect(fs.readFileSync(ready, "utf8")).toBe("ready");
       expect(fs.readFileSync(source, "utf8")).toBe("source must stay unchanged");
-      expect(fs.readdirSync(path.join(root, "openclaw"))).toEqual([]);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     } finally {
       await childClosed;
     }

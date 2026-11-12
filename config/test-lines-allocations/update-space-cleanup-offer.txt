@@ -1,0 +1,2 @@
+# Space shortfall offers retirable recovery-copy cleanup: interactive yes/no, --yes/--json/no-terminal/mid-update report-only, nothing retirable, and the package command refusal guidance.
+200

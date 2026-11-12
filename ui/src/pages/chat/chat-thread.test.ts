@@ -764,15 +764,15 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    expect(groups).toHaveLength(1);
-    const entries = groupAt(groups, 0).messages;
+    expect(groups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(firstMessageContent(groupAt(groups, 0))).toEqual([mixedContent[0]]);
+    const entries = groupAt(groups, 1).messages;
     expect(entries).toHaveLength(1);
     const cards = entries.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
     ]);
-    expect(firstMessageContent(groupAt(groups, 0))).toContainEqual(mixedContent[0]);
   });
 
   describe("distinct tool invocations", () => {
@@ -1658,7 +1658,7 @@ describe("expansion-state render dependencies", () => {
 
     expect(expanded.has(hiddenCardId)).toBe(false);
     expect(expanded.has("visible-card:toolcard:0")).toBe(true);
-    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion + 1);
+    expect(getExpansionStateVersion(expanded)).toBe(filteredVersion);
   });
 
   it("retains explicit choices when sibling panes have different loaded history", () => {

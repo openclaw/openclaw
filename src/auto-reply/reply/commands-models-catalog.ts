@@ -11,7 +11,7 @@ import {
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
   isRetiredModelPickerProvider,
   omitCliRuntimeAliasTwins,
@@ -126,6 +126,8 @@ export async function loadModelsProviderData(
   });
   // The owner records refresh outcomes; a sent menu must not wait for acquisition or be rewritten.
   void owner.loadFullModelCatalog?.().catch(() => undefined);
+  // Channel pickers, like models.list, pick up a CLI sign-in made after Gateway start.
+  void owner.recheckNativeLogin?.();
   const cfg = owner.config;
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({

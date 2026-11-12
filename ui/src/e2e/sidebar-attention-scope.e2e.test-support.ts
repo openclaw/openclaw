@@ -260,7 +260,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expectAutomations(0, 1);
     await captureProof("11-mobile-inbox-writer-agent.png", true);
 
-    await sidebar.getByRole("button", { name: "Dismiss shown" }).click();
+    await sidebar.locator(".sidebar-issues-panel__more").click();
+    await sidebar.getByRole("menuitem", { name: "Dismiss shown" }).click();
     await expectCount(sidebarUpdate, 0);
     await expectCount(automationRows, 0);
     await sidebar.getByRole("tab", { name: /All/ }).click();

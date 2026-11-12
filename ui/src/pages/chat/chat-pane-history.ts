@@ -2,7 +2,6 @@ import {
   readSessionMessageIdentity,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
-import type { SessionsCatalogContinueResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -14,11 +13,7 @@ import {
   prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  announceCatalogSessionContinued,
-  parseCatalogSessionKey,
-  type CatalogSessionKey,
-} from "../../lib/sessions/catalog-key.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
@@ -27,10 +22,7 @@ import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
-import {
-  cloneChatAttachmentsForIndependentOwner,
-  replaceChatAttachmentsFromEditor,
-} from "./attachment-payload-store.ts";
+import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import { captureChatConnectionOwner } from "./chat-connection-owner.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
@@ -63,7 +55,6 @@ import {
 import {
   CHAT_HISTORY_PREFETCH_EDGE_PX,
   CHAT_HISTORY_INTENT_IDLE_MS,
-  clearPaneSessionHandoff,
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { ChatPaneSnapshotHydration } from "./chat-pane-snapshot-hydration.ts";
@@ -86,7 +77,6 @@ import {
 import { resetToolStream } from "./tool-stream-state.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
-  private activeCatalogContinuation: symbol | null = null;
   private activeOlderLoad: Promise<boolean> | null = null;
   private activeOlderRead: AbortController | null = null;
   private historyViewportFillAttempted = false;
@@ -134,10 +124,16 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     this.resumeCatalogRead();
     const state = this.state;
     const load = state && getChatHistoryLoadState(state);
-    const resumed =
+    if (
       state &&
-      (load?.phase === "pending-presentation" || load?.phase === "pending-connection") &&
-      resumePendingChatHistoryLoad(state);
+      load?.phase === "failed" &&
+      load.retryable &&
+      chatHistoryRequests(state).subscriptionError
+    ) {
+      // An approval upgrade can fail while its weaker base subscription remains.
+      void syncSelectedSessionMessageSubscription(state, { force: true });
+    }
+    const resumed = state && resumePendingChatHistoryLoad(state);
     if (state && resumed) {
       this.deferSessionHydrationUntilTranscript(
         state.sessionKey,
@@ -161,7 +157,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     this.reconcileWaitingApprovalSnapshot();
     if (chatHistoryRequests(state).subscriptionError) {
-      void syncSelectedSessionMessageSubscription(state);
+      void syncSelectedSessionMessageSubscription(state, { force: true });
     }
     const historyLoad = getChatHistoryLoadState(state);
     const startup = historyLoad.phase === "failed" && historyLoad.startup;
@@ -216,7 +212,6 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       }
     }
     if (
-      typeof IntersectionObserver !== "function" ||
       !this.presented ||
       !this.visuallyPresented ||
       document.visibilityState === "hidden" ||
@@ -339,6 +334,9 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     if (newHistoryIntent && (this.historyAutoLoadBlocked || !this.historyObserverArmed)) {
       this.historyAutoLoadBlocked = false;
       this.historyObserverArmed = true;
+    }
+    // A row correction can retire the observer without consuming this gesture's intent.
+    if (hasUpwardIntent && this.historyObserverArmed && !this.historyObserver) {
       this.syncHistoryObserver();
     }
     // Preserve the normal at-bottom/new-message bookkeeping while layering
@@ -373,10 +371,6 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       return;
     }
     this.historyAutoLoadBlocked = false;
-    if (typeof IntersectionObserver !== "function") {
-      void this.loadOlderMessages();
-      return;
-    }
     this.historyObserverArmed = true;
     this.syncHistoryObserver();
   }
@@ -387,9 +381,12 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     const load = (async () => {
       // A sparse or overlapping page is cursor progress, not a visible result.
-      // Keep boot autofill to one page; reader actions may cross three pages,
-      // then yield so a long hidden interval cannot monopolize the connection.
-      for (let page = 0; page < (readerIntent ? 3 : 1); page += 1) {
+      // A trimmed cache needs a boundary probe before its one boot-fill page.
+      // Reader actions may cross three pages, then yield so a long hidden
+      // interval cannot monopolize the connection.
+      const pagination = this.state?.chatHistoryPagination;
+      const limit = readerIntent ? 3 : pagination?.hasMore && pagination.needsBoundary ? 2 : 1;
+      for (let page = 0; page < limit; page += 1) {
         const loaded = await this.performOlderMessagesLoad(readerIntent);
         if (loaded !== "empty") {
           return loaded;
@@ -452,7 +449,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
           result = this.takeStagedOlderPage(state);
         }
         const pagination = state.chatHistoryPagination;
-        if (!pagination.hasMore || (!readerIntent && pagination.needsBoundary)) {
+        if (!pagination.hasMore) {
           return false;
         }
         const expectedSessionId = state.currentSessionId?.trim() ?? "";
@@ -604,87 +601,6 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     }
     this.stagedOlder.page = null;
     return isStagedOlderHistoryPageCurrent(state, staged) ? staged.result : null;
-  }
-
-  protected async continueCatalogSession(key: CatalogSessionKey) {
-    const scope = this.captureConnectionScope();
-    const state = scope?.state;
-    const client = scope?.client;
-    const draft = state?.chatMessage.trim() ?? "";
-    // Attachments count as composed content: an image-only continuation must
-    // send, not silently no-op while the send button looks live.
-    if (!scope || !state || !client || !this.history.catalogSession?.canContinue) {
-      return;
-    }
-    const attachments = cloneChatAttachmentsForIndependentOwner(state.chatAttachments);
-    if (!draft && attachments.length === 0) {
-      return;
-    }
-    const sourceSessionKey = state.sessionKey;
-    const sourceAgentId = resolveChatAgentId(state);
-    const sourceCatalogGeneration = this.catalogLoadGeneration;
-    const continuation = Symbol("catalog-continuation");
-    this.activeCatalogContinuation = continuation;
-    const isCurrent = () =>
-      this.activeCatalogContinuation === continuation &&
-      this.isConnectionScopeCurrent(scope) &&
-      this.catalogLoadGeneration === sourceCatalogGeneration &&
-      state.sessionKey === sourceSessionKey &&
-      resolveChatAgentId(state) === sourceAgentId;
-    state.chatSending = true;
-    const releaseStaleContinuation = () => {
-      if (this.activeCatalogContinuation !== continuation) {
-        return;
-      }
-      this.activeCatalogContinuation = null;
-      if (state.chatSendingScopeKey != null || !state.chatSending) {
-        return;
-      }
-      state.chatSending = false;
-    };
-    try {
-      const result = await client.request<SessionsCatalogContinueResult>(
-        "sessions.catalog.continue",
-        {
-          ...key,
-          agentId: sourceAgentId,
-          ...(this.history.catalogSession.sourceHomeId
-            ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
-            : {}),
-        },
-      );
-      // A catalog adoption must not navigate or send into a pane that switched
-      // sessions or reconnected while its original continuation was in flight.
-      if (!isCurrent()) {
-        releaseStaleContinuation();
-        return;
-      }
-      preparePaneSessionHandoff(this.context, this.paneId, result.sessionKey, {
-        attachments,
-        draft,
-        send: true,
-      });
-      if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
-        clearPaneSessionHandoff(this.context, this.paneId, result.sessionKey);
-        releaseStaleContinuation();
-        return;
-      }
-      announceCatalogSessionContinued({
-        ...key,
-        agentId: sourceAgentId,
-        sessionKey: result.sessionKey,
-      });
-      this.activeCatalogContinuation = null;
-      state.chatSending = false;
-    } catch (error) {
-      if (!isCurrent()) {
-        releaseStaleContinuation();
-        return;
-      }
-      this.activeCatalogContinuation = null;
-      state.lastError = formatUiError(error);
-      state.chatSending = false;
-    }
   }
 
   protected async rewindToMessage(entryId: string): Promise<boolean> {

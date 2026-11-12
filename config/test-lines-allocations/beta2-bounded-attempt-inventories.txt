@@ -1,0 +1,3 @@
+111
+# Exact own test LF growth: twelve ordered inventories within the existing deadline,
+# sequential page fallback, and full settlement without new claims after failure.

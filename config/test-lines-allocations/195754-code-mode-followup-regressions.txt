@@ -1,0 +1,4 @@
+# Repeated Code Mode failures through AgentSession/middleware, queued UI state,
+# admission wait timing, worker admission deadline, and long fixture lifetime.
+# Exactly the PR's net regression growth; public proof and cost are in PR #195754.
+234

@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { childSessionListQuery } from "../../lib/sessions/child-session-data.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -164,7 +165,18 @@ function fixture(
       ...rest,
     });
   };
-  return { data, when, open, request, connection, subscriptions, released, changed, publish };
+  return {
+    data,
+    when,
+    open,
+    request,
+    connection,
+    sessions,
+    subscriptions,
+    released,
+    changed,
+    publish,
+  };
 }
 
 const view = (f: ReturnType<typeof fixture>) => f.data.rows[0];
@@ -178,6 +190,67 @@ async function ready(
 }
 
 describe("Subagents panel data ownership", () => {
+  it("keeps descendant reads, rows, and Stop within the visible tab tree", async () => {
+    const reviewer = runningChild("reviewer", { spawnedBy: "agent:worker:subagent:coordinator" });
+    let coordinator = child("coordinator", {
+      hasActiveSubagentRun: true,
+      childSessions: [reviewer.key],
+    });
+    const f = fixture(
+      (params) => page(params.spawnedBy === parentKey ? [coordinator] : [reviewer]),
+      (params) => history(params.sessionKey === reviewer.key ? reviewer : coordinator),
+    );
+    // Details/mobile remain direct-child views; the desktop tab opts into its tree.
+    await ready(f);
+    expect(f.data.rows.map((row) => row.session.key)).toEqual([coordinator.key]);
+    expect(
+      f.request.mock.calls.filter(
+        ([method, params]) =>
+          method === "sessions.list" && asOptionalRecord(params)?.spawnedBy === coordinator.key,
+      ),
+    ).toHaveLength(0);
+
+    f.data.sync({
+      sessionKey: parentKey,
+      agentId: "main",
+      presented: true,
+      includeDescendants: true,
+    });
+    await f.data.readResult;
+    expect(f.data.rows.map((row) => [row.session.key, row.depth])).toEqual([
+      [coordinator.key, 0],
+      [reviewer.key, 1],
+    ]);
+    const nested = f.data.rows[1]!;
+    await f.data.stop(nested);
+    expect(f.request).toHaveBeenCalledWith(
+      "sessions.abort",
+      expect.objectContaining({
+        key: reviewer.key,
+        runId: "run-1",
+      }),
+    );
+
+    coordinator = { ...coordinator, hasActiveSubagentRun: false, childSessions: [] };
+    f.connection.publishEvent("sessions.changed", {
+      sessionKey: coordinator.key,
+      reason: "run-end",
+      ts: Date.now(),
+      session: coordinator,
+    });
+    await f.when(() => f.data.rows.length === 1);
+    f.request.mockClear();
+    await f.data.stop(nested);
+    expect(f.request.mock.calls.some(([method]) => method === "sessions.abort")).toBe(false);
+    f.data.sync({
+      sessionKey: parentKey,
+      agentId: "main",
+      presented: false,
+      includeDescendants: true,
+    });
+    expect(f.data.rows).toEqual([]);
+  });
+
   it.each(["parent", "connection"])(
     "rejects late history after %s retirement",
     async (retirement) => {
@@ -245,6 +318,12 @@ describe("Subagents panel data ownership", () => {
     expect(f.data.rows).toEqual([]);
     expect(f.data.error).toContain("Session read access denied");
     expect(f.subscriptions.has(row.key)).toBe(false);
+
+    denied = false;
+    // A shared roster refresh recovers the view without explicitly refreshing this panel.
+    await f.sessions.refreshList(childSessionListQuery(parentKey));
+    await f.when(() => view(f)?.session.key === row.key);
+    expect(f.data.error).toBeNull();
   });
 
   it("loads older running children beyond the first page", async () => {

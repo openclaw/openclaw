@@ -270,13 +270,13 @@ it("does not default to elevated when not allowed", async () => {
   expect(text(await execute(tool, shellEcho("hi")))).toContain("hi");
 });
 
-it("reads the unbounded offset log window", async () => {
+it("reads the unbounded offset and clamped tail log windows", async () => {
   const sessionId = await startAndFinish(
     createTool(),
     Array.from({ length: 201 }, (_, i) => shellEcho(`line-${i + 1}`)).join("; "),
   );
   const log = await processAction({ action: "log", sessionId, offset: 30 });
-  expect(log.details).toMatchObject({ totalLines: 201 });
+  expect(text(await processAction({ action: "log", sessionId, limit: -5 }))).toMatch(/^line-201\n/);
   expect(text(log).split("\n")[0]).toBe("line-31");
   expect(text(log)).toMatch(/line-201\n\nProcess exited with code 0\.$/);
   expect(text(log)).not.toContain("showing last 200");

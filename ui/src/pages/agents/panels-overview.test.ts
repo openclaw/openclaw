@@ -27,6 +27,10 @@ const contextValue = (container: HTMLElement, label: string) =>
   Array.from(container.querySelectorAll("dt"))
     .find((term) => term.textContent?.trim() === label)
     ?.nextElementSibling?.textContent?.trim();
+const overviewRow = (container: HTMLElement, label: string) =>
+  Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
+    (row) => row.querySelector(".settings-row__title")?.textContent?.trim() === label,
+  );
 
 type ViewOverrides = Omit<Partial<AgentsProps>, "access" | "overview"> & {
   access?: Partial<AgentsProps["access"]>;
@@ -50,7 +54,6 @@ function renderAgents({ configForm, ...overrides }: ViewOverrides = {}) {
 }
 
 it.each([
-  ["overview", { fallbacks: [nextFallback] }, `${inheritedAgentModel} (+1 fallback)`],
   ["channels", { fallbacks: [] }, inheritedAgentModel],
   ["cron", { primary: existingFallback }, existingFallback],
 ] as const)(
@@ -75,11 +78,86 @@ it.each([
     });
     await waitForSolid(() => {
       expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
-      expect(contextValue(container, "Primary Model")).toBe(expectedModel);
-      expect(contextValue(container, "Skills Filter")).toBe("2 selected");
+      expect(contextValue(container, "Primary model")).toBe(expectedModel);
+      expect(contextValue(container, "Skills filter")).toBe("2 selected");
     });
   },
 );
+
+function renderOverview(agent: Record<string, unknown> = {}) {
+  const onSelectPanel = vi.fn();
+  const container = renderAgents({
+    configForm: contextConfig({ fallbacks: [nextFallback] }),
+    onSelectPanel,
+    readData: () => ({
+      ...data,
+      agentsPanel: "overview",
+      agentsList: {
+        ...data.agentsList!,
+        agents: [{ id: "beta", workspace: resolvedAgentWorkspace, ...agent }],
+      },
+    }),
+  });
+  return { container, onSelectPanel };
+}
+
+it("shows Overview context as rows that open their owning tabs", async () => {
+  const { container, onSelectPanel } = renderOverview();
+  await waitForSolid(() =>
+    expect(container.querySelector(".agent-overview__workspace")?.textContent).toBe(
+      resolvedAgentWorkspace,
+    ),
+  );
+  expect(container.querySelector(".settings-kv")).toBeNull();
+  const primaryModel = overviewRow(container, "Primary model");
+  assert(primaryModel);
+  expect(primaryModel.querySelector(".model-picker")).not.toBeNull();
+  expect(primaryModel.querySelector(".settings-row__value")).toBeNull();
+  const skills = overviewRow(container, "Skills filter");
+  expect(skills?.querySelector(".settings-row__value")?.textContent).toBe("2 selected");
+  skills?.click();
+  expect(onSelectPanel).toHaveBeenLastCalledWith("skills");
+  overviewRow(container, "Workspace")?.click();
+  expect(onSelectPanel).toHaveBeenLastCalledWith("files");
+});
+
+it("leaves out read-only facts the agent does not have", () => {
+  const { container } = renderOverview();
+  expect(overviewRow(container, "Thinking default")).toBeUndefined();
+  expect(overviewRow(container, "Runtime")).toBeUndefined();
+});
+
+it("shows read-only facts the agent has", () => {
+  const { container } = renderOverview({
+    thinkingDefault: "xhigh",
+    agentRuntime: { id: "codex", fallback: "pi" },
+  });
+  const value = (label: string) =>
+    overviewRow(container, label)?.querySelector(".settings-row__value")?.textContent;
+  expect(value("Thinking default")).toBe("Extra high");
+  expect(value("Runtime")).toBe("codex (fallback pi)");
+});
+
+it("edits models without a Save or Reload of its own", () => {
+  const defaults = createProps();
+  const dirty = renderAgents({
+    config: { ...defaults.config, configForm: agentConfig({}), configFormDirty: true },
+  });
+  const labels = [...dirty.querySelectorAll("button")].map((button) => button.textContent?.trim());
+  expect(labels).not.toContain("Save");
+  expect(labels).not.toContain("Reload config");
+  expect(dirty.querySelector(".callout.warn")).toBeNull();
+});
+
+it("reaches Agent defaults from Overview and with no agent selected, not from other tabs", () => {
+  const name = "Agent defaults";
+  const row = (container: HTMLElement) => overviewRow(container, name);
+  expect(row(renderOverview().container)).toBeDefined();
+  expect(row(renderAgents({ selectedAgentId: null }))).toBeDefined();
+  expect(
+    row(renderAgents({ readData: () => ({ ...data, agentsPanel: "channels" }) })),
+  ).toBeUndefined();
+});
 
 it.each([false, true])(
   "keeps identity field permissions correct with write access %s",
@@ -90,7 +168,7 @@ it.each([false, true])(
     });
 
     expect(
-      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.disabled,
+      container.querySelector<HTMLInputElement>(".agent-identity-editor__name")?.disabled,
     ).toBe(!canUpdateIdentity);
   },
 );
@@ -144,4 +222,20 @@ it("shows, filters and extends the effective fallback chain for the selected age
 it("disables the field without config write access", () => {
   const { input } = renderFallbacks(false);
   expect(input).toMatchObject({ disabled: true });
+});
+
+it("keeps the full model ids in title for truncated controls", async () => {
+  const primary = "fixture/a-very-long-primary-model-id-that-truncates-on-one-line";
+  const fallback = "fixture/a-very-long-fallback-model-id-that-truncates-on-one-line";
+  const container = renderAgents({
+    configForm: agentConfig({ model: { primary, fallbacks: [fallback] } }),
+  });
+  await waitForSolid(() =>
+    expect(
+      Array.from(container.querySelectorAll(".picker-select__trigger")).map((trigger) =>
+        trigger.getAttribute("title"),
+      ),
+    ).toContain(primary),
+  );
+  expect(container.querySelector(".multi-select__chip")?.getAttribute("title")).toBe(fallback);
 });

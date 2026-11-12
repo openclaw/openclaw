@@ -35,7 +35,7 @@ export function receiveBrowserAnnotation(
     return false;
   }
   if (!uploadsEnabled(state.uploadConfig)) {
-    showToast({ message: uploadsDisabledMessage() });
+    showToast({ severity: "error", message: uploadsDisabledMessage() });
     return false;
   }
   const detail = event.detail as BrowserAnnotationDraft | null;

@@ -27,6 +27,7 @@ import {
 } from "../transports/openai-transport-params.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   finalizeTransportStream,
   withProviderResponseHook,
@@ -192,7 +193,10 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
-      const nextRequest = await options?.onPayload?.(request, model);
+      const nextRequest = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(request, model) : undefined,
+        options?.signal,
+      );
       if (nextRequest !== undefined) {
         request = nextRequest as OpenAIResponsesRequestParams;
       }

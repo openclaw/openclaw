@@ -1,13 +1,12 @@
 /** @jsxImportSource @solidjs/web */
 
-import type { JSX } from "@solidjs/web";
 import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
 } from "openclaw/plugin-sdk/control-ui";
 import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMemo, For, Show, onSettled } from "solid-js";
-import { SettingsRow, SettingsSection, SettingsStatus } from "./components.tsx";
+import { SettingsRow, SettingsStatus } from "./components.tsx";
 import type { createProfileController } from "./controller.ts";
 import { createTranslator } from "./i18n/index.ts";
 import { createNostrProfileForm } from "./profile-form.tsx";
@@ -27,34 +26,10 @@ export function createProfileCard(
   const NostrProfileForm = createNostrProfileForm(t);
   const boolStatusKind = (value: boolean | null | undefined) =>
     value === true ? ("ok" as const) : ("muted" as const);
-  function BooleanChannelFact(props: {
-    field: "configured" | "running";
-    value: boolean | null | undefined;
-  }) {
-    return (
-      <>
-        <dt>{t(`common.${props.field}`)}</dt>
-        <dd>
-          <SettingsStatus
-            kind={boolStatusKind(props.value)}
-            label={t(props.value == null ? "common.na" : props.value ? "common.yes" : "common.no")}
-          />
-        </dd>
-      </>
-    );
-  }
   function ChannelError(props: { message: unknown }) {
     return (
-      <SettingsRow
-        title={<SettingsStatus kind="danger" label={t("channels.lastError")} />}
-        description={context.formatError(props.message)}
-      />
-    );
-  }
-  function ChannelActions(props: { children: JSX.Element }) {
-    return (
-      <div class="settings-row settings-row--actions">
-        <div class="settings-row__control">{props.children}</div>
+      <div class="callout danger" role="alert">
+        {context.formatError(props.message)}
       </div>
     );
   }
@@ -70,16 +45,19 @@ export function createProfileCard(
       <div class="settings-row">
         <div class="settings-row__text">
           <span class="settings-row__title">{props.title}</span>
-          <span class="settings-row__desc">{[props.accountId, ...props.facts].join(" · ")}</span>
+          <span class="settings-row__desc">
+            {[
+              props.accountId,
+              ...props.facts,
+              ...(props.lastInboundAt ? [formatRelativeTimestamp(props.lastInboundAt)] : []),
+            ].join(" · ")}
+          </span>
           <Show when={props.lastError}>
             <span class="settings-row__desc">{context.formatExternalText(props.lastError!)}</span>
           </Show>
         </div>
         <div class="settings-row__control">
           <SettingsStatus {...props.status} />
-          <span class="settings-row__value">
-            {props.lastInboundAt ? formatRelativeTimestamp(props.lastInboundAt) : t("common.na")}
-          </span>
         </div>
       </div>
     );
@@ -219,54 +197,48 @@ export function createProfileCard(
     }
 
     return (
-      <SettingsSection
-        title={t("channels.nostr.title")}
-        description={t("channels.nostr.subtitle")}
-        count={accounts().length >= 2 ? accounts().length : undefined}
-      >
-        {accounts().length > 1 ? (
-          <For each={accounts()} keyed={(account) => account.accountId}>
-            {(account) => <NostrAccount account={account()} />}
-          </For>
-        ) : (
-          <dl class="settings-kv">
-            <BooleanChannelFact field="configured" value={configured()} />
-            <BooleanChannelFact
-              field="running"
-              value={nostr()?.running ?? primaryAccount()?.running ?? false}
-            />
-            <dt>{t("common.publicKey")}</dt>
-            <dd>
-              <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>
-            </dd>
-            <dt>{t("common.lastStart")}</dt>
-            <dd>{lastStart() ? formatRelativeTimestamp(lastStart()) : t("common.na")}</dd>
-          </dl>
-        )}
+      <>
         {lastError() ? <ChannelError message={lastError()} /> : undefined}
-        <Show when={form()} fallback={<ProfileSection />}>
-          {(formState) => (
-            <NostrProfileForm
-              state={formState()}
-              connected={state().snapshot.connected}
-              accountId={accountId()}
-              callbacks={{
-                onFieldChange: (field, value) => controller.field(field, value),
-                onSave: () => void controller.save(),
-                onImport: () => void controller.import(),
-                onCancel: () => controller.cancel(),
-                onToggleAdvanced: () => controller.toggleAdvanced(),
-              }}
-            />
+        <div class="settings-group">
+          {accounts().length > 1 ? (
+            <For each={accounts()} keyed={(account) => account.accountId}>
+              {(account) => <NostrAccount account={account()} />}
+            </For>
+          ) : (
+            <Show when={publicKey() || lastStart()}>
+              <dl class="settings-kv">
+                <Show when={publicKey()}>
+                  <dt>{t("common.publicKey")}</dt>
+                  <dd>
+                    <code title={publicKey() ?? ""}>{truncatePubkey(publicKey())}</code>
+                  </dd>
+                </Show>
+                <Show when={lastStart()}>
+                  <dt>{t("common.lastStart")}</dt>
+                  <dd>{formatRelativeTimestamp(lastStart())}</dd>
+                </Show>
+              </dl>
+            </Show>
           )}
-        </Show>
+          <Show when={form()} fallback={<ProfileSection />}>
+            {(formState) => (
+              <NostrProfileForm
+                state={formState()}
+                connected={state().snapshot.connected}
+                accountId={accountId()}
+                callbacks={{
+                  onFieldChange: (field, value) => controller.field(field, value),
+                  onSave: () => void controller.save(),
+                  onImport: () => void controller.import(),
+                  onCancel: () => controller.cancel(),
+                  onToggleAdvanced: () => controller.toggleAdvanced(),
+                }}
+              />
+            )}
+          </Show>
+        </div>
         <ConfigSlot />
-        <ChannelActions>
-          <button class="btn" onClick={() => void context.refresh(false)}>
-            {t("common.refresh")}
-          </button>
-        </ChannelActions>
-      </SettingsSection>
+      </>
     );
   }
 

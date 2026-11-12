@@ -965,6 +965,51 @@ ${readFileSync(gitShim, "utf8")}
     },
   );
 
+  it("fetches pinned authoritative commits as promisor packs without a promisor history walk", () => {
+    const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-authoritative-filter-"), {
+      partialCloneFilter: "blob:none",
+    });
+    // Only the authoritative repository has this commit, so origin cannot satisfy the fetch.
+    const authority = join(f.root, "authority.git");
+    f.git(f.root, "clone", "--bare", f.origin, authority);
+    f.git(authority, "config", "uploadpack.allowFilter", "true");
+    const author = join(f.root, "author");
+    f.git(authority, "worktree", "add", "--detach", author, f.main);
+    f.git(author, "config", "user.name", "OpenClaw Test");
+    f.git(author, "config", "user.email", "test@example.invalid");
+    writeFileSync(join(author, "authoritative.txt"), "authoritative\n");
+    f.git(author, "add", "authoritative.txt");
+    f.git(author, "commit", "-qm", "test: authoritative main");
+    const commit = f.git(author, "rev-parse", "HEAD");
+    const blob = f.git(author, "rev-parse", "HEAD:authoritative.txt");
+    expect(() => f.git(f.origin, "cat-file", "-e", commit)).toThrow();
+    const url = "https://github.com/authority/repo";
+    f.git(f.canonical, "config", `url.${authority}.insteadOf`, url);
+
+    const commonConfig = join(f.canonical, ".git", "config");
+    const beforeConfig = readFileSync(commonConfig, "utf8");
+    const sharedFetchHead = join(f.canonical, ".git", "FETCH_HEAD");
+    writeFileSync(sharedFetchHead, "unrelated shared checkpoint\n");
+    const trace = join(f.root, "git-trace");
+    const result = f.shell(
+      `cd .worktrees/pr-42\nMERGE_REPO_URL=${url} GIT_TRACE=${trace} merge_outcome_require_commit ${commit} main`,
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+
+    expect(readFileSync(trace, "utf8")).not.toContain("--exclude-promisor-objects");
+    const objects = f.git(
+      f.canonical,
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    );
+    expect(objects).toContain(commit);
+    expect(objects).not.toContain(blob);
+    expect(f.git(f.canonical, "rev-parse", "refs/remotes/origin/main")).toBe(f.main);
+    expect(readFileSync(sharedFetchHead, "utf8")).toBe("unrelated shared checkpoint\n");
+    expect(readFileSync(commonConfig, "utf8")).toBe(beforeConfig);
+  });
+
   it("records the selected baseline and candidate without losing fresh private main checkpoints", () => {
     const f = fixture();
     f.enableReviewTests();

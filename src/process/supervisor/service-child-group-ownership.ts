@@ -10,11 +10,20 @@ export type ProcessCommand =
       argv: string[];
       executable?: string;
       serviceMarker?: string;
+      /** A JS runtime whose environment Darwin could not bound; argv still classifies. */
+      serviceMarkerUnavailable?: true;
       uid?: number;
       owner?: "same" | "different" | "unknown";
     }
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
-  | { argvUnavailable: true; uid?: never; owner: "different" };
+  | { argvUnavailable: true; uid?: never; owner: "different" }
+  /** A sealed Apple binary whose argument image Darwin redacts (no-read-procargs). */
+  | {
+      argvUnavailable: true;
+      executable: string;
+      uid?: never;
+      owner?: "same" | "different" | "unknown";
+    };
 
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {
@@ -194,7 +203,11 @@ export function* readProcessGroupMembers(
             : commandInspection?.readDarwinCommand(member.pid, member.owner)
           : undefined;
       } catch (error) {
-        if (!(error instanceof ProcSafeError) || error.code !== "incomplete") {
+        // One unparseable argument image (Intel layout-mismatch) leaves only that PID unknown.
+        if (
+          !(error instanceof ProcSafeError) ||
+          (error.code !== "incomplete" && error.code !== "layout-mismatch")
+        ) {
           throw error;
         }
         // Preserve unknown custody for this PID without dropping later observations.

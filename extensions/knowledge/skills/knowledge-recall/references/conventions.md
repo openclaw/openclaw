@@ -147,35 +147,32 @@ existing tools, not a separate ingestion engine.
   A changed snapshot means restart. This replaces repetitive structural readbacks,
   including supplied link-target identity checks, not source reading or semantic
   checks. Investigate exceptions before marking complete.
-- For identity/revision checks use `knowledge_record({id, view: "summary"})`.
-  Compact structured metadata is included by default, without evidence arrays.
-  Use `metadataView: "full"` for arbitrary ontology fields, or `"none"` for text
-  only. Request `includeEvidence: true` for provenance/attribution review and keep
-  previews bounded (for example `evidenceLimit: 3, maxEvidenceChars: 1000`).
+- For identity/revision checks use `knowledge_record({id, maxChars: 1000})`.
+  It returns identity, revision, full hash, aliases, tags, dependencies, domain
+  fields and linked pages, without evidence. Request `includeEvidence: true` for
+  provenance/attribution review.
   Do not fetch every body or download
   every original merely to confirm publication. Full source reads remain required
   when substantive verification needs them.
 - Inspect substantive saved prose with `knowledge_record`; opt into evidence
-  when reviewing source support. Follow `content.nextOffset` and
-  `nextEvidenceOffset` independently. Record and connection responses are bounded
-  to 24 KiB; use returned offsets, not requested lengths. Compare record hashes
-  across chunks and restart if changed. Inspect `omitted` for excluded previews;
-  use connections, attachments or paged `view: "raw", metadataView: "none"`
-  without evidence/references for complete detail. A preview is not the complete source.
-- For a failed expectation or link-specific investigation, inspect
-  `knowledge_record({id, view: "content"})`: each intended inline
-  page link in `links` must have `status: "resolved"` and the expected stable `id`,
-  not merely a matching label. Repair missing/ambiguous targets using observed
-  paths. `linksTruncated: true` means this check is incomplete; do not claim all
-  links verified from the bounded result.
+  when reviewing source support. Follow `nextOffset` and `nextEvidenceOffset`
+  independently. `maxChars` bounds a whole default record response, and record
+  and connection responses stay within 24 KiB; use returned offsets, not
+  requested lengths. Compare record hashes
+  across chunks and restart if changed. `omitted` names evidence previews left
+  out to fit; read passages with `knowledge_evidence_read` and originals with
+  `knowledge_attachment`. A preview is not the complete source.
+- Check intended inline page links with `knowledge_verify` `expectedLinks`; a
+  failure names the link whose target is missing or ambiguous. Repair it using
+  the intended stable ID, not merely a matching label.
 - For graph discovery or failed checks, inspect
   `knowledge_connections({id, direction: "links"})` and
   `knowledge_connections({id, direction: "backlinks"})` for the expected distinct
   neighbors. Follow `nextOffset`; restart if `snapshot` changes between pages.
-  Connections default to compact identities, endpoints and uncertainty without
-  evidence or prose cards. Keep view/filters unchanged across pages. Request
-  `view: "full"` for metadata/evidence previews and `includeCards: true` with
-  full view when claim prose is needed; read the record for complete provenance.
+  Connections default to one row per connection: ID, revision, 16-character
+  hash, title/type, and for claims their text, day, linked page titles and
+  source, without evidence. Keep filters unchanged across pages. Read
+  provenance with `knowledge_record({id, includeEvidence: true})`.
   A source → entity link gives the entity a derived backlink. An entity's
   Timeline comes from its relationship with the source, not from links. Do not
   write generated References/Referenced by lists into page bodies. Check typed claims/relationships separately; navigation is not evidence.
@@ -184,8 +181,9 @@ existing tools, not a separate ingestion engine.
 - Read the saved prose for readable citations and absence of redundant Sources
   appendices. Verify original retention and exact evidence independently: a
   resolved page link alone does not establish that its citation is supported.
-- `evidence.verified` verifies bytes/locators, not the truth of a claim or the
-  correctness of a speaker identification. Read the cited passage too. Download
+- Evidence is verified unless marked `verified: false`. Verification covers
+  bytes/locators, not the truth of a claim or the correctness of a speaker
+  identification. Read the cited passage too. Download
   full originals with `knowledge_attachment({id,path,sha256,offset})`, following
   `nextOffset` until null when the preview is insufficient.
 - `knowledge_verify` checks keyword-index membership. Use exact lookup or a distinctive

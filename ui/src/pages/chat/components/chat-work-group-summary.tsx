@@ -128,11 +128,10 @@ function WorkGroupSummaryBody(props: {
             </span>
           )}
         </For>
-        <span class="chat-tool-row__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">
+          <Icon name="chevronDown" />
         </span>
       </button>
-      <div class="chat-work-group__separator" aria-hidden="true" />
       <Show when={!props.options.expanded && !props.options.bubbleMode}>
         <BrowserTabPreviews
           previews={props.options.browserTabPreviews}

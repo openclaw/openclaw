@@ -1,0 +1,4 @@
+# Sandbox-copy readiness regression: a sandbox-written setup file or sibling attestation in the
+# sandbox root must not refuse the whole Gateway, plus genuine-legacy fixtures gaining their
+# state-dir attestation. Exact net growth for the sandbox-copy readiness fix.
+35

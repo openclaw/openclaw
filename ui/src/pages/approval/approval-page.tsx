@@ -30,7 +30,12 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { ApprovalContent, approvalTitle, type ResolutionOrigin } from "./approval-presentation.tsx";
+import {
+  ApprovalContent,
+  approvalSeverity,
+  approvalTitle,
+  type ResolutionOrigin,
+} from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
@@ -545,15 +550,7 @@ export const ApprovalPage = defineSolidBridge<ApprovalPageProps>(
             : disconnected()
               ? "connection-error"
               : (read().approval?.status ?? "loading");
-      const severity = () => {
-        const active = read().approval?.presentation;
-        const raw = active?.kind === "plugin" ? active.severity?.trim().toLowerCase() : null;
-        return active?.kind === "exec" || raw === "warning" || raw === "warn"
-          ? "warning"
-          : raw === "danger" || raw === "critical" || raw === "error"
-            ? "danger"
-            : "info";
-      };
+      const severity = () => approvalSeverity(read().approval?.presentation);
       const retry = (className: string) => (
         <button
           type="button"

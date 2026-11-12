@@ -29,7 +29,7 @@ export type PanelTabStripProps<T extends SolidPanelTabStripTab> = {
   renderIcon?: (tab: Accessor<T>) => SolidJSX.Element;
   activeId: string | null;
   ariaControls: string | ((tab: T) => string);
-  onSelect: (id: string) => void;
+  onSelect: (id: string, event: MouseEvent | KeyboardEvent) => void;
   focusOwner?: TabFocus;
   onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
@@ -65,7 +65,7 @@ function NewControl<T extends SolidPanelTabStripTab>(props: {
           <button
             id={id()}
             slot={props.slotted ? "nav" : undefined}
-            class="rail-header__action tabstrip-new"
+            class="oc-icon-button oc-icon-button--28 rail-header__action tabstrip-new"
             type="button"
             data-new-tab-action={props.strip.newTabAction ? "" : undefined}
             disabled={props.strip.newDisabled}
@@ -98,7 +98,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(
   const tabs = createTabList(
     () => ({
       active: props.activeId,
-      onSelect: (value) => props.onSelect(value),
+      onSelect: (value, _tab, event) => props.onSelect(value, event),
       onActivate: (value) => {
         const tab = props.tabs.find((entry) => entry.id === value);
         if (tab?.onActivate) {

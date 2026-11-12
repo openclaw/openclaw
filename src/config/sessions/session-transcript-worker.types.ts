@@ -1,9 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ProgressCard } from "../../../packages/gateway-protocol/src/index.js";
-import type {
-  SessionFileEntry,
-  readSessionEntryResetRecallCutoff,
-} from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { BoardReadOperations } from "../../boards/sqlite-board-operations.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type { SessionPreviewItem, SessionTitleFields } from "../../gateway/session-utils.types.js";
@@ -146,14 +142,13 @@ import type {
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
 import type { SessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts.types.js";
+import type { SessionTranscriptReplayGroup } from "./session-transcript-replay.types.js";
 import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   SessionSqliteTargetWorkerInput,
   SessionResetRecallWorkerInput,
-  SessionEntryWorkerInput,
   SessionEntriesWorkerInput,
-  SessionEntriesWorkerResult,
   SessionEntryCurrentWorkerInput,
   SessionEntryCurrentWorkerResult,
   BoardSnapshotWorkerInput,
@@ -353,7 +348,6 @@ export type SessionTranscriptWorkerInput =
   | SessionHistoryWorkerInput
   | SessionModelContextWorkerInput
   | SessionContextMessagesWorkerInput
-  | SessionEntryWorkerInput
   | SessionEntriesWorkerInput
   | SessionResetRecallWorkerInput;
 
@@ -388,6 +382,10 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "transcript-visible-delta": {
       kind: "transcript-visible-delta";
       result: SessionTranscriptVisibleMessageDeltaResult;
+    };
+    "transcript-replay-groups": {
+      kind: "transcript-replay-groups";
+      result: SessionTranscriptReplayGroup[];
     };
     "transcript-latest-assistant": {
       kind: "transcript-latest-assistant";
@@ -503,17 +501,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     "session-reset-recall": {
       cutoff: import("../../../packages/memory-host-sdk/src/host/session-reset-recall.js").SessionResetRecallCutoff;
     };
-    "session-entry":
-      | {
-          entry: SessionFileEntry | null;
-          resetRecallCutoff: ReturnType<typeof readSessionEntryResetRecallCutoff>;
-        }
-      | {
-          snapshot: ReturnType<
-            typeof import("./session-accessor.sqlite-read.js").readTranscriptExportSnapshotReadOnlySync
-          >;
-        };
-    "session-entries": SessionEntriesWorkerResult;
+    "session-entries": { entries: [] };
   };
 
 export type SessionTranscriptWorkerError =
@@ -563,6 +551,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readCleanup: SessionHistoryReader<"session-cleanup">;
     readRawDelta: CancellableSessionHistoryReader<"transcript-raw-delta", "result">;
     readVisibleDelta: CancellableSessionHistoryReader<"transcript-visible-delta", "result">;
+    readReplayGroups: CancellableSessionHistoryReader<"transcript-replay-groups", "result">;
     readLatestAssistant: CancellableSessionHistoryReader<"transcript-latest-assistant", "result">;
     readSessionMemoryCapture: CancellableSessionHistoryReader<"session-memory-capture", "result">;
     readBoardSnapshot: SessionHistoryReader<"board-snapshot", "value">;

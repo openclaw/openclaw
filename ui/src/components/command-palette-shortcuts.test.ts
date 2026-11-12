@@ -77,7 +77,7 @@ describe("CommandPalette platform shortcuts", () => {
       expect(start.hidden).toBe(false);
       expect(start.textContent).toContain("New session");
       expect(start.querySelector("kbd")?.textContent?.replace(/\s+/gu, "").trim()).toBe(
-        platform === "MacIntel" ? "⌘⏎" : "Ctrl+Enter",
+        platform === "MacIntel" ? "⌘⏎" : "CtrlEnter",
       );
       expect(start.querySelectorAll("kbd svg")).toHaveLength(platform === "MacIntel" ? 2 : 0);
       const editQuery = chord(other);

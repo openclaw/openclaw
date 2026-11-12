@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-operator-authority.types.js";
 import {
   GitHubIdentityError,
   installManagedGitHubProfile,
@@ -197,11 +199,13 @@ async function installProfile(scope: "agent" | "system" = "system") {
 async function bindPreparedGrant(
   fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>,
   assertCurrent = () => {},
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ) {
   // Renewal tests isolate turn attachment; placement-owner tests cover admission.
   using attachment = vi.spyOn(turnClaims, "bindWorkerTurnGitHubGrant");
   attachment.mockImplementation(() => {});
   const grant = await bindWorkerGitHubTurn({
+    operatorAuthority,
     session,
     fact,
     sessionTarget: {
@@ -371,6 +375,34 @@ describe("worker GitHub launch binding", () => {
       }
       expect(syncWorkspace).not.toHaveBeenCalled();
     }
+  });
+
+  it("retains and rechecks the admitted original operator independently of the turn owner", async () => {
+    await installProfile();
+    let current = true;
+    const release = vi.fn();
+    const retain = vi.fn(() => release);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "original-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Original operator revoked");
+        }
+      },
+      retain,
+    });
+    const fact = await prepareGitHubPublicationFact(session);
+    const grant = await bindPreparedGrant(fact, () => undefined, operatorAuthority);
+    try {
+      expect(retain).toHaveBeenCalledOnce();
+      current = false;
+      expect(() => grant.assertCurrent()).toThrow("Original operator revoked");
+      await expect(grant.refresh()).rejects.toThrow();
+    } finally {
+      await grant.revoke();
+    }
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("binds the verified shared account and canonical HTTPS remote", async () => {

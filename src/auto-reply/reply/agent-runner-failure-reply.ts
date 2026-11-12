@@ -6,6 +6,7 @@ import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { CliCredentialRemovedError } from "../../agents/cli-runner/auth-profile-preparation-error.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAgentHarnessPreflightUserMessage,
@@ -56,6 +57,7 @@ import {
   formatErrorMessage,
   readErrorCauses,
 } from "../../infra/errors.js";
+import { isProviderRefusalNoticeText } from "../../shared/assistant-error-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
@@ -224,6 +226,15 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const removedCredential = collectErrorGraphCandidates(error, readErrorCauses).find(
+    (candidate) => candidate instanceof CliCredentialRemovedError,
+  );
+  if (removedCredential) {
+    return {
+      text: `⚠️ ${removedCredential.userMessage(options?.includeAuthProfileId)}`,
+      isGenericRunnerFailure: false,
+    };
+  }
   const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
@@ -460,11 +471,13 @@ export async function resolveTerminalAgentRunFailurePayload(params: {
     terminalError.message.startsWith(MISSING_REPLY_NOTICE_TEXT);
   const suppressMissingReplyNotice =
     missingReplyNotice && !shouldDeliverMissingReplyNotice(params.run);
+  // A canonical provider refusal is the run's own failure notice, not generic copy.
   const ownedFailureNotice = params.result.payloads?.find(
     (payload) =>
       payload.isError === true &&
-      payload.isStatusNotice === true &&
-      getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true,
+      ((payload.isStatusNotice === true &&
+        getReplyPayloadMetadata(payload)?.assistantTranscriptOwned === true) ||
+        isProviderRefusalNoticeText(payload.text ?? "")),
   );
   if (ownedFailureNotice) {
     params.result.payloads = params.result.payloads?.filter(

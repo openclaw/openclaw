@@ -483,6 +483,8 @@ export {
   ChatPredictResultSchema,
   ChatPendingInputsDismissParamsSchema,
   ChatPendingInputsDismissResultSchema,
+  ChatSteerNowParamsSchema,
+  ChatSteerNowResultSchema,
   UpdateRunParamsSchema,
   UpdateRunRecordSchema,
   UpdateRunResultSchema,

@@ -1,0 +1,2 @@
+# Exercise asset API recovery, rejected release indexes, and cross-root cache reuse.
+44

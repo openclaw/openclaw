@@ -21,6 +21,7 @@ import {
 } from "../ingress-attribution.js";
 import { isLoopbackAddress } from "../net.js";
 import { clearNodeWakeState } from "../node-wake-state.js";
+import { recordOpenClawIdTunnelConnection } from "../openclaw-id/tunnel-connections.js";
 import {
   indexPluginNodeCapabilitySurfaces,
   reconcileClientPluginNodeCapabilities,
@@ -60,6 +61,7 @@ export type GatewayConnectionOptions = Pick<
   | "connectionWork"
   // Read per connection so reloads cannot leave a stale auth snapshot.
   | "getResolvedAuth"
+  | "gatewayExposure"
   | "getRequiredSharedGatewaySessionGeneration"
   | "rateLimiter"
   | "browserRateLimiter"
@@ -541,6 +543,14 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
     next.connectionSignal = connectionController.signal;
     client = next;
     clients.add(next);
+    if (next.internal?.openclawIdPeerKey) {
+      // Run custody outlives the socket: a removed member's runs are found by this record.
+      recordOpenClawIdTunnelConnection(
+        next.connId,
+        next.internal.openclawIdPeerKey,
+        connectionController.signal,
+      );
+    }
     if (
       next.presenceKey &&
       (next.authenticatedUserId || next.authenticatedUserProfile) &&

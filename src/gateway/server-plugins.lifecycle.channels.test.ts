@@ -197,13 +197,17 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     };
     // Registration precedes watcher settlement; poll only the read, never the mutation.
     const settledProbe = (channel: string) =>
-      vi.waitUntil(async () => {
-        const result = await rpcReq<Probe>(connected, `${channel}.probe`, {});
-        expect(result.ok, result.error?.message).toBe(true);
-        assert.ok(result.payload);
-        const { reloadSettled, ...binding } = result.payload;
-        return reloadSettled ? binding : false;
-      });
+      vi.waitFor(
+        async () => {
+          const result = await rpcReq<Probe>(connected, `${channel}.probe`, {});
+          expect(result.ok, result.error?.message).toBe(true);
+          assert.ok(result.payload);
+          const { reloadSettled, ...binding } = result.payload;
+          expect(reloadSettled).toBe(true);
+          return binding;
+        },
+        { timeout: 10_000 },
+      );
     await expect.poll(async () => (await settledProbe("sibling-chat")).starts).toBe(1);
     const sibling = await settledProbe("sibling-chat");
     const cold = await settledProbe("cold-chat");
@@ -214,11 +218,23 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         raw: JSON.stringify({ channels: { "cold-chat": { enabled: true, label } } }),
         baseHash: current.payload?.hash,
       });
-      expect(changed.ok, changed.error?.message).toBe(true);
-      expect(changed.payload).toMatchObject({
-        sentinel: { payload: { stats: { requiresRestart: false } } },
-      });
-      await expect.poll(async () => (await settledProbe("cold-chat")).captured?.label).toBe(label);
+      if (changed.ok) {
+        expect(changed.payload).toMatchObject({
+          sentinel: { payload: { stats: { requiresRestart: false } } },
+        });
+      } else {
+        // Reload settlement does not join predecessor cleanup or concurrent plugin calls.
+        expect(changed.error).toMatchObject({
+          code: "UNAVAILABLE",
+          details: {
+            application: { status: "deferred" },
+            persistedConfig: { config: { channels: { "cold-chat": { enabled: true, label } } } },
+          },
+        });
+      }
+      await expect
+        .poll(async () => (await settledProbe("cold-chat")).captured?.label, { timeout: 10_000 })
+        .toBe(label);
       const replacement = await settledProbe("cold-chat");
       expect(replacement).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
       expect(replacement.instance).not.toBe(cold.instance);

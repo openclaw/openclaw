@@ -1,4 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { captureAgentTerminalSnapshot } from "../../agents/embedded-agent-runner/run/attempt-terminal-snapshot.js";
+import { resolveEmbeddedRunTerminal } from "../../agents/embedded-agent-runner/run/terminal-resolution.js";
+import {
+  makeTerminalInput,
+  emptyAssistant,
+  expectComplete,
+} from "../../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import { toPluginCronChangedEvent } from "../../gateway/server-cron-plugin-job.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -61,6 +69,66 @@ async function useRealOutcome() {
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
+
+  it.each([false, true])(
+    "carries native-selected observations to the hook unless delivery replaces the failure (%s)",
+    async (deliveryReplacesFailure) => {
+      await useRealOutcome();
+      const assistant = emptyAssistant({
+        stopReason: "error",
+        errorMessage: "synthetic selected failure",
+      });
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: true,
+      });
+      const native = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          assistant,
+          attemptOverrides: {
+            agentTerminal,
+            terminal: {
+              kind: "failed",
+              source: "prompt",
+              error: new Error("synthetic selected failure"),
+            },
+            replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          },
+        }),
+      );
+      expectComplete(native);
+      expect(native.result.payloads).toHaveLength(1);
+      expect(native.result.payloads?.[0]?.isError).toBe(true);
+      const selectedErrorText = native.result.payloads?.[0]?.text;
+      expect(selectedErrorText).toBeTruthy();
+      expect(selectedErrorText).not.toBe(assistant.errorMessage);
+      mockAgentRun(native.result);
+      mockDelivery(
+        deliveryReplacesFailure
+          ? { disposition: { kind: "error", error: "different selected delivery failure" } }
+          : { disposition: { kind: "pending" } },
+      );
+      const result = await runTurn();
+      const hook = toPluginCronChangedEvent(
+        {
+          ...result,
+          action: "finished",
+          jobId: "synthetic-job",
+          runId: "synthetic-run",
+          runAtMs: 1,
+        },
+        undefined,
+      );
+      expect(result.status).toBe("error");
+      expect(result.agentTerminal).toBe(deliveryReplacesFailure ? undefined : agentTerminal);
+      expect(hook.agentTerminal).toBe(deliveryReplacesFailure ? undefined : agentTerminal);
+      expect(hook.error).toBe(
+        deliveryReplacesFailure ? "different selected delivery failure" : selectedErrorText,
+      );
+    },
+  );
 
   it.each([false, true])(
     "keeps delivery target failure separate from execution (agent failed: %s)",

@@ -356,7 +356,7 @@ suite.define(() => {
     await page.locator(".new-session-page__message").fill("keep this draft");
     await button(page, "Start in terminal").click();
     await expect
-      .poll(() => page.locator(".new-session-page__alert-message").textContent())
+      .poll(() => page.locator(".new-session-page__alert .callout__content").textContent())
       .toBe(serverMessage);
     expect(await page.locator(".new-session-page__message").inputValue()).toBe("keep this draft");
     expect(await page.locator(".new-session-page__scroll").getAttribute("aria-busy")).toBe("false");

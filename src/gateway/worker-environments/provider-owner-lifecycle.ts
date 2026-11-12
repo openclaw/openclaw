@@ -4,6 +4,7 @@ import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-
 import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
+  CONVERSATION_CLEANUP_PARKED,
   hasForcedWorkerEnvironmentAbandonment,
   workerEnvironmentServiceError as serviceError,
 } from "./environment-errors.js";
@@ -286,7 +287,10 @@ export function createWorkerProviderOwnerLifecycle(
       nodeDeviceId: null,
       sshEndpoint: null,
       sharedHost: false,
-      lastError: destroying.lastError ?? "Worker bootstrap failed after provider teardown",
+      lastError:
+        (destroying.lastError?.startsWith(CONVERSATION_CLEANUP_PARKED)
+          ? destroying.lastError.split("\n")[1]
+          : destroying.lastError) ?? "Worker bootstrap failed after provider teardown",
     });
   };
 

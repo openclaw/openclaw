@@ -298,12 +298,12 @@ export function hasRegisteredSessionPendingInputOwner(
 }
 
 /** Durable queued text is visible only while its ordinary input owner is live. */
-export function listLiveSessionPendingInputIds(
+export function listLiveSessionPendingInputs(
   databasePath: string,
   sessionKey: string,
   sessionId: string,
   queuedOnly = false,
-): string[] {
+): Pick<SessionPendingInputOwner, "inputId" | "runId" | "recoverySource">[] {
   return [...owners.live.values()]
     .filter(
       (owner) =>
@@ -313,7 +313,11 @@ export function listLiveSessionPendingInputIds(
         (!queuedOnly || (!owner.consumed && !owner.settling)) &&
         (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
     )
-    .map((owner) => owner.inputId);
+    .map((owner) => ({
+      inputId: owner.inputId,
+      runId: owner.runId,
+      recoverySource: owner.recoverySource,
+    }));
 }
 
 /** Called after the exact IDs commit in the session marker, before shutdown cancellation. */
@@ -490,7 +494,10 @@ export function readSessionPendingInputByKey(
   const actor = readSessionActorTransactionState(database, scope);
   if (actor) {
     const row = actor.pendingInputs.get(idempotencyKey);
-    return row && { ...row };
+    if (row) {
+      return { ...row };
+    }
+    // The resident map covers unconsumed custody, not retained source history.
   }
   if (!hasSessionPendingInputsSchema(database.db)) {
     return undefined;
@@ -518,9 +525,9 @@ export function resolveSessionPendingInputAppend(
     return undefined;
   }
   const idempotencyKey = record.idempotencyKey.trim();
-  const row = preparedInputs
-    ? preparedInputs.get(idempotencyKey)
-    : readSessionPendingInputByKey(database, scope, idempotencyKey);
+  const row =
+    preparedInputs?.get(idempotencyKey) ??
+    readSessionPendingInputByKey(database, scope, idempotencyKey);
   const owner = owners.current.getStore();
   // A bound-session mirror shares source correlation, never its pending custody.
   const ownsInput =
@@ -593,7 +600,7 @@ export function resolveSessionPendingInputAppend(
     const inputs =
       preparedInputs ?? readSessionActorTransactionState(database, scope)?.pendingInputs;
     const acceptedByKey = new Map(
-      (inputs
+      (inputs && owner.sources.every((source) => inputs.has(source.idempotencyKey))
         ? owner.sources.flatMap((source) => inputs.get(source.idempotencyKey) ?? [])
         : executeSqliteQuerySync(
             database.db,
@@ -705,11 +712,8 @@ export function consumeSessionPendingInput(
         continue;
       }
       actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
-      if (pending.sourceInputIds) {
-        actor.pendingInputs.set(key, { ...row, consumed_event_id: pending.inputId });
-      } else {
-        actor.pendingInputs.delete(key);
-      }
+      // Retain source receipts in SQLite only; replay uses the indexed reader.
+      actor.pendingInputs.delete(key);
     }
   }
   // Outer commit publishes this fact before observers; rollback leaves finish responsible.

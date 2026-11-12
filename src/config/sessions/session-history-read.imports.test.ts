@@ -75,6 +75,13 @@ it.each([
     sessions("accessor.transcript-target entry-read-result.worker"),
     sessions("accessor.entry accessor.sqlite-entry"),
   ],
+  [
+    "entry patch publication",
+    sessions("entry-patch.worker"),
+    sessions(
+      "accessor.sqlite-maintenance-store accessor.sqlite-archive-store-kernel accessor.sqlite-transcript-store",
+    ),
+  ],
 ] as const)("keeps the %s import boundary", (_name, roots, forbidden) => {
   expect(findSourceImportBackedges(roots, forbidden)).toEqual([]);
 });
@@ -84,6 +91,7 @@ const prewarm = vi.hoisted(() => ({
   modules: Array.from({ length: 4 }, () => vi.fn(() => ({}))),
   startup: undefined as { prewarmHistory: true } | undefined,
   loadsAtRegistration: [] as number[],
+  broadEntryLoads: 0,
   open: vi.fn(() => ({ found: false, reason: "database-missing" })),
 }));
 
@@ -113,6 +121,39 @@ vi.mock("./session-transcript-worker-scopes.js", () => ({
 vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({
   withOpenClawAgentDatabaseReadOnly: prewarm.open,
 }));
+
+it("dispatches private entry and runtime-target reads without the broad entry worker", async () => {
+  vi.resetModules();
+  prewarm.startup = undefined;
+  prewarm.broadEntryLoads = 0;
+  vi.doMock("./session-entry-read.worker.js", async (importOriginal) => {
+    prewarm.broadEntryLoads++;
+    return importOriginal();
+  });
+  await import("./session-transcript.worker.js");
+  const database = { agentId: "main", path: "/synthetic/missing/openclaw-agent.sqlite" };
+  const scope = {
+    agentId: "main",
+    databaseAgentId: "main",
+    sessionKey: "agent:main:missing",
+    storePath: database.path,
+    env: {},
+  };
+  await expect(
+    prewarm.read({ kind: "session-entry-read", database, scope }),
+  ).resolves.toMatchObject({ ok: true, value: { kind: "session-entry-read", entry: undefined } });
+  await expect(
+    prewarm.read({
+      kind: "session-runtime-target",
+      database,
+      scope: { ...scope, sessionId: "missing" },
+    }),
+  ).resolves.toMatchObject({
+    ok: true,
+    value: { kind: "session-runtime-target", target: { sessionKey: scope.sessionKey } },
+  });
+  expect(prewarm.broadEntryLoads).toBe(0);
+});
 
 it.each([false, true])(
   "prepares presentation before serving only for foreground history workers (foreground=%s)",

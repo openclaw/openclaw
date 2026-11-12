@@ -98,12 +98,14 @@ export async function readUpdateStoreSchemaVersion(
   file: string,
   input: StateInput & { stagingRoot?: string; preserveSourceArtifacts?: boolean },
 ): Promise<{ userVersion: number }> {
-  const { inspectSqliteSchemaHeaderInProcess } = await import("./sqlite-readonly-location.js");
+  const { inspectSqliteSchemaHeaderInProcess } =
+    await import("./sqlite-schema-header-inspection.js");
   const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
     file,
     input.stagingRoot,
     undefined,
     input.preserveSourceArtifacts,
+    { cleanupFailure: "warn" },
   );
   if (userVersion === 0) {
     const { readBackupEngine } = await import("./database-engine/physical-store.js");

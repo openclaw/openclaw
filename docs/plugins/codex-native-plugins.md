@@ -25,6 +25,11 @@ plugins and connected apps remain available under the configured policy; owners 
 still browse and install plugins with `/codex plugins available` and
 `/codex plugins install <plugin>@<marketplace>`.
 
+Settled plugin metadata is cached in memory for up to one hour, measured by
+elapsed time rather than the host's wall clock. A clock correction does not
+force an early refresh or extend freshness. Runtime and marketplace scopes,
+explicit invalidation, and failed-catalog handling remain unchanged.
+
 ## Requirements
 
 - The agent runtime must be the native Codex harness.

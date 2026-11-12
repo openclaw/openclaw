@@ -9,6 +9,7 @@ import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { isGatewayAuthPolicyCurrent } from "./auth-policy.js";
 import { projectHealthSummary } from "./health/presentation.js";
 import type { HealthSummary } from "./health/types.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
@@ -24,6 +25,7 @@ import {
   hasEventScope,
   isPlainEventPayload,
   isSessionReadInvalidation,
+  isTargetedTranscriptionEvent,
   modelMetadataInvalidationFragment,
 } from "./server-broadcast-scopes.js";
 import type {
@@ -39,6 +41,7 @@ import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
+import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventMetrics } from "./session-event-metrics.js";
 import { invalidateSharedReadResponses } from "./shared-read-responses.js";
@@ -309,18 +312,17 @@ export function createGatewayBroadcaster(params: {
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
-        (event === "users.prefs.changed" && isTargeted) ||
-        (params.canReceiveSessionEvent !== undefined &&
-          sessionKeys.length > 0 &&
-          sessionKeys.every((key) => key.trim().length > 0)) ||
-        metadataInvalidation !== undefined ||
-        isSessionReadInvalidation(event, payload, isTargeted));
+        (event !== "talk.event" || isTargetedTranscriptionEvent(payload, isTargeted)) &&
+        ((event === "users.prefs.changed" && isTargeted) ||
+          (params.canReceiveSessionEvent !== undefined &&
+            sessionKeys.length > 0 &&
+            sessionKeys.every((key) => key.trim().length > 0)) ||
+          metadataInvalidation !== undefined ||
+          isSessionReadInvalidation(event, payload, isTargeted)));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
     let sessionFragments: Map<unknown, string | EncodedSessionPayload> | undefined;
-    let projectSession:
-      | ((client: GatewayWsClient) => SessionEventProjection | undefined)
-      | undefined;
+    let projectSession: ReturnType<NonNullable<typeof params.prepareSessionEventProjection>>;
     let skipSourcePayload = false;
     let sessionProjectionPrepared = false;
     let outboundEventLogged = false;
@@ -683,6 +685,14 @@ export function createGatewayBroadcaster(params: {
       // Targeted frames ride the same per-client sequence as fanout frames:
       // an unstamped frame is invisible to the client's gap detector, so a
       // drop between two targeted sends would go unnoticed forever.
+      if (c.authPolicy?.delegation && !isGatewayAuthPolicyCurrent(c.authPolicy)) {
+        invalidateGatewayPolicyClient(c, {
+          reason: "gateway-policy-changed",
+          code: 4001,
+          message: "gateway policy changed",
+        });
+        continue;
+      }
       clientSeq.set(c, nextSeq);
       delivery.recordReceipt(state, sessionKeys, live, publication);
       state.inFlight += 1;

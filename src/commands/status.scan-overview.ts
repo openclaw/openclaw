@@ -155,9 +155,9 @@ export async function collectStatusScanOverview(params: {
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
     ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
     : await (async () => {
-        const { hasConfiguredChannelsForReadOnlyScope } =
+        const { hasConfiguredChannelsForReadOnlyScopeAsync } =
           await import("../plugins/channel-plugin-ids.js");
-        return hasConfiguredChannelsForReadOnlyScope({
+        return await hasConfiguredChannelsForReadOnlyScopeAsync({
           config: cfg,
           activationSourceConfig: sourceConfig,
         });

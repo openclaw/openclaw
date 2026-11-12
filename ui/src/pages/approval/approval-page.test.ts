@@ -318,7 +318,7 @@ it.each([
     await settle(page);
     if (outcome === "allow") {
       expect(text(page, "h1")).toContain("Build monitor");
-      expect(page.textContent).toContain("after you leave this chat, until stopped");
+      expect(page.textContent).toContain("after you leave this session, until stopped");
       expect(page.textContent).toContain("restart automatically");
       expect(decision(page, "deny").textContent?.trim()).toBe("Cancel");
       expect(decision(page).textContent?.trim()).toBe(expected);

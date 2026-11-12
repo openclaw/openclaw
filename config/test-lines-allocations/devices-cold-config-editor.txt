@@ -1,0 +1,2 @@
+# Regression: a cold Devices connection must activate editing during a shared display read.
+47

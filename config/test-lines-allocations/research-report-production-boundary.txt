@@ -1,0 +1,2 @@
+6
+# Preserve rendered text and invalid UTF-8 citation fallback checks through the production reportBlocks API.

@@ -12,6 +12,7 @@ import {
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import * as records from "./session-row-projection-record.js";
+import { observeSessionRowProjectionRetention } from "./session-row-projection-retention.js";
 import type { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 
 /** Apply committed metadata before observers without reacquiring it from SQLite. */
@@ -332,6 +333,7 @@ export function subscribeSessionRowPublications({
   mutateGeneration: Parameters<typeof onSessionIdentityMutation>[0];
 }): Array<() => void> {
   return [
+    observeSessionRowProjectionRetention(rows),
     pluginStatePublication.subscribeFacts((change) => {
       if (change.kind === "pending" || change.kind === "settled") {
         return;

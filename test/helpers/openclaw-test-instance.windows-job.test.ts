@@ -13,12 +13,17 @@ afterEach(() => vi.restoreAllMocks());
 
 it("finalizes the native Job even when the Gateway and all output already closed", async () => {
   const child = new ChildProcess();
-  Object.defineProperties(child, { pid: { value: 12345 }, exitCode: { value: 0 } });
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
-  const closed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
-  child.stdout.destroy();
-  child.stderr.destroy();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  Object.defineProperties(child, {
+    pid: { value: 12345 },
+    exitCode: { value: 0 },
+    stdout: { value: stdout },
+    stderr: { value: stderr },
+  });
+  const closed = Promise.all([once(stdout, "close"), once(stderr, "close")]);
+  stdout.destroy();
+  stderr.destroy();
   await closed;
   const job = { inspect: () => [], beginStop: vi.fn(), stop: vi.fn(), close: vi.fn() };
   mocks.spawnWindowsJobChild.mockReturnValue({ child, job });

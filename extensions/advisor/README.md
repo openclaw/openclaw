@@ -16,21 +16,24 @@ run already ended, the correction is dropped. Reviews run when a trigger is due:
     "entries": {
       "advisor": {
         "enabled": true,
-        "config": { "everyToolCalls": 10, "everyMinutes": 20 }
+        "config": { "everyMinutes": 20, "everyToolCalls": 0 }
       }
     }
   }
 }
 ```
 
-- `everyToolCalls`: review after this many tool calls. `0` turns it off.
-- `everyMinutes`: review after this many minutes of work in a run, checked when a
-  tool starts. `0` turns it off.
+- `everyMinutes` (default `20`): review after this many minutes of work in a run,
+  checked when a tool starts. `0` turns it off.
+- `everyToolCalls` (default `0`, off): also review after this many tool calls.
 - `reviewInstructions`: optional guidance that replaces the built-in definition
   of "off course". Changes apply to the next review.
 
 A due review waits until every running tool call has its result, so the fork never
-sees a missing or synthetic tool outcome. Only user-triggered runs are reviewed. Each conversation has at most one review
+sees a missing or synthetic tool outcome. Only the main agent's user-triggered runs
+are reviewed; subagent sessions are not, because the main agent sees their results
+and can redirect them. A later review in the same run is told the correction it
+already gave and does not repeat it. Each conversation has at most one review
 in flight; the run ending or a new user message cancels it. Gateway info logs
 record review token usage and whether a correction was steered.
 

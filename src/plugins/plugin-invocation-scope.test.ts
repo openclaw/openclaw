@@ -121,6 +121,38 @@ it("creates only final teardown views while fencing each retained owner's callba
   }
 });
 
+it("finishes retained consumer teardown inside its closed caller scope", async () => {
+  const instance = createOwnedTestInstance("closed-consumer-caller");
+  const registry = instance.owner!.registry!;
+  const caller = new PluginInvocationScope(registry, [instance]);
+  const consumer = instance.retainConsumer(undefined, registry);
+  const callback = instance.wrap(() => getPluginRuntimeGatewayRequestScope()?.pluginRegistry);
+  const retiredCallback = caller.wrap(callback);
+  const consumerCallback = consumer.wrap(callback);
+  const unrelated = createOwnedTestInstance("unrelated-consumer-cleanup");
+  const forbidden = unrelated.wrap(() => "unrelated");
+  instance.quiesce();
+  unrelated.quiesce();
+  try {
+    await caller.run(async () => {
+      caller.release();
+      await consumer.close(async () => {
+        await Promise.resolve();
+        expect(callback()).toBe(registry);
+        expect(() => retiredCallback()).toThrow("Plugin invocation scope is closed");
+        expect(() => consumerCallback()).toThrow(/consumer is closed/);
+        expect(() => forbidden()).toThrow(PluginInstanceUnavailableError);
+      });
+    });
+    expect(instance.retainedWorkCount).toBe(0);
+    expect(() => callback()).toThrow(PluginInstanceUnavailableError);
+    expect(() => retiredCallback()).toThrow("Plugin invocation scope is closed");
+  } finally {
+    caller.release();
+    consumer.release();
+  }
+});
+
 it("finishes plugin and module disposal after its caller scope closes", async () => {
   const instance = new PluginInstance("closed-caller-cleanup");
   const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);

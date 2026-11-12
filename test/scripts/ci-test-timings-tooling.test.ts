@@ -73,9 +73,9 @@ it("requires independent runs, preserves runner profiles and prefers complete na
   ]);
   const { toolingFileSeconds, compactGroupSeconds, runtimePlacementTimings } = result.timings;
   expect({ toolingFileSeconds, compactGroupSeconds, runtimePlacementTimings }).toEqual({
-    toolingFileSeconds: { blacksmith: { [file]: 130 }, github: { [file]: 60 } },
-    compactGroupSeconds: { blacksmith: {}, github: {} },
-    runtimePlacementTimings: { blacksmith: [], github: [] },
+    toolingFileSeconds: { blacksmith: { [file]: 130 }, github: { [file]: 60 }, boat: {} },
+    compactGroupSeconds: { blacksmith: {}, github: {}, boat: {} },
+    runtimePlacementTimings: { blacksmith: [], github: [], boat: [] },
   });
 });
 
@@ -90,8 +90,36 @@ it("excludes Boat and unsupported self-hosted tooling from existing runner profi
   );
   expect(refitTestTimings(runs).timings.toolingFileSeconds).toEqual({
     blacksmith: {},
+    boat: {},
     github: {},
   });
+});
+
+it("keeps resource-qualified Boat tooling separate and rejects mixed worker ceilings", () => {
+  const boatRun = (id: number, cost: number, workers = 2): CiTimingRun => ({
+    ...run(id),
+    logs: [
+      {
+        kind: "tooling",
+        labels: ["boat-xlarge"],
+        text: [
+          `2026-09-20T01:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${workers}`,
+          `2026-09-20T01:00:00Z [shard:resources] logicalCpuCount=16 totalMemoryBytes=${31 * 1024 ** 3} requested plans=1 admitted plans=1`,
+          toolingLog(cost),
+        ].join("\n"),
+      },
+    ],
+  });
+  const result = refitTestTimings([run(1), run(2), boatRun(3, 40), boatRun(4, 60)]);
+  expect(result.timings.toolingFileSeconds).toEqual({
+    blacksmith: { [file]: 200 },
+    github: {},
+    boat: { [file]: 50 },
+  });
+  expect(result.contributingRunIds.toolingBoat).toEqual([3, 4]);
+  expect(
+    refitTestTimings([boatRun(3, 40), boatRun(4, 60, 4)]).timings.toolingFileSeconds.boat,
+  ).toEqual({});
 });
 
 type TimingCase = [

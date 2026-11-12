@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import type { GatewayContextWindowOption } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
@@ -89,10 +90,7 @@ export function ChatContextWindowControl(props: {
           >
             {(control) => (
               <button
-                class={[
-                  "chat-controls__speed-toggle",
-                  { "chat-controls__speed-toggle--active": control().active },
-                ]}
+                class="chat-controls__speed-toggle"
                 data-chat-context-window-toggle={control().next}
                 type="button"
                 role="switch"
@@ -108,7 +106,7 @@ export function ChatContextWindowControl(props: {
                   void props.contextWindow.onSelect(control().next, props.sessionKey);
                 })}
               >
-                <span class="chat-controls__speed-toggle-thumb" />
+                <SwitchIndicator checked={control().active} size="sm" />
               </button>
             )}
           </Show>

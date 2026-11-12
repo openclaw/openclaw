@@ -1,3 +1,4 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
@@ -41,6 +42,7 @@ export function getManagedSessionList(
     retainedLimit: query.limit,
     receivedKeys: new Set(),
     startupRetryAttempt: 0,
+    deniedConnectionEpoch: null,
     readGeneration: 0,
     readRevision: 0,
     connectionEpoch: null,
@@ -99,6 +101,11 @@ export function createSessionManagedListRefresh(
     if (!scope) {
       return Promise.resolve();
     }
+    // Session events cannot repair a denied query. Explicit reads and a new
+    // connection may retry against current authority without changing selection.
+    if (refresh.background && entry.deniedConnectionEpoch === scope.epoch) {
+      return Promise.resolve();
+    }
     if (entry.pending) {
       // A subscriber may extend the accepted window before this drain settles.
       if (refresh.append && !entry.snapshot.loading && !entry.queued) {
@@ -143,6 +150,7 @@ export function createSessionManagedListRefresh(
         };
         const issuedRevision = nextRevision();
         entry.readRevision = issuedRevision;
+        entry.deniedConnectionEpoch = null;
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
           const generation = entry.readGeneration;
@@ -265,6 +273,9 @@ export function createSessionManagedListRefresh(
         } catch (error) {
           if (!isCurrent()) {
             return;
+          }
+          if (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN") {
+            entry.deniedConnectionEpoch = scope.epoch;
           }
           const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
           const startupPending = isAgentDatabaseInspectionPendingError(error);

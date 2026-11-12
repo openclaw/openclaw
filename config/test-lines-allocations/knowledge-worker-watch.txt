@@ -1,0 +1,2 @@
+# Keep native edit/rename proof while asserting watcher setup and recovery stay off the caller thread.
+8

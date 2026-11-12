@@ -251,6 +251,14 @@ failures and zero-byte reads. Nested readers count once under their outer
 operation. Usage operations distinguish `sessions.usage.refresh`, `summary`,
 `overview`, `sessions`, and `inventory` suffixes.
 
+Transcript hydration uses `sessions.transcript-hydration.<caller>` with fixed
+caller names, including `model-open`, `cron-model`, `subagent-model`,
+`model-reload`, `compaction`, `preview`, and `export`. Sum this prefix to compare
+with the former `sessions.transcript-hydration` total. Reused actor snapshots
+and followers sharing an in-flight hydration do not add reader operations;
+the dispatched read is attributed to its initiating caller. Chat history and
+message subscriptions use separate history operations.
+
 These process-lifetime totals include retired direct reader workers and travel
 with the existing diagnostic memory samples. The label uses internal operation
 names, capped at 256 plus `other`; paths and session identities are excluded.

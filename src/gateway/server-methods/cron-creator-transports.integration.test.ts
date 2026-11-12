@@ -36,6 +36,10 @@ import {
   revokeMcpLoopbackClientGrant,
 } from "../mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
+import {
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "../openclaw-id/tunnel-principal.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
@@ -177,13 +181,34 @@ function addJob(
   });
 }
 
-it.each(["operator.cron", "operator.write"])(
-  "admits %s automation creation without owner authority",
-  async (scope) => {
+it.each([
+  { scope: "operator.cron", ocid: false, target: "current" },
+  { scope: "operator.write", ocid: false, target: "current" },
+  { scope: "operator.write", ocid: true, target: "isolated" },
+  { scope: "operator.write", ocid: true, target: "main" },
+])(
+  "admits $scope automation creation without owner authority (OCID=$ocid target=$target)",
+  async ({ scope, ocid, target }) => {
     const profile = ensureProfileForEmail("scoped-cron@example.test");
     const client = createOperatorClient({ profileId: profile.id, scopes: [scope] });
-    client.internal = { authenticatedOperator: true };
-    client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
+    const principal: OpenClawIdTunnelPrincipal = {
+      kind: "member",
+      peerKey: `iroh:${"ec".repeat(32)}`,
+      accountId: "script-creator",
+      role: "operator",
+      authority: { clawId: "creator-claw", rootPub: "creator-root", listedSeq: 1 },
+    };
+    if (ocid) {
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+    }
+    client.internal = {
+      authenticatedOperator: true,
+      ...(ocid ? { openclawIdPrincipal: principal } : {}),
+    };
+    client.authPolicy = captureGatewayAuthPolicy(config, {
+      role: "operator",
+      authMethod: ocid ? "trusted-proxy" : "token",
+    });
     const original = expectDefined(
       await captureGatewayOperatorRunAuthority({
         client,
@@ -214,24 +239,42 @@ it.each(["operator.cron", "operator.write"])(
                 senderIsOwner: false,
               });
               const result = await addJob(tools, "Restricted caller job", {
-                payload: { ...timedPayload },
+                ...(ocid ? { sessionTarget: target } : {}),
+                payload: ocid
+                  ? { kind: "script", script: "return {}", timeoutSeconds: 30 }
+                  : { ...timedPayload },
               });
               expect(result).toHaveProperty("details.id");
               const jobs = await fixture.read();
               expect(jobs).toMatchObject([
                 {
                   ...ownedJob,
-                  payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
+                  payload: {
+                    toolsAllow: ocid ? [AUTOMATIONS_TOOL_NAME] : ["*"],
+                    timeoutSeconds: ocid ? 30 : 0,
+                  },
                 },
               ]);
-              expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
+              if (ocid) {
+                expect(jobs[0]?.payload).toHaveProperty("toolsAllowIsDefault", true);
+              } else {
+                expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
+              }
               expect(jobs[0]?.operatorSource?.source.snapshot.scopes).toEqual([scope]);
+              if (ocid) {
+                expect(jobs[0]?.operatorSource?.source.snapshot.openclawIdPrincipal).toEqual(
+                  principal,
+                );
+              }
             }),
             original.authority,
           ),
       );
     } finally {
       original.release();
+      if (ocid) {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+      }
     }
   },
 );

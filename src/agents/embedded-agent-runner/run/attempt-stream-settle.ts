@@ -536,6 +536,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     (messages) => messages,
     async ({ context, ...provider }) => {
       assertRunCurrent?.();
+      let localRoots: readonly string[] | undefined;
       const prepared = await materializeProviderContext({
         ...provider,
         context,
@@ -545,7 +546,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
         workspaceOnly: input.workspaceOnly,
         localRoots: input.workspaceOnly
           ? undefined
-          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+          : () =>
+              (localRoots ??= getAgentScopedMediaLocalRoots(
+                attempt.config ?? {},
+                input.sessionAgentId,
+              )),
         onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
         sandbox:
           input.sandbox?.enabled && input.sandbox.fsBridge

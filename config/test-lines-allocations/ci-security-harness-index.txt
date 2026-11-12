@@ -1,0 +1,2 @@
+79
+# Real Git proof of indexed security harness reuse, revision/manual fallback, modes and terminal failures.

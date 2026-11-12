@@ -18,21 +18,25 @@ import { getPreparedModelRuntimeMocks } from "../../prepared-model-runtime.test-
 import { installSpawnAccessCodex } from "./subagent-spawn.access-codex.test-support.js";
 import {
   createBoundSpawnInvocation,
+  createSpawnOperatorSource,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
 
 export function registerAccessRequestSpawnCases(
   options: NativePluginSpawnTestOptions & { parentSessionKey: string },
 ) {
-  const cases = (["OpenClaw", "Codex"] as const).flatMap((runtimeName) =>
-    (["explicit", "inherited"] as const).flatMap((selection) =>
-      (["allowed", "unavailable", "revoked", "reassigned"] as const).map((outcome) => ({
-        runtimeName,
-        selection,
-        outcome,
-      })),
+  const cases = [
+    ...(["OpenClaw", "Codex"] as const).flatMap((runtimeName) =>
+      (["explicit", "inherited"] as const).flatMap((selection) =>
+        (["allowed", "unavailable", "revoked", "reassigned"] as const).map((outcome) => ({
+          runtimeName,
+          selection,
+          outcome,
+        })),
+      ),
     ),
-  );
+    { runtimeName: "OpenClaw", selection: "explicit", outcome: "requester-revoked" } as const,
+  ];
   it.each(cases)(
     "$selection child Access at final $runtimeName submission: $outcome",
     async ({ runtimeName, selection, outcome }) => {
@@ -42,7 +46,10 @@ export function registerAccessRequestSpawnCases(
         .spyOn(agentScope, "resolveSessionAgentIds")
         .mockImplementation(actualScope.resolveSessionAgentIds);
       onTestFinished(() => resolver.mockRestore());
-      const bound = await options.createBoundParent();
+      const source = createSpawnOperatorSource("access-admin", ["operator.admin"], {
+        rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
+      });
+      const bound = await options.createBoundParent(source.authority);
       await upsertSessionEntryCore(
         { storePath: bound.storePath, sessionKey: options.parentSessionKey },
         { cyberAccessProgram: selection === "inherited" ? program : undefined },
@@ -149,6 +156,7 @@ export function registerAccessRequestSpawnCases(
           >[0]
         | undefined;
       let accountChanged = false;
+      let requesterRevoked = false;
       const provider = buildOpenAIProvider();
       const originalWrap = expectDefined(provider.wrapStreamFn, "OpenAI stream wrapper");
       provider.wrapStreamFn = (ctx) => {
@@ -161,7 +169,16 @@ export function registerAccessRequestSpawnCases(
             ...streamOptions,
             onPayload: async (payload, payloadModel) => {
               const transformed = await streamOptions?.onPayload?.(payload, payloadModel);
-              if (outcome === "revoked") {
+              if (outcome === "requester-revoked" && !requesterRevoked) {
+                // The child retains custody after foreground closure; revocation still fences egress.
+                bound.admission.close();
+                bound.parent.cleanup();
+                source.closeRequest();
+                expect(source.holds).toBeGreaterThan(0);
+                expect(source.authority.assertCurrent).not.toThrow();
+                source.revoke();
+                requesterRevoked = true;
+              } else if (outcome === "revoked") {
                 const catalog = expectDefined(
                   capturedAttempt?.preparedModelRuntime?.accountCatalog,
                   "request account catalog",
@@ -333,7 +350,16 @@ export function registerAccessRequestSpawnCases(
           nativeMessages
             ?.filter(({ method }) => method === "turn/start")
             .map(({ params }) => params) ?? writes;
-        if (outcome !== "allowed") {
+        if (outcome === "requester-revoked") {
+          expect(requesterRevoked).toBe(true);
+          expect(accountChanged).toBe(false);
+          expect(requests).toHaveLength(0);
+          if (completed instanceof Error) {
+            expect(completed.message).toMatch(/operator source revoked|aborted/i);
+          } else {
+            expect(completed).toMatchObject({ meta: { aborted: true } });
+          }
+        } else if (outcome !== "allowed") {
           if (!native) {
             expect(accountChanged).toBe(outcome !== "unavailable");
             if (outcome !== "unavailable") {
@@ -375,6 +401,12 @@ export function registerAccessRequestSpawnCases(
               meta: { agentMeta: { agentHarnessId: "codex" } },
               payloads: expect.arrayContaining([
                 expect.objectContaining({ text: "Completed as account-a" }),
+              ]),
+            });
+          } else {
+            expect(completed).toMatchObject({
+              payloads: expect.arrayContaining([
+                expect.objectContaining({ text: "Access child completed" }),
               ]),
             });
           }

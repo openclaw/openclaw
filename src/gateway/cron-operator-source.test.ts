@@ -9,9 +9,11 @@ function restore(signal?: AbortSignal) {
       id: "continuation",
       operatorSource: { source: { invalid: true }, executionRevision: "rev" },
     } as unknown as CronStoredJob,
-    agentId: "main",
-    sessionKey: "agent:main:dashboard:continuation",
-    entry: { sessionId: "session", lifecycleRevision: "1" },
+    target: {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:continuation",
+      entry: { sessionId: "session", lifecycleRevision: "1" },
+    },
     signal,
     deliveryAttemptFence: null,
   });

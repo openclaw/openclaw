@@ -1,0 +1,2 @@
+# Observe lazy CLI module evaluation in the existing metadata case.
+5

@@ -15,6 +15,7 @@ import {
   type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import type { ProjectionFamily } from "../../ui/src/test-helpers/control-ui-projection-fixture-contract.ts";
 import { mcpResourceHtml } from "../../ui/src/test-helpers/control-ui-team-scale-widget-html.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
@@ -37,9 +38,12 @@ import {
   openInteractionPanel,
   openNavigationDrawer,
   prepareChat,
+  scrollTranscriptToTop,
 } from "./control-ui-interaction-navigation.ts";
+import { logbookReadinessScenarios } from "./control-ui-logbook-readiness-scenarios.ts";
 import { runProjectionFixture } from "./control-ui-projection-fixtures.ts";
 import type { ControlUiResourceCounts } from "./control-ui-resource-counts.ts";
+import { skillsReadinessScenarios } from "./control-ui-skills-readiness-scenarios.ts";
 import {
   exerciseWorkboardResourceFixture,
   idleWorkboardResourceFixture,
@@ -83,7 +87,7 @@ export type InteractionEvidence = Record<string, number | boolean>;
 type InteractionSession = GatewaySessionRow &
   NonNullable<ControlUiMockGatewayScenario["sessions"]>[number];
 export type InteractionFixtureOverrides = Omit<
-  Partial<ControlUiMockGatewayScenario>,
+  Partial<NativeControlUiMockGatewayScenario>,
   "sessions"
 > & {
   sessions?: InteractionSession[];
@@ -152,7 +156,7 @@ export function createScenarioFixture(
   version: string,
   scenario: InteractionScenario,
   sandbox?: InteractionSandbox,
-): ControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
+): NativeControlUiMockGatewayScenario & { sessions: InteractionSession[] } {
   const base = createInteractionFixture(buildId, version, scenario.fixture, sandbox);
   const overrides = scenario.fixtureOverrides?.(sandbox, base);
   return {
@@ -1186,15 +1190,7 @@ async function runTranscriptPlatformEvents(page: Page): Promise<InteractionEvide
     activePane,
   );
   try {
-    const thread = page.locator(`${activePane} .chat-thread`);
-    await thread.hover();
-    await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
-    await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
-    await page.waitForFunction(
-      (selector) => document.querySelector(selector)?.scrollTop === 0,
-      `${activePane} .chat-thread`,
-    );
-    await frames(page);
+    const scroll = await scrollTranscriptToTop(page);
     const retirement = await original.evaluate((nodes) => ({
       initialDisclosureNodes: nodes.length,
       initialDisclosureNodesStillConnected: nodes.filter((node) => node.isConnected).length,
@@ -1206,6 +1202,7 @@ async function runTranscriptPlatformEvents(page: Page): Promise<InteractionEvide
       syntheticFontEvents: 9,
       nativeViewportChanges: 2,
       nativeReducedMotionChanges: 2,
+      ...scroll,
       ...platformTranscriptEvidence("before", before),
       ...platformTranscriptEvidence("afterPlatformEvents", afterPlatformEvents),
       ...platformTranscriptEvidence("after", await platformTranscriptSnapshot(page)),
@@ -1552,7 +1549,11 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
     match: { source: "sessions-page", limit: 1000 },
   });
   await page.locator(".data-table-pagination__info").getByText(/1000/).waitFor();
-  await toggle.click();
+  if ((await filters.getAttribute("aria-modal")) === "true") {
+    await filters.locator(".oc-sheet__close").click();
+  } else {
+    await toggle.click();
+  }
   await filters.waitFor({ state: "hidden" });
   // The owner sorts 1,000 rows; the logical page has 100 even when its DOM is windowed.
   await page.locator(".data-table-pagination__size").selectOption("100");
@@ -1601,7 +1602,7 @@ async function prepareCron(page: Page) {
   }
 }
 
-async function settingsSection(
+export async function settingsSection(
   page: Page,
   path: string,
   routeId: "appearance" | "connection" | "notifications",
@@ -1871,11 +1872,13 @@ async function searchProviderModels(page: Page) {
 }
 
 export const interactionScenarios: readonly InteractionScenario[] = [
+  ...skillsReadinessScenarios,
   ...dataActivityLiveScenarios,
   ...dataActivityScenarios,
   ...dataBoardScenarios,
   ...dataCatalogScenarios,
   ...dataLogScenarios,
+  ...logbookReadinessScenarios,
   ...dataUsageDetailScenarios,
   ...dataUsageScenarios,
   ...(
@@ -2552,11 +2555,11 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "storage-refresh",
     route: `${pathForRoute("ai-agents")}?section=session#settings-session-storage`,
     expected: "An unchanged storage refresh retains both agent rows and the open disclosure.",
-    rowSelector: "openclaw-session-storage-settings details > .settings-row",
+    rowSelector: "#settings-session-storage details .settings-row:not(summary)",
     prepare: async (page) => {
-      const details = page.locator(
-        "openclaw-session-storage-settings details.settings-row--stacked",
-      );
+      const details = page.locator("#settings-session-storage details").filter({
+        has: page.getByText("research", { exact: true }),
+      });
       await details.locator("summary").click();
       await details.getByText("research", { exact: true }).waitFor();
     },
@@ -2566,6 +2569,8 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await section.getByRole("button", { name: "Refresh", exact: true }).click();
       await gateway.waitForRequest("sessions.storage.status", { after });
       await section.getByRole("button", { name: "Refresh", exact: true }).waitFor();
+      await section.getByText("main", { exact: true }).waitFor();
+      await section.getByText("research", { exact: true }).waitFor();
       await frames(page);
     },
   },
@@ -2727,23 +2732,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The first message of the 400-message transcript enters the viewport.",
     prepare: prepareChat,
-    run: async (page) => {
-      const thread = page.locator(`${activePane} .chat-thread`);
-      if (page.viewportSize()!.width < 768) {
-        // Playwright's mobile WebKit driver has no wheel input. Use the same
-        // native scrollport jump in both mobile engines (not a wheel-latency sample).
-        await thread.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
-      } else {
-        await thread.hover();
-        await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
-      }
-      await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
-      await page.waitForFunction(
-        (selector) => document.querySelector(selector)?.scrollTop === 0,
-        `${activePane} .chat-thread`,
-      );
-      await frames(page);
-    },
+    run: scrollTranscriptToTop,
   },
   {
     id: "sidebar-toggle",
@@ -2930,12 +2919,33 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "sessions-sort",
     route: "/sessions",
     expected: "Sorting the 1,000-session result reverses its Updated order.",
-    prepare: prepareSessions,
+    prepare: async (page, gateway) => {
+      await prepareSessions(page, gateway);
+      if (
+        !(await page
+          .locator(".sessions-table")
+          .getByRole("button", { name: "Updated", exact: true })
+          .isVisible())
+      ) {
+        await page.getByRole("button", { name: "Filters", exact: true }).click();
+        await page
+          .locator(".sessions-filter-popover:popover-open")
+          .getByLabel("Direction")
+          .waitFor();
+      }
+    },
     run: async (page) => {
-      await page
+      const header = page
         .locator(".sessions-table")
-        .getByRole("button", { name: "Updated", exact: true })
-        .click();
+        .getByRole("button", { name: "Updated", exact: true });
+      if (await header.isVisible()) {
+        await header.click();
+      } else {
+        await page
+          .locator(".sessions-filter-popover:popover-open")
+          .getByLabel("Direction")
+          .selectOption("asc");
+      }
       await page
         .locator(".sessions-table tbody .session-data-row")
         .first()
@@ -2949,17 +2959,19 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     expected: "Gateway filtering replaces the 1,000-session result with Interaction 0999.",
     prepare: prepareSessions,
     run: async (page, gateway) => {
-      await page.getByRole("button", { name: "Filters", exact: true }).click();
-      const filters = page.locator(".sessions-filter-popover:popover-open");
-      await filters.waitFor({ state: "visible" });
-      const searchToggle = filters.locator(".header-search__toggle");
-      if (await searchToggle.isVisible()) {
-        await searchToggle.click();
+      let search = page.locator(".sessions-search input");
+      if (!(await search.isVisible())) {
+        await page.getByRole("button", { name: "Filters", exact: true }).click();
+        const filters = page.locator(".sessions-filter-popover:popover-open");
+        await filters.waitFor({ state: "visible" });
+        const searchToggle = filters.locator(".header-search__toggle");
+        if (await searchToggle.isVisible()) {
+          await searchToggle.click();
+        }
+        search = filters.locator(".sessions-filter-popover__search input");
       }
       const after = (await gateway.getRequests("sessions.list", { search: sessionQuery })).length;
-      await filters
-        .locator(".sessions-filter-popover__search input")
-        .pressSequentially(sessionQuery);
+      await search.pressSequentially(sessionQuery);
       await gateway.waitForRequest("sessions.list", { after, match: { search: sessionQuery } });
       await page
         .locator(".sessions-table tbody .session-data-row")
@@ -2998,7 +3010,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
   {
     id: "cron-menu-open",
     route: pathForRoute("cron"),
-    expected: "The first of 500 jobs opens its enabled Run if due, Clone, and Remove actions.",
+    expected: "The first of 500 jobs opens its enabled due-run, clone, and remove actions.",
     prepare: prepareCron,
     run: async (page) => {
       const trigger = page.locator(".cron-table__row").first().locator(".cron-job-menu__trigger");
@@ -3009,11 +3021,11 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await trigger.click();
       const menu = page.locator(`[id=${JSON.stringify(menuId)}][role="menu"]`);
       await menu.waitFor({ state: "visible" });
-      for (const name of ["Run if due", "Clone", "Remove"]) {
-        const item = menu.getByRole("menuitem", { name, exact: true });
+      for (const action of ["run-if-due", "clone", "remove"]) {
+        const item = menu.locator(`[role="menuitem"][data-value="${action}"]`);
         await item.waitFor({ state: "visible" });
         if (!(await item.isEnabled())) {
-          throw new Error(`Automation action is disabled: ${name}`);
+          throw new Error(`Automation action is disabled: ${action}`);
         }
       }
       if ((await menu.getByRole("menuitem").count()) !== 3) {

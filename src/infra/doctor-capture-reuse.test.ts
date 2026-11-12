@@ -7,7 +7,7 @@ import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-man
 import type { DoctorMaintenanceParams } from "../commands/doctor-maintenance-types.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { preserveDoctorOriginalState } from "../commands/doctor-original-capture.js";
-import * as declarations from "../plugins/doctor-contract-registry.js";
+import * as declarations from "../plugins/doctor-contract-preparation.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,6 +21,7 @@ import * as snapshots from "./sqlite-snapshot-source.js";
 import * as discoveryWorker from "./update-candidate-state.inspection.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
+import * as backupReader from "./update-recovery-backup-reader.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -155,6 +156,23 @@ it("reuses a sealed standalone baseline only while the complete source is unchan
   expect(await f.capture(true), "explicit full integrity verification does not reuse").toHaveLength(
     3,
   );
+});
+
+it("rejects an ineligible retained capture before verifying its payloads", async () => {
+  const f = await fixture();
+  await f.capture();
+  const verifyPayloads = vi.spyOn(backupReader, "withVerifiedUpdateRecoveryBackup");
+  const reused = await findReusableDoctorCapture({
+    stateDir: f.stateDir,
+    installRoot: path.join(f.root, "different-install"),
+    env: { ...process.env },
+    assertCurrent() {},
+  });
+  expect(reused).toBeUndefined();
+  expect(
+    verifyPayloads,
+    "an ineligible capture must stream zero payload hashes",
+  ).not.toHaveBeenCalled();
 });
 
 it("rediscovers files, declared paths, config includes, links, permissions, and new agent databases", async () => {

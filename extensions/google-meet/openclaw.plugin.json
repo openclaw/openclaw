@@ -533,5 +533,10 @@
     "secretInputs": {
       "paths": [{ "path": "realtime.providers.*.apiKey", "expected": "string" }]
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me prepare Google Meet participation and choose captions or spoken interaction.",
+    "Help me plan Google Meet notes with participant consent before joining.",
+    "Help me prepare to create a Google Meet link without inviting anyone."
+  ]
 }

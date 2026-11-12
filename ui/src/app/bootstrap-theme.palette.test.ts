@@ -43,6 +43,26 @@ beforeEach(({ onTestFinished }) => {
 
 const pendingPalette = () => document.getElementById("openclaw-theme-palette-tide")!;
 
+it("publishes authored selection without reapplying the previous document appearance", () => {
+  const root = document.documentElement;
+  const mutations = new MutationObserver(() => {});
+  mutations.observe(root, { attributes: true });
+  const palette = theme.appliedPalette;
+  try {
+    theme.recordServerSelection("claw", theme.settings.gatewayUrl);
+    expect(snapshots).toHaveBeenCalledOnce();
+    expect(mutations.takeRecords()).toEqual([]);
+    expect(theme.appliedPalette).toBe(palette);
+    patchSettings({ themeMode: "dark" });
+    expect(root.dataset.themeMode).toBe("dark");
+    expect(
+      mutations.takeRecords().filter((record) => record.attributeName === "data-theme-mode"),
+    ).toHaveLength(1);
+  } finally {
+    mutations.disconnect();
+  }
+});
+
 function observe(read: () => string | undefined) {
   const values: string[] = [];
   createEffect(read, (value) => void values.push(value ?? "none"));

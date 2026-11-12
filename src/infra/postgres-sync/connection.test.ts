@@ -2,6 +2,7 @@ import { MessageChannel, receiveMessageOnPort, threadId } from "node:worker_thre
 import { expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { readSqliteDatabaseScopedWriteToken as readToken } from "../sqlite-database-admission.js";
+import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-schema-facts.js";
 import {
   runSqliteImmediateTransaction as prepared,
@@ -135,6 +136,7 @@ function transportFixture(
     waits,
     elapse: (ms: number) => (now += ms),
     normal: () => (mode = "normal"),
+    dropReplies: () => (mode = "missing"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
@@ -407,6 +409,126 @@ it("runs the commit authority guard and rolls back when it refuses", () => {
   ).toThrow(refusal);
   expect(statements).toEqual([writeBegin, "ROLLBACK"]);
   expect(db.isTransaction).toBe(false);
+});
+
+it("invalidates staged authority after a lost COMMIT reply", () => {
+  const fixture = transportFixture("normal");
+  const phases: string[] = [];
+  expect(() =>
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, {
+        prepareCommit: () => phases.push("prepare"),
+        commit: () => phases.push("commit"),
+        rollback: () => phases.push("rollback"),
+        invalidate: () => phases.push("invalidate"),
+      });
+      fixture.dropReplies();
+    }),
+  ).toThrow(expect.objectContaining({ code: "outcome-unknown" }));
+  expect(phases).toEqual(["prepare", "invalidate"]);
+  expect(fixture.db.isOpen).toBe(false);
+});
+
+it.each(["throw", "promise"])(
+  "invalidates a committed write after its guard returns %s",
+  (mode) => {
+    const { db } = transactionFixture();
+    const invalidate = vi.fn();
+    const rollback = vi.fn();
+    expect(() =>
+      immediate(
+        db,
+        () => stageSqliteTransactionState(db, { commit: vi.fn(), invalidate, rollback }),
+        {
+          withCommit(commit) {
+            commit();
+            if (mode === "throw") {
+              throw new Error("guard failed after COMMIT");
+            }
+            return Promise.resolve();
+          },
+        },
+      ),
+    ).toThrow(mode === "throw" ? "guard failed after COMMIT" : "synchronous");
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(rollback).not.toHaveBeenCalled();
+    expect(db.isOpen).toBe(false);
+  },
+);
+
+it.each([false, true])(
+  "invalidates all staged state after failed rollback (nested=%s)",
+  (nested) => {
+    const { db } = transactionFixture();
+    const execute = db.exec.bind(db);
+    const failure = new Error("write refused");
+    const phases: string[] = [];
+    db.exec = (sql) => {
+      if (sql.startsWith("ROLLBACK")) {
+        throw new Error("rollback unavailable");
+      }
+      execute(sql);
+    };
+    const stage = (name: string) =>
+      stageSqliteTransactionState(db, {
+        commit: () => phases.push(`${name}:commit`),
+        rollback: () => phases.push(`${name}:rollback`),
+        invalidate: () => phases.push(`${name}:invalidate`),
+      });
+    expect(() =>
+      immediate(db, () => {
+        stage("outer");
+        const fail = () => {
+          stage("inner");
+          throw failure;
+        };
+        return nested ? immediate(db, fail) : fail();
+      }),
+    ).toThrow(failure);
+    expect(phases).toEqual(["inner:invalidate", "outer:invalidate"]);
+    expect(db.isOpen).toBe(false);
+  },
+);
+
+it("keeps a known rejected COMMIT distinct from an unknown outcome", () => {
+  const fixture = transportFixture("normal");
+  const rollback = vi.fn();
+  const invalidate = vi.fn();
+  expect(() =>
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, { commit: vi.fn(), rollback, invalidate });
+      fixture.command("ROLLBACK");
+    }),
+  ).toThrow("rolled back instead of committing");
+  expect(rollback).toHaveBeenCalledOnce();
+  expect(invalidate).not.toHaveBeenCalled();
+  expect(fixture.db.isOpen).toBe(true);
+});
+
+it("retires the connection even when an unknown-outcome invalidator throws", () => {
+  const fixture = transportFixture("normal");
+  const cleanup = new Error("authority invalidation failed");
+  let failure: unknown;
+  try {
+    immediate(fixture.db, () => {
+      stageSqliteTransactionState(fixture.db, {
+        commit: vi.fn(),
+        invalidate() {
+          throw cleanup;
+        },
+      });
+      fixture.dropReplies();
+    });
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect(failure).toMatchObject({
+    cause: expect.objectContaining({ code: "outcome-unknown" }),
+    errors: [expect.objectContaining({ code: "outcome-unknown" }), cleanup],
+  });
+  expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+  expect(fixture.db.isOpen).toBe(false);
 });
 
 it("prepares before asynchronous admission and commits only inside its guard", async () => {

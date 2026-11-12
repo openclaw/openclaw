@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { JSDOM } from "jsdom";
 import { build, createServer, type Alias } from "vite";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -19,6 +20,7 @@ import {
 import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import { controlUiLocaleModulesPlugin } from "../../config/control-ui-locales.ts";
 import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 import controlUiViteConfig, {
@@ -194,6 +196,56 @@ async function localeHooks(aliases: Alias[] = []) {
   return { buildStart, resolveId, load, watchChange };
 }
 
+it.each([
+  { language: "en-US", saved: "ar", dir: "rtl" },
+  { language: "fa-IR", saved: null, dir: "rtl" },
+  { language: "ar-EG", saved: "en", dir: "ltr" },
+  { language: "ar-EG", saved: "invalid", dir: "rtl" },
+  { language: "ar-EG", saved: null, dir: "rtl", blocked: true },
+])("sets $dir before the document body for $language and saved $saved", async (sample) => {
+  const server = await createServer({
+    configFile: false,
+    logLevel: "silent",
+    plugins: [controlUiLocaleModulesPlugin()],
+    optimizeDeps: { noDiscovery: true },
+    server: { middlewareMode: true, hmr: false, watch: null },
+  });
+  let html: string;
+  try {
+    html = await server.transformIndexHtml(
+      "/",
+      '<html lang="en"><head><script>window.bootLocale={dir:document.documentElement.dir,lang:document.documentElement.lang,body:document.body};</script></head><body></body></html>',
+    );
+  } finally {
+    await server.close();
+  }
+  const page = new JSDOM(html, {
+    url: "https://gateway.example/",
+    runScripts: "dangerously",
+    beforeParse(window) {
+      Object.defineProperty(window.navigator, "language", { value: sample.language });
+      if (sample.blocked) {
+        Object.defineProperty(window, "localStorage", {
+          get() {
+            throw new Error("denied");
+          },
+        });
+      } else if (sample.saved) {
+        window.localStorage.setItem("openclaw.i18n.locale", sample.saved);
+      }
+    },
+  });
+  try {
+    expect(Reflect.get(page.window, "bootLocale")).toEqual({
+      dir: sample.dir,
+      lang: "en",
+      body: null,
+    });
+  } finally {
+    page.window.close();
+  }
+});
+
 async function loadLocaleSource(
   load: Awaited<ReturnType<typeof localeHooks>>["load"],
   id: string = baseLocaleId,
@@ -268,13 +320,13 @@ async function executeLocale(
     JSON.stringify(lazyCatalogPath),
     JSON.stringify(lazyCatalogUrl),
   );
-  const namespaces: string[] = [];
+  const promisePath = path.join(repoRoot, "src/shared/lazy-promise.ts");
+  executableSource = executableSource.replace(
+    JSON.stringify(promisePath),
+    JSON.stringify(pathToFileURL(promisePath).href),
+  );
   for (const match of baseSource.matchAll(/import\("(virtual:[^"]+)"\)/g)) {
     const specifier = match[1]!;
-    const namespace = specifier.startsWith("virtual:openclaw-control-ui-locale-config-hints/")
-      ? "configHints"
-      : specifier.split("/").at(-1)!;
-    namespaces.push(namespace);
     const source = await loadLocaleSource(load, `\0${specifier}`);
     executableSource = executableSource.replace(
       JSON.stringify(specifier),
@@ -292,9 +344,7 @@ async function executeLocale(
     await module.getLazyLocaleCatalog(catalog)?.load(namespace);
   };
   const loadAll = async () => {
-    for (const namespace of namespaces) {
-      await loadNamespace(namespace);
-    }
+    await module.getLazyLocaleCatalog(catalog)?.prepare(loadControlUiSourceCatalog());
   };
   if (!deferNamespaces) {
     await loadAll();
@@ -321,7 +371,7 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
-    "aabdc80dc704c3abc609a76c6ac3e9ae872cf023770c6ea5fbb29ffe56adfcab",
+    "60e4687fc5820ca008c163772ca7f2c11787042a29b21615e43beebd8eb30198",
   );
   // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
   expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
@@ -586,7 +636,7 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it.each(["agent-id", "error-coercion", "expect"])(
+it.each(["agent-id", "error-coercion", "expect", "stringified-error"])(
   "resolves internal source aliases for %s",
   (subpath) => {
     const aliases = resolveSourcePackageAliasesForVite();
@@ -650,6 +700,49 @@ it("includes every English dependency in the raw source-hash input", async () =>
   }
 });
 
+it("keeps namespace URLs in one immutable locale generation across rebuilds", async () => {
+  const buildCatalog = async (label: string) => {
+    let files: string[] = [];
+    await withSourceImport(
+      async () =>
+        catalogImport({
+          common: { health: "Ready" },
+          chat: { title: label },
+          activity: { title: "Activity" },
+        }),
+      async () => {
+        const result = await build({
+          configFile: false,
+          logLevel: "silent",
+          plugins: [controlUiLocaleModulesPlugin()],
+          build: {
+            write: false,
+            rolldownOptions: {
+              input: "virtual:openclaw-control-ui-locale/fr",
+              output: { codeSplitting: controlUiCodeSplitting },
+            },
+          },
+        });
+        if (Array.isArray(result) || !("output" in result)) {
+          throw new Error("Expected one locale fixture build");
+        }
+        files = result.output
+          .map((asset) => asset.fileName)
+          .filter((file) => file.startsWith("assets/locale-namespace-fr-"))
+          .toSorted();
+      },
+    );
+    return files;
+  };
+  const first = await buildCatalog("Chat");
+  const repeated = await buildCatalog("Chat");
+  const changed = await buildCatalog("Conversation");
+  expect(first).toHaveLength(2);
+  expect(new Set(first.map((file) => file.slice(-11, -3))).size).toBe(1);
+  expect(repeated).toEqual(first);
+  expect(changed.every((file) => !first.includes(file))).toBe(true);
+});
+
 it("defers page and config-hint translations until their namespace loads", async () => {
   const { load, resolveId } = await localeHooks();
   const resolve = (id: string) => resolveId.call({} as never, id, undefined, {} as never);
@@ -667,20 +760,27 @@ it("defers page and config-hint translations until their namespace loads", async
   expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
   expect(catalog.configHints).toBeUndefined();
   const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
-  const healthText = flattenTranslations(en).get("common.health");
-  if (typeof healthText !== "string") {
-    throw new Error("Expected English health source");
+  const loadingText = flattenTranslations(en).get("common.loading");
+  if (typeof loadingText !== "string") {
+    throw new Error("Expected English loading source");
   }
-  const healthEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
+  const loadingEntry = [...loadControlUiTranslationMemory(memoryPath).values()].find(
     (entry) =>
-      (entry.segment_id === "common.health" || entry.segment_ids?.includes("common.health")) &&
-      entry.text_hash === hashControlUiTranslationText(healthText),
+      (entry.segment_id === "common.loading" || entry.segment_ids?.includes("common.loading")) &&
+      entry.text_hash === hashControlUiTranslationText(loadingText),
   );
-  expect(healthEntry).toBeDefined();
-  expect(flattenTranslations(catalog).get("common.health")).toBe(healthEntry?.translated);
+  expect(loadingEntry).toBeDefined();
+  expect(flattenTranslations(catalog).get("common.loading")).toBe(loadingEntry?.translated);
   await loadNamespace("activity");
   expect(flattenTranslations(catalog).get("activity.title")).toBeTypeOf("string");
   expect(catalog.configHints).toBeUndefined();
+  expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
+  expect(catalog.notificationErrors).toBeUndefined();
+  expect(catalog.nativeDeviceEditError).toBeUndefined();
+  await loadNamespace("notificationErrors");
+  expect(flattenTranslations(catalog).get("notificationErrors.manageDenied")).toBeTypeOf("string");
+  expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
+  expect(catalog.nativeDeviceEditError).toBeUndefined();
   await loadNamespace("configHints");
   expect(catalog.configHints).toBeTypeOf("object");
   expect(addWatchFile).toHaveBeenCalledWith(memoryPath);

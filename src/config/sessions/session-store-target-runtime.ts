@@ -277,7 +277,7 @@ export async function prepareSessionStoreReaderCandidates(
 ) {
   const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
   const source = options.preparedSource;
-  if (options.inspection && source) {
+  if (source) {
     source.assertCurrent();
     return {
       target,

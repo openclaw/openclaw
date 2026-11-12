@@ -42,7 +42,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
     this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
-      (prefix) => prefix.anchorIds.length > 0,
+      (prefix) => prefix.anchorIds.length,
     );
   }
 

@@ -291,6 +291,7 @@ export function readWorkspaceStateSnapshotFromDatabase(params: {
     setup: {
       version: WORKSPACE_SETUP_STATE_VERSION,
       ...(setupRow?.bootstrap_seeded_at ? { bootstrapSeededAt: setupRow.bootstrap_seeded_at } : {}),
+      ...(setupRow?.bootstrap_deferred === 1 ? { bootstrapDeferred: true } : {}),
       ...(setupRow?.setup_completed_at ? { setupCompletedAt: setupRow.setup_completed_at } : {}),
     },
     ...(attestationPresent

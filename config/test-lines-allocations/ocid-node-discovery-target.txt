@@ -1,0 +1,2 @@
+41
+# Persist separately configured Discovery origin and reject invalid routing targets.

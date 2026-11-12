@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #197238 (project-session lookups read the published model catalog).
+70

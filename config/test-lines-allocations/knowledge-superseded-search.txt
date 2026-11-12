@@ -1,0 +1,5 @@
+# Knowledge keyword search following superseded_by (#193054): three regressions,
+# each shown failing first, for replacement discovery with dedupe, pagination and
+# filters; filtered-only BM25 ranking of superseded wording; and history-only
+# edits reaching the persistent index, the snapshot token and dropped-table rebuild.
+94

@@ -3,6 +3,7 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { isExplicitPluginDisableMarker, normalizePluginId } from "../plugins/config-state.js";
@@ -25,6 +26,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
+import { listCronDefaultDestinationChannels } from "./cron-default-destinations.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import { collectMcpTransportIssues } from "./mcp-config-normalize.js";
@@ -600,6 +602,23 @@ export function validatePreparedConfigWithPlugins(
         message: `unknown channel id: ${channelId} (install its channel plugin or correct this setting)`,
       });
     }
+  }
+
+  // A default destination on a missing channel silently drops every route-less
+  // automation that uses it, so reject it at load time like `channels.<id>`.
+  for (const { path, channel, globalFailureAlert } of listCronDefaultDestinationChannels(
+    config.cron,
+  )) {
+    const channelId = normalizeChatChannelId(channel) ?? channel.toLowerCase();
+    if (isKnownChannel(channelId) || preserveUnavailableConfig(path)) {
+      continue;
+    }
+    const issue = {
+      path,
+      message: `unknown channel id: ${channel} (install its channel plugin or correct this setting)`,
+    };
+    // `cron.failureAlert` predates this check; keep existing configs loadable.
+    (globalFailureAlert || hasStalePluginEvidence(channelId) ? warnings : issues).push(issue);
   }
 
   validateWebSearchProvider();

@@ -7,6 +7,7 @@ import type {
   CronUpdateParams as CronUpdateParamsWire,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
+import type { AgentTerminalSnapshot } from "../agents/agent-terminal-snapshot.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -87,6 +88,7 @@ type CronCompletionDestination = {
 type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   mode?: "announce" | "webhook";
 };
@@ -150,6 +152,8 @@ export type CronRunTelemetry = Pick<CronRunLogWireEntry, "model" | "provider" | 
 
 /** Scheduler lifecycle event projected to Gateway clients and notification adapters. */
 export type CronEvent = {
+  /** Transient content-free facts from the selected failed agent attempt. */
+  agentTerminal?: AgentTerminalSnapshot;
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
@@ -206,6 +210,8 @@ export type CronFailureNotificationDetail =
 
 /** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
+  /** Transient selected-attempt observations; omitted for other terminal owners. */
+  agentTerminal?: AgentTerminalSnapshot;
   status: CronRunStatus;
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
@@ -469,6 +475,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     sessionId: string;
     lifecycleRevision?: string;
   };
+  /** Original native process grant, independent of mutable payload authority; store-private. */
+  streamOperatorSource?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Trusted logical sandbox and original access basis, never public create/patch input. */
   streamSandbox?: CronStreamSandboxTarget;
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
@@ -496,6 +504,7 @@ type CronJobStateInput = Partial<
     CronJobState,
     | "lastMeaningfulResult"
     | "autoDisabled"
+    | "admissionDeferred"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
     | "sourceIdentity"

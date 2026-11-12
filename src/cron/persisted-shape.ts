@@ -12,6 +12,7 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 import { decodePluginCommandSchedule } from "./plugin-command-schedule.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
 import { isCronEventSchedule } from "./source-schedule.js";
+import { decodeCronStreamOperatorSource } from "./stream-operator-source.js";
 import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronJobState } from "./types.js";
 
@@ -153,6 +154,16 @@ export function getInvalidPersistedCronJobReason(
       !parseCronStreamSandboxTarget(candidate.streamSandbox))
   ) {
     return "invalid-schedule";
+  }
+  if (candidate.streamOperatorSource !== undefined) {
+    if (scheduleKind !== "stream" || candidate.streamSandbox !== undefined) {
+      return "invalid-execution-policy";
+    }
+    try {
+      decodeCronStreamOperatorSource(candidate.streamOperatorSource);
+    } catch {
+      return "invalid-execution-policy";
+    }
   }
   if (scheduleKind === "event" && !isCronEventSchedule(schedule)) {
     return "invalid-schedule";

@@ -1,0 +1,3 @@
+# Registered Logbook Ask field geometry, focus, typing and mock-submit regression.
+# Exact own net LF growth; preserves the shared scalar and inherited test debt.
+108

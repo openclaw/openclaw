@@ -305,7 +305,7 @@ describe("resolveTranscriptPolicy", () => {
 
   it.each([
     ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", false],
+    ["claude-mythos-5-1", true],
     ["claude-fable-5", false],
   ])("scopes persisted context and consecutive-turn merging for %s", (modelId, appendOnly) => {
     const messages: AgentMessage[] = [
@@ -346,7 +346,7 @@ describe("resolveTranscriptPolicy", () => {
         modelId: "deployment",
         model: makeOpenAiCompatibleReasoningModel({ params: { canonicalModelId } }),
       });
-      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId === "claude-fable-5-1");
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     },
   );
 

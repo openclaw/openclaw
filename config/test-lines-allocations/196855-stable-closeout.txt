@@ -1,0 +1,3 @@
+149
+# Exact net regression-test growth: ACP terminal persistence (68), startup metadata (11),
+# Ollama output budgets (29), and timing pagination/transient-read recovery (41).

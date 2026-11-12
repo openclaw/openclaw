@@ -1241,7 +1241,7 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     private var sendButton: some View {
-        if self.viewModel.pendingRunCount > 0, self.shouldShowStopButton {
+        if self.viewModel.pendingRunCount > 0 {
             Button {
                 self.viewModel.abort()
             } label: {
@@ -1263,7 +1263,8 @@ extension OpenClawChatComposer {
             .accessibilityLabel("Stop response")
             .disabled(self.viewModel.isAborting)
             .modifier(ChatStopGuard())
-        } else {
+        }
+        if self.viewModel.pendingRunCount == 0 || self.viewModel.hasDraftToSend {
             Button {
                 self.sendDraftIfEnabled()
             } label: {
@@ -1632,13 +1633,6 @@ extension OpenClawChatComposer {
         self.pickerItems = []
     }
     #endif
-
-    /// Preserve text and image draft controls while keeping completed voice notes abortable.
-    private var shouldShowStopButton: Bool {
-        !self.viewModel.hasDraftToSend || self.viewModel.attachments.contains {
-            $0.mimeType == "audio/mp4" && $0.durationSeconds != nil
-        }
-    }
 
     private func sendDraftIfEnabled(queueMode: OpenClawChatQueueMode? = nil) {
         guard self.canSendMessage else { return }

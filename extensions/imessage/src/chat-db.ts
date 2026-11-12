@@ -34,6 +34,7 @@ export function openIMessageChatDbReader(databasePath: string) {
     ),
     databasePath,
     existingOnly: true,
+    isolation: "external",
     input: undefined,
   });
 }

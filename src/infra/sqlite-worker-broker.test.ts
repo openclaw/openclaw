@@ -21,6 +21,8 @@ import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.j
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import * as stateOwner from "./gateway-state-owner.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
   useSqliteWorkerStoreFixture,
@@ -517,6 +519,64 @@ it("borrows an open database while an unrelated cold open awaits its reply", asy
     await broker.close();
   }
 });
+
+it("releases broker client capacity and drains after synchronous cold path failures", async ({
+  signal,
+  skip,
+}) => {
+  if (process.platform === "win32") {
+    skip(); // File symlinks require privileges on Windows.
+  }
+  const broker = new SqliteWorkerBroker();
+  const loop = databasePath();
+  fs.symlinkSync(loop, loop);
+  // Exhaust the client limit if any failed open keeps its reservation.
+  for (let index = 0; index < 64; index++) {
+    await expect(openBroker(broker, loop)).rejects.toMatchObject({ code: "ELOOP" });
+  }
+  try {
+    const store = await withinTest(openBroker(broker, databasePath()), signal);
+    assert(store);
+    expect(await append(store, "capacity recovered")).toMatchObject({ writes: 1 });
+  } finally {
+    await withinTest(broker.close(), signal);
+  }
+});
+
+it("lets a cold admission turn open its database while a later open waits on that turn", async ({
+  signal,
+}) =>
+  withSqliteDatabaseAdmissionExchange(
+    () => [],
+    async () => {
+      const broker = new SqliteWorkerBroker();
+      const file = databasePath();
+      const entered = createDeferredCore();
+      const proceed = createDeferredCore();
+      // A cold agent writer holds the database's turn, then opens its worker inside it.
+      const owner = runWithSqliteDatabaseAdmissionTurn([file], async () => {
+        entered.resolve();
+        await proceed.promise;
+        return await openBroker(broker, file);
+      });
+      const pending: Promise<unknown>[] = [owner];
+      try {
+        await withinTest(entered.promise, signal);
+        // An unrelated open of the same cold file arrives outside that turn.
+        const later = openBroker(broker, file);
+        pending.push(later);
+        proceed.resolve();
+        const [ownerStore, laterStore] = await withinTest(Promise.all([owner, later]), signal);
+        assert(ownerStore && laterStore, "Fixture stores missing");
+        expect(await append(ownerStore, "turn owner")).toMatchObject({ writes: 1 });
+        expect(await read(laterStore)).toEqual(["turn owner"]);
+      } finally {
+        proceed.resolve();
+        await Promise.allSettled(pending);
+        await broker.close();
+      }
+    },
+  ));
 
 it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
   signal,

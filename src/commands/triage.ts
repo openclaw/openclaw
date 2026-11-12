@@ -8,6 +8,7 @@ import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { resolveSubprocessExitCode } from "../cli/subprocess-exit-code.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
@@ -128,13 +129,37 @@ async function collectTriageBundle(
   }
 }
 
+type AutomaticTriage = { failure: TriageFailureContext; signal: AbortSignal } & (
+  | { diagnosticOnly: true }
+  | { diagnosticOnly?: false; assertCurrent: () => void }
+);
+
 export async function triageCommand(
   runtime: RuntimeEnv,
   options: TriageOptions = {},
-  automatic?: { failure: TriageFailureContext; signal: AbortSignal } & (
-    | { diagnosticOnly: true }
-    | { diagnosticOnly?: false; assertCurrent: () => void }
-  ),
+  automatic?: AutomaticTriage,
+): Promise<void> {
+  if (automatic) {
+    return runTriage(runtime, options, automatic);
+  }
+  // An accepted SIGINT, SIGTERM or hangup stops standalone triage at its next step,
+  // before it can start a repair agent; the signal drain waits for this unwind.
+  const stopped = new AbortController();
+  const finished = Promise.withResolvers<void>();
+  const releaseGate = registerSignalExitGate(finished.promise, () => stopped.abort());
+  try {
+    return await runTriage(runtime, options, undefined, stopped.signal);
+  } finally {
+    releaseGate();
+    finished.resolve();
+  }
+}
+
+async function runTriage(
+  runtime: RuntimeEnv,
+  options: TriageOptions,
+  automatic?: AutomaticTriage,
+  stopped?: AbortSignal,
 ): Promise<void> {
   if (
     !automatic &&
@@ -172,6 +197,9 @@ export async function triageCommand(
     }
   }
   const isCurrent = () => {
+    if (stopped?.aborted) {
+      return false;
+    }
     automatic?.signal.throwIfAborted();
     if (automatic && !automatic.diagnosticOnly) {
       automatic.assertCurrent();

@@ -138,15 +138,16 @@ export class VaultScanner {
           return false;
         }
         const file = dir + name,
-          stamp = fileStamp(this.root, file);
-        entries.push(`${file}|${stamp}`);
+          directory = fs.lstatSync(path.join(this.root, file)).isDirectory();
+        // Retained originals and publication staging change on every upload
+        // and save without changing the catalog; cited files carry their own
+        // evidence stamps. Only their kind (a real directory or not) matters here.
         if (!dir && (name === "artifacts" || name === ".knowledge-history")) {
+          entries.push(`${file}|${directory ? "directory" : fileStamp(this.root, file)}`);
           continue;
         }
-        if (
-          fs.lstatSync(path.join(this.root, file)).isDirectory() &&
-          !walk(file + "/", depth + 1)
-        ) {
+        entries.push(`${file}|${fileStamp(this.root, file)}`);
+        if (directory && !walk(file + "/", depth + 1)) {
           return false;
         }
       }
@@ -167,9 +168,12 @@ export class VaultScanner {
       this.cache.files ??= new Map();
       this.cache.evidence ??= new Map();
     }
-    const evidence = new EvidenceInspector(this.root, overlay ? undefined : this.cache?.evidence);
+    // Overlay scans share per-file parses and evidence outcomes, which are
+    // keyed by on-disk stamps. A parse that hydrated from an overlay artifact
+    // carries the disk stamp but not the disk bytes, so it is never cached.
+    const evidence = new EvidenceInspector(this.root, this.cache?.evidence);
     const descriptorStamp = sourceDescriptorStamper(this.root);
-    const parsed = overlay ? undefined : this.cache?.files,
+    const parsed = this.cache?.files,
       seen = new Set<string>();
     const directory = this.empty ? null : await safeRoot(this.root);
     const records: LoadedRecord[] = [];
@@ -252,6 +256,12 @@ export class VaultScanner {
           // Cache only deterministic outcomes of settled files; a failed read is retried.
           const descriptors = new Map<string, string>();
           const remember = (value: Omit<ParsedFile, "stamp" | "descriptors">) => {
+            if (
+              overlay &&
+              [...descriptors.keys()].some((p) => Object.hasOwn(overlay.artifacts, p))
+            ) {
+              return;
+            }
             // Unsettled files are still reread and validated; retain their parse
             // identity only to reuse links when those freshly read bytes match.
             const reusable =

@@ -8,8 +8,23 @@ import { synthesizeSpeech, textToSpeechTelephony } from "openclaw/plugin-sdk/tts
 import { describe, expect, it } from "vitest";
 
 const AUDIO = Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
-type Request = { url: string; auth?: string; body: Record<string, unknown> };
+type Request = { url: string; auth?: string; vendorKey?: string; body: Record<string, unknown> };
+type Catalog = {
+  providerId: "openai" | "gradium";
+  model: string | null;
+  observedAt?: string;
+  authType?: string;
+  path?: string;
+  routeKind: "unified" | "native" | "manifest";
+  eligible: boolean;
+  requestFormat: string;
+  responseFormat: string;
+  route?: string;
+};
 type Fixture = {
+  catalog: Catalog;
+  catalogRequests: string[];
+
   cfg: OpenClawConfig;
   home: string;
   requests: Request[];
@@ -22,7 +37,11 @@ const withoutKey = (cfg: OpenClawConfig): OpenClawConfig => ({
   ...cfg,
   models: {
     providers: {
-      clawrouter: { baseUrl: cfg.models?.providers?.clawrouter?.baseUrl ?? "", models: [] },
+      clawrouter: {
+        baseUrl: cfg.models?.providers?.clawrouter?.baseUrl ?? "",
+        models: [],
+        request: { allowPrivateNetwork: true },
+      },
     },
   },
 });
@@ -38,9 +57,86 @@ async function withFixture(
   await withTempHome(
     async (home) => {
       const requests: Request[] = [];
+      const catalogRequests: string[] = [];
+      const catalog: Catalog = {
+        providerId: "openai",
+        model: "tts-1",
+        routeKind: "unified",
+        eligible: true,
+        requestFormat: "openai.audio_speech",
+        responseFormat: "audio.binary",
+      };
       await withServer(
         (req, res) => {
           void (async () => {
+            if (req.url === "/v1/catalog") {
+              catalogRequests.push(req.headers.authorization ?? "");
+              const route =
+                catalog.route ??
+                (catalog.routeKind === "unified"
+                  ? "/v1/audio/speech"
+                  : catalog.routeKind === "native"
+                    ? `/v1/native/${catalog.providerId}${catalog.path ?? (catalog.providerId === "gradium" ? "/api/post/speech/tts" : "/v1/audio/speech")}`
+                    : `/v1/proxy/${catalog.providerId}/speech`);
+              res.setHeader("content-type", "application/json");
+              res.end(
+                JSON.stringify({
+                  version: "clawrouter.client-catalog.v1",
+                  observedAt: catalog.observedAt ?? new Date().toISOString(),
+                  scope: {
+                    authType: catalog.authType ?? "proxy_key",
+                    credentialId: "synthetic-router-id",
+                    principalId: null,
+                  },
+                  providers: [
+                    {
+                      id: catalog.providerId,
+                      allowed: true,
+                      executable: true,
+                      nativeBaseUrl: `/v1/native/${catalog.providerId}`,
+                      routes: [
+                        {
+                          endpoint: "speech",
+                          path:
+                            catalog.path ??
+                            (catalog.providerId === "gradium"
+                              ? "/api/post/speech/tts"
+                              : "/v1/audio/speech"),
+                          methods: ["POST"],
+                          requestFormat: catalog.requestFormat,
+                          responseFormat: catalog.responseFormat,
+                        },
+                      ],
+                      models:
+                        catalog.model === null
+                          ? []
+                          : [
+                              {
+                                id: catalog.providerId + "/" + catalog.model,
+                                upstream: catalog.model,
+                                capabilities: ["audio.speech"],
+                              },
+                            ],
+                      offers: [
+                        {
+                          endpoint: "speech",
+                          modelId:
+                            catalog.model === null
+                              ? null
+                              : catalog.providerId + "/" + catalog.model,
+                          routeKind: catalog.routeKind,
+                          route,
+                          transport: "http",
+                          eligible: catalog.eligible,
+                          affordability: "request-dependent",
+                        },
+                      ],
+                    },
+                  ],
+                }),
+              );
+              return;
+            }
             let text = "";
             for await (const chunk of req) {
               text += chunk;
@@ -48,6 +144,8 @@ async function withFixture(
             const request = {
               url: req.url ?? "",
               auth: req.headers.authorization,
+              vendorKey:
+                typeof req.headers["x-api-key"] === "string" ? req.headers["x-api-key"] : undefined,
               body: text ? JSON.parse(text) : {},
             };
             requests.push(request);
@@ -61,7 +159,14 @@ async function withFixture(
             plugins: { allow: ["clawrouter"], entries: { clawrouter: { enabled: true } } },
             agents: { defaults: { voiceModel: "clawrouter/openai/tts-1" } },
             models: {
-              providers: { clawrouter: { baseUrl, apiKey: "fixture-router", models: [] } },
+              providers: {
+                clawrouter: {
+                  baseUrl,
+                  apiKey: "fixture-router",
+                  models: [],
+                  request: { allowPrivateNetwork: true },
+                },
+              },
             },
             tts: { providers: { clawrouter: {} } },
           };
@@ -69,6 +174,8 @@ async function withFixture(
             cfg,
             home,
             requests,
+            catalog,
+            catalogRequests,
             tts: (options = {}) =>
               synthesizeSpeech({
                 text: "Hello from ClawRouter",
@@ -88,7 +195,13 @@ async function withFixture(
         },
       );
     },
-    { env: { CLAWROUTER_API_KEY: routerApiKey, OPENAI_API_KEY: "fixture-openai-not-router" } },
+    {
+      env: {
+        CLAWROUTER_API_KEY: routerApiKey,
+        OPENAI_API_KEY: "fixture-openai-not-router",
+        GRADIUM_API_KEY: "fixture-gradium-not-router",
+      },
+    },
   );
 }
 
@@ -97,6 +210,81 @@ function speech(cfg: OpenClawConfig) {
 }
 
 describe("ClawRouter native speech", () => {
+  it.each(["native", "manifest"] as const)(
+    "runs a catalog-selected %s offer through actual TTS",
+    async (routeKind) => {
+      await withFixture(async ({ cfg, catalog, catalogRequests, requests, tts }) => {
+        catalog.routeKind = routeKind;
+        catalog.model = "gpt-4o-mini-tts";
+        const result = await tts({
+          cfg: {
+            ...cfg,
+            agents: { defaults: {} },
+            tts: {
+              provider: "clawrouter",
+              providers: {
+                clawrouter: {
+                  model: "openai/gpt-4o-mini-tts",
+                  voice: "coral",
+                  instructions: "Speak softly",
+                },
+              },
+            },
+          },
+        });
+        expect(result).toMatchObject({ success: true, audioBuffer: AUDIO });
+        expect(catalogRequests).toEqual(["Bearer fixture-router"]);
+        expect(requests).toHaveLength(1);
+        expect(requests[0]).toMatchObject({
+          url:
+            routeKind === "native"
+              ? "/v1/native/openai/v1/audio/speech"
+              : "/v1/proxy/openai/speech",
+          auth: "Bearer fixture-router",
+          body:
+            routeKind === "manifest"
+              ? {
+                  body: {
+                    model: "gpt-4o-mini-tts",
+                    input: "Hello from ClawRouter",
+                    voice: "coral",
+                    instructions: "Speak softly",
+                    response_format: "mp3",
+                  },
+                }
+              : {
+                  model: "gpt-4o-mini-tts",
+                  input: "Hello from ClawRouter",
+                  voice: "coral",
+                  instructions: "Speak softly",
+                  response_format: "mp3",
+                },
+        });
+      });
+    },
+  );
+
+  it("refreshes grants and refuses unsupported formats or credential-bearing destinations before synthesis", async () => {
+    await withFixture(async ({ cfg, request, catalog, requests, catalogRequests }) => {
+      const provider = speech(cfg);
+      await provider.synthesize(request({ instructions: "tts-1 cannot accept this" }));
+      expect(requests[0]?.body).not.toHaveProperty("instructions");
+      catalog.eligible = false;
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      catalog.eligible = true;
+      catalog.requestFormat = "future.speech";
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      catalog.requestFormat = "openai.audio_speech";
+      catalog.responseFormat = "application.json";
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      catalog.responseFormat = "audio.binary";
+      catalog.route = "https://untrusted.example/audio/speech";
+      await expect(provider.synthesize(request())).rejects.toThrow("no eligible supported offer");
+      expect(catalogRequests).toHaveLength(5);
+      expect(requests).toHaveLength(1);
+    });
+  });
+
   it("selects the qualified voice model through native TTS, without a chat provider selection", async () => {
     await withFixture(async ({ tts, requests }) => {
       const result = await tts();
@@ -352,8 +540,8 @@ describe("ClawRouter native speech", () => {
     await withFixture(async ({ cfg, request, requests }) => {
       const provider = speech(cfg);
       for (const [config, message] of [
-        [{ model: "tts-1" }, "supports only openai/tts-1"],
-        [{ voice: "unknown" }, "Invalid ClawRouter tts-1 voice"],
+        [{ model: "tts-1" }, "requires a qualified OpenAI speech model"],
+        [{ voice: "unknown" }, "Invalid ClawRouter OpenAI speech voice"],
         [{ speed: 0 }, "speed must be between 0.25 and 4"],
         [{ responseFormat: "json" }, "Invalid ClawRouter speech responseFormat"],
       ] as const) {
@@ -367,4 +555,205 @@ describe("ClawRouter native speech", () => {
       expect(requests[0]?.body.input).toBe("😀".repeat(4096));
     });
   });
+});
+
+function selectGradium(fixture: Fixture) {
+  Object.assign(fixture.catalog, {
+    providerId: "gradium",
+    model: null,
+    requestFormat: "gradium.speech",
+    responseFormat: "audio.binary",
+    routeKind: "native",
+  });
+  return {
+    ...fixture.cfg,
+    agents: { defaults: {} },
+    tts: {
+      provider: "clawrouter",
+      providers: { clawrouter: { upstreamProvider: "gradium", voiceId: "synthetic-voice" } },
+    },
+  } satisfies OpenClawConfig;
+}
+
+const GRADIUM_WAV = Buffer.from(
+  "UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YRAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "base64",
+);
+// Published PR454 synthetic transport fixture; not decoder/playback or live inference proof.
+const GRADIUM_OPUS = Buffer.from("OggS\0synthetic OpusHead transport fixture", "utf8");
+function respondGradium(res: ServerResponse, request: Request) {
+  const body = (request.body.body ?? request.body) as Record<string, unknown>;
+  res.setHeader("content-type", body.output_format === "opus" ? "audio/ogg" : "audio/wav");
+  res.end(body.output_format === "wav" ? GRADIUM_WAV : GRADIUM_OPUS);
+}
+
+describe("ClawRouter native Gradium speech", () => {
+  it("returns native voice-note bytes but denies unqualified proxy telephony", async () => {
+    await withFixture(async (fixture) => {
+      const cfg = selectGradium(fixture);
+      expect(
+        await speech(cfg).synthesize({
+          ...fixture.request(cfg.tts.providers.clawrouter),
+          cfg,
+          target: "voice-note",
+        }),
+      ).toMatchObject({
+        outputFormat: "opus",
+        voiceCompatible: true,
+        audioBuffer: GRADIUM_OPUS,
+      });
+      expect(
+        await textToSpeechTelephony({
+          text: "Synthetic phone speech",
+          cfg,
+          prefsPath: fixture.home + "/tts-prefs.json",
+        }),
+      ).toMatchObject({
+        success: false,
+        error: expect.stringContaining("telephony output is not qualified"),
+      });
+      expect(fixture.requests.map((request) => request.body.output_format)).toEqual(["opus"]);
+      expect(
+        fixture.requests.every(
+          (request) => request.auth === "Bearer fixture-router" && !request.vendorKey,
+        ),
+      ).toBe(true);
+    }, respondGradium);
+  });
+
+  it.each(["native", "manifest"] as const)(
+    "runs model-less %s offers through actual TTS",
+    async (routeKind) => {
+      await withFixture(async (fixture) => {
+        const cfg = selectGradium(fixture);
+        fixture.catalog.routeKind = routeKind;
+        const result = await fixture.tts({ cfg });
+        expect(result).toMatchObject({
+          success: true,
+          audioBuffer: GRADIUM_WAV,
+          outputFormat: "wav",
+        });
+        expect(fixture.catalogRequests).toEqual(["Bearer fixture-router"]);
+        expect(fixture.requests).toEqual([
+          {
+            url:
+              routeKind === "native"
+                ? "/v1/native/gradium/api/post/speech/tts"
+                : "/v1/proxy/gradium/speech",
+            auth: "Bearer fixture-router",
+            vendorKey: undefined,
+            body:
+              routeKind === "manifest"
+                ? {
+                    body: {
+                      text: "Hello from ClawRouter",
+                      voice_id: "synthetic-voice",
+                      only_audio: true,
+                      output_format: "wav",
+                      json_config: '{"padding_bonus":0}',
+                    },
+                  }
+                : {
+                    text: "Hello from ClawRouter",
+                    voice_id: "synthetic-voice",
+                    only_audio: true,
+                    output_format: "wav",
+                    json_config: '{"padding_bonus":0}',
+                  },
+          },
+        ]);
+      }, respondGradium);
+    },
+  );
+
+  it.each([
+    { observedAt: "2000-01-01T00:00:00Z" },
+    { authType: "access" },
+    { eligible: false },
+    { providerId: "openai" as const },
+    { model: "unqualified" },
+    { requestFormat: "unknown.speech" },
+    { route: "https://foreign.example/speech" },
+    { path: "/foreign/speech" },
+  ])("denies stale or foreign catalog offers through TTS (%j)", async (patch) => {
+    await withFixture(async (fixture) => {
+      const cfg = selectGradium(fixture);
+      Object.assign(fixture.catalog, patch);
+      expect((await fixture.tts({ cfg })).success).toBe(false);
+      expect(fixture.requests).toHaveLength(0);
+    }, respondGradium);
+  });
+
+  it("never substitutes the native Gradium key for a missing proxy key", async () => {
+    await withFixture(async (fixture) => {
+      const cfg = withoutKey(selectGradium(fixture));
+      expect((await fixture.tts({ cfg })).success).toBe(false);
+      expect(fixture.catalogRequests).toHaveLength(0);
+      expect(fixture.requests).toHaveLength(0);
+    }, respondGradium);
+  });
+
+  it("rejects mismatched audio MIME through the real consumer", async () => {
+    await withFixture(async (fixture) => {
+      expect((await fixture.tts({ cfg: selectGradium(fixture) })).success).toBe(false);
+      expect(fixture.requests).toHaveLength(1);
+    });
+  });
+
+  it.each([
+    "partial-status",
+    "truncated",
+    "oversized",
+    "redirect",
+    "range",
+    "mime-parameters",
+    "encoding",
+  ] as const)("rejects %s binary delivery through TTS", async (failure) => {
+    await withFixture(
+      async (fixture) => {
+        const cfg = selectGradium(fixture);
+        expect((await fixture.tts({ cfg })).success).toBe(false);
+        expect(fixture.requests).toHaveLength(1);
+      },
+      (res) => {
+        res.setHeader("content-type", "audio/wav");
+        if (failure === "partial-status") {
+          res.statusCode = 206;
+        }
+        if (failure === "range") {
+          res.setHeader("content-range", "bytes 0-15/100");
+        }
+        if (failure === "mime-parameters") {
+          res.setHeader("content-type", "audio/wav; codecs=unknown");
+        }
+        if (failure === "encoding") {
+          res.setHeader("content-encoding", "gzip");
+        }
+        if (failure === "truncated") {
+          res.setHeader("content-length", GRADIUM_WAV.length + 1);
+          res.setHeader("connection", "close");
+        }
+        if (failure === "oversized") {
+          res.setHeader("content-length", 16 * 1024 * 1024 + 1);
+        }
+        if (failure === "redirect") {
+          res.statusCode = 307;
+          res.setHeader("location", "/replayed-speech");
+        }
+        res.end(GRADIUM_WAV);
+      },
+    );
+  });
+
+  it.each([{ model: "gradium/fake-model" }, { speed: 1.2 }, { instructions: "whisper" }])(
+    "rejects unsupported native settings before submission (%j)",
+    async (override) => {
+      await withFixture(async (fixture) => {
+        const cfg = selectGradium(fixture);
+        Object.assign(cfg.tts.providers.clawrouter, override);
+        expect((await fixture.tts({ cfg })).success).toBe(false);
+        expect(fixture.requests).toHaveLength(0);
+      }, respondGradium);
+    },
+  );
 });

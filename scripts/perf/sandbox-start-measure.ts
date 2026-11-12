@@ -89,6 +89,7 @@ for (const name of [
 await fs.writeFile(
   path.join(bin, engine),
   `#!/bin/sh
+if [ "$1" = --remote=false ]; then shift; fi
 if [ "$1" = --host ]; then shift 2; fi
 printf '%s\n' "$1" >> "$SANDBOX_MEASURE_CALLS"
 case "$1" in

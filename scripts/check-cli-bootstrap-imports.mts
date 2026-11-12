@@ -160,6 +160,14 @@ function listRuntimeImportSpecifiers(source: string): string[] {
         continue;
       }
       const node = value as AcornNode & Record<string, unknown>;
+      // These leaves cannot contain imports; avoid allocating property lists for them.
+      if (
+        node.type === "Identifier" ||
+        node.type === "Literal" ||
+        node.type === "TemplateElement"
+      ) {
+        continue;
+      }
       if (
         node.type === "ImportDeclaration" ||
         node.type === "ExportNamedDeclaration" ||

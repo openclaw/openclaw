@@ -1,0 +1,2 @@
+57
+# Browser regression test: h1/h2 chat links paint no file/GitHub mark or favicon while h3 and body links keep theirs.

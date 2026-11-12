@@ -343,9 +343,7 @@ it.each([false, true])("reconciles thinking metadata (clear override: %s)", (cle
     thinkingLevel: clear ? null : "ultra",
     ...(clear ? {} : { agentRuntime: { id: "codex", source: "model" } }),
   });
-  expect(next.row?.thinkingLevel).toBe(clear ? undefined : "ultra");
-  if (!clear) {
-    expect(next.row?.thinkingLevels).toEqual(thinkingLevels);
-    expect(next.row?.thinkingOptions).toEqual(["max", "ultra"]);
-  }
+  expect(next.result?.sessions).toEqual([
+    { ...result.sessions[0], updatedAt: 2, thinkingLevel: clear ? undefined : "ultra" },
+  ]);
 });

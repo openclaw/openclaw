@@ -190,9 +190,8 @@ private vault files yourself.
 Run `knowledge_verify` with receipt preconditions and independently planned
 links, associations, owners/dates and relationship endpoints. Read every changed
 page/claim/relationship for substantive correctness using compact defaults;
-request `includeEvidence: true` for cited passages and attribution review, and
-`metadataView: "full"` when domain fields matter. Verify exact quotes/locators,
-source notes and connected assertions. Use compact connections
+request `includeEvidence: true` for cited passages and attribution review. Verify exact quotes/locators,
+source notes and connected assertions. Use connections
 for discovery or failed expectations, not duplicate structural confirmation.
 Test lookup and distinctive-keyword
 retrieval. Follow pagination; a preview is not full readback. For complete-source

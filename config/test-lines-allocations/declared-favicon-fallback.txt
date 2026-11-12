@@ -1,0 +1,2 @@
+# Declared favicon PNG/SVG, revoked request authority, and failed-slot regressions.
+144

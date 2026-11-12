@@ -1,0 +1,6 @@
+# PR #192473: qualified Gateway-name display for native Slack mentions.
+# Gateway contract coverage checks account/viewer isolation, self display, escaping,
+# literal code/unknown IDs, expansion, unchanged storage, and no inbox effects.
+# The serializer contract preserves paging/budgets; the real-Gateway browser fixture
+# proves serialized startup and committed live fanout paths that RPC units miss.
+446

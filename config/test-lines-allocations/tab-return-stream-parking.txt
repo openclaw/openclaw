@@ -1,0 +1,2 @@
+16
+# Extend live transcript regression to prove hidden text stays parked and catches up on return.

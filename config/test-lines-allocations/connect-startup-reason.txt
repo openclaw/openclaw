@@ -1,0 +1,2 @@
+22
+# Exercise connect startup failure through the CLI entry with root profile options, retaining redaction and debug-only details.

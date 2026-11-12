@@ -1325,10 +1325,7 @@ describe("previous release update compatibility", () => {
     return output;
   }
 
-  function serveTarball(
-    archive: string,
-    failFirstRequests = 0,
-  ): { child: childProcess.ChildProcess; url: string } {
+  function serveTarball(archive: string, failFirstRequests = 0) {
     const root = createTempDir("update-compat-registry-");
     const portFile = path.join(root, "port");
     const server = path.join(root, "server.cjs");
@@ -1350,7 +1347,8 @@ describe("previous release update compatibility", () => {
         "  fs.createReadStream(archive).pipe(response);",
         "});",
         'instance.listen(0, "127.0.0.1", () => {',
-        "  fs.writeFileSync(portFile, String(instance.address().port));",
+        '  fs.writeFileSync(portFile + ".tmp", String(instance.address().port));',
+        '  fs.renameSync(portFile + ".tmp", portFile);',
         "});",
       ].join("\n"),
     );
@@ -1376,8 +1374,10 @@ describe("previous release update compatibility", () => {
   function runInventoryCli(
     args: string[],
     replies: Array<{ args: string[]; value: unknown }> = [],
+    prepareBuild: (root: string) => void = candidate,
   ) {
     const root = createTempDir("update-compat-npm-");
+    prepareBuild(root);
     const bin = path.join(root, "bin");
     const callsFile = path.join(root, "calls.json");
     const stub = path.join(bin, "npm.cjs");
@@ -1416,7 +1416,7 @@ describe("previous release update compatibility", () => {
     const calls: unknown = fsSync.existsSync(callsFile)
       ? JSON.parse(fsSync.readFileSync(callsFile, "utf8"))
       : [];
-    return { result, calls };
+    return { result, calls, root };
   }
 
   it("records an ordered supported window, including releases without post-swap imports, offline", () => {
@@ -1509,18 +1509,44 @@ describe("previous release update compatibility", () => {
     }
   });
 
+  it("rejects recorded exports that the candidate build cannot bridge", () => {
+    const output = writeWindowInventory(createTempDir("update-compat-unbridgeable-"));
+    const inventory = readUpdateCompatibilityInventory(output);
+    inventory.releases[0]!.chunks[0]!.exports[0]!.origin.symbol = "removedExport";
+    fsSync.writeFileSync(output, JSON.stringify(inventory));
+    const { result } = runInventoryCli(
+      ["--check", "--output", output],
+      [
+        {
+          args: ["view", "openclaw", "dist-tags", "--json"],
+          value: { latest: "2026.9.3", beta: "2026.9.2" },
+        },
+      ],
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("no equivalent current export");
+  });
+
+  it("requires built dist before checking an inventory", () => {
+    const output = writeWindowInventory(createTempDir("update-compat-no-build-"));
+    const { result } = runInventoryCli(["--check", "--output", output], [], () => {});
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Run pnpm build before checking update compatibility");
+  });
+
   it.each(["npm 11", "npm 12"])(
     "checks %s latest and beta coverage without refetching recorded integrity",
     (npmVersion) => {
       const output = writeWindowInventory(createTempDir("update-compat-tag-coverage-"));
       const tags = { latest: "2026.9.3", beta: "2026.9.2" };
       const npmArgs = ["view", "openclaw", "dist-tags", "--json"];
-      const { result, calls } = runInventoryCli(
+      const { result, calls, root } = runInventoryCli(
         ["--check", "--output", output],
         [{ args: npmArgs, value: npmVersion === "npm 12" ? [tags] : tags }],
       );
       expect(result.status, result.stderr).toBe(0);
       expect(calls).toEqual([npmArgs]);
+      expect(fsSync.readdirSync(path.join(root, "dist"))).toEqual(["current.mjs"]);
     },
   );
 

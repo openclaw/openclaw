@@ -11,6 +11,7 @@ import {
   listClawHubTemplates,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
+  readClawHubTemplatesOverview,
   searchClawHubTemplates,
 } from "../../templates/clawhub-source.js";
 import {
@@ -40,6 +41,12 @@ export const templatesHandlers: GatewayRequestHandlers = {
     validateTemplatesCatalogSearchParams,
     async ({ params, respond, context }) => {
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
+      if (params.overview && !params.query?.trim() && !params.category && !params.featured) {
+        const overview = await readClawHubTemplatesOverview({ limit: params.limit ?? 8 });
+        assertTemplatesLabsEnabled(context.getRuntimeConfig());
+        respond(true, { entries: [], ...(overview ? { overview } : {}) });
+        return;
+      }
       const entries = params.query?.trim()
         ? await searchClawHubTemplates({
             query: params.query,

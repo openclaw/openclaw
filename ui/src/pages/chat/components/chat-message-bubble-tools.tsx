@@ -1,6 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, lazy, Show } from "solid-js";
+import { createMemo, For, lazy, Show } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -45,20 +45,19 @@ export function InlineToolCards(props: {
         {(card, index) => {
           const disclosureId = () => `${props.options.messageKey}:toolcard:${index()}`;
           const expanded = () => props.options.isToolExpanded?.(disclosureId()) ?? false;
+          const options = createMemo(
+            () => ({
+              ...props.options,
+              expanded: expanded(),
+              onToggleExpanded: () =>
+                props.options.onToggleToolExpanded?.(disclosureId(), expanded()),
+            }),
+            { lazy: true },
+          );
           return (
             <Show
               when={props.options.toolCardOverrides?.has(card())}
-              fallback={
-                <ChatToolCard
-                  card={card()}
-                  options={{
-                    ...props.options,
-                    expanded: expanded(),
-                    onToggleExpanded: () =>
-                      props.options.onToggleToolExpanded?.(disclosureId(), expanded()),
-                  }}
-                />
-              }
+              fallback={<ChatToolCard card={card()} options={options()} />}
             >
               <Show when={props.options.toolCardOverrides?.get(card())}>
                 {(operation) => <ActivityOperation {...operation()} />}
@@ -122,6 +121,13 @@ export function AssistantViews(props: ContentProps) {
 }
 
 export function BubbleToolCards(props: ContentProps) {
+  const inlineOptions = createMemo(
+    () => ({
+      ...props.state().toolRenderOptions,
+      showApprovalReviews: props.state().isStandaloneToolMessage ? false : undefined,
+    }),
+    { lazy: true },
+  );
   return (
     <>
       <Show when={props.state().hasToolCards}>
@@ -131,15 +137,7 @@ export function BubbleToolCards(props: ContentProps) {
             props.state().expandsSingleToolCard &&
             props.state().singleToolCard
           }
-          fallback={
-            <InlineToolCards
-              cards={props.state().toolCards}
-              options={{
-                ...props.state().toolRenderOptions,
-                showApprovalReviews: props.state().isStandaloneToolMessage ? false : undefined,
-              }}
-            />
-          }
+          fallback={<InlineToolCards cards={props.state().toolCards} options={inlineOptions()} />}
         >
           <openclaw-chat-tool-content style={{ display: "contents" }}>
             <ExpandedToolCardContent

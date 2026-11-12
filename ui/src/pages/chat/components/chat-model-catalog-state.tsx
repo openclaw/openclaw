@@ -1,5 +1,5 @@
 import { createMemo, onSettled, Show } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
+import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
@@ -19,7 +19,12 @@ type ChatModelCatalogStateProps = {
   emptyLabel?: string;
 };
 
-export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
+export function ChatModelCatalogRefresh(props: {
+  state: ModelCatalogState | undefined;
+  providerLabel?: (provider: string) => string;
+}) {
+  const providerDisplayLabel = (provider: string) =>
+    props.providerLabel?.(provider) ?? defaultProviderLabel(provider);
   const label = createMemo(() => {
     if (
       !props.state ||

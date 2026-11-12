@@ -167,6 +167,21 @@ it("skips retrieval preparation when Memory Core is inactive", async () => {
   expect(mocks.listManagedPlugins).toHaveBeenCalledOnce();
 });
 
+it("leaves browser handlers cold when Control UI is explicitly disabled", async () => {
+  const cfg: OpenClawConfig = { gateway: { controlUi: { enabled: false } } };
+  schedule({ getConfig: () => cfg });
+  await drainPrewarm();
+
+  expect(mocks.events).not.toContain("handlers");
+  expect(mocks.prewarmGatewaySessionHistory).not.toHaveBeenCalled();
+  expect(mocks.listManagedPlugins).not.toHaveBeenCalled();
+  expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledExactlyOnceWith({
+    config: cfg,
+    isCancelled: expect.any(Function),
+  });
+  expect(mocks.executeRequest).not.toHaveBeenCalled();
+});
+
 it("does not wait for an elapsed prewarm deadline", async () => {
   const startedAt = Date.now();
   let contextStartedAt: number | undefined;

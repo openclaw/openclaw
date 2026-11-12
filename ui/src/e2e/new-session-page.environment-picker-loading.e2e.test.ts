@@ -53,7 +53,7 @@ suite.define(() => {
         const configuration = picker.locator(".new-session-page__cloud-configuration");
         await configuration.waitFor();
         expect(await configuration.getByText("Operating system", { exact: true }).count()).toBe(0);
-        await configuration.getByText("Machine", { exact: true }).waitFor();
+        await configuration.getByText("Device size", { exact: true }).waitFor();
         expect(
           await configuration.locator('[data-value="machine:small"]').getAttribute("aria-pressed"),
         ).toBe("true");

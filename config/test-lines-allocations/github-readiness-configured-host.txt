@@ -1,0 +1,3 @@
+# Real registered-handler host/cache work-count regression plus shipped CLI/Gateway host-switch proof.
+# Replaces the former qualifier-only mock test; current test deltas are30+140 lines.
+170

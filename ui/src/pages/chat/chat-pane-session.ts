@@ -17,6 +17,7 @@ import {
   sessionGitHubRepository,
 } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
@@ -90,6 +91,21 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const key = parseCatalogSessionKey(this.state?.sessionKey);
     if (key && this.catalogReadPending) {
       void this.loadCatalogSession(key, false);
+    }
+  }
+
+  protected handleCatalogGatewayEvent(event: string): void {
+    if (
+      event !== "terminal.exit" ||
+      this.history.catalogSession?.canContinue !== false ||
+      this.catalogReadPending
+    ) {
+      return;
+    }
+    const key = parseCatalogSessionKey(this.state?.sessionKey);
+    if (key) {
+      // Recheck provider eligibility without discarding the retained transcript or older pages.
+      void this.loadCatalogSession(key, false, !this.history.catalogLoading);
     }
   }
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
@@ -552,7 +568,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     void this.loadCatalogSession(key, false);
   }
 
-  protected async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {
+  protected async loadCatalogSession(
+    key: CatalogSessionKey,
+    older: boolean,
+    metadataOnly = false,
+  ): Promise<boolean> {
     const scope = this.captureConnectionScope();
     if (!scope) {
       return false;
@@ -577,7 +597,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       JSON.stringify(this.catalogProfileRelation) === queryKey &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
-    if (!older) {
+    if (!older && !metadataOnly) {
       this.history.catalogLoading = true;
       this.history.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
@@ -596,6 +616,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         client,
         key,
         profileRelation,
+        metadataOnly,
+        listMethod: catalogMethod(scope.context.gateway.snapshot, key.catalogId, "list"),
+        readMethod: catalogMethod(scope.context.gateway.snapshot, key.catalogId, "read"),
         signal: read.controller.signal,
         isCurrent,
         older,

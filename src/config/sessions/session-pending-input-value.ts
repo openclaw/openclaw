@@ -14,6 +14,21 @@ export function parseSessionPendingInputMessage(messageJson: string): PersistedU
   return value as PersistedUserTurnMessage;
 }
 
+/** Retain the explicit Stop fact with the existing pending message, outside model history. */
+export function markSessionPendingInputCancelledByUser(messageJson: string): string {
+  const message = parseSessionPendingInputMessage(messageJson);
+  return JSON.stringify({
+    ...message,
+    __openclaw: { ...message["__openclaw"], pendingInputCancelledByUser: true },
+  });
+}
+
+/** Stop and dismissal keep the row as a record; redelivery must never execute it again. */
+export function isSessionPendingInputRetiredByUser(messageJson: string): boolean {
+  const message = parseSessionPendingInputMessage(messageJson);
+  return message.display === false || message["__openclaw"]?.pendingInputCancelledByUser === true;
+}
+
 export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {
   return (
     outcome.reason === "completed" ||

@@ -1,9 +1,10 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { formatUiError, formatUiErrorDetails } from "../../lib/format-error.ts";
 import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import { setChatError } from "./chat-history-state.ts";
 import {
@@ -13,6 +14,8 @@ import {
   type ChatModelSelection,
   type ChatModelSettingsHost,
 } from "./chat-session.ts";
+
+registerChatSessionEnglish();
 
 async function confirmChatNativeRuntimeRecovery(
   host: ChatModelSettingsHost,
@@ -75,7 +78,10 @@ async function confirmChatNativeRuntimeRecovery(
     return true;
   } catch (error) {
     if (ownsSelection()) {
-      setChatError(host, t("chat.nativeRuntimeRecovery.failed", { error: formatUiError(error) }));
+      setChatError(
+        host,
+        t("chat.nativeRuntimeRecovery.failed", { error: formatUiErrorDetails(error) }),
+      );
     }
     return false;
   }
@@ -171,7 +177,7 @@ export async function recoverChatModelSwitch(
       ? error.details
       : undefined;
   if (!restriction) {
-    setChatError(host, `Failed to set model: ${formatUiError(error)}`);
+    setChatError(host, t("chat.settingErrors.model", { error: formatUiError(error) }));
     return false;
   }
   return confirmChatNativeRuntimeRecovery(

@@ -12,10 +12,13 @@ export type ConfirmDialogSkipPreference = {
 };
 
 export type ConfirmDialogOptions = {
-  title?: string;
+  /** A question naming the action, such as “Delete this session?”. */
+  title: string;
+  /** The consequence, such as “This can’t be undone.”. */
   message: string;
   details?: string;
-  confirmLabel?: string;
+  /** The action verb; never OK, Yes or Confirm. */
+  confirmLabel: string;
   cancelLabel?: string;
   danger?: boolean;
   signal?: AbortSignal;

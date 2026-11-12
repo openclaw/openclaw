@@ -34,7 +34,7 @@ it.each([
     "chat",
     "Review @Alex",
     [recipient],
-    history === "loading" ? "Loading chat" : undefined,
+    history === "loading" ? "Loading conversation…" : undefined,
   );
 
   view.edit(draft);
@@ -322,15 +322,27 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
   );
 
   if (kind === "new-session") {
-    it.each(["`@Peter Steinberger", "```\n@Peter Steinberger", "/command @Peter Steinberger"])(
-      "keeps %j as plain text",
-      async (text) => {
-        const view = composerFixture(kind);
-        await view.search(text);
-        expect(view.request).not.toHaveBeenCalled();
-        expect(view.value().mentions).toEqual([]);
-      },
-    );
+    it.each([
+      "`@Peter Steinberger",
+      "```\n@Peter Steinberger",
+      "~~~ts\n@Peter Steinberger",
+      "    @Peter Steinberger",
+      "> @Peter Steinberger",
+      "/command @Peter Steinberger",
+    ])("keeps %j as plain text", async (text) => {
+      const view = composerFixture(kind);
+      await view.search(text);
+      expect(view.request).not.toHaveBeenCalled();
+      expect(view.value().mentions).toEqual([]);
+    });
+
+    it("keeps a mention inside a closed multi-backtick code span as text", async () => {
+      const view = composerFixture(kind);
+      const text = "Example ``code @Peter Steinberger``";
+      await view.search(text, { caret: text.length - 2 });
+      expect(view.request).not.toHaveBeenCalled();
+      expect(view.value().mentions).toEqual([]);
+    });
 
     it("sends a full name without recipients when no person was selected", async () => {
       const draft = "@Peter Steinberger";

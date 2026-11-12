@@ -1,0 +1,2 @@
+# Protect single-config selection and mixed-pair isolation in the existing planner suite.
+31

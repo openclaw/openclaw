@@ -1,0 +1,2 @@
+# Exact net test-line growth from the claude-cli hook-context lane (trigger and role ids in claude-cli tool hook context).
+4

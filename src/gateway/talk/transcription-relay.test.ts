@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
-import type { RealtimeTranscriptionSessionCreateRequest } from "../../realtime-transcription/provider-types.js";
+import type { RealtimeTranscriptionSessionCreateRequest } from "../../realtime-transcription/provider-contexts.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "../server-constants.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -74,6 +74,7 @@ function createRelay(
   connId = "conn-1",
   providerConfig: Record<string, unknown> = {},
   onRequest?: (req: RealtimeTranscriptionSessionCreateRequest) => void,
+  assertCurrent: () => void = () => {},
 ) {
   let request: RealtimeTranscriptionSessionCreateRequest | undefined;
   const provider = createTranscriptionProvider(sttSession, (value) => {
@@ -83,6 +84,7 @@ function createRelay(
   const session = createTalkTranscriptionRelaySession({
     context,
     connId,
+    assertCurrent,
     provider,
     providerConfig,
   });
@@ -244,6 +246,32 @@ describe("talk transcription gateway relay", () => {
       });
     }
   });
+
+  it.each(["append", "finalize"] as const)(
+    "rejects %s after the retained session authority is revoked",
+    async (operation) => {
+      const sttSession = createSttSessionMock();
+      const { context } = createBroadcastContext();
+      const assertCurrent = vi.fn();
+      const { session } = createRelay(context, sttSession, "conn-1", {}, undefined, assertCurrent);
+      await Promise.resolve();
+      sendAudio(session);
+      assertCurrent.mockImplementation(() => {
+        throw new Error("revoked session");
+      });
+
+      expect(() =>
+        operation === "append"
+          ? sendAudio(session)
+          : stopTalkTranscriptionRelaySession({
+              transcriptionSessionId: session.transcriptionSessionId,
+              connId: "conn-1",
+            }),
+      ).toThrow("revoked session");
+      expect(sttSession.sendAudio).toHaveBeenCalledTimes(1);
+      expect(sttSession.close).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(["synchronous", "asynchronous", "prior-final"] as const)(
     "delivers a %s provider final before gracefully closing an active transcription turn",
@@ -626,10 +654,58 @@ describe("talk transcription gateway relay", () => {
       createTalkTranscriptionRelaySession({
         context,
         connId: "conn-1",
+        assertCurrent: () => {},
         provider,
         providerConfig: { encoding: "linear16", sampleRate: 16000 },
       }),
     ).toThrow("Gateway transcription relay requires g711_ulaw/8000 audio");
     expect(provider.createSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("transcription live authority", () => {
+  it("releases retained session authority once when the relay closes", async () => {
+    const { context, logGateway } = createBroadcastContext();
+    const releaseAuthority = vi.fn();
+    const session = createTalkTranscriptionRelaySession({
+      context,
+      connId: "conn-authority",
+      provider: createTranscriptionProvider(createSttSessionMock()),
+      providerConfig: {},
+      assertCurrent: () => {},
+      releaseAuthority,
+    });
+    expect(releaseAuthority).not.toHaveBeenCalled();
+    await stopTalkTranscriptionRelaySession({
+      transcriptionSessionId: session.transcriptionSessionId,
+      connId: "conn-authority",
+      discard: true,
+    });
+    cleanupTalkConnection("conn-authority", logGateway);
+    expect(releaseAuthority).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes instead of delivering a transcript after authority is revoked", async () => {
+    const { context, events } = createBroadcastContext();
+    const stt = createSttSessionMock();
+    let current = true;
+    const { request } = createRelay(context, stt, "revoked-dictation", {}, undefined, () => {
+      if (!current) {
+        throw new Error("revoked");
+      }
+    });
+    await Promise.resolve();
+    current = false;
+    request.onTranscript?.("private dictation must not be delivered");
+    expect(
+      events.some(
+        ({ payload }) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          "text" in payload &&
+          payload.text === "private dictation must not be delivered",
+      ),
+    ).toBe(false);
+    expect(stt.close).toHaveBeenCalledOnce();
   });
 });

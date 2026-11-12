@@ -35,7 +35,11 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
 }>;
 
 export type PreparedModelCatalogWorkerTask = {
-  context: { workspaceDir: string | undefined; fingerprint: string };
+  context: {
+    workspaceDir: string | undefined;
+    fingerprint: string;
+    registrationFingerprint: string;
+  };
   value:
     | PreparedModelCatalogWorkerInput
     | Omit<PreparedModelCatalogWorkerInput, "remoteCatalog" | "pluginMetadataSnapshot">;

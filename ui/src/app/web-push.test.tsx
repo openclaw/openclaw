@@ -204,7 +204,6 @@ describe("web push Gateway reconciliation", () => {
         <NotificationsSection {...webProps} webPush={capability.snapshot} />
       ));
       expect(container.textContent).toContain("Unavailable");
-      expect(container.textContent).toContain("Not requested");
       expect(container.textContent).not.toContain("Enable notifications");
       expect(container.textContent).not.toContain("Send test");
     } finally {
@@ -1017,7 +1016,7 @@ describe("web push Gateway reconciliation", () => {
         expect(request).not.toHaveBeenCalledWith("push.web.subscribe", expect.anything());
         expect(subscribe).not.toHaveBeenCalled();
         expect(unsubscribe).not.toHaveBeenCalled();
-        expect(container.textContent).toContain("Not subscribed");
+        expect(container.textContent).toContain("Unavailable");
         expect(button("Send test")).toBeUndefined();
         const resetButton = button("Unsubscribe");
         expect(resetButton).toBeDefined();

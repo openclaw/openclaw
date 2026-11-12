@@ -1,0 +1,3 @@
+# Channel panel read readiness: unloaded/failed versus accepted empty results,
+# preserving accepted rows during refresh and reusing the existing mount fixture.
+76

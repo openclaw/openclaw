@@ -1,0 +1,3 @@
+# Runtime-boundary regressions for OpenAI GPT Image 2.6 catalog capabilities and applied-quality reporting.
+# The existing OpenAI image provider suite is at its 1000-line cap, so these live in a sibling file with its own mocks.
+98

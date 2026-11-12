@@ -74,13 +74,16 @@ export function reserveSandboxRegistryInDatabase(
 }
 
 export function shouldPruneSandboxRegistryEntry(
-  entry: Pick<SandboxRegistryEntry, "lastUsedAtMs" | "createdAtMs">,
+  entry: Pick<SandboxRegistryEntry, "lastUsedAtMs" | "createdAtMs"> & { sessionKey?: string },
   prune: SandboxRegistryPrune,
 ): boolean {
   const now = asDateTimestampMs(prune.now) ?? 0;
   const lastUsed = asDateTimestampMs(entry.lastUsedAtMs) ?? 0;
   const created = asDateTimestampMs(entry.createdAtMs) ?? 0;
   return (
+    // Builders hold runtime-use custody during installation; abandoned builders
+    // must recover even when ordinary idle/age pruning is disabled.
+    entry.sessionKey?.startsWith("worktree-dependencies:") === true ||
     (prune.idleHours > 0 && now - lastUsed > prune.idleHours * 60 * 60 * 1000) ||
     (prune.maxAgeDays > 0 && now - created > prune.maxAgeDays * 24 * 60 * 60 * 1000)
   );
@@ -492,30 +495,34 @@ function readSandboxRegistryRowInDatabase(
   );
 }
 
-export function readSandboxRegistryInDatabase(
-  db: EngineConnection,
-  workspaceDir?: string,
-): SandboxRegistryEntry[] {
-  return readRegistryRows(db, "container")
-    .map((row) => rowToContainerEntry(row, workspaceDir))
-    .filter((entry): entry is SandboxRegistryEntry => entry !== null);
-}
-
-export function readSandboxRuntimeIdsInDatabase(
-  db: EngineConnection,
-  filter: { backendId: string; scopeKey: string },
-): string[] {
-  return readRegistryRows(db, "container", filter)
-    .map((row) => rowToContainerEntry(row))
-    .filter((entry): entry is SandboxRegistryEntry => entry !== null)
-    .map((entry) => entry.containerName);
-}
-
-export function readSandboxBrowserRegistryInDatabase(
-  db: EngineConnection,
-  workspaceDir?: string,
-): SandboxBrowserRegistryEntry[] {
-  return readRegistryRows(db, "browser")
-    .map((row) => rowToBrowserEntry(row, workspaceDir))
-    .filter((entry): entry is SandboxBrowserRegistryEntry => entry !== null);
-}
+export const sandboxRegistryReadOperations = {
+  "sandboxRegistry.list": ({ workspaceDir }: { workspaceDir?: string }, db: EngineConnection) => ({
+    type: "sandboxRegistry.list" as const,
+    entries: readRegistryRows(db, "container")
+      .map((row) => rowToContainerEntry(row, workspaceDir))
+      .filter((entry): entry is SandboxRegistryEntry => entry !== null),
+  }),
+  "sandboxRegistry.get": ({ containerName }: { containerName: string }, db: EngineConnection) => ({
+    type: "sandboxRegistry.get" as const,
+    entry: readSandboxRegistryEntryInDatabase(db, containerName),
+  }),
+  "sandboxRegistry.runtimeIds": (
+    filter: { backendId: string; scopeKey: string },
+    db: EngineConnection,
+  ) => ({
+    type: "sandboxRegistry.runtimeIds" as const,
+    runtimeIds: readRegistryRows(db, "container", filter)
+      .map((row) => rowToContainerEntry(row))
+      .filter((entry): entry is SandboxRegistryEntry => entry !== null)
+      .map((entry) => entry.containerName),
+  }),
+  "sandboxRegistry.browsers": (
+    { workspaceDir }: { workspaceDir?: string },
+    db: EngineConnection,
+  ) => ({
+    type: "sandboxRegistry.browsers" as const,
+    entries: readRegistryRows(db, "browser")
+      .map((row) => rowToBrowserEntry(row, workspaceDir))
+      .filter((entry): entry is SandboxBrowserRegistryEntry => entry !== null),
+  }),
+};

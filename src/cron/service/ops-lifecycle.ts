@@ -106,6 +106,7 @@ export function stop(state: CronServiceState) {
   mutationSubscriptions.get(state)?.();
   mutationSubscriptions.delete(state);
   state.schedulerStarted = false;
+  state.liveSinceMs = undefined;
   state.schedulerDrain = Promise.allSettled([
     state.schedulerDrain,
     stopCronScheduler(state),

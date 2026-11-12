@@ -1,0 +1,2 @@
+# Loader contract test: a burst of catalog publications while idle becomes one Models reload, and an explicit reload cancels a pending one.
+41

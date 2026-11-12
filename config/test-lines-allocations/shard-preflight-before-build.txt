@@ -1,0 +1,2 @@
+# Extend the existing invalid-shard regression to exercise E2E preparation admission.
+7

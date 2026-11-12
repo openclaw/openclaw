@@ -1,0 +1,2 @@
+# Keep applied watch opt-out through stale local reads and remote retirement.
+80

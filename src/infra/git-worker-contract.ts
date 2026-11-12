@@ -6,7 +6,10 @@ import type {
   WorkspaceInventoryComputationOperations,
   WorkspaceInventoryHostEffects,
 } from "../gateway/worker-environments/workspace-inventory-computation.js";
-import type { WorkspaceManifestComputationOperations } from "../gateway/worker-environments/workspace-manifest-computation.js";
+import type {
+  WorkspaceManifestComputationOperations,
+  WorkspaceManifestHostEffects,
+} from "../gateway/worker-environments/workspace-manifest-computation.js";
 import type { WorkspaceArtifactReadOperations } from "../gateway/worker-environments/workspace-result-inventory.js";
 import type { BufferedCommandOptions, BufferedCommandResult } from "../process/exec.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
@@ -15,8 +18,14 @@ import type { GitReadOperations } from "./git-read-operations.js";
 
 export type GitWorkerOperations = Omit<
   GitReadOperations,
-  "pull-request.branch-facts" | "checkout.diff"
+  "pull-request.branch-facts" | "checkout.diff" | "repository.branches"
 > & {
+  "repository.branches": {
+    input: GitReadOperations["repository.branches"]["input"];
+    output: GitReadOperations["repository.branches"]["output"] & {
+      observation?: { root: string; gitDir: string; commonDir: string };
+    };
+  };
   "checkout.diff": {
     input: GitReadOperations["checkout.diff"]["input"] & {
       worktreeStatus?: NonNullable<
@@ -54,6 +63,7 @@ export type GitWorkerCommand = {
 export type GitWorkerResult = GitWorkerOperations[keyof GitWorkerOperations]["output"];
 
 export type GitWorkerEffects = GitWorktreeEffects &
+  WorkspaceManifestHostEffects &
   WorkspaceInventoryHostEffects & {
     "git.temporary-directory": { input: Record<string, never>; output: string };
   };

@@ -21,6 +21,7 @@ import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatCliOperatorError } from "./failure-output.js";
 import { readPluginAuthoringJson as readJsonFile } from "./plugins-authoring-json.js";
 import {
@@ -70,7 +71,7 @@ function normalizeRelativePath(rootDir: string, targetPath: string): string {
     .relative(rootDir, path.resolve(rootDir, targetPath))
     .replaceAll(path.sep, "/");
   if (relative === ".." || relative.startsWith("../")) {
-    throw new Error(`entry must stay inside plugin root: ${targetPath}`);
+    throwExpectedCliError(`entry must stay inside plugin root: ${targetPath}`);
   }
   return relative.startsWith(".") ? relative : `./${relative}`;
 }
@@ -92,7 +93,7 @@ function resolveEntryPath(rootDir: string, entry: string | undefined): string {
 function readPackageManifest(rootDir: string): JsonObject {
   const packagePath = path.join(rootDir, "package.json");
   if (!fs.existsSync(packagePath)) {
-    throw new Error(`package.json not found: ${packagePath}`);
+    throwExpectedCliError(`package.json not found: ${packagePath}`);
   }
   return readJsonFile(packagePath);
 }
@@ -100,7 +101,7 @@ function readPackageManifest(rootDir: string): JsonObject {
 export async function loadToolPlugin(params: { rootDir: string; entryPath: string }) {
   // Tool and feature helpers publish the same static authoring metadata.
   if (!fs.existsSync(params.entryPath)) {
-    throw new Error(
+    throwExpectedCliError(
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
@@ -123,7 +124,7 @@ export async function loadToolPlugin(params: { rootDir: string; entryPath: strin
     : candidate);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
-    throw new Error(
+    throwExpectedCliError(
       `plugin entry does not expose tool or feature authoring metadata: ${normalizeRelativePath(
         params.rootDir,
         params.entryPath,
@@ -278,7 +279,7 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
 function normalizeRequiredPluginText(input: string, label: string): string {
   const value = input.trim();
   if (!value) {
-    throw new Error(`Plugin ${label} is required.`);
+    throwExpectedCliError(`Plugin ${label} is required.`);
   }
   return value;
 }
@@ -304,7 +305,7 @@ export async function runPluginsInitCommand(
   const requestedType = opts.type ?? "tool";
   const type = SUPPORTED_PLUGIN_SCAFFOLD_TYPES.find((candidate) => candidate === requestedType);
   if (!type) {
-    throw new Error(
+    throwExpectedCliError(
       `Unsupported plugin scaffold type "${requestedType}". Supported types: ${SUPPORTED_PLUGIN_SCAFFOLD_TYPES.join(
         ", ",
       )}.`,
@@ -315,9 +316,11 @@ export async function runPluginsInitCommand(
     : `openclaw-plugin-${id}`;
   const rootDir = path.resolve(opts.directory ?? id);
   if (opts.force !== true && fs.existsSync(rootDir)) {
-    throw new Error(`Refusing to overwrite existing path: ${rootDir}`);
+    throwExpectedCliError(`Refusing to overwrite existing path: ${rootDir}`);
   }
-  fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+  if (type !== "feature") {
+    fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
+  }
 
   if (type === "feature") {
     writeFeaturePluginScaffold({ rootDir, id, name });

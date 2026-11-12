@@ -3,7 +3,22 @@ import { en } from "./en.ts";
 
 const enSkillWorkshop = {
   skillWorkshop: {
-    loadError: "Could not load the Workshop.",
+    loadError: "Couldn’t load the Workshop. Try again.",
+    plugin: {
+      offTitle: "Skill Workshop is off",
+      offBody:
+        "Turn it on to let your agent save what it learns as skills and improve them over time.",
+      enable: "Turn on Skill Workshop",
+      enabling: "Turning on…",
+      needsAdmin: "An admin can turn it on from Plugins.",
+      pluginsDisabled:
+        "Plugins are turned off on this Gateway. Ask an admin to turn them on to use Skill Workshop.",
+      missing: "Skill Workshop is not part of this OpenClaw install.",
+      failed: "Skill Workshop is turned on but did not load. Check Plugins for details.",
+      reload: "Skill Workshop is on. Reload to open it.",
+      enableFailed: "Couldn’t turn on Skill Workshop. Try again.",
+      checkFailed: "Couldn’t check whether Skill Workshop is on.",
+    },
     retry: "Retry",
     mode: {
       label: "Learning",
@@ -16,15 +31,15 @@ const enSkillWorkshop = {
         "The agent saves skill changes it would make as drafts. Review them together with /learn drafts.",
       autoTitle:
         "The agent saves and improves skills as it works, announces each change, and every change can be undone.",
-      updateError: "Could not update the learning mode.",
+      updateError: "Couldn’t update the learning mode. Try again.",
     },
     skills: {
       title: "Learned skills",
       empty: "No learned skills yet. Your agent saves skills here as it learns from its work.",
-      noneActive: "No active skills. Restore one from Archived, or let the agent learn.",
-      noneArchived: "Nothing archived.",
+      noneActive: "No active skills yet. Restore an archived skill or let the agent learn.",
+      noneArchived: "No archived skills yet.",
       noneDrafts:
-        "No drafts waiting. In Propose mode, background reviews save the skill changes they would make here for you to apply or discard.",
+        "No drafts yet. In Propose mode, background reviews save the skill changes they would make here for you to apply or discard.",
       filterAria: "Show active or archived skills",
       active: "Active",
       uses: "{count} uses",
@@ -46,14 +61,14 @@ const enSkillWorkshop = {
       applyUpdateTitle:
         "Replace the live skill with this draft. The current version is saved first, so you can undo.",
       discard: "Discard",
-      discardTitle: "Delete this draft. No skill changes.",
+      discardTitle: "Delete this draft without changing the skill.",
       diffLive: "Live skill",
       diffDraft: "Draft",
       same: "This draft already matches the live skill. Discard it.",
       tooLarge: "This draft differs too much from the live skill to compare line by line.",
       filesLabel: "Files",
       chatHint:
-        "Want the agent's judgment first? Send /learn drafts in chat to review all drafts together, or /learn drafts {skill} for this skill only.",
+        "Want the agent’s judgment first? Send /learn drafts in Chat to review all drafts together, or /learn drafts {skill} for this skill only.",
     },
     sort: {
       label: "Sort skills",
@@ -109,7 +124,7 @@ const enSkillWorkshop = {
       diffHint: "changes since then",
       diffCurrent: "Today",
       diffVersion: "Before",
-      noDiff: "This version matches today's instructions.",
+      noDiff: "This version matches today’s instructions.",
       diffTooLarge: "This version is too different from today's to compare line by line.",
       backToCurrent: "Back to current",
       archivedNotice: "Archived. The agent no longer sees this skill until you restore it.",
@@ -124,7 +139,7 @@ const enSkillWorkshop = {
       starting: "Opening learning session\u2026",
       title: "Learn from past conversations",
       description: "Open a session where the agent looks for lessons worth saving as skills.",
-      startFailed: "Could not start learning. Check your sessions before trying again.",
+      startFailed: "Couldn’t start learning. Check your sessions before trying again.",
     },
   },
 } satisfies TranslationMap;

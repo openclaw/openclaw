@@ -7,10 +7,10 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
 import { resolveCronJobsStorePathAsync } from "./store.js";
 
-export async function withLocalAgentCronJobsRemoved<T>(
-  agentId: string,
+/** Offline custody is supplied by the caller; this owner never starts scheduled execution. */
+export async function withLocalCronService<T>(
   getRuntimeConfig: () => OpenClawConfig,
-  commit: () => Promise<T>,
+  run: (service: CronService) => Promise<T>,
 ): Promise<T> {
   const cfg = getRuntimeConfig();
   const storePath = await resolveCronJobsStorePathAsync();
@@ -36,10 +36,22 @@ export async function withLocalAgentCronJobsRemoved<T>(
       throw new Error("Cron execution is unavailable in local service context.");
     },
   });
+  service.pauseScheduling();
   try {
-    return await service.removeAgentJobsTransactional(agentId, commit);
+    return await run(service);
   } finally {
     service.stop();
+    await service.waitForIdle();
     await scheduler.stop();
   }
+}
+
+export async function withLocalAgentCronJobsRemoved<T>(
+  agentId: string,
+  getRuntimeConfig: () => OpenClawConfig,
+  commit: () => Promise<T>,
+): Promise<T> {
+  return await withLocalCronService(getRuntimeConfig, async (service) =>
+    service.removeAgentJobsTransactional(agentId, commit),
+  );
 }

@@ -1,0 +1,4 @@
+# Latest retains measured destination rows until three stable end frames.
+# 147 net test lines replace the existing 32-line Latest allocation.
+# Reconcile exactly 356 inherited lines of debt measured on d325e9e069a.
+535

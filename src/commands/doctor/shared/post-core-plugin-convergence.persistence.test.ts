@@ -237,6 +237,7 @@ it("keeps restored indexed packages usable under a fresh owner after marker comp
   await cleanupGatewayRetiredPluginArtifacts({
     log,
     startupInstallPaths: [],
+    startupConfig: cfg,
     signal: new AbortController().signal,
     assertCurrent: () => {},
   });

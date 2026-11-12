@@ -1,0 +1,5 @@
+# Session writers may start an agent's unused main conversation: real-Gateway proof that an
+# admitted subscription receives no foreign-draft or revoked delivery, plus regression tests
+# for the subscribe admission and the composer's proven-absent gate.
+# Exact net growth for PR #197151.
+482

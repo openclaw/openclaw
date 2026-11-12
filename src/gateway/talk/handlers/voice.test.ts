@@ -14,7 +14,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import { makeBridge, makeVoiceProvider } from "../../../talk/session-runtime.test-support.js";
 import { withEnv } from "../../../test-utils/env.js";
 import {

@@ -4,6 +4,7 @@ import os from "node:os";
 import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import * as gatewayCrash from "../infra/gateway-crash.js";
 import {
   prepareGatewaySuspend,
   resumeGatewaySuspend,
@@ -202,6 +203,37 @@ it.each([
 });
 
 describe("gateway probe endpoints", () => {
+  it("shows crash history only with readiness details and keeps a healthy successor ready", async () => {
+    const recentCrashes = [
+      {
+        bootId: "previous-run",
+        pid: 42,
+        startedAtMs: 1_000,
+        detectedAtMs: 3_000,
+        signal: "SIGSEGV",
+      },
+    ];
+    const snapshot = vi
+      .spyOn(gatewayCrash, "getGatewayRecentCrashes")
+      .mockReturnValue(recentCrashes);
+    try {
+      await withProbeServer(
+        { getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 1_000 }) },
+        async (probe) => {
+          await probe.json("/readyz", 200, { ready: true, recentCrashes });
+          await probe.json(remote("/readyz"), 200, { ready: true }, true);
+          await probe.json(remote("/readyz", `Bearer ${AUTH_TOKEN.token}`), 200, {
+            ready: true,
+            recentCrashes,
+          });
+        },
+        AUTH_TOKEN,
+      );
+    } finally {
+      snapshot.mockRestore();
+    }
+  });
+
   it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
     await withControlUi(
       {

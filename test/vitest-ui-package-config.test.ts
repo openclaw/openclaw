@@ -467,7 +467,7 @@ export default {
       );
     }
     expect(resolveChromium).toHaveBeenCalledTimes(1);
-    for (const files of [[], [nativeFiles[0]!]]) {
+    for (const files of [[], ["ui/src/components/markdown-mermaid.runtime.browser.test.ts"]]) {
       writeJson(includeFile, files);
       const scoped = requireTestConfig(
         createUiBrowserVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),

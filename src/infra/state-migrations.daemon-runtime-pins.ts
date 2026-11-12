@@ -2,25 +2,32 @@ import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import {
-  completeUnshippedDaemonRuntimePinMigration,
+  completeUnshippedDaemonRuntimePinMigrationAsync,
   type DaemonRuntimePinDatabase,
   readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
+  withPreparedDaemonRuntimePinStore,
 } from "../daemon/runtime-pin-store.js";
 import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { runUpdateSqliteMigrationAsync } from "./update-doctor-migration-attribution.js";
 
 function writeDaemonRuntimePinMigrationReceipt(
   db: DatabaseSync,
@@ -81,7 +88,7 @@ export function initializeFreshDaemonRuntimePinMigration(env: NodeJS.ProcessEnv)
 }
 
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
-  if (completeUnshippedDaemonRuntimePinMigration(env)) {
+  if (await completeUnshippedDaemonRuntimePinMigrationAsync(env)) {
     return { changes: [], warnings: [] };
   }
   const sourceState = resolveOpenClawStateSqlitePath(env);
@@ -109,65 +116,87 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
       if (migrationComplete(lockedEnv)) {
         return { changes: [], warnings: [] };
       }
-      const moved = !fs.existsSync(sourceState)
-        ? 0
-        : runOpenClawStateWriteTransaction(
-            (database) => {
-              const source = database.db;
-              const sourceDb = getNodeSqliteKysely<Pick<DB, "config_machine_state">>(source);
-              const rows = executeSqliteQuerySync(
-                source,
-                sourceDb
-                  .selectFrom("config_machine_state")
-                  .select(["state_key", "value_json", "updated_at_ms"])
-                  .where("state_key", "like", "daemon-runtime-pin:%"),
-              ).rows;
-              if (rows.length === 0) {
-                return 0;
-              }
-              withDaemonRuntimePinStore(lockedEnv, true, (target) => {
-                writeDaemonRuntimePinMigrationReceipt(target, sourceState, "copied");
-                const targetDb = getNodeSqliteKysely<DaemonRuntimePinDatabase>(target);
-                const existing = executeSqliteQuerySync(
-                  target,
-                  targetDb.selectFrom("daemon_runtime_pins").selectAll(),
-                ).rows;
-                for (const saved of existing) {
-                  const row = rows.find((candidate) => candidate.state_key === saved.state_key);
-                  if (
-                    row &&
-                    (saved.value_json !== row.value_json ||
-                      saved.updated_at_ms !== row.updated_at_ms)
-                  ) {
-                    throw new Error(
-                      `Daemon runtime pin migration conflict for ${row.state_key}; both stores were retained. Back up and reconcile the stores with OpenClaw stopped, then run openclaw doctor --fix.`,
-                    );
-                  }
-                }
-                executeSqliteQuerySync(
-                  target,
-                  targetDb
-                    .insertInto("daemon_runtime_pins")
-                    .values(rows)
-                    .onConflict((conflict) => conflict.column("state_key").doNothing()),
+      return withPreparedDaemonRuntimePinStore(lockedEnv, async (target) => {
+        const sourceHandle = fs.existsSync(sourceState)
+          ? openOpenClawStateDatabase({ env: lockedEnv })
+          : undefined;
+        const sourceDatabase = sourceHandle?.db ?? target.database;
+        if (isPostgresSqlConnection(sourceDatabase)) {
+          throw new Error("Daemon runtime pin migration requires its native SQLite source.");
+        }
+        const moved = await runUpdateSqliteMigrationAsync(
+          sourceDatabase,
+          sourceHandle?.path ?? target.path,
+          () => {
+            const movedRows = !fs.existsSync(sourceState)
+              ? 0
+              : runOpenClawStateWriteTransaction(
+                  (database) => {
+                    const source = database.db;
+                    const sourceDb = getNodeSqliteKysely<Pick<DB, "config_machine_state">>(source);
+                    const rows = executeSqliteQuerySync(
+                      source,
+                      sourceDb
+                        .selectFrom("config_machine_state")
+                        .select(["state_key", "value_json", "updated_at_ms"])
+                        .where("state_key", "like", "daemon-runtime-pin:%"),
+                    ).rows;
+                    if (rows.length === 0) {
+                      return 0;
+                    }
+                    runSqliteImmediateTransactionSync(target.database, () => {
+                      writeDaemonRuntimePinMigrationReceipt(target.database, sourceState, "copied");
+                      const targetDb = getNodeSqliteKysely<DaemonRuntimePinDatabase>(
+                        target.database,
+                      );
+                      const existing = executeSqliteQuerySync(
+                        target.database,
+                        targetDb.selectFrom("daemon_runtime_pins").selectAll(),
+                      ).rows;
+                      for (const saved of existing) {
+                        const row = rows.find(
+                          (candidate) => candidate.state_key === saved.state_key,
+                        );
+                        if (
+                          row &&
+                          (saved.value_json !== row.value_json ||
+                            saved.updated_at_ms !== row.updated_at_ms)
+                        ) {
+                          throw new Error(
+                            `Daemon runtime pin migration conflict for ${row.state_key}; both stores were retained. Back up and reconcile the stores with OpenClaw stopped, then run openclaw doctor --fix.`,
+                          );
+                        }
+                      }
+                      executeSqliteQuerySync(
+                        target.database,
+                        targetDb
+                          .insertInto("daemon_runtime_pins")
+                          .values(rows)
+                          .onConflict((conflict) => conflict.column("state_key").doNothing()),
+                      );
+                    });
+                    // The target commits first. A crash before source commit leaves exact duplicates.
+                    for (const row of rows) {
+                      deleteConfigMachineState(row.state_key, { env: lockedEnv, database });
+                    }
+                    return rows.length;
+                  },
+                  { env: lockedEnv },
+                  { operationLabel: "state-migration.daemon-runtime-pins" },
                 );
-              });
-              // The target commits first. A crash before source commit leaves exact duplicates.
-              for (const row of rows) {
-                deleteConfigMachineState(row.state_key, { env: lockedEnv, database });
-              }
-              return rows.length;
-            },
-            { env: lockedEnv },
-            { operationLabel: "state-migration.daemon-runtime-pins" },
-          );
-      withDaemonRuntimePinStore(lockedEnv, true, (db) =>
-        writeDaemonRuntimePinMigrationReceipt(db, sourceState, "complete"),
-      );
-      return {
-        changes: moved > 0 ? [`Moved ${moved} daemon runtime pin(s) to local service intent.`] : [],
-        warnings: [],
-      };
+            runSqliteImmediateTransactionSync(target.database, () =>
+              writeDaemonRuntimePinMigrationReceipt(target.database, sourceState, "complete"),
+            );
+            return movedRows;
+          },
+          sourceHandle ? { companions: [target] } : { retainExclusive: true },
+        );
+        return {
+          changes:
+            moved > 0 ? [`Moved ${moved} daemon runtime pin(s) to local service intent.`] : [],
+          warnings: [],
+        };
+      });
     },
   });
 }

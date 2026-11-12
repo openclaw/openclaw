@@ -5,7 +5,6 @@ import {
   logCodeModeDiagnostic,
 } from "../../../logging/code-mode-diagnostic.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
-import { resolveSkillWorkshopToolConstructionBlock } from "../../../skills/workshop/tool-availability.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
@@ -17,7 +16,7 @@ import {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../../runtime-plan/tools.js";
-import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "../../tool-policy-match.js";
+import { createToolPolicyMatcher } from "../../tool-policy-match.js";
 import {
   createToolExecutionMatcher,
   formatToolExecutionGatedMessage,
@@ -27,8 +26,8 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import { createToolSearchSelectionMatcher } from "../../tool-search-selection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   collectUniqueCatalogToolNames,
   TOOL_CALL_RAW_TOOL_NAME,
@@ -280,19 +279,6 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
           (source) => `${source.label}: ${source.entries.map(normalizeToolPolicyName).join(", ")}`,
         )
         .join("; ");
-      const workshopBlock = sources.every((source) =>
-        isToolAllowedByPolicyName("skill_workshop", { allow: source.entries }),
-      )
-        ? resolveSkillWorkshopToolConstructionBlock({
-            sandboxed: input.setup.sandbox?.enabled,
-            libraryAuthoring: attempt.skillLibraryAuthoring,
-          })
-        : undefined;
-      if (toolsEnabled && !toolsIntentionallyDisabled && workshopBlock) {
-        return new Error(
-          `No callable tools remain after resolving explicit tool allowlist (${requested}); ${workshopBlock.detail} ${workshopBlock.fix}`,
-        );
-      }
       const reason =
         attempt.disableTools === true
           ? "tools are disabled for this run"

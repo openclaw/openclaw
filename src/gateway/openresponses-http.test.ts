@@ -1,5 +1,4 @@
 import http from "node:http";
-import OpenAI from "openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
@@ -7,7 +6,7 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState, type GatewayAuthConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
@@ -39,6 +38,7 @@ import {
 } from "./http-stream.test-support.js";
 import * as httpUtils from "./http-utils.js";
 import type { ResponseResource } from "./open-responses.schema.js";
+import { registerOpenResponsesHttpAdmissionTests } from "./openresponses-http.admission.test-support.js";
 import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
 import { browserProxyAuth } from "./server.auth.test-helpers.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
@@ -832,103 +832,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["completed response without a provider terminal", "completed", false, false, false],
-    ["provider-failed response with a resolved run", "failed", true, true, false],
-    ["rejected response with a provider terminal", "failed", true, true, true],
-  ])(
-    "keeps the %s admitted until its deferred SSE terminal is written",
-    async (_label, name, failed, providerTerminal, reject) => {
-      const idleRootCount = getActiveGatewayRootWorkCount();
-      const terminalAdmission = createDeferred<{ active: number }>();
-      const wireResponse = createDeferred<string>();
-      const continueAgent = createDeferred();
-      const lifecycleTerminals: string[] = [];
-      let activeRunId: string | undefined;
-      const unsubscribe = onAgentEvent((event) => {
-        const phase = event.data?.phase;
-        if (event.runId !== activeRunId || event.stream !== "lifecycle") {
-          return;
-        }
-        if (phase !== "end" && phase !== "error") {
-          return;
-        }
-        lifecycleTerminals.push(phase);
-        // Restart drains run before the next-turn SSE finalizer, so inspect the real
-        // root owner at that boundary instead of observing eventual client delivery.
-        queueMicrotask(() => {
-          const active = getActiveGatewayRootWorkCount();
-          terminalAdmission.resolve({ active });
-        });
-      });
-
-      agentCommandMock.mockClear();
-      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
-        activeRunId = (opts as { runId?: string }).runId;
-        if (!activeRunId) {
-          throw new Error("expected a streaming response run ID");
-        }
-        await continueAgent.promise;
-        emitAgentEvent({ runId: activeRunId, stream: "assistant", data: { delta: "answer" } });
-        if (providerTerminal) {
-          emitAgentEvent({
-            runId: activeRunId,
-            stream: "lifecycle",
-            data: failed ? { phase: "error", error: "provider request failed" } : { phase: "end" },
-          });
-        }
-        if (reject) {
-          throw new Error("provider request failed");
-        }
-        return {
-          payloads: [{ text: "answer" }],
-          meta: { agentMeta: { usage: { input: 3, output: 2, total: 5 } } },
-        };
-      }) as never);
-
-      try {
-        const client = new OpenAI({
-          apiKey: "test",
-          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
-          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
-          maxRetries: 0,
-          fetch: async (input, init) => {
-            const response = await fetch(input, init);
-            void response.clone().text().then(wireResponse.resolve, wireResponse.reject);
-            return response;
-          },
-        });
-        const stream = client.responses.stream({
-          model: "openclaw",
-          input: "Keep the stream owned.",
-        });
-        const terminalEvents: string[] = [];
-        stream.on("response.completed", () => terminalEvents.push("response.completed"));
-        stream.on("response.failed", () => terminalEvents.push("response.failed"));
-        const finalResponse = stream.finalResponse();
-        await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        continueAgent.resolve();
-
-        const [admission, response, wire] = await Promise.all([
-          terminalAdmission.promise,
-          finalResponse,
-          wireResponse.promise,
-        ]);
-
-        expect(admission.active).toBe(idleRootCount + 1);
-        expect(response.status).toBe(name);
-        expect(terminalEvents).toEqual([`response.${name}`]);
-        expect(lifecycleTerminals).toEqual([failed ? "error" : "end"]);
-        expect(parseSseEvents(wire).at(-1)?.data).toBe("[DONE]");
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
-      } finally {
-        unsubscribe();
-      }
-    },
-  );
+  registerOpenResponsesHttpAdmissionTests(() => enabledPort);
 
   it.each([
     ...STREAM_FAILURE_CASES.map((failure) => ({

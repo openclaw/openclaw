@@ -355,8 +355,9 @@ plugin resolution and compatibility planning. It also tests migrations and
 boots a test Gateway with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
 copied agent databases. Installed plugin payloads and their dependencies are also
-copied; the copied install records point to those copies, and their OpenClaw
-host links target the staged installation. Literal imports, `require()` calls, and
+copied, including plugins discovered in the global `extensions` directory without
+install records or explicit load paths. The copied install records point to those
+copies, and their OpenClaw host links target the staged installation. Literal imports, `require()` calls, and
 literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
@@ -605,7 +606,19 @@ The update report records the measured SQLite and plugin sizes, the total
 required space, the checked destinations and their available space, and the
 selected location and reason. If none fits, snapshot preparation refuses before
 copying with `snapshot-capacity-insufficient` and explains how to free space or
-set `TMPDIR`. A path that cannot be allocated is recorded and skipped; if all
+set `TMPDIR`.
+
+When space is short and [`update cleanup`](/cli/update/repair-and-recovery#update-cleanup)
+already counts some recovery copies from earlier updates as retirable, an
+interactive `openclaw update` lists them with their sizes and asks whether to
+remove them permanently, defaulting to no. On yes, the running Gateway, or the
+updater itself when no Gateway runs, retires them and the update checks space
+again before it changes anything. `--yes`, `--json`, updates without a terminal,
+and Control UI updates never remove them; their refusal names the reclaimable
+size and the next step instead. Git updates make this offer before they start;
+their later pre-staging check still decides whether to refuse.
+
+A path that cannot be allocated is recorded and skipped; if all
 fitting paths are unusable, `snapshot-location-unavailable` names their path or
 permission errors. Capacity checks do not reserve space against concurrent writes.
 The copy worker uses the inventoried plugin plan. If an install record, plugin

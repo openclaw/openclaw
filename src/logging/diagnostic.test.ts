@@ -9,7 +9,10 @@ import {
 } from "../infra/diagnostic-events.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { DiagnosticLivenessSample } from "./diagnostic-liveness.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
@@ -254,24 +257,41 @@ describe("stuck session diagnostics threshold", () => {
   it.each([
     { name: "material stall", progressAt: 20_000, tickAt: 35_000, warns: true },
     { name: "ordinary jitter", progressAt: 15_500, tickAt: 30_999, warns: false },
-  ])("reports $name without inventing ownerless recovery", ({ progressAt, tickAt, warns }) => {
-    startSession();
+  ])(
+    "reports $name without inventing ownerless recovery",
+    async ({ progressAt, tickAt, warns }) => {
+      const clock = createGatewaySchedulerClock(0);
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler(clock.clock),
+        { diagnostics: { enabled: true } },
+        {
+          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+          recoverStuckSession,
+        },
+      );
+      logSessionStateChange({ ...session, state: "processing" });
+      markDiagnosticEmbeddedRunStarted(session);
 
-    vi.advanceTimersByTime(progressAt);
-    markDiagnosticSessionProgress(session);
-    markDiagnosticRunProgress({ ...session, reason: "embedded_run:progress" });
-    vi.advanceTimersByTime(30_000 - progressAt);
+      vi.setSystemTime(progressAt);
+      await clock.advanceBy(progressAt);
+      markDiagnosticSessionProgress(session);
+      markDiagnosticRunProgress({ ...session, reason: "embedded_run:progress" });
+      vi.setSystemTime(30_000);
+      await clock.advanceBy(30_000 - progressAt);
 
-    vi.setSystemTime(tickAt);
-    vi.advanceTimersByTime(30_000);
+      // Delay the host wake itself; a wall-clock change alone permits other jobs to re-arm it.
+      vi.setSystemTime(30_000 + tickAt);
+      await clock.advanceBy(tickAt);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed", warns);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed", warns);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(30_000);
+      vi.setSystemTime(60_000 + tickAt);
+      await clock.advanceBy(30_000);
 
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-  });
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["embedded_run", "model_call"] as const)(
     "reports silent %s at its threshold without ownerless recovery",

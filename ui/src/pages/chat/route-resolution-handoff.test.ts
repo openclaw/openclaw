@@ -18,6 +18,7 @@ import {
   canonicalSession,
   createSessionRouteContext as contextFor,
   createSessionRouteRow as row,
+  sessionRouteListResult,
   installShortSessionResolver as installShortResolver,
   loadSessionRoute as load,
 } from "./route-resolution.test-support.ts";
@@ -31,7 +32,11 @@ const location = (pathname: string, search = "") => ({ pathname, search, hash: "
 
 describe("session route navigation handoffs", () => {
   it("carries a catalog query only through the same connection's ephemeral navigation", async () => {
-    const { context } = contextFor();
+    const { context, request } = contextFor();
+    request.mockImplementation(async (method) => {
+      expect(method).toBe("sessions.catalog.resolve");
+      return null;
+    });
     const sessionKey = buildCatalogSessionKey(
       { catalogId: "openclaw", hostId: "node:team", threadId: "agent:main:selected" },
       "roboclaw",
@@ -124,6 +129,8 @@ describe("session route navigation handoffs", () => {
   it("uses the sidebar-carried full key without issuing a session search", async () => {
     const storedRow = row({ displayName: "Deploy monitor" });
     const { context, list } = contextFor();
+    context.sessions.state.result = sessionRouteListResult([storedRow]);
+    context.sessions.state.resultCached = true;
     const target = sessionNavigationTarget({
       face: "chat",
       sessionKey: storedRow.key,
@@ -137,6 +144,7 @@ describe("session route navigation handoffs", () => {
       kind: "session",
       sessionKey: storedRow.key,
     });
+    expect(loaded).not.toHaveProperty("sessionResolutionFromCache");
     expect(list).not.toHaveBeenCalled();
   });
 

@@ -31,6 +31,7 @@ import type { PaneOutboxRecovery } from "../chat-outbox-recovery.tsx";
 import type { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
 import type { ChatRealtimeView } from "../chat-realtime.ts";
 import type { ChatRunStartupStatus } from "../chat-run-startup.ts";
+import type { ChatSessionStateSnapshot } from "../chat-session-state-snapshot.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -48,6 +49,7 @@ import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
+import type { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -106,6 +108,8 @@ export type ChatSessionProgressProps = import("../chat-spawned-subagent.ts").Sub
   onClearSavedProgressCard?: (card: ProgressCard) => void;
   messages: unknown[];
 };
+
+type ReplyAuthorProps = Parameters<typeof createReplyPreviewResolver>[1];
 
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
@@ -174,6 +178,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sessions: SessionsListResult | null;
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
+  /** Owners pass the same Incognito decision as the header; the edge turns dashed. */
+  incognito?: boolean;
+  contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   providerUsage?: ProviderUsageDisplayProps;
@@ -190,6 +197,14 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
+  /** Thread facts that name a reply target's author, as its transcript line does. */
+  userId?: ReplyAuthorProps["userId"];
+  userName?: ReplyAuthorProps["userName"];
+  assistantAvatar?: ReplyAuthorProps["assistantAvatar"];
+  assistantAvatarUrl?: ReplyAuthorProps["assistantAvatarUrl"];
+  assistantAvatarSource?: ReplyAuthorProps["assistantAvatarSource"];
+  senderAgentAvatars?: ReplyAuthorProps["senderAgentAvatars"];
+  mediaReadAllowed?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   chatMessageMaxWidth?: string | null;
   onComposerWidthChange?: (value: string | undefined) => void;
@@ -230,6 +245,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
+  /** Stop parked the queue; automatic sends wait for Resume. */
+  queuePaused?: boolean;
+  onQueueResume?: () => void;
+  onQueueClear?: () => void;
   displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;

@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover service worker cache behavior.
 // Explicit package entry: Bun maps the bare "undici" import to Bun.fetch.
+import { createHash } from "node:crypto";
 import { fetch as fetchWithIntegrity } from "undici/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -600,7 +601,15 @@ describe("Control UI offline app shell", () => {
       const html = await response?.text();
       expect(html).toContain(`src="${new URL(base).pathname}assets/app-AbCd1234.js"`);
       expect(html).toContain("generic shell");
-      expect(response?.headers.get("Content-Security-Policy")).toBe(offlineBootFixture.csp);
+      const map = /<script type="importmap">(.*?)<\/script>/u.exec(html ?? "")?.[1] ?? "";
+      const assets = new URL(base).pathname + "assets/";
+      expect(JSON.parse(map)).toEqual({
+        imports: { [assets + "_app.js"]: assets + "app-AbCd1234.js" },
+      });
+      const hash = createHash("sha256").update(map).digest("base64");
+      expect(response?.headers.get("Content-Security-Policy")).toBe(
+        offlineBootFixture.csp.replace(/'sha256-[^']+'/u, `'sha256-${hash}'`),
+      );
     }
     expect(worker.fetch).toHaveBeenCalledTimes(offlineBootFixture.assets.length + routes.length);
     expect([...worker.cache.keys()]).toEqual([

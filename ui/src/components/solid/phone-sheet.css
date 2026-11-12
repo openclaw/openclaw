@@ -68,18 +68,18 @@
   }
 }
 
-/* Equal tracks either side keep the title on the sheet's center, with or without an action. */
+/* Equal tracks either side keep the title on the sheet's center. */
 .oc-sheet__header {
   display: grid;
   flex: none;
-  grid-template-columns: repeat(2, 32px) minmax(0, 1fr) repeat(2, 32px);
+  grid-template-columns: 32px minmax(0, 1fr) 32px;
   align-items: center;
   min-height: 44px;
   padding-inline: var(--space-3);
 }
 
 .oc-sheet__title {
-  grid-area: 1 / 3;
+  grid-column: 2;
   margin: 0;
   overflow: hidden;
   color: var(--text-strong);
@@ -93,7 +93,7 @@
 /* Page-level touch sizing on bare buttons must not move the X between sheets. */
 .oc-popover.oc-sheet .oc-sheet__close {
   display: inline-flex;
-  grid-area: 1 / 5;
+  grid-column: 3;
   align-items: center;
   justify-content: center;
   width: 32px;
@@ -106,52 +106,6 @@
   background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
-}
-
-/* A header search keeps its toggle beside the close button; the sheet's title is the title. */
-.oc-sheet__action {
-  display: flex;
-  grid-area: 1 / 1 / auto / 5;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
-.oc-sheet__action > .header-search {
-  flex: 1;
-  justify-content: flex-end;
-  min-width: 0;
-  min-height: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.oc-sheet__action > .header-search > .header-search__title {
-  display: none;
-}
-
-.oc-sheet__header .header-search__toggle {
-  flex: none;
-  width: 32px;
-  height: 32px;
-  color: var(--muted);
-}
-
-.oc-sheet__header .header-search__toggle svg {
-  width: 16px;
-  height: 16px;
-}
-
-/* While searching, the field takes the row and its clear button is the only X. */
-.oc-popover.oc-sheet
-  .oc-sheet__header:has(.header-search[data-searching])
-  > :is(.oc-sheet__title, .oc-sheet__close) {
-  display: none;
-}
-
-.oc-sheet__action:has(> .header-search[data-searching]) {
-  grid-column-end: -1;
-  padding-inline-start: var(--space-1);
 }
 
 .oc-sheet__close svg {
@@ -182,20 +136,49 @@
   font-size: var(--control-ui-text-md);
 }
 
-/* A long value keeps its chevron: the same one-line clip as the shared select family. */
-@supports (appearance: base-select) {
-  .oc-sheet__body select.settings-select:not([multiple], [size]) {
-    overflow: hidden;
-    align-items: flex-start;
-    padding-block: 0;
-    line-height: calc(var(--settings-control-height) - 2px);
-    overflow-wrap: anywhere;
-    white-space: normal;
+/* The calendar reads like a select's chevron: same color, stroke, size and inset. */
+.oc-sheet__body input[type="date"] {
+  padding-inline-end: 10px;
+}
 
-    &::picker-icon {
-      flex: none;
-      align-self: center;
-    }
+.oc-sheet__body input[type="date"]::-webkit-calendar-picker-indicator {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  background: var(--text-tertiary);
+  opacity: 1;
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M8 2v4'/><path d='M16 2v4'/><rect width='18' height='18' x='3' y='4' rx='2'/><path d='M3 10h18'/></svg>")
+    center / contain no-repeat;
+}
+
+/* A customizable select can't ellipsize its own label, so a long value would push the chevron out. */
+@media not (forced-colors: active) {
+  .oc-sheet__body .field select:not([multiple], [size]) {
+    display: block;
+    overflow: hidden;
+    padding-inline-end: 32px;
+    appearance: none;
+    background-image: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .oc-sheet__body .field:has(> select) {
+    position: relative;
+  }
+
+  .oc-sheet__body .field:has(> select)::after {
+    position: absolute;
+    inset-inline-end: 11px;
+    bottom: 12px;
+    width: 16px;
+    height: 16px;
+    background: var(--text-tertiary);
+    content: "";
+    mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
+      center / contain no-repeat;
+    pointer-events: none;
   }
 }
 

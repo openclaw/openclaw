@@ -1,0 +1,3 @@
+# Custodian/Chat chunk-closure regression and queued inline-view visibility regression.
+# Both extend existing integration fixtures; no new production test seam.
+60

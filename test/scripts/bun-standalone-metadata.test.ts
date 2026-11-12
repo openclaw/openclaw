@@ -1640,7 +1640,11 @@ function loadLegacySessionSurface(rootPath: string) {
     const filename = path.join(runtime, "dist/hooks-loader.js");
     const transformed = adapter.transform({
       filename,
-      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks"),
+      // Literal dependencies are bundled normally; this extracted owner uses the fixture namespace.
+      contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks").replace(
+        'import("./workspace.js")',
+        "Promise.resolve({ prepareWorkspaceHookEntries })",
+      ),
     });
     vm.runInContext(
       rewriteStandaloneImports({

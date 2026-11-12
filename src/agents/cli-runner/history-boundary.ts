@@ -18,6 +18,7 @@ import {
   composeSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
@@ -554,14 +555,16 @@ async function planCliHistoryBoundary(
   ) {
     let truncated = false;
     const branch = (
-      await SessionManager.openBoundedAsync(target, {
-        signal: params.abortSignal,
-        maxBytes: 1024 * 1024,
-        maxEvents: 100,
-        onTruncated: () => {
-          truncated = true;
-        },
-      })
+      await withSessionTranscriptHydrationCaller("cli-context", () =>
+        SessionManager.openBoundedAsync(target, {
+          signal: params.abortSignal,
+          maxBytes: 1024 * 1024,
+          maxEvents: 100,
+          onTruncated: () => {
+            truncated = true;
+          },
+        }),
+      )
     ).getBranch();
     assertCurrent();
     // Bookkeeping is not a conversation. Retained reset rows, summaries, custom

@@ -310,7 +310,6 @@
     padding-inline-end: 4px;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
   }
 
   .agent-chat__goal[data-expanded="true"]
@@ -625,7 +624,6 @@
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   padding: 0 18px 14px 13px;
   border: 0;
   border-radius: 0;

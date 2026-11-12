@@ -249,6 +249,7 @@ export async function createRequesterPublicationFixture(
   repositoryOptions: {
     requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
     baseFiles?: Record<string, string>;
+    sourceHistory?: Parameters<typeof createRepositoryPublicationFixture>[5];
     initialCheckpoint?: boolean;
   } = {},
 ) {
@@ -260,6 +261,7 @@ export async function createRequesterPublicationFixture(
           session,
           repositoryOptions.baseFiles,
           repositoryOptions.initialCheckpoint,
+          repositoryOptions.sourceHistory,
         )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);
@@ -475,6 +477,7 @@ export async function prepareVisitorPublicationFixture(f: {
         subagent: {
           complete: unexpected,
           forkSession: unexpected,
+          runForkedTurn: unexpected,
           run: unexpected,
           waitForRun: unexpected,
           getSessionMessages: unexpected,

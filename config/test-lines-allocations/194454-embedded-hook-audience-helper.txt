@@ -1,0 +1,3 @@
+38
+# Embedded hook context memory audience: paired guard, omitted keys without an audience, and session mismatch rejection.
+# Exact measured net test LF growth; shared scalar unchanged and no spare ceiling credit.

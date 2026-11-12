@@ -12,6 +12,9 @@ title: "Memory wiki"
 navigable wiki: pages built from saved data, structured claims with evidence,
 provenance, dashboards, and machine-readable digests.
 
+In native mode, generated link labels display page titles literally, including
+Markdown markers, HTML-like text, and entity names such as `&amp;`.
+
 It does not replace the active memory plugin. Recall, promotion, indexing, and
 dreaming stay owned by the configured memory plugin (`memory-core`, Honcho,
 and others). `memory-wiki` sits beside it and compiles

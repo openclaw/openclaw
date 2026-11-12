@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { NativeBrowserMessage, NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT } from "../panel-hosted-tabs.ts";
@@ -178,7 +177,7 @@ describe("Browser toolbar", () => {
   const toolbarFavicon = (panel: HTMLElement) =>
     panel.querySelector<HTMLImageElement>(".bp-toolbar-favicon img");
 
-  it("retires replaced favicon requests without replacing the address draft or focus", async () => {
+  it.each(["Enter", "Escape"])("keeps IME input through %s and favicon refresh", async (key) => {
     const panel = await mountToolbar();
     const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
     input.focus();
@@ -186,7 +185,7 @@ describe("Browser toolbar", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await panel.updateComplete;
     input.setSelectionRange(8, 13);
-    const toolbar = panel.querySelector(".bp-toolbar");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, isComposing: true }));
     const retired = createDeferred<string | null>();
     const current = createDeferred<string | null>();
     const firstFetcher = vi.fn(() => retired.promise);
@@ -204,8 +203,6 @@ describe("Browser toolbar", () => {
     await retired.promise;
     await panel.updateComplete;
     expect(toolbarFavicon(panel)?.getAttribute("src")).toBe(currentUrl);
-    expect(panel.querySelector(".bp-toolbar")).toBe(toolbar);
-    expect(panel.querySelector(".bp-url")).toBe(input);
     expect(document.activeElement).toBe(input);
     expect(input).toMatchObject({
       value: "https://draft.example.test/uncommitted",
@@ -264,21 +261,7 @@ describe("Browser toolbar", () => {
 });
 
 describe("Browser recovery", () => {
-  let originalFonts: PropertyDescriptor | undefined;
-
-  beforeEach(() => {
-    originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
-    Object.defineProperty(document, "fonts", {
-      configurable: true,
-      value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
-    });
-    vi.stubGlobal("ResizeObserver", undefined);
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    restorePropertyDescriptor(document, "fonts", originalFonts);
-  });
+  afterEach(() => document.body.replaceChildren());
 
   function mountFailingBrowser(nativeAvailable: boolean, remoteAvailable: boolean) {
     const nativeMessages: NativeBrowserMessage[] = [];

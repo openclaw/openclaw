@@ -258,7 +258,7 @@ it("renders edit and write rows from their result outcome", async () => {
 });
 
 it.each([false, true])("reports clipboard failure=%s when copying a patch", async (failed) => {
-  const feedback = failed ? "Copy failed" : "Copied!";
+  const feedback = failed ? "Couldn’t copy. Try again." : "Copied";
   const writeText = failed
     ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
     : vi.fn().mockResolvedValue(undefined);
@@ -676,7 +676,7 @@ it("renders a plain error detail when a failed tool has no output", async () => 
   expect(cardPart(container, "status-badge")).toBeNull();
   expect(cardPart(container, "block-label")).toMatchObject({ textContent: "Tool error" });
   expect(cardPart(container, "block-content")).toMatchObject({
-    textContent: "No output — tool failed.",
+    textContent: "The tool failed without output.",
   });
 });
 

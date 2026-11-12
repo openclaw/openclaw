@@ -389,52 +389,28 @@ describe("resolveExecutable", () => {
     });
   });
 
-  it("resolves to the first .cmd result from PATH on Windows without executing where.exe", async () => {
-    await withMockedPlatform("win32", async () => {
-      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
-        const binDir = path.join(base, "bin");
-        await fs.mkdir(binDir, { recursive: true });
-        const cmdPath = path.join(binDir, "gcloud.cmd");
-        const exePath = path.join(binDir, "gcloud.exe");
-        await fs.writeFile(cmdPath, "@echo off\n", "utf8");
-        await fs.writeFile(exePath, "exe\n", "utf8");
+  it.each([
+    ["gcloud", ["cmd", "exe"], { PATHEXT: ".EXE;.CMD;.BAT;.COM" }, "gcloud.cmd"],
+    ["tailscale", ["exe"], {}, "tailscale.exe"],
+    ["gcloud", ["ps1"], { PATHEXT: ".PS1" }, "gcloud.ps1"],
+  ] as const)(
+    "resolves %s with extensions %j and env %j to %s on Windows",
+    async (command, extensions, env, expected) => {
+      await withMockedPlatform("win32", async () => {
+        await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
+          const binDir = path.join(base, "bin");
+          await fs.mkdir(binDir, { recursive: true });
+          for (const extension of extensions) {
+            await fs.writeFile(path.join(binDir, `${command}.${extension}`), "fixture\n", "utf8");
+          }
 
-        withEnv({ PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT;.COM" }, () => {
-          expect(resolveExecutable("gcloud")).toBe(cmdPath);
+          withEnv({ PATH: binDir, ...env }, () => {
+            expect(resolveExecutable(command)).toBe(path.join(binDir, expected));
+          });
         });
       });
-    });
-  });
-
-  it("falls back to .exe when no .cmd match exists on Windows", async () => {
-    await withMockedPlatform("win32", async () => {
-      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
-        const binDir = path.join(base, "bin");
-        await fs.mkdir(binDir, { recursive: true });
-        const exePath = path.join(binDir, "tailscale.exe");
-        await fs.writeFile(exePath, "exe\n", "utf8");
-
-        withEnv({ PATH: binDir }, () => {
-          expect(resolveExecutable("tailscale")).toBe(exePath);
-        });
-      });
-    });
-  });
-
-  it("falls back to first PATH result when no .cmd or .exe match exists on Windows", async () => {
-    await withMockedPlatform("win32", async () => {
-      await withTestDir({ prefix: "openclaw-exec-path-" }, async (base) => {
-        const binDir = path.join(base, "bin");
-        await fs.mkdir(binDir, { recursive: true });
-        const ps1Path = path.join(binDir, "gcloud.ps1");
-        await fs.writeFile(ps1Path, "Write-Output ok\n", "utf8");
-
-        withEnv({ PATH: binDir, PATHEXT: ".PS1" }, () => {
-          expect(resolveExecutable("gcloud")).toBe(ps1Path);
-        });
-      });
-    });
-  });
+    },
+  );
 
   it("returns original cmd when no PATH match exists on Windows", () => {
     withMockedPlatform("win32", () => {

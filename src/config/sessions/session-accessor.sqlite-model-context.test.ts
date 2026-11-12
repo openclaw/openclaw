@@ -19,15 +19,20 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 
+async function seedScope(state: { statePath(name: string): string }, sessionId: string) {
+  const scope = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: state.statePath("transcript.sqlite"),
+  };
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+  return scope;
+}
+
 it("retains accepted background artifacts across bounded placement and compaction without rewriting legacy history", () =>
   withOpenClawTestState({ label: "background-result-placement" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "placement",
-      sessionKey: "agent:main:placement",
-      storePath: state.statePath("transcript.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const scope = await seedScope(state, "placement");
     const manager = await SessionManager.openAsync(scope);
     const legacy = makeAgentAssistantMessage({
       provider: "openclaw",
@@ -89,26 +94,16 @@ it("retains accepted background artifacts across bounded placement and compactio
     ]) {
       expect((await read()).buildSessionContext().messages).toEqual([legacy, signed, placed, next]);
     }
-    expect(
-      (
-        await SessionManager.openBoundedAsync(scope, { maxBytes: 16384, maxEvents: 2 })
-      ).buildSessionContext().messages,
-    ).toEqual([placed, next]);
-    expect(
-      (
-        await SessionManager.openModelContextAsync(scope, {
-          limits: { maxBytes: 16384, maxEvents: 2 },
-        })
-      ).buildSessionContext().messages,
-    ).toEqual([placed, next]);
-    // Reuse the navigation cache after the source's physical row left its retained suffix.
-    expect(
-      (
-        await SessionManager.openModelContextAsync(scope, {
-          limits: { maxBytes: 16384, maxEvents: 2 },
-        })
-      ).buildSessionContext().messages,
-    ).toEqual([placed, next]);
+    const tail = { maxBytes: 16384, maxEvents: 2 };
+    // The second model-context read reuses the navigation cache after the source's physical row
+    // left its retained suffix.
+    for (const read of [
+      () => SessionManager.openBoundedAsync(scope, tail),
+      () => SessionManager.openModelContextAsync(scope, { limits: tail }),
+      () => SessionManager.openModelContextAsync(scope, { limits: tail }),
+    ]) {
+      expect((await read()).buildSessionContext().messages).toEqual([placed, next]);
+    }
     await manager.appendCompactionAsync("Earlier conversation", marker, 100);
     const compacted = (await SessionManager.openModelContextAsync(scope)).buildSessionContext()
       .messages;
@@ -122,13 +117,7 @@ it.each(["missing", "unknown"] as const)(
   "honors resets with %s identity facts when bounding background results",
   (identity) =>
     withOpenClawTestState({ label: `background-reset-${identity}` }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "placement",
-        sessionKey: "agent:main:placement",
-        storePath: state.statePath("transcript.sqlite"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const scope = await seedScope(state, "placement");
       await SessionManager.openAsync(scope);
       await appendTranscriptMessage(scope, {
         eventId: "pending",
@@ -176,13 +165,7 @@ it.each(["missing", "unknown"] as const)(
 
 it("reuses freshly decoded model payloads while keeping stored and subsequent contexts detached", () =>
   withOpenClawTestState({ label: "model-context-payload-ownership" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "payload-ownership",
-      sessionKey: "agent:main:payload-ownership",
-      storePath: state.statePath("transcript.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const scope = await seedScope(state, "payload-ownership");
     const manager = await SessionManager.openAsync(scope);
     const retainedId = await manager.appendMessageAsync({
       role: "user",

@@ -4,6 +4,15 @@
  *   --rss-mib 2048 --mappings 2000 --samples 5 --commands 20
  * --control compares two identical native arms. Run it separately from ABAB.
  * --broker-entry selects an independently bundled copy of the existing worker.
+ * --owner container or git exercises those real command owners instead of raw spawn.
+ * The container fixture is a synthetic podman executable, not a container engine.
+ * Prepare a standalone Linux bundle on the development host:
+ *   node --import ./scripts/tsx.mjs scripts/perf/durable-spawn-measure.ts --prepare /task/proof
+ *   node /task/proof/measure.mjs --broker-entry /task/proof/broker.mjs \
+ *     --owner container --rss-mib 4096 --samples 5 --commands 20
+ * --cpu-profile /task/profile writes per-batch main-thread CPU profiles; run separately
+ * from acceptance timing because profiling changes overhead.
+ * Both arms use the current source: this isolates transport cost, not a patch speedup.
  *
  * Acceptance (before running): every command returns the same bytes/status;
  * candidate host native launches are zero; synchronous dispatch blocking falls;
@@ -17,13 +26,20 @@
  */
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
+import { Session } from "node:inspector/promises";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
-import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
+import { execContainerRaw } from "../../src/agents/sandbox/container-engine.js";
+import { executeGitCommand } from "../../src/infra/git-exec.js";
 import { runWithSpawnBroker } from "../../src/process/spawn-broker/context.js";
 import { createSpawnBrokerHost } from "../../src/process/spawn-broker/host.js";
 import { spawnProcess } from "../../src/process/spawn-utils.js";
@@ -31,6 +47,9 @@ import { runInDetachedAsyncContext } from "../../src/shared/detached-async-conte
 
 const { values } = parseArgs({
   options: {
+    prepare: { type: "string" },
+    "cpu-profile": { type: "string" },
+    owner: { type: "string", default: "raw" },
     "rss-mib": { type: "string", default: "2048" },
     mappings: { type: "string", default: "2000" },
     samples: { type: "string", default: "5" },
@@ -39,6 +58,48 @@ const { values } = parseArgs({
     "broker-entry": { type: "string" },
   },
 });
+if (values.prepare) {
+  const directory = path.resolve(values.prepare);
+  fs.mkdirSync(directory);
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const { build } = await import("esbuild");
+  const options = {
+    absWorkingDir: root,
+    bundle: true,
+    platform: "node" as const,
+    format: "esm" as const,
+    external: ["*.node", "esbuild"],
+    define: { WORKER_DEPLOY_BUILD: "false" },
+    banner: {
+      js: 'import {createRequire as __createRequire} from "node:module"; const require = __createRequire(import.meta.url);',
+    },
+    logLevel: "warning" as const,
+  };
+  for (const [source, output] of [
+    ["scripts/perf/durable-spawn-measure.ts", "measure.mjs"],
+    ["src/process/spawn-broker/worker.ts", "broker.mjs"],
+  ]) {
+    await build({ ...options, entryPoints: [source!], outfile: path.join(directory, output!) });
+  }
+  for (const name of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
+    fs.copyFileSync(path.join(root, "src/state", name), path.join(directory, name));
+  }
+  const provenance = {
+    commit: childProcess.execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    bundles: Object.fromEntries(
+      ["measure.mjs", "broker.mjs"].map((name) => [
+        name,
+        createHash("sha256")
+          .update(fs.readFileSync(path.join(directory, name)))
+          .digest("hex"),
+      ]),
+    ),
+  };
+  fs.writeFileSync(path.join(directory, "source.json"), JSON.stringify(provenance));
+  console.log(JSON.stringify({ directory, ...provenance }));
+  process.exit(0);
+}
+assert(["raw", "container", "git"].includes(values.owner));
 assert.equal(process.platform, "linux", "Linux fork and /proc measurement only");
 const rssMiB = Number(values["rss-mib"]);
 const mappingCount = Number(values.mappings);
@@ -74,6 +135,38 @@ function cpuTicks(pid: number) {
   };
 }
 
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-spawn-owner-"));
+const input = Buffer.from("synthetic stdin\n");
+const environment = {
+  ...process.env,
+  PATH: `${fixture}:${process.env.PATH}`,
+  SPAWN_FIXTURE: "literal value",
+};
+const podmanArgs = [
+  "exec",
+  "synthetic-container",
+  "literal argument",
+  "$not-expanded",
+  "--flag=value",
+];
+if (values.owner === "container") {
+  fs.writeFileSync(
+    path.join(fixture, "podman"),
+    `#!${process.execPath}
+const fs = require('node:fs');
+process.stdout.write(JSON.stringify({parent: process.ppid, cwd: process.cwd(), args: process.argv.slice(2), env: process.env.SPAWN_FIXTURE, input: fs.readFileSync(0).toString('hex')}));
+process.stderr.write('synthetic stderr\\n');
+`,
+    { mode: 0o700 },
+  );
+} else if (values.owner === "git") {
+  childProcess.execFileSync("git", ["init", "--quiet", fixture]);
+}
+const expectedHash = createHash("sha1")
+  .update(`blob ${input.length}\0`)
+  .update(input)
+  .digest("hex");
+
 const retained = Buffer.allocUnsafe(rssMiB * 1024 * 1024);
 for (let offset = 0; offset < retained.length; offset += 4096) {
   retained[offset] = 1;
@@ -86,6 +179,12 @@ const mappings = Array.from(
 );
 let nativeCalls = 0;
 let nativeBlockingMs = 0;
+let brokerCalls = 0;
+const brokerSpawnExeca = broker.spawnExeca.bind(broker);
+broker.spawnExeca = (...args) => {
+  brokerCalls++;
+  return brokerSpawnExeca(...args);
+};
 const nativeSpawn = childProcess.spawn;
 const measuredSpawn = (...args: Parameters<typeof nativeSpawn>) => {
   const start = performance.now();
@@ -103,6 +202,43 @@ async function command(brokered: boolean) {
   return runInDetachedAsyncContext(() =>
     runWithSpawnBroker(brokered ? broker : undefined, async () => {
       const start = performance.now();
+      const blockingBefore = nativeBlockingMs;
+      if (values.owner !== "raw") {
+        const pending =
+          values.owner === "container"
+            ? execContainerRaw(
+                { id: "podman", command: "podman", displayName: "Podman", baseEnv: environment },
+                podmanArgs,
+                { input },
+              )
+            : executeGitCommand(fixture, ["hash-object", "--stdin"], {
+                input,
+                baseEnv: environment,
+              });
+        const dispatchMs = performance.now() - start;
+        const result = await pending;
+        const wallMs = performance.now() - start;
+        assert.equal(result.code, 0);
+        if (values.owner === "container") {
+          assert.deepEqual(JSON.parse(result.stdout.toString()), {
+            parent: brokered ? broker.pid : process.pid,
+            cwd: process.cwd(),
+            args: podmanArgs,
+            env: "literal value",
+            input: input.toString("hex"),
+          });
+          assert.equal(result.stderr.toString(), "synthetic stderr\n");
+        } else {
+          assert.equal(result.stdout.toString(), `${expectedHash}\n`);
+          assert.equal(result.stderr.toString(), "");
+        }
+        return {
+          dispatchMs,
+          readyMs: undefined,
+          wallMs,
+          nativeBlockingMs: nativeBlockingMs - blockingBefore,
+        };
+      }
       const child = spawnProcess("/bin/sh", ["-c", "printf 'spawn-fixture\\n'"], {
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -121,7 +257,7 @@ async function command(brokered: boolean) {
       assert.equal(signal, null);
       assert.equal(stdout, "spawn-fixture\n");
       assert.equal(stderr, "");
-      return { dispatchMs, readyMs, wallMs };
+      return { dispatchMs, readyMs, wallMs, nativeBlockingMs: nativeBlockingMs - blockingBefore };
     }),
   );
 }
@@ -132,6 +268,9 @@ const rows: Array<{
   sample: number;
   hostNativeCalls: number;
   nativeBlockingMs: number;
+  brokerCalls: number;
+  eventLoopP99Ms: number;
+  eventLoopMaxMs: number;
   threadCpuMs: number;
   processCpuMs: number;
   brokerCpuTicks: number;
@@ -140,12 +279,16 @@ const rows: Array<{
   commands: Row[];
 }> = [];
 const summarize = (numbers: number[]) => {
+  if (numbers.length === 0) {
+    return undefined;
+  }
   const sorted = numbers.toSorted((a, b) => a - b);
   return {
     mean: numbers.reduce((sum, value) => sum + value, 0) / numbers.length,
     median:
       (sorted[Math.floor((sorted.length - 1) / 2)]! + sorted[Math.floor(sorted.length / 2)]!) / 2,
     p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
+    p99: sorted[Math.ceil(sorted.length * 0.99) - 1],
     min: sorted[0],
     max: sorted.at(-1),
   };
@@ -161,6 +304,16 @@ try {
     for (const arm of arms) {
       nativeCalls = 0;
       nativeBlockingMs = 0;
+      brokerCalls = 0;
+      const eventLoop = monitorEventLoopDelay({ resolution: 1 });
+      eventLoop.enable();
+      await delay(10);
+      const profiler = values["cpu-profile"] ? new Session() : undefined;
+      if (profiler) {
+        profiler.connect();
+        await profiler.post("Profiler.enable");
+        await profiler.post("Profiler.start");
+      }
       const brokerCpuBefore = cpuTicks(broker.pid);
       const childCpuBefore = cpuTicks(process.pid).children;
       const allocatedBefore = getHeapStatistics().total_allocated_bytes;
@@ -174,12 +327,28 @@ try {
       const cpuDelta = process.cpuUsage(cpu);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
       const brokerCpuAfter = cpuTicks(broker.pid);
+      await delay(5);
+      eventLoop.disable();
+      if (profiler) {
+        const { profile } = await profiler.post("Profiler.stop");
+        profiler.disconnect();
+        fs.writeFileSync(
+          `${values["cpu-profile"]}-${arm}-${sample}.cpuprofile`,
+          JSON.stringify(profile),
+        );
+      }
+      if (values.owner !== "raw") {
+        assert.equal(brokerCalls, !values.control && arm === "after" ? commands : 0);
+      }
       assert.equal(nativeCalls, !values.control && arm === "after" ? 0 : commands);
       rows.push({
         arm,
         sample,
         hostNativeCalls: nativeCalls,
         nativeBlockingMs,
+        brokerCalls,
+        eventLoopP99Ms: eventLoop.percentile(99) / 1e6,
+        eventLoopMaxMs: eventLoop.max / 1e6,
         threadCpuMs: (threadDelta.user + threadDelta.system) / 1000,
         processCpuMs: (cpuDelta.user + cpuDelta.system) / 1000,
         brokerCpuTicks: brokerCpuAfter.own - brokerCpuBefore.own,
@@ -195,7 +364,14 @@ try {
   }
   console.log(
     JSON.stringify({
-      fixture: { rssMiB, mappingCount, samples, commands, control: values.control },
+      fixture: {
+        owner: values.owner,
+        rssMiB,
+        mappingCount,
+        samples,
+        commands,
+        control: values.control,
+      },
       runtime: {
         node: process.version,
         uv: process.versions.uv,
@@ -215,8 +391,17 @@ try {
                 selected.flatMap((row) => row.commands.map((item) => item.dispatchMs)),
               ),
               readyMs: summarize(
-                selected.flatMap((row) => row.commands.map((item) => item.readyMs)),
+                selected.flatMap((row) =>
+                  row.commands.flatMap((item) =>
+                    item.readyMs === undefined ? [] : [item.readyMs],
+                  ),
+                ),
               ),
+              nativeBlockingMs: summarize(
+                selected.flatMap((row) => row.commands.map((item) => item.nativeBlockingMs)),
+              ),
+              eventLoopP99Ms: summarize(selected.map((row) => row.eventLoopP99Ms)),
+              eventLoopMaxMs: summarize(selected.map((row) => row.eventLoopMaxMs)),
               wallMs: summarize(selected.flatMap((row) => row.commands.map((item) => item.wallMs))),
               threadCpuMsPerCommand: summarize(selected.map((row) => row.threadCpuMs / commands)),
               processCpuMsPerCommand: summarize(selected.map((row) => row.processCpuMs / commands)),
@@ -243,4 +428,5 @@ try {
   Object.defineProperty(childProcess, "spawn", { value: nativeSpawn });
   syncBuiltinESMExports();
   await broker.close();
+  fs.rmSync(fixture, { recursive: true, force: true });
 }

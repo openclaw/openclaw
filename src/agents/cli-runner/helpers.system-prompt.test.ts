@@ -15,10 +15,9 @@ vi.mock("../git-coauthor-prompt.js", () => ({
   resolveSessionGitCoauthorPrompt: vi.fn(),
 }));
 
-vi.mock("../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: vi.fn(() => undefined),
-  resolveModelOverridePolicy: vi.fn(),
-  setTtsMachinePrefsPathResolver: vi.fn(),
+vi.mock("../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: vi.fn(async () => undefined),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -67,7 +66,7 @@ describe("buildCliAgentSystemPrompt", () => {
     });
   });
 
-  it("includes the OpenClaw skills prompt in CLI system prompts", () => {
+  it("includes the OpenClaw skills prompt in CLI system prompts", async () => {
     const preparedModelRuntime = {
       isCurrent: vi.fn(() => true),
       configuredModelAliases: [{ alias: "Current", provider: "fixture", model: "current" }],
@@ -88,22 +87,22 @@ describe("buildCliAgentSystemPrompt", () => {
         "</available_skills>",
       ].join("\n"),
     };
-    const systemPrompt = buildCliAgentSystemPrompt(params);
+    const systemPrompt = await buildCliAgentSystemPrompt(params);
 
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("- Current: fixture/current");
     preparedModelRuntime.isCurrent.mockReturnValue(false);
-    expect(buildCliAgentSystemPrompt(params)).toBe(systemPrompt);
+    expect(await buildCliAgentSystemPrompt(params)).toBe(systemPrompt);
   });
 
   it.each([true, false])(
     "gates ClawHub guidance on the CLI tool schema (available=%s)",
-    (available) => {
+    async (available) => {
       const message = createStubTool("message");
       message.parameters = Type.Object(
         available ? { clawhub: Type.Object({ query: Type.String() }) } : {},
       );
-      const prompt = buildCliAgentSystemPrompt({
+      const prompt = await buildCliAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
         tools: [message],
         runtimeChannel: "webchat",
@@ -116,8 +115,8 @@ describe("buildCliAgentSystemPrompt", () => {
     },
   );
 
-  it("uses config-backed sub-agent delegation mode", () => {
-    const prompt = buildCliAgentSystemPrompt({
+  it("uses config-backed sub-agent delegation mode", async () => {
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       config: {
         agents: {
@@ -136,8 +135,8 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("## Delegation");
   });
 
-  it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", () => {
-    const prompt = buildCliAgentSystemPrompt({
+  it("uses CLI backend tool fallback instead of OpenClaw tool assumptions", async () => {
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       docsPath: "/tmp/openclaw/docs",
       tools: [],
@@ -148,8 +147,8 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("exec approval-pending");
   });
 
-  it("distinguishes the CLI working directory from the agent workspace", () => {
-    const prompt = buildCliAgentSystemPrompt({
+  it("distinguishes the CLI working directory from the agent workspace", async () => {
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
       cwd: "/tmp/task-repo",
       tools: [],
@@ -161,10 +160,10 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Working directory: /tmp/openclaw-agent");
   });
 
-  it("renders the Bootstrap Pending gate for full bootstrap mode", () => {
+  it("renders the Bootstrap Pending gate for full bootstrap mode", async () => {
     // CLI-backend runs must gate the first reply on a pending BOOTSTRAP.md the
     // same way the embedded runner does, not just inject the file as context.
-    const prompt = buildCliAgentSystemPrompt({
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
       contextFiles: [
@@ -181,8 +180,8 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("Can finish BOOTSTRAP.md here: do it.");
   });
 
-  it("renders limited bootstrap guidance when the run cannot complete bootstrap", () => {
-    const prompt = buildCliAgentSystemPrompt({
+  it("renders limited bootstrap guidance when the run cannot complete bootstrap", async () => {
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
       bootstrapMode: "limited",
@@ -192,7 +191,7 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("this run cannot safely finish full BOOTSTRAP.md");
   });
 
-  it("includes CLI-scoped plugin command guidance", () => {
+  it("includes CLI-scoped plugin command guidance", async () => {
     // Plugin command guidance is surface-filtered; CLI prompts must not leak
     // OpenClaw-main command text into external CLI backends.
     registerPluginCommand("demo-plugin", {
@@ -211,7 +210,7 @@ describe("buildCliAgentSystemPrompt", () => {
       handler: async () => ({ text: "ok" }),
     });
 
-    const prompt = buildCliAgentSystemPrompt({
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [{ name: "exec" } as never],
       modelDisplay: "test/model",
@@ -221,8 +220,8 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("OpenClaw-only command guidance.");
   });
 
-  it("includes session identity in runtime when provided", () => {
-    const prompt = buildCliAgentSystemPrompt({
+  it("includes session identity in runtime when provided", async () => {
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       config: {
         agents: {
@@ -243,8 +242,8 @@ describe("buildCliAgentSystemPrompt", () => {
     );
   });
 
-  it("includes Telegram channel context for CLI final replies without core rich guidance", () => {
-    const prompt = buildCliAgentSystemPrompt({
+  it("includes Telegram channel context for CLI final replies without core rich guidance", async () => {
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
       modelDisplay: "anthropic/claude-opus-4-8",
@@ -257,24 +256,27 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("### message tool");
   });
 
-  it.each(["mattermost", "slack"])("preserves %s channel-owned button guidance", (channel) => {
-    const prompt = buildCliAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      tools: [createStubTool("message")],
-      modelDisplay: "test/model",
-      runtimeChannel: channel,
-      runtimeCapabilities: ["inlineButtons"],
-      customInlineButtonHint: true,
-      messageToolHints: ["- Use the channel's supported button shape."],
-    });
+  it.each(["mattermost", "slack"])(
+    "preserves %s channel-owned button guidance",
+    async (channel) => {
+      const prompt = await buildCliAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        tools: [createStubTool("message")],
+        modelDisplay: "test/model",
+        runtimeChannel: channel,
+        runtimeCapabilities: ["inlineButtons"],
+        customInlineButtonHint: true,
+        messageToolHints: ["- Use the channel's supported button shape."],
+      });
 
-    expect(prompt).toContain("- Use the channel's supported button shape.");
-    expect(prompt).not.toContain('"action":{"type":"callback"');
-    expect(prompt).not.toContain("Inline buttons OFF");
-  });
+      expect(prompt).toContain("- Use the channel's supported button shape.");
+      expect(prompt).not.toContain('"action":{"type":"callback"');
+      expect(prompt).not.toContain("Inline buttons OFF");
+    },
+  );
 
-  it("requires an explicit message target when the CLI turn policy requires one", () => {
-    const prompt = buildCliAgentSystemPrompt({
+  it("requires an explicit message target when the CLI turn policy requires one", async () => {
+    const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [{ name: "message" } as never],
       modelDisplay: "test/model",

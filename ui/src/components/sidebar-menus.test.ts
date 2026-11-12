@@ -175,8 +175,7 @@ it.each(["provider replacement", "client replacement", "native disconnect and re
       }
       await waitForSolid(() => expect(find("openclaw-session-menu")).not.toBeNull());
       const menu = find("openclaw-session-menu")!;
-      const advanced = await openSubmenu(menu, "Advanced");
-      const openIn = await openSubmenu(advanced, "Open in");
+      const openIn = await openSubmenu(menu, "Open in");
       expect(openIn.querySelector('[data-value="open-in:vscode"]')).toBeNull();
 
       retired.resolve(response);

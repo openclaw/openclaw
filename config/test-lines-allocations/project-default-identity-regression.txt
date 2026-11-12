@@ -1,0 +1,3 @@
+74
+# Exact net fixture growth for default-base identity, filter and source-ref regressions
+# through real Git/HTTP; retains existing assertions and the base's 17-line slack.

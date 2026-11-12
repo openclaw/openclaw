@@ -1,21 +1,48 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { TempWorkspace, TempWorkspaceCleanupResult } from "@openclaw/fs-safe/temp";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createGitBackup, restoreGitBackupRef, verifyGitBackupRef } from "./git-backup.js";
 import { createStateDatabaseFixture, withBackupStateEnv } from "./git-backup.test-support.js";
 
-const roots = useAutoCleanupTempDirTracker(afterEach);
-let nativeConfig: ReturnType<typeof getFsSafeNativeConfig>;
-beforeEach(() => {
-  nativeConfig = getFsSafeNativeConfig();
-  configureFsSafeNative({ mode: "off" });
+// fs-safe owns how a workspace is removed (native owned-tree removal or the
+// compatible JS path), so failures are injected at its cleanup result. Native
+// stays on: Darwin private store creation requires the native ACL inspector.
+const workspaceCleanup = vi.hoisted(() => ({
+  failure: undefined as
+    | {
+        prefix: string;
+        retained: Set<string>;
+        cleanup: () => Promise<TempWorkspaceCleanupResult>;
+      }
+    | undefined,
+  handles: [] as TempWorkspace[],
+}));
+vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/temp")>();
+  return {
+    ...actual,
+    tempWorkspace: async (...args: Parameters<typeof actual.tempWorkspace>) => {
+      const workspace = await actual.tempWorkspace(...args);
+      const failure = workspaceCleanup.failure;
+      if (!failure || args[0]?.prefix !== failure.prefix) {
+        return workspace;
+      }
+      failure.retained.add(workspace.dir);
+      workspaceCleanup.handles.push(workspace);
+      return { ...workspace, cleanup: failure.cleanup };
+    },
+  };
 });
-afterEach(() => {
+
+const roots = useAutoCleanupTempDirTracker(afterEach);
+afterEach(async () => {
   vi.restoreAllMocks();
-  configureFsSafeNative(nativeConfig);
+  workspaceCleanup.failure = undefined;
+  for (const workspace of workspaceCleanup.handles.splice(0)) {
+    await workspace.cleanup();
+  }
 });
 
 it.each([
@@ -42,49 +69,38 @@ it.each([
     const removal = Object.assign(new Error("EACCES: synthetic private cleanup failure"), {
       code: "EACCES",
     });
-    const retained = new Set<string>();
-    const prefix = workspace === "codec" ? ".git-backup-restore-" : `openclaw-git-${workspace}-`;
-    const rename = fsSync.renameSync;
-    const { rm, rmdir, open } = fs;
     const codec = workspace === "codec";
+    const retained = new Set<string>();
+    const { rm, open } = fs;
     const basename = (value: unknown) => path.basename(String(value));
     await withBackupStateEnv({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       if (operation !== "create") {
         await createGitBackup(backup);
       }
       const warning = vi.spyOn(console, "error").mockImplementation(() => {});
-      vi.spyOn(fsSync, "renameSync").mockImplementation((source, destination) => {
-        const name = basename(source);
-        const selected =
-          name.startsWith(prefix) &&
-          (workspace === "backup-index" || !name.startsWith("openclaw-git-backup-index-"));
-        if (selected && cleanup === "rename") {
-          retained.add(String(source));
-          throw removal;
-        }
-        rename(source, destination);
-        if (selected) {
-          retained.add(String(destination));
-        }
-      });
+      if (!codec) {
+        // Mirrors fs-safe's outcomes: a failed quarantine rename leaves the
+        // removal indeterminate; a failed removal rejects with its I/O error.
+        workspaceCleanup.failure = {
+          prefix: `openclaw-git-${workspace}-`,
+          retained,
+          cleanup:
+            cleanup === "rename"
+              ? async () => "indeterminate"
+              : async () => {
+                  throw removal;
+                },
+        };
+      }
       vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-        if (codec && basename(args[0]).startsWith(prefix)) {
+        if (codec && basename(args[0]).startsWith(".git-backup-restore-")) {
           retained.add(String(args[0]));
-          throw removal;
-        }
-        if (retained.has(String(args[0]))) {
           throw removal;
         }
         if (failure && operation === "create" && basename(args[0]) === "global-0.sqlite") {
           throw primary;
         }
         return await rm(...args);
-      });
-      vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
-        if (retained.has(String(args[0]))) {
-          throw removal;
-        }
-        return await rmdir(...args);
       });
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
         if (failure && codec && String(args[0]).includes(`${path.sep}.git-backup-restore-`)) {
@@ -109,9 +125,8 @@ it.each([
         expect(retained.size).toBeGreaterThan(0);
         for (const retainedPath of retained) {
           expect((await fs.lstat(retainedPath)).isDirectory()).toBe(true);
-          if (codec) {
-            expect(diagnostics).toContain(retainedPath);
-          }
+          // Workspace warnings name the parent that holds the retained directory.
+          expect(diagnostics).toContain(codec ? retainedPath : path.dirname(retainedPath));
         }
         if (codec) {
           if (failure) {

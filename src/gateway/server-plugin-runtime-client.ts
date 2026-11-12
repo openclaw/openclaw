@@ -30,6 +30,7 @@ export function createSyntheticPluginRuntimeClient(
       | "agentToolCaller"
       | "agentRunTracking"
       | "operatorRoleActor"
+      | "openclawIdPrincipal"
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
       | "cronRunContinuation"
@@ -65,6 +66,7 @@ export function createSyntheticPluginRuntimeClient(
     internal: {
       syntheticClient: true,
       ...(params?.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+      ...(params?.openclawIdPrincipal ? { openclawIdPrincipal: params.openclawIdPrincipal } : {}),
       ...(params?.operatorRunAuthority
         ? { operatorRunAuthority: params.operatorRunAuthority }
         : {}),
@@ -195,8 +197,15 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
     throw new Error("toolsAlsoAllow requires plugin identity for subagent runs.");
   }
   const registry = getActivePluginRegistry();
+  // A catalog id is the plugin's own when its manifest declares the tool (as `browser` and
+  // `skill_workshop` are); every other catalog id is a core tool a plugin may not hand a fork.
+  const declaredTools = new Set(
+    (registry?.plugins.find((plugin) => plugin.id === pluginId)?.contracts?.tools ?? []).map(
+      (name) => normalizeToolPolicyName(name),
+    ),
+  );
   for (const toolName of requested) {
-    if (isKnownCoreToolId(toolName)) {
+    if (isKnownCoreToolId(toolName) && !declaredTools.has(toolName)) {
       throw new Error(`plugin "${pluginId}" may not add core tool "${toolName}" to subagent runs.`);
     }
     const owners = uniqueStrings(

@@ -1,0 +1,2 @@
+# Real outer-tool delegation after network taint, preserving retained and revoked authority denials.
+52

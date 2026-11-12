@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
@@ -130,11 +131,11 @@ export function CloudWorkerSnapshotRow(
       </Show>
       <Show when={props.image.retirement}>
         {(retirement) => (
-          <p class="callout warning" role="status">
+          <InlineAlert tone="warning" role="status">
             {t("cloudWorkersPage.snapshots.retirementHint", {
               checkpoint: retirement().checkpointId,
             })}
-          </p>
+          </InlineAlert>
         )}
       </Show>
       <Show when={props.image.capture?.phase === "uncertain"}>
@@ -235,7 +236,24 @@ export function CloudWorkerEnvironmentSheet(
   );
   const phases = createMemo(() => {
     const durations = setup()?.phaseDurationsMs;
-    return (["onCreate", "updateContent", "detectedInstall"] as const).flatMap((name) =>
+    return (
+      [
+        "retainedGit",
+        "retainedManifest",
+        "inspection",
+        "seedPreparation",
+        "seedTransfer",
+        "seedVerification",
+        "seedCheckout",
+        "seedManifest",
+        "gitUpdate",
+        "toolchainPreparation",
+        "onCreate",
+        "updateContent",
+        "detectedInstall",
+        "preparedManifest",
+      ] as const
+    ).flatMap((name) =>
       durations?.[name] !== undefined ? [{ name, durationMs: durations[name] }] : [],
     );
   });
@@ -339,7 +357,7 @@ export function CloudWorkerEnvironmentSheet(
           {(image) => (
             <Show when={image().recipePreparation?.failure}>
               {(failure) => (
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   <Show when={images().length > 1}>
                     <strong>{image().profileId ?? image().profileKey}</strong>
                   </Show>
@@ -347,7 +365,7 @@ export function CloudWorkerEnvironmentSheet(
                   <Show when={failure().outputTail}>
                     {(tail) => <pre class="cloud-environments__output">{tail()}</pre>}
                   </Show>
-                </div>
+                </InlineAlert>
               )}
             </Show>
           )}

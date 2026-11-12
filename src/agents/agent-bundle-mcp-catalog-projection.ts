@@ -1,10 +1,13 @@
 /** Projects MCP catalog metadata without owning transport or catalog lifetime. */
 import type { Client, Tool } from "@modelcontextprotocol/client";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { logWarn } from "../logger.js";
-import type { McpCatalogTool, McpServerCatalog, McpToolCatalog } from "./agent-bundle-mcp-types.js";
+import type {
+  McpCatalogTool,
+  McpServerCatalog,
+  McpToolCatalog,
+} from "./agent-bundle-mcp-catalog.types.js";
 import {
   readMcpAppIcons,
   readMcpAppSettingsCapability,
@@ -15,11 +18,11 @@ import {
   resolveProjectedMcpCodexToolApprovalMode,
 } from "./mcp-codex-tool-approval.js";
 import {
-  normalizeToolUiVisibility,
+  readMcpToolUiMetadata,
   sanitizeMcpMetadataText,
   summarizeServerCapabilities,
 } from "./mcp-metadata.js";
-import { createMcpToolFilter, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
+import { createListedMcpToolFilter, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
 import { normalizeMcpToolCatalog } from "./mcp-tool-metadata.js";
 
 export function projectBundleMcpServerCatalog({
@@ -55,11 +58,12 @@ export function projectBundleMcpServerCatalog({
   const deniedToolNames = new Set(
     denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
   );
-  const isToolAllowed = createMcpToolFilter(toolFilter, {
-    ...capabilities,
+  const isToolAllowed = createListedMcpToolFilter(
+    toolFilter,
     safeServerName,
-    toolNames: listedTools.map((tool) => tool.name.trim()),
-  });
+    listedTools,
+    capabilities,
+  );
   const normalizedTools = normalizeMcpToolCatalog(listedTools, schemaValidator, (toolName) => {
     if (!isToolAllowed(toolName)) {
       return "exclude";
@@ -120,14 +124,6 @@ export function projectBundleMcpServerCatalog({
       (entry) => [entry, true, deniedToolNames.has(entry.name)] as const,
     ),
   ]) {
-    const { _meta: metadata } = tool;
-    const uiMeta = asOptionalRecord(metadata?.ui);
-    const rawResourceUri = uiMeta?.resourceUri ?? metadata?.["ui/resourceUri"];
-    const uiResourceUri =
-      typeof rawResourceUri === "string" && rawResourceUri.startsWith("ui://")
-        ? rawResourceUri
-        : undefined;
-    const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
     const entry: McpCatalogTool = {
       serverName,
       safeServerName,
@@ -137,8 +133,7 @@ export function projectBundleMcpServerCatalog({
       description: sanitizeMcpMetadataText(tool.description),
       inputSchema: tool.inputSchema,
       fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
-      ...(uiResourceUri ? { uiResourceUri } : {}),
-      ...(uiVisibility ? { uiVisibility } : {}),
+      ...readMcpToolUiMetadata(tool),
       ...(excludedFromOpenClawCatalog ? { excludedFromOpenClawCatalog: true as const } : {}),
       ...(deniedBySession ? { deniedBySession: true } : {}),
       codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),

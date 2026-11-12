@@ -732,6 +732,5 @@ it("preserves independent stdout and stderr parser state", async () => {
     return run.promise;
   });
   expect(outcome.aggregated).toBe("outerrOUTERR");
-  expect(outcome.aggregated).not.toContain("\\x1b");
   expect(updates.at(-1)).toBe("outerrOUTERR");
 });

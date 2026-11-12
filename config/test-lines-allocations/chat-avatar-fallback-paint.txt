@@ -1,0 +1,3 @@
+# Keep accessible identity, fallback text, visibility and dimensions in one
+# retrying browser read while a cached miss replaces the avatar frame.
+10

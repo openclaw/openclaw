@@ -1,0 +1,2 @@
+# Real-Gateway contract test: adding the first provider's API key from Models activates its model through Test & use's owner and ends in a chat reply, within 4 clicks, without visiting Set up a model; plus the setup-errors test now counts the add-time check.
+159

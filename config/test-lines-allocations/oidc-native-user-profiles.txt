@@ -1,0 +1,3 @@
+# 618 lines for delegated identity, HTTP/WS authority and persisted profile regressions.
+# Covers real worker persistence, credential watcher, Gateway profiles, scope ceilings and revocation.
+618

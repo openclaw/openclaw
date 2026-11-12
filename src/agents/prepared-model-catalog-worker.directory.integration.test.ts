@@ -32,24 +32,26 @@ it.each(["Gateway", "standalone"])("%s isolates and releases custom directories"
   const observations = path.join(fixture.root, "directory-catalog.jsonl");
   const readObservations = () => fs.readFileSync(observations, "utf8");
   const pluginDir = path.join(fixture.root, "plugin");
+  const pluginId = `${PLUGIN_ID}-directory`;
   writeFixtureFiles(pluginDir, {
     "index.cjs": `const fs = require("node:fs");
 const id = ${JSON.stringify(PROVIDER_ID)};
+let staticCalls = 0;
 const catalog = (models) => ({ provider: { baseUrl: "https://directory.invalid/v1", api: "openai-completions", models } });
-module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
+module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
     api.registerProvider({ id, label: "Directory catalog", auth: [],
-      staticCatalog: { run: async () => catalog([]) },
+      staticCatalog: { run: async () => { staticCalls++; return catalog([]); } },
       catalog: { run: async (context) => {
         const auth = context.resolveProviderApiKey(${JSON.stringify(PROVIDER_ID)});
         const modelId = { "alpha-key-not-real": "alpha-model", "beta-key-not-real": "beta-model" }[auth.discoveryApiKey];
-        fs.appendFileSync(${JSON.stringify(observations)}, JSON.stringify([auth.profileId, context.agentDir, require("node:worker_threads").threadId]) + "\\n");
+        fs.appendFileSync(${JSON.stringify(observations)}, JSON.stringify([auth.profileId, context.agentDir, require("node:worker_threads").threadId, staticCalls]) + "\\n");
         if (!modelId) throw new Error("Unexpected directory credential");
         return catalog([{ id: modelId, name: modelId }]);
       } },
     });
 } };`,
     "openclaw.plugin.json": {
-      id: PLUGIN_ID,
+      id: pluginId,
       providers: [PROVIDER_ID],
       providerCatalogEntry: "./index.cjs",
       modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" } },
@@ -62,16 +64,30 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
     beta: directory("custom-catalog"),
     foreign: directory("other-parent", "agent"),
   };
-  const profiles = (agentId: string): AuthProfileStore["profiles"] => ({
+  const profiles = (agentId: string, unknownProvider?: string): AuthProfileStore["profiles"] => ({
     [`${PROVIDER_ID}:${agentId}`]: {
       type: "api_key",
       provider: PROVIDER_ID,
       key: `${agentId}-key-not-real`,
     },
+    ...(unknownProvider
+      ? {
+          [`${unknownProvider}:default`]: {
+            type: "api_key" as const,
+            provider: unknownProvider,
+            key: "unknown-key-not-real",
+          },
+        }
+      : {}),
   });
   const config = {
     ...fixture.config,
     agents: { defaults: { model: `${PROVIDER_ID}/selected-model` }, entries },
+    plugins: {
+      ...fixture.config.plugins,
+      allow: [pluginId],
+      entries: { [pluginId]: { enabled: true } },
+    },
   };
   const retirement = new AbortController();
   retireAfterTest(() => {
@@ -110,6 +126,13 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
     });
   const workers = prepared.agentFacts.map(createWorker);
   for (const attempt of [1, 2]) {
+    const unknownProvider = `unknown-directory-provider-${attempt}`;
+    for (const agentId of ["alpha", "beta"] as const) {
+      saveAuthProfileStore(
+        { version: 1, profiles: profiles(agentId, unknownProvider) },
+        entries[agentId].agentDir,
+      );
+    }
     const catalogs = await Promise.all(workers.map((worker) => worker.loadCatalog()));
     for (const [index, agentId] of ["alpha", "beta"].entries()) {
       const catalog = catalogs[index]!.modelCatalog;
@@ -117,9 +140,10 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
       expect(catalog.entries).not.toContainEqual(
         expect.objectContaining({ id: `${agentId === "alpha" ? "beta" : "alpha"}-model` }),
       );
-      expect(getPreparedModelFullCatalogAuth(catalog)?.authStore.profiles).toEqual(
-        profiles(agentId),
-      );
+      const auth = getPreparedModelFullCatalogAuth(catalog);
+      expect(auth?.authStore.profiles).toEqual(profiles(agentId, unknownProvider));
+      expect(auth?.credentials).toHaveProperty(unknownProvider);
+      expect(auth?.credentials).not.toHaveProperty(`unknown-directory-provider-${3 - attempt}`);
     }
     expect(readObservations().trim().split("\n")).toHaveLength(attempt * 2);
   }
@@ -139,12 +163,22 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
     ).rejects.toThrow(`belongs to agent ${actual}; requested agent ${requested}`);
   }
   expect(readObservations()).toBe(beforeRejection);
+  saveAuthProfileStore({ version: 1, profiles: profiles("beta") }, entries.beta.agentDir);
   const next = await workers[1]!.loadCatalog();
   expect(next.modelCatalog.entries).toContainEqual(catalogEntry("beta-model"));
-  const events: Array<[profileId: string, agentDir: string, thread: number]> = readObservations()
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  expect(getPreparedModelFullCatalogAuth(next.modelCatalog)?.authStore.profiles).toEqual(
+    profiles("beta"),
+  );
+  for (const attempt of [1, 2]) {
+    expect(getPreparedModelFullCatalogAuth(next.modelCatalog)?.credentials).not.toHaveProperty(
+      `unknown-directory-provider-${attempt}`,
+    );
+  }
+  const events: Array<[profileId: string, agentDir: string, thread: number, staticCalls: number]> =
+    readObservations()
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
   expect(
     events
       .map(([profileId, agentDir]) => [profileId, agentDir] as const)
@@ -157,6 +191,8 @@ module.exports = { id: ${JSON.stringify(PLUGIN_ID)}, register(api) {
   );
   expect(new Set(events.map((event) => event[2])).size).toBe(owner === "Gateway" ? 1 : 2);
   expect(events.every((event) => event[2] !== threadId)).toBe(true);
+  // Credential-only identities must not rebuild or enlarge the retained static scope.
+  expect(events.map((event) => event[3])).toEqual([1, 1, 1, 1, 1]);
   if (owner === "Gateway") {
     const pool = getPreparedModelCatalogWorkerPoolSnapshot();
     expect([pool.workersCreated, pool.workers, pool.activeTasks, pool.pendingTasks]).toEqual([

@@ -187,7 +187,7 @@ export function emitSuccessfulPluginInstallSecurityEvent(
     trustedSourceLinkedOfficialInstall?: boolean;
   },
 ) {
-  if (params.dryRun || !result.ok) {
+  if (params.dryRun || !result.ok || result.outcome === "prepared") {
     return;
   }
   emitPluginInstallSecurityEvent({
@@ -358,6 +358,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   workTimeoutMs?: number | null;
   mode: "install" | "update";
   dryRun: boolean;
+  prepareOnly?: boolean;
   copyErrorPrefix: string;
   hasDeps: boolean;
   sourceHardlinks?: "package-manager" | "reject";
@@ -421,6 +422,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    prepareOnly: params.prepareOnly,
     omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
@@ -433,7 +435,10 @@ export async function installPluginDirectoryIntoExtensions(params: {
       }
       try {
         // Consent must bind to the final staged bytes, never their mutable source tree.
-        await params.onBeforePluginArtifactCommit?.({
+        const inspect = params.prepareOnly
+          ? params.onPluginArtifactInspect
+          : params.onBeforePluginArtifactCommit;
+        await inspect?.({
           pluginId: params.pluginId,
           ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
           stagedArtifactDir: installedDir,
@@ -464,14 +469,17 @@ export async function installPluginDirectoryIntoExtensions(params: {
     return installRes;
   }
 
-  const result = buildDirectoryInstallResult({
-    pluginId: params.pluginId,
-    targetDir,
-    manifestName: params.manifestName,
-    version: params.version,
-    extensions: params.extensions,
-    setup: params.setup,
-  });
+  const result: InstallPluginResult = {
+    ...buildDirectoryInstallResult({
+      pluginId: params.pluginId,
+      targetDir,
+      manifestName: params.manifestName,
+      version: params.version,
+      extensions: params.extensions,
+      setup: params.setup,
+    }),
+    ...(params.prepareOnly ? { outcome: "prepared" } : {}),
+  };
   const transaction = resolvePackageDirInstallTransaction(installRes);
   return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }

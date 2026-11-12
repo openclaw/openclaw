@@ -32,7 +32,6 @@ import {
 import { runBtwSessionFork, runLightweightBtwStream } from "./btw-stream.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
-import { createAgentHarnessHostCapabilities } from "./harness/host-capability.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import type { AgentHarnessPreparedModelProvider } from "./harness/selection-decision.js";
@@ -371,6 +370,7 @@ export async function runBtwSideQuestion(
         nativeOwnership: runtime.nativeOwnership,
         sandbox,
       });
+      const { createAgentHarnessHostCapabilities } = await import("./harness/host-capability.js");
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
         params.cfg,
         sideRunId,

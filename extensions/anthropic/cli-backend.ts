@@ -80,23 +80,28 @@ function projectClaudeNativeToolAuthority(nativeTools: readonly string[]): reado
   ];
 }
 
-// Orchestration tools whose descendants inherit the parent's tool list, so they confer
-// no capability of their own. Order is canonical: equivalent selections launch one argv.
-const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow"] as const;
+// Agent and Workflow descendants inherit the parent's tool list, so they confer no
+// capability of their own. WebSearch runs on Anthropic's servers and confers web_search,
+// which core keeps only while the turn's OpenClaw policy allows it and no configured
+// OpenClaw search provider already serves it. Order is canonical:
+// equivalent selections launch one argv.
+const CLAUDE_MANAGED_NATIVE_TOOLS = ["Agent", "Workflow", "WebSearch"] as const;
+// Used when the operator sets no `default` list; an explicit list (even []) replaces it.
+const CLAUDE_DEFAULT_MANAGED_NATIVE_TOOLS: readonly string[] = ["WebSearch"];
 
 /** Operator selection under `plugins.entries.anthropic.config.managedNativeTools`. */
 function resolveClaudeManagedNativeTools(
   ctx: Parameters<NonNullable<CliBackendPlugin["resolveManagedNativeTools"]>>[0],
 ): readonly string[] {
   const pluginConfig = ctx.config?.plugins?.entries?.anthropic?.config;
-  const selection = isRecord(pluginConfig) ? pluginConfig.managedNativeTools : undefined;
-  if (!isRecord(selection)) {
-    return [];
-  }
+  const configured = isRecord(pluginConfig) ? pluginConfig.managedNativeTools : undefined;
+  const selection = isRecord(configured) ? configured : {};
   const agents = isRecord(selection.agents) ? selection.agents : undefined;
   const selected = Object.hasOwn(agents ?? {}, ctx.agentId)
     ? agents?.[ctx.agentId]
-    : selection.default;
+    : Object.hasOwn(selection, "default")
+      ? selection.default
+      : CLAUDE_DEFAULT_MANAGED_NATIVE_TOOLS;
   return Array.isArray(selected)
     ? CLAUDE_MANAGED_NATIVE_TOOLS.filter((name) => selected.includes(name))
     : [];
@@ -318,7 +323,7 @@ export function buildAnthropicCliBackend(
             : {}),
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
           ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
-          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel),
           ...authInput?.env,
         };
         return {

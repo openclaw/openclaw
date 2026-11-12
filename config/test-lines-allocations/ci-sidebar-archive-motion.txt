@@ -1,0 +1,3 @@
+# Native-frame regression proving archive row motion survives delayed layout delivery.
+# Exact net growth in app-sidebar-archive-exit.browser.test.ts for CI round 43020804161.
+25

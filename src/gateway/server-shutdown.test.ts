@@ -20,16 +20,20 @@ it("omits invalid restart metadata and normalizes the reason", () => {
   });
 });
 
-it.for(["optional", "fatal", "required"])(
+it.for(["optional", "fatal", "required", "required-close"])(
   "joins required work and preserves fatal close status (%s)",
   async (mode) => {
     const fatal = mode === "fatal";
-    const required = mode === "required";
+    const required = mode.startsWith("required");
+    const requiredClose = mode === "required-close";
     vi.useFakeTimers();
     const sidecar = createDeferredCore();
     const sidecars = createGatewaySidecarStopOwner();
     sidecars.publish({ name: "synthetic-held-worker", stop: () => sidecar.promise });
     const close = vi.fn(async () => {
+      if (requiredClose) {
+        await sidecars.stop();
+      }
       if (fatal) {
         throw new Error("synthetic persistence failure");
       }
@@ -38,7 +42,7 @@ it.for(["optional", "fatal", "required"])(
     const noWork = async () => undefined;
     const closing = runGatewayCloseSteps({
       owner: {
-        connectionWork: { drain: required ? sidecars.stop : noWork },
+        connectionWork: { drain: required && !requiredClose ? sidecars.stop : noWork },
         stopConnectionDependentSidecars: noWork,
         stopRegisteredGatewayLifetimeSidecars: required ? noWork : sidecars.stop,
         stopRegisteredPostReadySidecars: noWork,
@@ -50,8 +54,8 @@ it.for(["optional", "fatal", "required"])(
       onError,
     }).catch((error: unknown) => error);
     try {
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(close).toHaveBeenCalledTimes(required ? 0 : 1);
+      await vi.advanceTimersByTimeAsync(requiredClose ? 10_000 : 5_000);
+      expect(close).toHaveBeenCalledTimes(required && !requiredClose ? 0 : 1);
       sidecar.resolve();
       const failure = await closing;
       if (required) {
@@ -63,7 +67,9 @@ it.for(["optional", "fatal", "required"])(
         expect(failure).toHaveProperty("message", expect.stringContaining("synthetic-held-worker"));
       }
       expect(onError).toHaveBeenCalledWith(
-        expect.stringMatching(/cleanup exceeded 5000ms; resources remain; pending: shutdown\./),
+        expect.stringMatching(
+          /cleanup exceeded (5000|10000)ms; resources remain; pending: shutdown\./,
+        ),
       );
     } finally {
       sidecar.resolve();

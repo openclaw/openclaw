@@ -326,7 +326,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message) && !normalizeOptionalString(params.caption)) {
       params.message = recommendations.text;
     }
   }
@@ -647,7 +647,8 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
               extraParamKeys: extraActionMediaSourceParamKeys,
             });
 
-          if (action !== "send") {
+          const stagesBuffer = action === "send" || action === "thread-reply";
+          if (!stagesBuffer) {
             await hydrateActionAttachmentParams();
           }
 
@@ -663,7 +664,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             plugin: channelPlugin,
           });
 
-          if (action === "send") {
+          if (stagesBuffer) {
             // Target validation must finish before buffer staging, which can perform
             // filesystem reads and mutate the outbound action payload.
             await hydrateActionAttachmentParams();

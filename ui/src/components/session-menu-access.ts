@@ -48,7 +48,7 @@ export function sessionMenuReasons(params: {
     });
   const renameReason = patchReason({ label: null }, true);
   const promotionReason = !session.sessionId?.trim()
-    ? "Session lifecycle action requires a durable session identity."
+    ? t("sessionsView.lifecycleIdentityRequired")
     : patchReason({ sidebarRoot: true }, true);
   const iconReason = patchReason({ icon: null });
   const colorReason = patchReason({ color: null });
@@ -69,7 +69,7 @@ export function sessionMenuReasons(params: {
   const categoryReason = batchPatchReason({ category: null });
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
-    ? "Session lifecycle action requires a durable session identity."
+    ? t("sessionsView.lifecycleIdentityRequired")
     : batchRows &&
         snapshot?.phase === "connected" &&
         !snapshot.deferredIntentCount &&
@@ -87,7 +87,7 @@ export function sessionMenuReasons(params: {
           )
           .find((value) => value !== undefined);
   const snoozeReason = !session.sessionId?.trim()
-    ? "Session lifecycle action requires a durable session identity."
+    ? t("sessionsView.lifecycleIdentityRequired")
     : patchReason({ snoozedUntil: null }, true);
   const groupReason = reason({
     method: "sessions.groups.put",

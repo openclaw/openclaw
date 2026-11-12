@@ -3,6 +3,7 @@
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
@@ -416,7 +417,7 @@ describe("Talk device and voice wake settings", () => {
     )!;
     expect(section).toBeDefined();
     const rows = settingRows(section);
-    expect(rows.map(rowTitle)).toEqual(["Voice Wake"]);
+    expect(rows.map(rowTitle)).toEqual(["Voice wake"]);
     const next = !rows[0]!.querySelector<HTMLInputElement>(".settings-toggle__input")!.checked;
     rows[0]!.click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledExactlyOnceWith(
@@ -438,10 +439,13 @@ describe("Talk device and voice wake settings", () => {
     expect(triggerInput(page)).toMatchObject({ rows: 4, value: "", disabled: true });
     expect(triggerInput(page).getAttribute("aria-busy")).toBe("true");
     if (mode === "retry") {
-      pending.reject(new Error("trigger read unavailable"));
+      pending.reject(new TypeError("Cannot read properties of undefined"));
       await waitForSolid(() =>
-        expect(triggerAlert(page)?.textContent).toContain("trigger read unavailable"),
+        expect(triggerAlert(page)?.textContent).toBe(
+          `${t("configPage.deviceTalk.triggerWordsLoadFailed")}${t("common.retry")}`,
+        ),
       );
+      expect(page.querySelector(".settings-group [role='alert']")).toBeNull();
       retryTrigger(page);
     } else {
       setGatewayConnection(false);
@@ -454,6 +458,35 @@ describe("Talk device and voice wake settings", () => {
     expect(triggerAlert(page)).toBeNull();
   });
 
+  it("redacts the Gateway's reason when trigger words fail to load", async () => {
+    const voiceWakeRequest = vi.fn(async () => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Access denied. Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk",
+      });
+    });
+    const { page } = createTalkMutationHarness({ voiceWakeRequest });
+    await waitForSolid(() =>
+      expect(triggerAlert(page)?.textContent).toBe(
+        `Couldn’t load trigger words. Try again. Access denied. Authorization: [redacted]${t("common.retry")}`,
+      ),
+    );
+  });
+
+  it("redacts the Gateway's reason when trigger words fail to save", async () => {
+    const { page, input } = await voiceWakeFixture(() => {
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Access denied. Authorization: Basic dXNlcjpzdXBlcnNlY3JldHBhc3N3b3Jk",
+      });
+    });
+    editTrigger(input, "hello");
+    await tick(400);
+    expect(triggerAlert(page)?.textContent).toBe(
+      `Couldn’t save trigger words. Try again. Access denied. Authorization: [redacted]${t("common.retry")}`,
+    );
+  });
+
   it("retains rejected trigger edits and recovers through retry or typing", async () => {
     const { page, input, voiceWakeRequest } = await voiceWakeFixture((index) => {
       if (index <= 2) {
@@ -464,7 +497,10 @@ describe("Talk device and voice wake settings", () => {
     input.focus();
     editTrigger(input, "hello");
     await tick(400);
-    expect(triggerAlert(page)?.textContent).toContain("Permission denied");
+    expect(triggerAlert(page)?.textContent).toBe(
+      `${t("configPage.deviceTalk.triggerWordsSaveFailed")}${t("common.retry")}`,
+    );
+    expect(page.querySelector(".settings-group [role='alert']")).toBeNull();
     expect(input.value).toBe("hello");
     expect(input.disabled).toBe(false);
     retryTrigger(page);
@@ -666,11 +702,11 @@ describe("Talk device and voice wake settings", () => {
     const row = (title: string) => rows.find((element) => rowTitle(element) === title)!;
     const expectWakeDisabled = (disabled: boolean) =>
       expect(
-        row("Voice Wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
+        row("Voice wake").querySelector(".settings-toggle__input")?.hasAttribute("disabled"),
       ).toBe(disabled);
     expect(page.textContent).toContain("This Mac");
     expectWakeDisabled(true);
-    expect(row("Voice Wake").textContent).toContain("macOS 26");
+    expect(row("Voice wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "voice.pushToTalkEnabled",
@@ -706,7 +742,7 @@ describe("Talk device and voice wake settings", () => {
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
     await waitForSolid(() => expectWakeDisabled(false));
-    row("Voice Wake").click();
+    row("Voice wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
       "voice.wakeEnabled",
       false,

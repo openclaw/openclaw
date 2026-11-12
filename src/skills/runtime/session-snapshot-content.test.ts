@@ -219,6 +219,7 @@ it("shares immutable catalog skills across interleaved agent selections and unch
   const second = await read("reader");
   await refreshSkillsDiscovery({ workspaceDir });
   const third = await read("writer");
+  expect((await read("writer")).snapshot).toBe(third.snapshot);
   const shared = first.snapshot.resolvedSkills![0]!;
   expect(first.snapshot.skills.map((skill) => skill.name)).toEqual(["demo"]);
   expect(second.snapshot.skills.map((skill) => skill.name)).toEqual(["demo", "other"]);

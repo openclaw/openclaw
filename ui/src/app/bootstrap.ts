@@ -31,6 +31,7 @@ import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import { AssistantDock } from "./assistant-dock.ts";
+import { finishBootFrame } from "./boot-composer.ts";
 import { prepareApplicationStartup } from "./bootstrap-connection.ts";
 import {
   applicationRouteLocation,
@@ -157,6 +158,7 @@ export function bootstrapApplication(
   const stopWarmBootConnection = ownsWarmBoot
     ? subscribeWarmBootConnection(gateway, bootRecord, () => {
         warmBoot = false;
+        finishBootFrame();
       })
     : undefined;
   const agents = createAgentCapability(gateway);
@@ -311,6 +313,7 @@ export function bootstrapApplication(
   });
   const sidebarAttention = createSidebarAttentionStore({
     gateway,
+    config,
     agentSelection,
     agents,
     overlays,

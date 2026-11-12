@@ -16,6 +16,9 @@ export async function loadCatalogSessionPage({
   client,
   key,
   profileRelation,
+  metadataOnly,
+  listMethod,
+  readMethod,
   signal,
   isCurrent,
   older,
@@ -27,6 +30,9 @@ export async function loadCatalogSessionPage({
   client: Pick<GatewayBrowserClient, "request">;
   key: CatalogSessionKey;
   profileRelation?: SessionCatalogProfileRelation;
+  metadataOnly: boolean;
+  listMethod: string;
+  readMethod: string;
   signal: AbortSignal;
   isCurrent: () => boolean;
   older: boolean;
@@ -40,6 +46,7 @@ export async function loadCatalogSessionPage({
       client,
       key,
       profileRelation,
+      listMethod,
       isCurrent,
       signal,
     });
@@ -48,10 +55,13 @@ export async function loadCatalogSessionPage({
     }
     history.catalogHost = lookup.host;
     history.catalogSession = lookup.session;
+    if (metadataOnly) {
+      return true;
+    }
   }
   const requestedOlderCursor = older ? history.catalogCursor : undefined;
   const page = await client.request<SessionsCatalogReadResult>(
-    "sessions.catalog.read",
+    readMethod,
     {
       agentId,
       catalogId: key.catalogId,

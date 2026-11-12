@@ -1,0 +1,2 @@
+# Native package-script execution: spaced arguments, failure propagation, and unsafe cmd rejection.
+16

@@ -1,0 +1,2 @@
+26
+# Cold-page editor activation must survive connection readiness and save its first draft.

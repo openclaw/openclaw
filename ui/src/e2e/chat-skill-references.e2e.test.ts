@@ -14,7 +14,9 @@ const command = (name: string, skillDisplayName?: string) => ({
   name,
   scope: "both",
   source: skillDisplayName ? "skill" : "native",
-  ...(skillDisplayName ? { skillDisplayName, skillModelVisible: true } : {}),
+  ...(skillDisplayName
+    ? { skillDisplayName, skillReferenceable: true, skillModelVisible: true }
+    : {}),
 });
 
 suite.define(() => {
@@ -30,9 +32,14 @@ suite.define(() => {
       },
       async ({ page }) => {
         const commands = [
-          command("autoreview", "Mu\u0308nchen"),
+          { ...command("autoreview", "Mu\u0308nchen"), skillModelVisible: false },
           command("technical_documentation", "Home Caf\u00e9"),
           command("status_report", "Status Report"),
+          {
+            ...command("bundle_review", "Bundle Review"),
+            skillModelVisible: false,
+            skillReferenceable: false,
+          },
           command("status"),
         ];
         const gateway = await installMockGateway(page, {
@@ -60,10 +67,17 @@ suite.define(() => {
             );
           }
         };
-        await composer.fill("Review this with $m\u00fcnchen");
-
+        await composer.fill("$");
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });
+        await screenshot("skill-reference-manual-only.png", picker);
+        await expect
+          .poll(() => picker.getByRole("option").allTextContents())
+          .toContainEqual(expect.stringContaining("Mu\u0308nchen"));
+        expect(await picker.getByRole("option").allTextContents()).not.toContainEqual(
+          expect.stringContaining("Bundle Review"),
+        );
+        await composer.fill("Review this with $m\u00fcnchen");
         await expect
           .poll(() => picker.getByRole("option").allTextContents())
           .toEqual([expect.stringContaining("Mu\u0308nchen")]);
@@ -85,6 +99,14 @@ suite.define(() => {
 
         await composer.fill("Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
+        await composer.fill("Review this with /bundle_review");
+        await expect
+          .poll(() => page.getByRole("listbox", { name: "Slash commands" }).count())
+          .toBe(0);
+        await composer.fill("/bundle_review");
+        await expect
+          .poll(() => page.getByRole("option", { name: /bundle_review/u }).count())
+          .toBe(1);
         await composer.fill("Review this with /auto");
         const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
         await slashPicker.waitFor({ state: "visible" });

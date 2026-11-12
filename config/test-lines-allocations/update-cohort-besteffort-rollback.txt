@@ -1,0 +1,7 @@
+# Best-effort plugin cohort rollback (migrations and install records).
+# A real install-index fixture keeps a later install record, restores a matching
+# one, completes the rollback and records the kept change as an update warning.
+# Repair settlement cases assert rollback completes and warns, while forward does not.
+# An installation keyed by owner keeps its plugin's snapshot (demo / package-owner),
+# and cohort rows stored by released updaters settle unchanged.
+260

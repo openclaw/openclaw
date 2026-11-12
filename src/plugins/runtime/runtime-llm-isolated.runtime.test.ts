@@ -14,7 +14,7 @@ import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-l
 import type { Model } from "../../llm/types.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
+import type { LlmIsolatedAgentRuntimeCompleteParams } from "./runtime-llm.types.js";
 
 const hoisted = vi.hoisted(() => ({
   acquireSimpleCompletionModelForAgent:

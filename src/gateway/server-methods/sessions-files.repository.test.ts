@@ -78,6 +78,9 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
       raw: async () => {
         throw new Error("File browsing must consume visible transcript pages");
       },
+      replayGroups: async () => {
+        throw new Error("File browsing must consume visible transcript pages");
+      },
     })) satisfies typeof withSessionTranscriptDeltaReader,
 }));
 
@@ -332,8 +335,14 @@ it("downloads original live repository bytes in bounded windows and rejects stal
   expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
   const windows = await Promise.all(run.mock.results.map((call) => call.value));
   expect(windows.every((result) => Buffer.byteLength(result.stdout) < 2 * 1024 * 1024)).toBe(true);
-  for (const filePath of ["../outside", "/etc/passwd"]) {
-    await files.error("download", filePath, undefined, connection);
+  for (const filePath of [
+    "../outside",
+    "/etc/passwd",
+    path.join(nodeRoot, ".openclaw/tmp/report.txt"),
+  ]) {
+    expect(await files.error("download", filePath, undefined, connection)).toMatchObject({
+      details: { type: "session_file_not_found", reason: "outside_session_boundary" },
+    });
   }
   onResult = () => {
     generation++;

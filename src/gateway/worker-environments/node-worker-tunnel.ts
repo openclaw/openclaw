@@ -21,6 +21,7 @@ import {
   NodeWorkerWorkspaceTransferError,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { canInvokeNodeMcpLocally } from "../node-command-policy.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { measureGatewayCloseStep } from "../restart-trace.js";
 import {
@@ -374,6 +375,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       ownerEpoch: entry.ownerEpoch,
       measureLaunchTurn: (plan, claim) =>
         measureNodeWorkerLaunchBytes(entry.deviceId, buildLaunchInput(plan, claim)),
+      supportsLocalMcp: async () => {
+        const node = await options.getTransport()?.getCurrentNode(entry.deviceId);
+        return node?.workerHost.localMcp === true && canInvokeNodeMcpLocally(node.commands);
+      },
       readLaunchToolNames: async () => {
         const node = await options.getTransport()?.getCurrentNode(entry.deviceId);
         return resolveNodeWorkerLaunchToolNames(node?.workerHost);

@@ -1,0 +1,2 @@
+# Browser device-code pairing: route, approval authority, reduced-token refusal and UI flow regressions.
+1004

@@ -294,6 +294,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: 
   await ensureKyselyTypes(repoRoot);
   signal.throwIfAborted();
   const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
+  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
   let selected: string[] | undefined;
   let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
   let preparation: Awaited<ReturnType<typeof resolveExtensionBoundaryPreparation>> | undefined;
@@ -311,15 +312,17 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: 
     ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
       await import("./lib/extension-boundary-projects.mts"));
     signal.throwIfAborted();
-    preparation = await discoverPreparation(repoRoot, selected);
-    signal.throwIfAborted();
-    process.stdout.write(
-      `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
-    );
+    // Shared SDK preparation does not need roots until its full output is verified.
+    if (!sharedSdk) {
+      preparation = await discoverPreparation(repoRoot, selected);
+      signal.throwIfAborted();
+      process.stdout.write(
+        `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
+      );
+    }
   }
   const compilerEnv = resolveDeclarationCompilerEnv(resolveLocalCheckEnv(process.env));
   const compilerTimeoutMs = resolveTsgoTimeoutMs(compilerEnv);
-  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
   const sdk = sdkBoundaryUnit(sharedSdk ? undefined : preparation?.sdkRoots);
   const plugins = BOUNDARY_PLUGIN_UNITS.map(([id, entry]) => ({
     id,
@@ -454,7 +457,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[], signal: 
       process.stdout.write(`[${unit.id} boundary dts] emitted ${unit.outputs.size} files\n`);
     }
   };
-  if (!preparation) {
+  if (!selected) {
     for (const batch of batches) {
       await prepareBatch(batch);
     }

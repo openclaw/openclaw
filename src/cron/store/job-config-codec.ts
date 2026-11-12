@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hashCronJobDefinition } from "../definition-hash.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "../plugin-command-schedule.types.js";
 import { stripCronPinnedExecGrant } from "../scheduled-tool-policy.js";
+import { decodeCronStreamOperatorSource } from "../stream-operator-source.js";
 import { parseCronStreamSandboxTarget } from "../stream-sandbox-target.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
 import {
@@ -14,6 +15,7 @@ import {
 export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
   const {
     streamSandbox: rawStreamSandbox,
+    streamOperatorSource: rawStreamOperatorSource,
     runtimeAuthority: _runtimeAuthority,
     runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
     state: _state,
@@ -43,6 +45,9 @@ export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Recor
   // Runtime state and authority have separate owners; JSON is canonical for config.
   return {
     ...rest,
+    ...(rawStreamOperatorSource !== undefined
+      ? { streamOperatorSource: decodeCronStreamOperatorSource(rawStreamOperatorSource) }
+      : {}),
     ...(streamSandbox
       ? { streamSandbox, schedule: { ...job.schedule, kind: "sandbox-stream" } }
       : {}),
@@ -94,6 +99,9 @@ export function decodeStoredCronJobConfig(
       : undefined);
   return {
     ...decodeDeliveryConfig(jobJson),
+    ...(jobJson.streamOperatorSource !== undefined
+      ? { streamOperatorSource: decodeCronStreamOperatorSource(jobJson.streamOperatorSource) }
+      : {}),
     ...(ownerProfileId ? { ownerProfileId } : {}),
     ...(schedule?.kind === "sandbox-stream" && streamSandbox
       ? { schedule: { ...schedule, kind: "stream" }, streamSandbox }

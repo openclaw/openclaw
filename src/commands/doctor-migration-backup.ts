@@ -58,7 +58,8 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db-contract.js";
-import { isStatePostgres, stateEngineInput } from "../state/openclaw-state-db-engine.js";
+import { stateEngineInput } from "../state/openclaw-state-db-engine-input.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {

@@ -568,10 +568,11 @@ export async function releasePreparedAgentRunUserTurn(
     | "execApprovalFollowupHandoffClaimId"
   >,
   disposition: "cancelled" | "interrupted" = "cancelled",
+  userInitiated?: true,
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();
-    prepared.recorder?.finishPendingInput?.(disposition);
+    prepared.recorder?.finishPendingInput?.(disposition, userInitiated);
   } finally {
     try {
       await prepared.recorder?.waitForPendingInputSettlement?.();

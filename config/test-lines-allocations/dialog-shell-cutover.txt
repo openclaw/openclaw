@@ -1,0 +1,2 @@
+# Pairing lazy fallback geometry and real remote-access ceremony completion regression coverage.
+205

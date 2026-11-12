@@ -1,0 +1,2 @@
+# Load generated plugin-skill links when the state dir is reached through a symlinked ancestor (macOS /tmp).
+22

@@ -7,6 +7,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
@@ -14,7 +15,7 @@ import {
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
-import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-check.js";
+import { resolveNpmChannelTag } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
@@ -82,6 +83,7 @@ import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-comma
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
+import { settleInterruptedUpdatePluginCohort } from "./update-plugin-cohort-settlement.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -222,6 +224,11 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     validChannel
       ? await prepareHandoffRepair()
       : null;
+  if (handoff) {
+    defaultRuntime.error(
+      "Warning: Reclaiming a dead managed handoff lease under exclusive repair ownership.",
+    );
+  }
   if (pluginCohort) {
     if (
       !validChannel ||
@@ -242,46 +249,12 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
           throw new Error("Plugin cohort recovery installation changed during repair.");
         }
       };
-      assertCurrent();
-      const current = await inspectPluginCohortRecoveryAdmission(
+      await settleInterruptedUpdatePluginCohort({
+        expected: originalPair,
+        root: discoveredRoot,
         options,
-        originalPair.cohort.runId,
-      );
-      assertCurrent();
-      if (
-        !current ||
-        current.cohort.transactionId !== originalPair.cohort.transactionId ||
-        current.cohort.installKey !== originalPair.cohort.installKey
-      ) {
-        throw new Error("Plugin cohort recovery changed before repair acquired ownership.");
-      }
-      if (current.cohort.disposition === "commit") {
-        const [version, buildId] = await Promise.all([
-          readPackageVersion(discoveredRoot),
-          readBuiltGatewayBuildId(discoveredRoot),
-        ]);
-        assertCurrent();
-        if (
-          version !== current.reservation.to.version ||
-          (buildId ?? null) !== current.reservation.to.buildId
-        ) {
-          throw new Error(
-            "Plugin cohort commit does not match the installed candidate version and build.",
-          );
-        }
-      }
-      const { settleUpdatePluginCohort } = await import("../../plugins/update-cohort-recovery.js");
-      assertCurrent();
-      await settleUpdatePluginCohort({
-        runId: current.cohort.runId,
-        action: current.cohort.disposition === "commit" ? "commit" : "rollback",
-        env,
-        fence: { assertCurrent },
+        assertCurrent,
       });
-      assertCurrent();
-      // The plugin reservation is gone before ordinary history reconciliation.
-      await assertUpdateRecoveryAdmission(options);
-      assertCurrent();
       if (admission.kind === "conflict") {
         await reconcileUnderRepairOwnership({ assertCurrent });
       } else {

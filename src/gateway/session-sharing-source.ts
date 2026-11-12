@@ -16,12 +16,10 @@ import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
-  createSessionSharingLookupCaches,
   findPreparedSharingTarget,
   sessionMutationTargetChanged,
   withCurrentSessionSharingSource,
   type AuthorizedSessionMutationTarget,
-  type SessionSharingLookupCaches,
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
 import { captureSessionSharingMemoryFacts } from "./session-sharing-incognito.js";
@@ -143,7 +141,6 @@ export function withPreparedSessionSharingSource(params: {
     target: SessionMutationTarget,
     expected: AuthorizedSessionMutationTarget | undefined,
     cfg: OpenClawConfig,
-    caches?: SessionSharingLookupCaches,
     ensuredSessionId?: string,
     prepared?: { target: SessionSharingTarget | null; members: readonly string[] },
     currentTalkTarget?: PreparedTalkSessionTarget,
@@ -169,14 +166,12 @@ export function withPreparedSessionSharingSource(params: {
   const assertCurrent = () => {
     const cfg = assertSource();
     const currentTalkTarget = params.assertTalkTargetCurrent(cfg);
-    const caches = createSessionSharingLookupCaches();
     for (const target of params.targets) {
       const bound = boundSources.get(target)?.readCurrent();
       params.assertTargetCurrent(
         target,
         target,
         cfg,
-        caches,
         undefined,
         bound && {
           target: bound.target,
@@ -231,9 +226,9 @@ export function withPreparedSessionSharingSource(params: {
         if (!facts) {
           read.assertCurrent();
         }
-        assertSourceCurrent();
+        const cfg = assertSourceCurrent();
         const expected = params.targets[index]!;
-        params.assertTargetCurrent(expected, expected, assertSource(), undefined, undefined, {
+        params.assertTargetCurrent(expected, expected, cfg, undefined, {
           target: facts
             ? facts.entry
               ? {
@@ -248,7 +243,6 @@ export function withPreparedSessionSharingSource(params: {
         });
       };
       const assertPreparedCurrent = () => {
-        assertSourceCurrent();
         for (let index = 0; index < prepared.length; index += 1) {
           assertPrepared(index);
         }
@@ -355,7 +349,7 @@ export function createAdmittedSessionSharingAuthority(params: {
   const assertAdmittedTargetCurrent = (
     selected: AuthorizedSessionMutationTarget,
     cfg: OpenClawConfig,
-    prepared?: Parameters<typeof params.assertTargetCurrent>[5],
+    prepared?: Parameters<typeof params.assertTargetCurrent>[4],
   ) => {
     if (selected === target && isAdoptingEffectActive && !isAdoptingEffectActive()) {
       throw params.changed(selected.sessionKey);
@@ -364,7 +358,6 @@ export function createAdmittedSessionSharingAuthority(params: {
       selected,
       selected === target ? admittedTarget : selected,
       cfg,
-      undefined,
       undefined,
       prepared,
       undefined,
@@ -396,7 +389,7 @@ export function createAdmittedSessionSharingAuthority(params: {
           ownSessionProfileId: params.ownSessionProfileId,
           talk: undefined,
           assertTalkTargetCurrent: () => undefined,
-          assertTargetCurrent: (_selected, _expected, cfg, _caches, _ensured, prepared) =>
+          assertTargetCurrent: (_selected, _expected, cfg, _ensured, prepared) =>
             params.withStorage(() => {
               assertAdmittedTargetCurrent(target, cfg, prepared);
               bindCurrentEffect();

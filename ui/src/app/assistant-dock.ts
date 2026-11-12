@@ -27,7 +27,7 @@ export class AssistantDock {
 
   openSession(params: SessionParams, activation: object): void {
     if (!this.owner) {
-      throw new Error("The conversation dock is unavailable. Reopen the Control UI and try again.");
+      throw new Error("Couldn’t open the session dock. Reopen the Control UI and try again.");
     }
     this.owner.openSession(params, activation);
   }

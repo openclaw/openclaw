@@ -46,6 +46,7 @@ function npmFixture(dir: string, userConfig = "") {
     fsSync.writeFileSync(file, content, "utf-8");
     return file;
   };
+  write("package.json", "{}");
   const home = path.join(dir, "home");
   fsSync.mkdirSync(home);
   const env = {

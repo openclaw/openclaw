@@ -485,7 +485,11 @@ it("rejects a missing required model before starting a thread", async () => {
       model: { mode: "required", id: "missing-model" },
       isolation: "configured-transport",
     }),
-  ).rejects.toThrow("Codex app-server model not found: missing-model");
+  ).rejects.toMatchObject({
+    code: "model_not_found",
+    model: "missing-model",
+    message: expect.stringContaining("model/list"),
+  });
   expect(fake.methods).toEqual(["model/list"]);
 });
 

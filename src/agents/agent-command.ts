@@ -25,7 +25,6 @@ import {
   sanitizePublicAgentCommandIngressOpts,
   type AgentCommandAdmissionIngress,
 } from "./agent-command-execution-identity.js";
-import { runLocalAgentCommand } from "./agent-command-local.js";
 import {
   beginAgentCommandSessionEffect,
   repairAgentCommandSessionTranscript,
@@ -551,6 +550,7 @@ async function agentCommandWithAdmissionIngress(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
+  const { runLocalAgentCommand } = await import("./agent-command-local.js");
   return await runLocalAgentCommand({
     opts,
     runtime,

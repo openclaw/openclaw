@@ -237,6 +237,23 @@ async function stopManagedServiceBeforeMutableUpdate(
       }
     }
   };
+  // Repair restarts only the stops an update recorded; a killed updater has nothing else to say.
+  const recordUpdateGatewayStop = (startedAtMs: number | undefined) => {
+    if (!updateRun) {
+      return;
+    }
+    try {
+      recordUpdateRunStep(
+        updateRun.runId,
+        { step: "service-stop", status: "completed", startedAtMs, endedAtMs: Date.now() },
+        updateRun,
+      );
+    } catch {
+      (params.warn ?? defaultRuntime.error)(
+        "Could not record the Gateway stop in update history; update repair may not restart it.",
+      );
+    }
+  };
   const prepareSystemdMaintenance = async (state: GatewayServiceState, stopping: boolean) => {
     const { prepareSystemdGatewayMaintenance } =
       await import("../../daemon/systemd-maintenance.js");
@@ -640,7 +657,10 @@ async function stopManagedServiceBeforeMutableUpdate(
           ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }
           : {}),
         // Native stop may unload the service before a later port check fails.
-        onMutation: () => params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs }),
+        onMutation: () => {
+          recordUpdateGatewayStop(stoppedAtMs);
+          params.onStopped?.({ ...inspected, stopped: true, stoppedAtMs });
+        },
       });
     };
     if (process.platform === "linux") {

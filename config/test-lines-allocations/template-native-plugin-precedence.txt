@@ -1,0 +1,2 @@
+37
+# Real Template project-reader regressions for native identity with named and unnamed companion manifests.

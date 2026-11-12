@@ -238,7 +238,7 @@ function writeProcess(root, pid, startTicks) {
 const verifiedTarget = "c".repeat(40);
 
 function releaseProof(fixture, ...args) {
-  const result = spawnSync(process.execPath, ["--no-warnings", fixture.library, ...args], {
+  const result = spawnSync("bash", ["-c", 'exec 9<>"$OPENCLAW_TEAM_LOCK_FILE"; flock -n 9 || exit 75; exec "$@"', "fixture-proof", process.execPath, "--no-warnings", fixture.library, ...args], {
     encoding: "utf8", env: fixture.env, timeout: 30000,
   });
   assert.ifError(result.error);
@@ -1202,6 +1202,8 @@ if (args[0] === 'stat-identity' && args[1] === release) {
 
   for (const [scenario, args] of [["success", ["--recover", "--sha", verifiedTarget]], ["user-manager-offline", ["--recover"]], ["channel-client-auth-held", ["--recover"]]]) test(`live current keeps full verified-no-restart recovery unchanged: ${scenario}`, (t) => {
     const f = failedReleaseFixture(t, true, scenario);
+    const failed = join(f.serving, "failed", after);
+    writeFileSync(failed, after + "\n", { mode: 0o600 });
     if (scenario === "channel-client-auth-held") f.env.OPENCLAW_TEAM_VERIFICATION_BUDGET = "30";
     if (process.env.TEAM_OWNER_TEST_SOURCE) f.owner = process.env.TEAM_OWNER_TEST_SOURCE;
     verificationMarker(f, verifiedTarget);
@@ -1209,12 +1211,41 @@ if (args[0] === 'stat-identity' && args[1] === release) {
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr + events(f));
     assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED action=verified-current-candidate-no-restart/);
+    const marker = join(f.serving, "verified", after), entry = lstatSync(marker);
+    assert.equal(readFileSync(marker, "utf8"), after + "\n");
+    assert.equal(entry.mode & 0o7777, 0o600);
+    assert.equal(entry.uid, process.getuid());
+    assert.equal(entry.gid, process.getgid());
+    assert.equal(readFileSync(failed, "utf8"), after + "\n");
     const probe = JSON.parse(readFileSync(join(f.state, "channel-probe-params"), "utf8"));
     assert.equal(probe.probe, true);
     assert.ok(Number.isInteger(probe.timeoutMs) && probe.timeoutMs > 0);
     assert.equal(existsSync(f.journal), false);
     assert.equal(readlinkSync(join(f.serving, "current")), join(f.serving, "releases", after));
     assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)|account\.openclaw-deploy/);
+  });
+
+  test("failed rollback recovery retains its journal until the verified marker can be published", t => {
+    const f = failedReleaseFixture(t, true), journal = readFileSync(f.journal);
+    const node = join(f.commands, "node-marker-failure");
+    executable(node, `
+if [[ "$1" == -e && "\${@: -2:1}" == record ]]; then
+  printf 'synthetic marker publication failure\\n' >&2
+  exit 74
+fi
+exec '${process.execPath}' "$@"`);
+    f.env.OPENCLAW_TEAM_NODE_BIN = node;
+    const failed = runOwner(f, ["--recover"]);
+    assert.notEqual(failed.status, 0, failed.stdout);
+    assert.match(failed.stderr, /synthetic marker publication failure/);
+    assert.deepEqual(readFileSync(f.journal), journal);
+    assert.equal(existsSync(join(f.serving, "verified", after)), false);
+    f.env.OPENCLAW_TEAM_NODE_BIN = process.execPath;
+    const recovered = runOwner(f, ["--recover"]);
+    assert.equal(recovered.status, 0, recovered.stderr + events(f));
+    assert.equal(readFileSync(join(f.serving, "verified", after), "utf8"), after + "\n");
+    assert.equal(existsSync(f.journal), false);
+    assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)/);
   });
 
   for (const phase of ["D_VERIFYING", "ROLLBACK_FAILED"]) {
@@ -1641,6 +1672,7 @@ describe("Team history gaps warn without blocking deployment", () => {
     assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED/);
     assert.equal(existsSync(f.journal), false);
     assert.equal(readFileSync(original.path, "utf8"), original.witness);
+    assert.equal(readFileSync(join(f.serving, "verified", position === "selected" ? after : before), "utf8"), (position === "selected" ? after : before) + "\n");
     assert.doesNotMatch(result.stderr, /agent:controller-test-agent:fixture-|window-11/);
     assert.doesNotMatch(events(f), /service\..*\.(stop|start|restart)/);
   });
@@ -1686,6 +1718,41 @@ describe("Team history gaps warn without blocking deployment", () => {
     const preserved = verify();
     assert.equal(preserved.stdout.trim(), "SESSIONS_PRESERVED");
     assert.doesNotMatch(preserved.stderr, /HISTORY_PRESERVATION/);
+  });
+  test("history reason counts include failures beyond the private detail cap", t => {
+    const f = makeReleaseFixture(t), db = new DatabaseSync(f.agentDatabasePath);
+    db.exec("DELETE FROM session_nodes");
+    for (let index = 0; index < 27; index++) {
+      const session = `history-window-${index}`, key = `agent:controller-test-agent:history-${String(index).padStart(2, "0")}`;
+      db.prepare("INSERT INTO session_nodes VALUES (?, ?, ?, ?, NULL)")
+        .run(key, session, JSON.stringify({ sessionId: session, updatedAt: 1 }), 1);
+      db.prepare("INSERT INTO session_windows VALUES (?, ?)").run(session, key);
+      if (index >= 20) db.prepare("INSERT INTO transcript_rewrite_watermarks VALUES (?, ?)")
+        .run(session, `history-generation-${index}`);
+    }
+    db.close();
+    const witness = releaseProof(f, "session-preservation-witness", f.initial, f.initial, f.databasePath);
+    const changed = new DatabaseSync(f.agentDatabasePath);
+    changed.exec("DELETE FROM transcript_rewrite_watermarks"); changed.close();
+    const result = spawnSync(process.execPath,
+      [f.library, "session-preservation-verify", f.initial, f.initial, f.databasePath],
+      { env: f.env, input: witness, encoding: "utf8", timeout: 30_000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "SESSIONS_HISTORY_WARNING count=27");
+    assert.match(result.stderr, /WARNING HISTORY_PRESERVATION_GAPS count=27 shown=8 historical-bytes=unverified continuation=allowed/);
+    const summary = / reasonCounts=(\{[^\n]+\})\n/.exec(result.stderr);
+    assert.ok(summary, "warning summary must account for every gap reason");
+    assert.deepEqual(JSON.parse(summary[1]), {
+      "exact-owner-generation-missing/exact-tuple-missing": 7,
+      "missing-generation": 20,
+    });
+    const details = [...result.stderr.matchAll(/HISTORY_PRESERVATION_GAP diagnostic=(.+)/g)]
+      .map(([, value]) => JSON.parse(value));
+    assert.equal(details.length, 8);
+    assert.ok(details.every(detail => detail.captured.generation === "null"));
+    assert.doesNotMatch(result.stderr, /agent:controller-test-agent:history-|history-window-|history-generation-/);
+    assert.equal(result.stderr.includes(f.agentDatabasePath), false);
   });
   for (const fault of ["table-missing", "witness-replaced", "database-replaced"]) test(`${fault} remains fatal and retains the exact journal`, t => {
     const f = failedReleaseFixture(t, true), original = originalWitness(f), journal = readFileSync(f.journal);
@@ -1826,6 +1893,7 @@ describe("Team marker terminal observation", () => {
   for(const scenario of ["marker-wrong-session","marker-wrong-model","marker-missing-receipt","marker-error-with-reply","marker-abort-with-reply","marker-pending-with-receipt","marker-generation-change","marker-generation-change-after-wait"]) test(scenario+" cannot retire recovery evidence",t=>{
     const f=failedReleaseFixture(t,true);writeFileSync(join(f.state,"scenario"),scenario);const journal=readFileSync(f.journal);
     const result=runOwner(f,["--recover"]);assert.notEqual(result.status,0,result.stdout);assert.deepEqual(readFileSync(f.journal),journal);
+    assert.equal(existsSync(join(f.serving,"verified",after)),false);
     assert.equal(events(f).split("gateway gateway call agent\n").length-1,1);assert.doesNotMatch(result.stdout,/RECOVERED/);
   });
 });

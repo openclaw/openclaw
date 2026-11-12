@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { assert, beforeEach, describe, expect, it } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-scan.js";
@@ -11,7 +12,6 @@ import {
   createGeneratedPluginTempRoot,
   installGeneratedPluginTempRootCleanup,
   pluginTestRepoRoot as repoRoot,
-  writeJson,
 } from "./generated-plugin-test-helpers.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
@@ -35,12 +35,12 @@ function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: s
 }
 
 function writeAlphaPlugin(pluginRoot: string, manifest: Record<string, unknown>) {
-  writeJson(path.join(pluginRoot, "package.json"), {
+  writeJsonFile(path.join(pluginRoot, "package.json"), {
     name: "@openclaw/alpha",
     version: "0.0.1",
     openclaw: { extensions: ["./index.ts"] },
   });
-  writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+  writeJsonFile(path.join(pluginRoot, "openclaw.plugin.json"), {
     id: "alpha",
     configSchema: { type: "object" },
     ...manifest,
@@ -244,7 +244,7 @@ describe("bundled plugin metadata", () => {
 
     expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("Before");
 
-    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+    writeJsonFile(path.join(pluginRoot, "openclaw.plugin.json"), {
       id: "alpha",
       name: "After",
       configSchema: { type: "object" },

@@ -1,0 +1,2 @@
+# Native Daybreak gesture remains active while accepted-session history refreshes.
+35

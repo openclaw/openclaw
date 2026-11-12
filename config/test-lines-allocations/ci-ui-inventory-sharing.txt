@@ -1,0 +1,2 @@
+# Verify shared UI inventory queries preserve renamed and unrelated source owners.
+37

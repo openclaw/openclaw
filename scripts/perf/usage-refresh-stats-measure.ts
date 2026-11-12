@@ -29,6 +29,7 @@ import { parseArgs } from "node:util";
 import type { UsageCostSqliteCheckpoint } from "../../src/infra/session-cost-usage-rollup-codec.js";
 import { readThreadDiskReadBytes } from "../../src/infra/thread-disk-io.js";
 import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { evictLinuxFilePageCache } from "../lib/linux-page-cache.ts";
 
 const { values } = parseArgs({
   options: {
@@ -281,16 +282,7 @@ if (values.prepare) {
   for (let sample = 0; sample < samples; sample++) {
     if (values.cold) {
       assert(path.resolve(fixture.databasePath).startsWith(`${root}${path.sep}`));
-      const evict = spawnSync(
-        "python3",
-        [
-          "-c",
-          "import os,sys; f=os.open(sys.argv[1],os.O_RDONLY); os.fsync(f); os.posix_fadvise(f,0,0,os.POSIX_FADV_DONTNEED); os.close(f)",
-          fixture.databasePath,
-        ],
-        { encoding: "utf8" },
-      );
-      assert.equal(evict.status, 0, evict.stderr);
+      evictLinuxFilePageCache(fixture.databasePath);
     }
     using db = openNodeSqliteDatabase(fixture.databasePath, { readOnly: true });
     db.exec("PRAGMA cache_size=-2048; PRAGMA mmap_size=0");
@@ -365,11 +357,6 @@ if (values.prepare) {
         stores: [{ agentId: "main", storePath: fixture.databasePath, database }],
         archiveStorePaths: [fixture.databasePath],
         operation: { kind: "refresh", pricingFingerprint: "synthetic" },
-      },
-      control: {
-        signal: new AbortController().signal,
-        runNativeSection: async (read) => read(),
-        throwIfCancelled() {},
       },
       target: () => database,
       readStore: async (_agentId, _storePath, read) => scope.run(database, read),

@@ -1,3 +1,4 @@
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import {
@@ -10,10 +11,12 @@ import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
+import { formatGatewayCrash, type GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { createDaemonActionContext } from "./response.js";
 export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 
@@ -68,6 +71,22 @@ export function resolveDaemonInstallBlockMessage(
   return undefined;
 }
 
+/** Service-policy refusals carry their own remedy; show it instead of the generic CLI failure. */
+export function assertGatewayServiceActionAllowed(
+  label: "start" | "stop" | "uninstall" | "restart",
+  action: string,
+): void {
+  const refusal = resolveGatewayServiceMutationError(action);
+  if (refusal) {
+    throw new ExpectedCliError({
+      message: refusal.message,
+      humanOutput: `Gateway ${label} blocked: ${refusal.message}`,
+      machineOutput: refusal.message,
+      cause: refusal,
+    });
+  }
+}
+
 export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?: number): string {
   const servicePort = port ?? parseTcpPort(env.OPENCLAW_GATEWAY_PORT);
   return formatCliCommand(
@@ -101,6 +120,20 @@ export function formatGatewayServiceInstallationDrift(
   const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
   const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
   return guidance ? `${facts} ${guidance}` : facts;
+}
+
+export type GatewayCrashHistory = {
+  recentCrashes?: readonly GatewayCrashRecord[];
+  crashHistoryError?: string;
+};
+
+export function formatGatewayCrashHistory(history?: GatewayCrashHistory): string[] {
+  return history?.crashHistoryError
+    ? [terminalText`Recent Gateway crashes unavailable: ${history.crashHistoryError}`]
+    : (history?.recentCrashes ?? []).map(
+        (crash) =>
+          terminalText`Previous Gateway run ended unexpectedly (${new Date(crash.detectedAtMs).toISOString()}): ${formatGatewayCrash(crash)}`,
+      );
 }
 
 export function createCliStatusTextStyles() {
@@ -174,6 +207,24 @@ export function projectDaemonServiceForJson<
 
 export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
   return Object.entries(filterDaemonEnv(env)).map(([key, value]) => `${key}=${value}`);
+}
+
+export function resolveLaunchdInspectionWarnings(service: {
+  foreignLaunchdInspectionError?: string;
+  staleLaunchdInspectionError?: string;
+}): string[] {
+  const warnings: string[] = [];
+  if (service.foreignLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect foreign launchd jobs: ${service.foreignLaunchdInspectionError}`,
+    );
+  }
+  if (service.staleLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect stale OpenClaw updater launchd jobs: ${service.staleLaunchdInspectionError}; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun ${formatCliCommand("openclaw doctor")}.`,
+    );
+  }
+  return warnings;
 }
 
 export function normalizeListenerAddress(raw: string): string {

@@ -9,7 +9,7 @@ import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.j
 import * as execApprovalRequests from "../agents/bash-tools.exec-approval-request.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
-import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -155,7 +155,7 @@ async function fixture(
   // Use the real admission/capability; the factory only supplies irrelevant CLI defaults.
   context.params.admittedRunContext = admitted;
   context.params.skillLibraryAuthoring = capability;
-  context.nodeSkillWorkshop = capability ? createLibrarySkillWorkshopTool(capability) : undefined;
+  context.nodeSkillWorkshop = capability ? createSkillLibraryTool(capability) : undefined;
   const controller = new AbortController();
   const tasks: Promise<void>[] = [];
   let endpoint: ReturnType<typeof createNodeDuplexEndpoint> | undefined;
@@ -470,9 +470,9 @@ const fs=require('node:fs'); const config=JSON.parse(fs.readFileSync(process.arg
 async function call(method,params,id){const r=await fetch(config.mcpServers.openclaw.url,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id,method,params})});return r.json();}
 (async()=>{await call('initialize',{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'synthetic-claude',version:'1'}},1);
  const listed=await call('tools/list',{},2);
- const created=await call('tools/call',{name:'skill_workshop',arguments:{action:'create',name:'node-created',proposal_content:${JSON.stringify(content)},files:[{path:'scripts/task.sh',content:'#!/bin/sh\\nprintf owned',executable:true}]}},3);
+ const created=await call('tools/call',{name:'skill_library',arguments:{action:'create',name:'node-created',proposal_content:${JSON.stringify(content)},files:[{path:'scripts/task.sh',content:'#!/bin/sh\\nprintf owned',executable:true}]}},3);
  const receipt=JSON.parse(created.result.content[0].text);
- const updated=await call('tools/call',{name:'skill_workshop',arguments:{action:'update',skill_id:receipt.entry.skillId,expected_revision:receipt.entry.revision,name:'node-created',proposal_content:${JSON.stringify(content + "Updated on node.\n")}}},4);
+ const updated=await call('tools/call',{name:'skill_library',arguments:{action:'update',skill_id:receipt.entry.skillId,expected_revision:receipt.entry.revision,name:'node-created',proposal_content:${JSON.stringify(content + "Updated on node.\n")}}},4);
  console.log(JSON.stringify({type:'result',listed,created,updated}));
 })().catch(e=>{console.error(String(e));process.exitCode=1;});`;
 
@@ -481,7 +481,7 @@ it("authors through the node MCP proxy using the actual host capability without 
   expect((await f.execute()).result.exitCode).toBe(0);
   const tools = JSON.parse(f.output()).listed.result.tools;
   expect(tools).toHaveLength(1);
-  expect(tools[0]).toMatchObject({ name: "skill_workshop" });
+  expect(tools[0]).toMatchObject({ name: "skill_library" });
   const entries = (await listSkillLibrary(f.authority)).entries;
   expect(entries).toHaveLength(1);
   const published = await readSkillLibrary(f.authority, entries[0]!.skillId);

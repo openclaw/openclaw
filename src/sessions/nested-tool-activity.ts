@@ -48,6 +48,15 @@ export function readNestedToolActivity(value: unknown): NestedToolActivity | und
   return parsed.success ? parsed.data : undefined;
 }
 
+/**
+ * Reads the run's own activity even after a hidden turn (for example child coordination)
+ * cleared its display flag. Display readers keep using readNestedToolActivity.
+ */
+export function readOwnNestedToolActivity(value: unknown): NestedToolActivity | undefined {
+  const record = asOptionalRecord(value);
+  return readNestedToolActivity(record?.display === false ? { ...record, display: true } : value);
+}
+
 /** Keep each terminal activity bounded independently of provider context. */
 export function createNestedToolActivity(
   details: Omit<NestedToolActivity["details"], "result"> & { result: unknown },

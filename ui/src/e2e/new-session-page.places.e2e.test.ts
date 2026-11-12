@@ -350,7 +350,7 @@ suite.define(() => {
     await gateway.waitForRequest("fs.listDir", { match: { path: PICKED } });
     await expectValue(input, PICKED);
     await input.fill(`${WORKSPACE}/zzz`);
-    await place.getByText("No matching folders", { exact: true }).waitFor();
+    await place.getByText("No folders match your search.", { exact: true }).waitFor();
   });
 
   it("returns from the browse root to the place menu", async () => {

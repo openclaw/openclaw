@@ -1,0 +1,5 @@
+# Public Gateway/native managed-worker preparation and runtime-image setup proof.
+# Exact counted growth: 519 e2e + 4 provider regression + 1566 transport/support lines.
+# Real enrollment, execution, image custody, and revocation replace no native owner.
+# Covers this task only; no shared scalar change or inherited-baseline padding.
+2089

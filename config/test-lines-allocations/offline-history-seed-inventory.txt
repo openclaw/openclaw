@@ -1,0 +1,2 @@
+48
+# Actual offline history CLI preserves existing session inventory; one native regression.

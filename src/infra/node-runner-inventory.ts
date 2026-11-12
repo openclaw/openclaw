@@ -97,6 +97,7 @@ const WorkerHost = z
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
       launchToolNames: LaunchToolNames.optional(),
       idleRetention: z.literal(true).optional(),
+      localMcp: z.literal(true).optional(),
       nativeInference: z.literal(NODE_WORKER_NATIVE_INFERENCE_VERSION).optional(),
       promptContext: z.literal(NODE_WORKER_PROMPT_CONTEXT_VERSION).optional(),
     }).refine(

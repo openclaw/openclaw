@@ -18,8 +18,13 @@ type Publication = {
     {
       facts: readonly unknown[];
       views: Map<string, SessionRowView[]>;
+      previousViews?: WeakRef<Map<string, SessionRowView[]>>;
       target: SessionSharingTarget;
     }
+  >;
+  previousViews: WeakMap<
+    records.MaterializedRow["materialized"]["publicationIdentity"],
+    WeakRef<Map<string, SessionRowView[]>>
   >;
   lists: SessionListViewCache;
 };
@@ -48,6 +53,7 @@ export function prepareSessionRowPublicationView(
         identityRevision,
         factsRevision: 0,
         rows: new WeakMap(),
+        previousViews: new WeakMap(),
         lists: new SessionListViewCache(),
       };
       publications.set(projection, publication);

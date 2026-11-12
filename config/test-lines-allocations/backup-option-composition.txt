@@ -1,0 +1,2 @@
+# Prove companion and template flags survive both planning boundaries together, preserving nested durable owners and source bytes in the existing archive/restore and CLI cases.
+36

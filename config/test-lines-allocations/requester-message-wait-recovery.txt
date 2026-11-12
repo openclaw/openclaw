@@ -1,0 +1,4 @@
+# Real Gateway requester completion before/after park, actual process restart continuation/failure,
+# restored SQLite wait settlement with dead/missing/live requester, and exact restart eligibility.
+# Strengthens existing native-child restart proof with explicit sessions_yield.
+590

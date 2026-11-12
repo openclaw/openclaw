@@ -8,6 +8,7 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import "../../../components/tooltip.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
@@ -213,6 +214,9 @@ export function SidebarFile(props: {
               aria-label={t("chat.detailPanel.searchInFile")}
               placeholder={t("common.search")}
               value={controls().query}
+              onBlur={clearCompositionEnd}
+              onCompositionEnd={recordCompositionEnd}
+              onKeyUp={clearCompositionEnd}
               onInput={(event) => controls().onSearchInput(event.currentTarget.value)}
             />
             <span class="file-view__search-counter" role="status">

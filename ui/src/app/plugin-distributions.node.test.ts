@@ -139,6 +139,26 @@ it("publishes the complete immutable generation with only useful eligible sideca
   expect(source).not.toContain("ROLLUP_FILE_URL");
 });
 
+it("invalidates packaged revisions when only the panel artwork changes", async () => {
+  const { pluginRoot } = await fixture();
+  const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
+  const manifest = JSON.parse(await readText(manifestPath));
+  manifest.controlUi.panelIcon = "panel.svg";
+  await fs.writeFile(manifestPath, JSON.stringify(manifest));
+  const iconPath = path.join(pluginRoot, "panel.svg");
+  const svg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>';
+  await fs.writeFile(iconPath, svg);
+  const inputs = new Set<string>();
+  await compile(inputs);
+  const output = at("ui-output/assets/plugins/workboard");
+  const first = await fs.readdir(output);
+  await fs.writeFile(iconPath, svg.replace('r="8"', 'r="4"'));
+  await compile();
+  expect(await fs.readdir(output)).not.toEqual(first);
+  expect(inputs.has(iconPath)).toBe(true);
+});
+
 it.each(["missing", "changed"])("rejects a generation with a %s deferred chunk", async (kind) => {
   const { pluginRoot, generation } = await fixture();
   const chunk = path.join(pluginRoot, generation, "chunk-1.js");
@@ -244,4 +264,20 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
     expect(await readText(pluginRoot, generation, name)).toBe(body);
   }
   expect(JSON.parse(await readText(pluginRoot, "package.json")).name).toBe("@openclaw/workboard");
+});
+
+it("leaves the Labs-owned Access island to the flag-gated Gateway catalog", async () => {
+  const { pluginRoot, generation } = await fixture();
+  await fs.writeFile(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "openclaw-id-access",
+      configSchema: { type: "object" },
+      controlUi: { entry: `${generation}/index.js`, styles: [`${generation}/index.css`] },
+    }),
+  );
+  await compile();
+  await expect(fs.stat(at("ui-output/assets/plugins/openclaw-id-access"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
 });

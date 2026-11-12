@@ -4,6 +4,7 @@ import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { resolveConfigIncludeWriteBoundary } from "../../config/mutate.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRawWithPlugins } from "../../config/validation.js";
+import { preparePluginDoctorContractModules } from "../../plugins/doctor-contract-preparation.js";
 import {
   prepareDoctorConfigReferenceSource,
   restoreDoctorConfigEnvRefs,
@@ -81,6 +82,10 @@ export async function repairLegacyConfigForUpdateChannel(params: {
   configWriteOptions?: ConfigWriteOptions;
   jsonMode: boolean;
 }): Promise<{ snapshot: ConfigSnapshot; repaired: boolean; warnings?: string[] }> {
+  await preparePluginDoctorContractModules({
+    config: params.configSnapshot.sourceConfig,
+    surfaces: ["configRepair"],
+  });
   const plan = params.plan ?? planLegacyConfigForUpdateChannel(params.configSnapshot);
   if (!plan) {
     return { snapshot: params.configSnapshot, repaired: false };

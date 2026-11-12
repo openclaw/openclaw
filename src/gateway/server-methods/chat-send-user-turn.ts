@@ -4,9 +4,11 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-sc
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ECHO_TRANSCRIPT_FORMAT } from "../../media-understanding/echo-transcript.js";
+import {
+  DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+  formatAudioTranscriptForAgent,
+} from "../../media-understanding/echo-transcript.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
-import { formatAudioTranscriptForAgent } from "../../plugin-sdk/media-understanding-runtime.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";

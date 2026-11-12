@@ -334,7 +334,7 @@ it.each(["direct", "lifecycle", "agent"])("shares %s envelopes", async (producer
         }
         if (
           Array.isArray(value) &&
-          value.length === 10 &&
+          value.length === 11 &&
           isRecord(value[0]) &&
           value[0].kind === "operator"
         ) {

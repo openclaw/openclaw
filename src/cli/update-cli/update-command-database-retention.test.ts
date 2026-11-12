@@ -3,10 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createNpmTarget } from "../../infra/package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
 import * as databaseBackup from "../../infra/update-database-backup.js";
+import { createGitRuntimeTransaction } from "../../infra/update-runner-git-runtime.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { captureUpdateDatabases } from "./update-command-database-backup.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
@@ -24,7 +26,12 @@ function captureExecution(
   return {
     root,
     installKind,
-    updateInstallKind: installKind,
+    ...(installKind === "package"
+      ? {
+          updateInstallKind: installKind,
+          packageInstallTarget: createNpmTarget(path.dirname(root)),
+        }
+      : { updateInstallKind: installKind }),
     switchToGit: false,
     timeoutMs: 30_000,
     updateStepTimeoutMs: 30_000,
@@ -54,6 +61,17 @@ function captureExecution(
   };
 }
 
+async function captureEnvironment(stateDir: string) {
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  };
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+  return env;
+}
+
 it.runIf(process.platform !== "win32").each([false, true])(
   "captures Git update databases in physical artifact storage (redirected: %s)",
   async (redirected) => {
@@ -68,12 +86,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
       await fs.symlink(physicalArtifacts, artifactRoot, "dir");
     }
     await fs.mkdir(path.join(stateDir, "state"), { recursive: true });
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const env = await captureEnvironment(stateDir);
     {
       using db = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"));
       db.exec("CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES ('synthetic');");
@@ -105,29 +118,30 @@ it.runIf(process.platform !== "win32").each([false, true])(
   },
 );
 
-it.each([
-  { restorable: false, lateRefusal: false, outcome: "success" },
-  { restorable: true, lateRefusal: false, outcome: "success" },
-  { restorable: true, lateRefusal: true, outcome: "success" },
-  { restorable: true, lateRefusal: true, outcome: "failure" },
-  { restorable: true, lateRefusal: false, outcome: "rollback" },
-])(
-  "retains recovery snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome",
-  async ({ restorable, lateRefusal, outcome }) => {
+it.each(
+  (["git", "package"] as const).flatMap((kind) =>
+    [
+      { restorable: false, lateRefusal: false, outcome: "success" },
+      { restorable: true, lateRefusal: false, outcome: "success" },
+      { restorable: true, lateRefusal: true, outcome: "success" },
+      { restorable: true, lateRefusal: true, outcome: "failure" },
+      { restorable: true, lateRefusal: false, outcome: "failure" },
+      ...(kind === "package"
+        ? [{ restorable: true, lateRefusal: false, outcome: "rollback" }]
+        : []),
+    ].map((scenario) => Object.assign(scenario, { kind })),
+  ),
+)(
+  "retains $kind snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome",
+  async ({ kind, restorable, lateRefusal, outcome }) => {
     const base = await fs.realpath(dirs.make("update-database-retention-"));
     const fixture = await createPackageSwapFixture(base);
+    const root = fixture.packageRoot;
     const stateDir = path.join(base, "state");
     const source = path.join(stateDir, "state/openclaw.sqlite");
-    await fs.mkdir(stateDir);
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    const env = await captureEnvironment(stateDir);
     let snapshotPath = "";
-    // Snapshot generation is tested by update-database-backup; exercise its
-    // sealed/unsealed result through real capture admission and package retirement.
+    // Snapshot generation has its own tests; retain both real transaction lifecycles here.
     vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async (input) => {
       const directory = `${input.backupRoot}.databases`;
       snapshotPath = path.join(directory, "snapshot.sqlite");
@@ -144,27 +158,39 @@ it.each([
         warnings: [],
       };
     });
-    const execution = captureExecution(fixture.packageRoot, env, "package");
     let transaction: PackageUpdateTransaction | undefined;
     let capture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
-    const result = await swapStagedPackageInstall({
-      ...fixture.params,
-      onTransaction: async (value) => {
-        transaction = value;
-        capture = await captureUpdateDatabases({
-          transaction: value,
-          execution,
-          context: undefined,
-          assertCurrent: () => {},
-        });
-      },
-    });
-    expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-    expect(Boolean(capture?.backup)).toBe(restorable);
+    const onTransaction = async (value: PackageUpdateTransaction) => {
+      transaction = value;
+      capture = await captureUpdateDatabases({
+        transaction: value,
+        execution: captureExecution(root, env, kind),
+        context: undefined,
+        assertCurrent: () => {},
+      });
+    };
+    if (kind === "git") {
+      await onTransaction(
+        createGitRuntimeTransaction({
+          root,
+          promotion: {
+            backupRoot: path.join(base, "dist-runtime.openclaw-update-id.tmp"),
+            cleanup: async () => undefined,
+          },
+          assertRollbackSafe: async () => {},
+          restoreRuntime: async () => {
+            throw new Error("Unexpected rollback");
+          },
+        }),
+      );
+    } else {
+      const result = await swapStagedPackageInstall({ ...fixture.params, onTransaction });
+      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+    }
     const finalResult: UpdateRunResult = {
       status: outcome === "success" ? "ok" : "error",
-      mode: "npm",
-      root: fixture.packageRoot,
+      mode: kind === "git" ? "git" : "npm",
+      root,
       steps: [capture!.step],
       durationMs: 0,
     };
@@ -198,14 +224,16 @@ it.each([
       {
         packageTransaction: transaction,
         databaseBackup: capture?.backup,
-        root: fixture.packageRoot,
+        root,
         opts: { json: true },
       },
       finalResult,
       () => {},
     );
     if (restorable && !lateRefusal && outcome === "success") {
-      await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        fs.stat(kind === "git" ? path.dirname(snapshotPath) : snapshotPath),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     } else {
       expect(await fs.readFile(snapshotPath, "utf8")).toBe("pre-migration bytes");
     }

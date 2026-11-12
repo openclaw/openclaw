@@ -1,0 +1,2 @@
+# Regression proof that hidden nested tool activity rebases after a same-turn source reply and is read back by its run.
+55

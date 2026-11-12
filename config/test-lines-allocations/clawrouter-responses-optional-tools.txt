@@ -1,0 +1,2 @@
+# Discovery-to-serialized-Responses regression for optional tool inputs; other routes remain covered by the catalog suite.
+49

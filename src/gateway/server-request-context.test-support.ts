@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -41,7 +42,10 @@ export function makeContextParams(
       deps: {} as never,
       runtimeState: {
         cronState: makeCronState(),
-        configReloader: { isConfigReloadSettled: vi.fn(() => true) },
+        configReloader: {
+          getCommittedRuntimeConfig: vi.fn(getRuntimeConfig),
+          isConfigReloadSettled: vi.fn(() => true),
+        },
       },
       lifecycle: { closePreludeStarted: false },
       getAttachedGatewayMethodRegistry: vi.fn(() => ({}) as never),

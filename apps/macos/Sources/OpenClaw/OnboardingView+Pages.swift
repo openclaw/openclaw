@@ -157,11 +157,14 @@ extension OnboardingView {
                 Spacer(minLength: 0)
             }
             if self.selectedConnectionMode == .unconfigured {
-                Text("OK — OpenClaw won’t start anything yet. Pick Local or Remote later in the Connection window.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
+                Text("""
+                OK — OpenClaw won’t start anything yet; a Gateway installed outside the app keeps running. \
+                Pick Local or Remote later in the Connection window.
+                """)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
             }
         }
         .disabled(self.installingCLI)

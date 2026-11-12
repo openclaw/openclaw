@@ -2,6 +2,7 @@ import { z } from "zod";
 import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
+import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal.js";
 
 const MAX_RECOVERY_SOURCE_BYTES = 65_536;
 const boundedString = z.string().min(1).max(4096);
@@ -9,8 +10,9 @@ const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
 });
-const operatorRunRecoverySnapshotSchema = z.strictObject({
+const handshakeRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
+  openclawIdPrincipal: openClawIdRecoveryPrincipalSchema.optional(),
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),
   githubLogin: boundedString.nullable(),
@@ -47,7 +49,25 @@ const operatorRunRecoverySnapshotSchema = z.strictObject({
   localOperator: z.boolean(),
   sourceIngress: z.enum(["control-ui", "internal"]),
 });
-const sourceSchema = z.strictObject({
+const principalRecoverySnapshotSchema = handshakeRecoverySnapshotSchema.extend({
+  sourceIngress: z.literal("principal"),
+  ingress: z.strictObject({
+    pluginId: boundedString,
+    audienceId: boundedString,
+    recoveryId: boundedString,
+  }),
+  authPolicy: z.undefined().optional(),
+  sharedGeneration: z.undefined().optional(),
+  device: z.undefined().optional(),
+  controlUiAdmin: z.literal(false),
+  localOperator: z.literal(false),
+});
+const operatorRunRecoverySnapshotSchema = z.discriminatedUnion("sourceIngress", [
+  handshakeRecoverySnapshotSchema,
+  principalRecoverySnapshotSchema,
+]);
+const parentSourceSchema = z.strictObject({
+  kind: z.undefined().optional(),
   version: z.literal(1),
   agentId: boundedString,
   sessionKey: boundedString,
@@ -57,11 +77,23 @@ const sourceSchema = z.strictObject({
   snapshot: operatorRunRecoverySnapshotSchema,
 });
 
+// Existing parent-bound sources retain their stored shape. Device-backed jobs need no parent.
+const sourceSchema = z.union([
+  parentSourceSchema,
+  z.strictObject({
+    version: z.literal(1),
+    kind: z.literal("gateway"),
+    agentId: boundedString,
+    sourceRunId: boundedString,
+    snapshot: operatorRunRecoverySnapshotSchema,
+  }),
+]);
+
 const channelSnapshotSchema = z.strictObject({
   reference: userChannelAuthorizationReferenceSchema,
   profileId: boundedString,
-  scopes: operatorRunRecoverySnapshotSchema.shape.scopes,
-  modelPolicy: operatorRunRecoverySnapshotSchema.shape.modelPolicy,
+  scopes: handshakeRecoverySnapshotSchema.shape.scopes,
+  modelPolicy: handshakeRecoverySnapshotSchema.shape.modelPolicy,
 });
 const queuedSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("gateway"), snapshot: operatorRunRecoverySnapshotSchema }),

@@ -27,7 +27,7 @@ export type SessionsYieldCallback = (
   message: string,
   acknowledgment?: string,
   messageWaitRegistered?: boolean,
-  options?: { conditional: true },
+  options?: { conditional?: true; terminal?: import("../agent-tools.abort.js").ToolTurnHandoff },
 ) => Promise<void> | void;
 
 function describePendingChild(child: UnsettledRequesterChild): string {

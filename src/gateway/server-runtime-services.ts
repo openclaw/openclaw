@@ -41,6 +41,7 @@ import {
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
 import { measureStartup } from "./server-startup-trace.js";
+import { reportSessionAutomationSourceLoadFailed } from "./session-automation-index.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export { startGatewayChannelHealthMonitor } from "./server-runtime-startup-services.js";
 
@@ -76,6 +77,7 @@ export function startGatewayCronWithLogging(params: {
         await reconciliation.complete();
       } catch (err) {
         params.logCron.error(`failed to start: ${String(err)}`);
+        reportSessionAutomationSourceLoadFailed(err);
         if (err instanceof CronStoreSelectionRequiredError) {
           return;
         }

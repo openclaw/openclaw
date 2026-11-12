@@ -116,6 +116,11 @@ function sanitizeExecPolicyTableCell(value: string): string {
   return sanitizeExecApprovalDisplayText(sanitizeTerminalText(value));
 }
 
+/** Sanitize each cell line on its own so the table, not a value, supplies the line breaks. */
+function formatExecPolicyTableLines(...lines: string[]): string {
+  return lines.map(sanitizeExecPolicyTableCell).join("\n");
+}
+
 function sanitizeExecPolicyMessage(value: unknown): string {
   return sanitizeTerminalText(String(value));
 }
@@ -230,18 +235,19 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
       ],
       rows: payload.effectivePolicy.scopes.map((scope) => ({
         Scope: sanitizeExecPolicyTableCell(scope.scopeLabel),
-        Requested: sanitizeExecPolicyTableCell(
-          `host=${scope.host.requested} (${scope.host.requestedSource})\n` +
-            `security=${scope.security.requested} (${scope.security.requestedSource})\n` +
-            `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
+        Requested: formatExecPolicyTableLines(
+          `host=${scope.host.requested} (${scope.host.requestedSource})`,
+          `security=${scope.security.requested} (${scope.security.requestedSource})`,
+          `ask=${scope.ask.requested} (${scope.ask.requestedSource})`,
         ),
-        Host: sanitizeExecPolicyTableCell(
-          `security=${scope.security.host} (${scope.security.hostSource})\n` +
-            `ask=${scope.ask.host} (${scope.ask.hostSource})\n` +
-            `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
+        Host: formatExecPolicyTableLines(
+          `security=${scope.security.host} (${scope.security.hostSource})`,
+          `ask=${scope.ask.host} (${scope.ask.hostSource})`,
+          `askFallback=${scope.askFallback.effective} (${scope.askFallback.source})`,
         ),
-        Effective: sanitizeExecPolicyTableCell(
-          `security=${scope.security.effective}\nask=${scope.ask.effective}`,
+        Effective: formatExecPolicyTableLines(
+          `security=${scope.security.effective}`,
+          `ask=${scope.ask.effective}`,
         ),
       })),
     }).trimEnd(),

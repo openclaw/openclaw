@@ -9,15 +9,17 @@ const GATEWAY_HANDLER_PREWARM_RETRY_DELAY_MS = 250;
 
 type GatewayHandlerPrewarmItem = {
   name: string;
+  requiresControlUi?: boolean;
   notBeforeMs?: number;
   waitForIdle?: boolean;
   load: (isCancelled: () => boolean) => Promise<unknown>;
 };
 
 function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPrewarmItem[] {
-  return [
+  const items: GatewayHandlerPrewarmItem[] = [
     {
       name: "session-history-worker",
+      requiresControlUi: true,
       // Browser loading must not defer preparation of the worker its first history read needs.
       waitForIdle: false,
       load: async (isCancelled) => {
@@ -29,6 +31,7 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
     },
     ...["chat.history", "chat.send", "sessions.list"].map((method): GatewayHandlerPrewarmItem => ({
       name: method,
+      requiresControlUi: true,
       load: async (isCancelled) => {
         const [{ coreGatewayHandlers }, { prepareGatewayRequestHandler }] = await Promise.all([
           import("./server-methods/core-handlers.js"),
@@ -75,6 +78,7 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
     },
     {
       name: "plugins",
+      requiresControlUi: true,
       load: async (isCancelled) => {
         const { listManagedPlugins } = await import("../plugins/management-service.js");
         if (!isCancelled()) {
@@ -83,6 +87,10 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
       },
     },
   ];
+  // Headless clients retain the request-time loaders without paying for browser preparation.
+  return getConfig().gateway?.controlUi?.enabled === false
+    ? items.filter((item) => !item.requiresControlUi)
+    : items;
 }
 
 export function scheduleGatewayHandlerPrewarm(params: {

@@ -1,0 +1,6 @@
+# MLX native/cache and settings proof, CI routing, and UI/transcript regression coverage.
+# Includes SDK full-validation routing and timeout regression coverage.
+# Includes released-producer fallback and stable goal DOM/current-ID regressions.
+# Covers 3496 eligible JS/TS test/support lines against the refreshed baseline.
+# Uses 10 existing lines of baseline headroom; no debt credit or extra headroom.
+3486

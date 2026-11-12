@@ -1,0 +1,2 @@
+# Extend existing discovery work-count and lifecycle diagnostic boundary tests.
+32

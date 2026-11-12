@@ -164,12 +164,12 @@ suite.define(() => {
         .locator(".chat-system-events__body > [data-chat-row-key]")
         .allTextContents();
       expect(contents.map((text) => text.replace(/\s+/gu, " ").trim())).toEqual([
-        "System · gateway restartedGateway restarted. The conversation has been restored.",
+        "System · Gateway restartedGateway restarted. The conversation has been restored.",
         "Model fallback: Primary → BackupReason: capacity",
-        "System · gateway restarted" + warningText,
-        "System · gateway restartedThe workspace connection is available again.",
+        "System · Gateway restarted" + warningText,
+        "System · Gateway restartedThe workspace connection is available again.",
         "Returned to selected model: Backup → Primary",
-        "System · gateway restartedRecovery checks finished. Your conversation is ready.",
+        "System · Gateway restartedRecovery checks finished. Your conversation is ready.",
       ]);
       await summary.focus();
       await page.keyboard.press("Space");

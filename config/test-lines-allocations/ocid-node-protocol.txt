@@ -1,0 +1,2 @@
+565
+# Node invites, redemption proof and audience forgeries, separate node key class, snapshot field, Discovery node auth, join-link vectors, and fail-closed accountless member-mail settlement; +89 exact net test lines for signed node descriptions, verification-code vectors, and the one-hour link limit.

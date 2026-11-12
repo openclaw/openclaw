@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { linkSync } from "node:fs";
+import fs, { linkSync, symlinkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import {
   captureSqliteWorkerOpen,
@@ -21,6 +22,7 @@ import {
   readWorkerRows,
   appendWorkerRow,
 } from "./sqlite-worker-fixture.test-support.js";
+import * as workerIdentity from "./sqlite-worker-identity.js";
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
@@ -126,12 +128,14 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
     return "opened";
   };
   const pending = [
-    admission.open(0, open, undefined, kind === "reused" ? open : undefined),
-    admission.open(0, async () => {}),
+    admission.open(0, databasePath(), open, undefined, kind === "reused" ? open : undefined),
+    admission.open(0, databasePath(), async () => {}),
   ];
   const joined = admission.joinOpens().then(() => finished);
   try {
-    await expect(admission.open(0, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+    await expect(admission.open(0, databasePath(), async () => {})).rejects.toMatchObject({
+      code: "overloaded",
+    });
     if (kind === "reused") {
       await pending[1];
     }
@@ -140,23 +144,63 @@ it.each(["queued", "reused"] as const)("bounds and drains pending %s opens", asy
     await Promise.all(pending);
   }
   expect(await joined).toBe(true);
-  await expect(admission.open(0, async () => "admitted")).resolves.toBe("admitted");
+  await expect(admission.open(0, databasePath(), async () => "admitted")).resolves.toBe("admitted");
   expect(admission.retainedBytes).toBe(0);
 });
 
-it.each(["shared-state", "agent"] as const)(
+it("reserves cold admission synchronously before a later database turn", async () => {
+  const admission = inputAdmission();
+  const file = databasePath();
+  const order: string[] = [];
+  const opening = admission.open(1, file, async () => order.push("open"));
+  const later = runWithSqliteDatabaseAdmissionTurn([file], async () => order.push("later"));
+  await Promise.all([opening, later, admission.joinOpens()]);
+  expect(order).toEqual(["open", "later"]);
+  expect(admission.retainedBytes).toBe(0);
+});
+
+it.for(["ELOOP", "EACCES"])(
+  "releases cold open custody after synchronous %s",
+  async (code, { signal, skip }) => {
+    if (code === "ELOOP" && process.platform === "win32") {
+      skip(); // File symlinks require privileges on Windows.
+    }
+    const admission = inputAdmission();
+    const file = databasePath();
+    if (code === "ELOOP") {
+      symlinkSync(file, file);
+    } else {
+      // A permission error must be deterministic even when tests run as root.
+      vi.spyOn(workerIdentity, "inspectDatabasePathIdentitySync").mockImplementationOnce(() => {
+        throw Object.assign(new Error("permission denied"), { code });
+      });
+    }
+    const dispatch = vi.fn(async () => "unreachable");
+    await expect(admission.open(1024, file, dispatch)).rejects.toMatchObject({ code });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(admission.retainedBytes).toBe(0);
+    await withinTest(admission.joinOpens(), signal);
+    await expect(admission.open(1024, databasePath(), async () => "recovered")).resolves.toBe(
+      "recovered",
+    );
+  },
+);
+
+it.each(["shared-state", "agent", "external"] as const)(
   "admits cold %s beside ordinary opens within one input budget",
   async (carrierClass) => {
     const admission = inputAdmission();
     const finishOrdinary = createDeferredCore();
     const isolatedGate = createEnteredGate();
     const openIsolated = <T>(bytes: number, run: () => Promise<T>) =>
-      admission.open(bytes, run, undefined, undefined, carrierClass);
-    const ordinary = admission.open(512, () => finishOrdinary.promise);
+      admission.open(bytes, databasePath(), run, undefined, undefined, carrierClass);
+    const ordinary = admission.open(512, databasePath(), () => finishOrdinary.promise);
     const isolated = openIsolated(512, isolatedGate.wait);
     try {
       await isolatedGate.entered;
-      await expect(admission.open(1, async () => {})).rejects.toMatchObject({ code: "overloaded" });
+      await expect(admission.open(1, databasePath(), async () => {})).rejects.toMatchObject({
+        code: "overloaded",
+      });
       isolatedGate.release();
       await isolated;
       expect(admission.retainedBytes).toBe(512);
@@ -175,7 +219,28 @@ it.each(["shared-state", "agent"] as const)(
 
 await initializeSqliteRuntimeCapabilities();
 const { databasePath } = useSqliteWorkerStoreFixture("sqlite-capacity-drain-");
-it.for(["shared-state", "agent"] as const)(
+it("settles cold admission filesystem failures before draining the broker", async () => {
+  const pathname = databasePath();
+  const failure = Object.assign(new Error("cold database permission denied"), { code: "EACCES" });
+  const stat = fs.statSync;
+  using _ = vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+    if (String(file) === pathname) {
+      throw failure;
+    }
+    return stat(file, options);
+  });
+  const broker = new SqliteWorkerBroker();
+  await expect(
+    broker.open({
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: pathname,
+      input: undefined,
+    }),
+  ).rejects.toBe(failure);
+  await broker.close();
+});
+
+it.for(["shared-state", "agent", "external"] as const)(
   "keeps one physical owner across %s and ordinary opens",
   async (carrierClass, { signal }) => {
     const pathname = databasePath();

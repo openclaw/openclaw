@@ -1,4 +1,5 @@
 import { Option, type Command } from "commander";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { normalizeSpeechProviderId } from "../../tts/provider-registry-core.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
 import { runCapabilityCommand } from "./providers-command.js";
@@ -110,6 +111,7 @@ export function registerTtsCapabilityCommands(capability: Command): void {
         const result = await callGateway({
           method: "tts.status",
           timeoutMs: 30_000,
+          signal: getAsyncWorkSignal(),
         });
         return { transport: "gateway", ...result };
       }),

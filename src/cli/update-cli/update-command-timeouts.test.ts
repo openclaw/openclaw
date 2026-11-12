@@ -177,7 +177,7 @@ it.each(["validating", "activating"] as const)(
       }
       throw new Error("Unready Gateways must not complete successfully");
     });
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     const output = vi.mocked(defaultRuntime.writeJson);
     const running = runUpdate({ timeout: "60" }).catch((error: unknown) => error);
     try {
@@ -228,7 +228,7 @@ it.each(["timer", "monotonic"] as const)(
       fs.writeFileSync(effect, "forward mutation");
       return null;
     });
-    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     const running = runUpdate({ timeout: "60" }).catch((error: unknown) => error);
     try {
       await awaitGateBeforeSettlement(

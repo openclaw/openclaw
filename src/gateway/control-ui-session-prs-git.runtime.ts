@@ -259,7 +259,9 @@ export async function readCheckoutGitContext(
   const branch =
     head?.branch === null
       ? "HEAD"
-      : (head?.branch ?? (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
+      : (head?.branch ??
+        (await gitOutput(root, ["branch", "--show-current"])) ??
+        (await gitOutput(root, ["rev-parse", "--abbrev-ref", "HEAD"])));
   if (!branch) {
     return null;
   }
@@ -273,7 +275,10 @@ export async function readCheckoutGitContext(
   const preparedDefaultRef = readDefaultRef(head);
   const defaultRef =
     preparedDefaultRef === undefined
-      ? await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      ? (await gitOutput(root, ["symbolic-ref", "refs/remotes/origin/HEAD"]))?.replace(
+          /^refs\/remotes\//,
+          "",
+        )
       : preparedDefaultRef;
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   const forkHeadCandidates = canDiscoverAlternateForkHeads(branch, defaultBranch)

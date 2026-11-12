@@ -1,0 +1,2 @@
+# Pairing footer regression: initial, pending, failure/retry, and code-produced action order.
+17

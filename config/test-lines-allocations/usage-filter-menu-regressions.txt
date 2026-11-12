@@ -1,0 +1,2 @@
+# Existing Usage tests: Filter/submenu/chip interactions, query ownership, exports and keyboard access; focus-hint dismissal precedes root Escape without losing the query.
+64

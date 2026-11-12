@@ -1,0 +1,4 @@
+# Actual cleanup-command regressions: external squash merge, selected task artifacts,
+# native/session/process preservation, ignored files, shared dependencies, and retry.
+# Exact growth: 723 command-test LF plus one shared fixture dependency LF.
+724

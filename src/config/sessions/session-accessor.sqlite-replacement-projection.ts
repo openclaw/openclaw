@@ -59,6 +59,7 @@ import {
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
 import { composeSessionSourceAssertion } from "./session-source-authority.js";
 import { maintenanceLane, projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -71,6 +72,7 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  creationOperation?: SessionEntryReplacementCommit["creationOperation"];
   fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
@@ -103,6 +105,7 @@ type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions
 };
 
 type CreationProjection = {
+  certifyNotCommitted?: true;
   scope: ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
   sessionKey: string;
   creationSnapshot: SessionCreationSnapshot & { databaseIdentity: string };
@@ -315,7 +318,15 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     async (preparedScope) => {
       creation?.onWriterAdmitted?.();
       if (creation) {
-        params.assertCommitAllowed?.();
+        // This owner has not dispatched a writer yet. A failed final guard is
+        // affirmative nonexecution evidence, even after diagnostic admission.
+        try {
+          params.assertCommitAllowed?.();
+        } catch (error) {
+          throw creation.certifyNotCommitted
+            ? new SessionEntryCreationNotCommittedError(error)
+            : error;
+        }
       }
       const resolved = { ...preparedScope, env };
       const databaseOptions = {
@@ -502,6 +513,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               },
             );
             const input: SessionEntryReplacementCommit = {
+              creationOperation: params.creationOperation,
               fieldPatch: params.fieldPatch,
               expectedRows,
               labelOwnerKeys,

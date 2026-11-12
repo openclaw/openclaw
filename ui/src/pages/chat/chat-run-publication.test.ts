@@ -1,7 +1,13 @@
+import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { keepVolatileQueuedMessage, removeQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
 import { createSessionEventState, emitGatewayEvent } from "./chat-state.test-support.ts";
 
 function chatEvent(state: ChatPageHost, runId: string, phase: string, text: string) {
@@ -53,6 +59,91 @@ afterEach(() => {
 });
 
 describe("chat run publication", () => {
+  it("publishes the first answer without a frame wait and coalesces continuing text", () => {
+    const { frames } = captureAnimationFrames();
+    const { state } = createSessionEventState({ chatRunId: "run", chatStream: "" });
+    const observed: (string | null)[] = [];
+    onTestFinished(chatRunPresentation(state).subscribe(() => observed.push(state.chatStream)));
+
+    chatEvent(state, "run", "delta", "First answer");
+    expect(observed).toEqual(["First answer"]);
+
+    chatEvent(state, "run", "delta", "First answer continues");
+    chatEvent(state, "run", "delta", "First answer continues further");
+    expect(observed).toEqual(["First answer"]);
+    const callbacks = Array.from(frames.values());
+    frames.clear();
+    for (const callback of callbacks) {
+      callback(0);
+    }
+    expect(observed).toEqual(["First answer", "First answer continues further"]);
+  });
+
+  it("publishes a pending run projection when an unrelated pane commit consumes its frame", () => {
+    const { frames } = captureAnimationFrames();
+    const awaitDomCommit = vi.fn(async () => true);
+    const controller = createChatState<ChatPageHost>({
+      awaitDomCommit,
+    });
+    let state: ChatPageHost;
+    const rendered: (string | null)[] = [];
+    const queueLengths: number[] = [];
+    const activityChanged = vi.fn();
+    const dispose = createRoot((stop) => {
+      state = createPageState(createChatPageStateContext(), controller.createRenderLifecycle(), {
+        dispatchEvent: () => true,
+      });
+      state.client = createTestGatewayClient(vi.fn());
+      controller.attach(state);
+      state.chatStream = "initial stream";
+      onTestFinished(chatRunPresentation(state).subscribeNonText(activityChanged));
+      createEffect(
+        () => state.chatStream,
+        (stream) => {
+          rendered.push(stream);
+        },
+      );
+      createEffect(
+        () => state.chatQueue.length,
+        (length) => {
+          queueLengths.push(length);
+        },
+      );
+      return stop;
+    });
+    onTestFinished(() => {
+      controller.dispose();
+      dispose();
+    });
+    flush();
+    awaitDomCommit.mockClear();
+    chatRunPresentation(state!).batch(
+      () => (state!.chatStream = "queued stream"),
+      "animation-frame",
+    );
+    expect(frames.size).toBe(1);
+    controller.publishPendingRunState();
+    controller.captureRenderChanges();
+    flush();
+    expect(frames.size).toBe(0);
+    expect(activityChanged).not.toHaveBeenCalled();
+    expect(rendered).toEqual(["initial stream", "queued stream"]);
+    keepVolatileQueuedMessage(state!, state!.sessionKey, {
+      id: "run-and-outbox-publication",
+      text: "Keep this queued input",
+      createdAt: 1,
+      sendState: "held",
+    });
+    expect(state!.chatQueue).toHaveLength(1);
+    flush();
+    expect(queueLengths).toEqual([0, 1]);
+    removeQueuedMessage(state!, "run-and-outbox-publication");
+    flush();
+    expect(queueLengths).toEqual([0, 1, 0]);
+    expect(rendered).toEqual(["initial stream", "queued stream"]);
+    expect(awaitDomCommit).not.toHaveBeenCalled();
+  });
+
   it("publishes growing tool output at its flush without republishing unchanged frame activity", () => {
     vi.useFakeTimers();
     onTestFinished(() => {

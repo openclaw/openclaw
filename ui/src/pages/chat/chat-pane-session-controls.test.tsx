@@ -283,13 +283,13 @@ describe("chat pane composer controls", () => {
       cached: true,
       connected: false,
       error: "metadata unavailable",
-      message: "Offline",
+      message: "Disconnected",
     },
     {
       label: "failed with a snapshot",
       cached: true,
       error: "metadata unavailable",
-      message: "Some models could not be refreshed. Open Models to try again.",
+      message: "Couldn’t refresh some models. Open Models to try again.",
     },
     {
       label: "failed without a snapshot",
@@ -314,12 +314,17 @@ describe("chat pane composer controls", () => {
           : [],
         chatModelSwitchPromises: {},
         sessionKey: "main",
+        agentsList: {
+          agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "per-sender",
+        },
       }) as unknown as ChatPageHost;
       state.chatModelCatalogError = error;
       const onModelSetup = vi.fn();
 
       const controls = renderControls(state, {
-        agentDefaultPermissionMode: "guarded",
         onModelSetup,
       });
       controls.composerControls.model.modelPickerOpen = true;
@@ -381,8 +386,13 @@ describe("chat pane composer controls", () => {
       entry: { sessionId: "permission-test-session" },
     } satisfies SessionPatchResult);
 
+    state.agentsList = {
+      agents: [{ id: "main", defaultPermissionMode: "guarded" }],
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+    };
     const controls = renderControls(state, {
-      agentDefaultPermissionMode: "guarded",
       canSelectFull: false,
     });
     const view = mountSolid(
@@ -401,7 +411,7 @@ describe("chat pane composer controls", () => {
     const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
 
-    const heading = container.querySelector<HTMLElement>(".chat-controls__permission-heading");
+    const heading = menu.querySelector<HTMLElement>(".oc-menu-heading__label");
     expect(heading?.textContent?.trim()).toBe("Permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
     const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
@@ -417,7 +427,7 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
-    expect(defaultOption?.textContent).toContain("Uses this agent's settings.");
+    expect(defaultOption?.textContent).toContain("Uses this agent’s settings.");
     expect(
       container.querySelector('[data-chat-permission-option="guarded"]')?.textContent,
     ).toContain("Default");

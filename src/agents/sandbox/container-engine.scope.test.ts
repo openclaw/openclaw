@@ -12,6 +12,7 @@ import {
   writeFakeContainerExecutable,
   writeFakeSystemdScope,
 } from "./container-engine.scope.test-support.js";
+import { bindPodmanSandboxEngine } from "./podman-runtime.js";
 
 vi.mock("../../process/linux-exec-cgroup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/linux-exec-cgroup.js")>()),
@@ -26,12 +27,12 @@ afterEach(() => {
 it.skipIf(process.platform === "win32").for([
   {
     name: "bound local Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: true,
   },
   {
     name: "captured local Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: true,
     captured: true,
   },
@@ -44,19 +45,19 @@ it.skipIf(process.platform === "win32").for([
   { name: "Docker", engine: DOCKER_SANDBOX_ENGINE, scoped: false },
   {
     name: "undelegated Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: false,
     delegated: false,
   },
   {
     name: "rootful Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: false,
     uid: 0,
   },
   {
     name: "non-Linux Podman",
-    engine: { ...PODMAN_SANDBOX_ENGINE, globalArgs: [] },
+    engine: bindPodmanSandboxEngine({ key: "local", globalArgs: [] }),
     scoped: false,
     platform: "darwin",
   },
@@ -73,7 +74,7 @@ it.skipIf(process.platform === "win32").for([
     entry.engine.command,
     `
 const input = require("node:fs").readFileSync(0, "utf8");
-process.stdout.write(JSON.stringify({ args: process.argv.slice(2), input, scoped: process.env.OPENCLAW_TEST_USER_SCOPE === "true", invocation: process.env.INVOCATION_ID, userBus: process.env.DBUS_SESSION_BUS_ADDRESS }));
+process.stdout.write(JSON.stringify({ args: process.argv.slice(2), input, scoped: process.env.OPENCLAW_TEST_USER_SCOPE === "true", invocation: process.env.INVOCATION_ID, userBus: process.env.DBUS_SESSION_BUS_ADDRESS, preload: process.env.LD_PRELOAD ?? null, allocator: process.env.MALLOC_CONF ?? null }));
 process.stderr.write("engine-stderr");
 process.exitCode = 7;
 `,
@@ -82,6 +83,8 @@ process.exitCode = 7;
   vi.stubEnv("INVOCATION_ID", "gateway-invocation");
   vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/1000/bus");
   vi.stubEnv("OPENCLAW_TEST_USER_SCOPE", undefined);
+  vi.stubEnv("LD_PRELOAD", "/synthetic/libjemalloc.so.2");
+  vi.stubEnv("MALLOC_CONF", "background_thread:true");
   const baseEnv = "captured" in entry ? { ...process.env } : undefined;
   const args = ["exec", "$HOME", "space 'quotes' ${HOME}"];
   const result = await execContainerRaw({ ...entry.engine, baseEnv }, args, {
@@ -97,7 +100,11 @@ process.exitCode = 7;
     scoped: entry.scoped,
     invocation: "gateway-invocation",
     userBus: "unix:path=/run/user/1000/bus",
+    preload: null,
+    allocator: null,
   });
   expect(process.env.INVOCATION_ID).toBe("gateway-invocation");
   expect(baseEnv?.OPENCLAW_TEST_USER_SCOPE).toBeUndefined();
+  expect(process.env.MALLOC_CONF).toBe("background_thread:true");
+  expect(baseEnv?.LD_PRELOAD).toBe("captured" in entry ? "/synthetic/libjemalloc.so.2" : undefined);
 });

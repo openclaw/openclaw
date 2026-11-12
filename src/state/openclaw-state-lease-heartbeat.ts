@@ -42,6 +42,7 @@ import {
   type LeaseHeartbeatCleanup,
 } from "./openclaw-state-lease-heartbeat-cleanup.js";
 import {
+  createLeaseHeartbeatState,
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
@@ -235,11 +236,7 @@ export function startOpenClawStateLeaseHeartbeat(
   }
   const startedAt = performance.now();
   let onlineObserved = false;
-  const shared =
-    params.expiryObservation ??
-    new BigInt64Array(
-      new SharedArrayBuffer((state.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
-    );
+  const shared = params.expiryObservation ?? createLeaseHeartbeatState();
   Atomics.store(shared, state.expiresAt, BigInt(params.expiresAt));
   const ready = createDeferredCore();
   // Synchronous startup failures can occur before the caller receives ready.
@@ -701,6 +698,7 @@ export function startOpenClawStateLeaseHeartbeat(
   };
   return {
     ready: ready.promise,
+    expiryObservation: shared,
     assertRunning,
     verify: () => request("verify"),
     renew: () => request("renew"),

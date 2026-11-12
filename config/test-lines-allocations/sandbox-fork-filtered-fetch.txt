@@ -1,0 +1,3 @@
+# Extend the real agent Git regression through a real projection and independent fork.
+# Covers URL forms, lazy fork-only hydration, explicit opt-out, and full repositories.
+71

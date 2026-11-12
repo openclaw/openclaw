@@ -1,6 +1,6 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createSignal, refresh } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import { projectBoardWidgetNames } from "../../../lib/reactive/board-pins.ts";
@@ -37,7 +37,7 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
       yield refresh(pinned);
     } catch (error) {
       if (button.isConnected) {
-        showToast({ message: t("chat.toolCards.pinToDashboardFailed") });
+        showToast({ severity: "error", message: t("chat.toolCards.pinToDashboardFailed") });
       }
       throw error;
     }
@@ -53,7 +53,7 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
   const failed = createMemo(() => {
     const completion = attempt();
     const outcome = createMemo(() => completion, { loadingValue: undefined });
-    // Only the native title's failure fact belongs to this boundary, not its optimistic label.
+    // Only the tooltip's failure fact belongs to this boundary, not its optimistic label.
     return createErrorBoundary(
       () => {
         outcome();
@@ -63,17 +63,17 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
     );
   });
   return (
-    <button
+    <IconButton
+      class="chat-tool-card__widget-action"
+      icon="pin"
+      label={label()}
+      tooltip={
+        !saving() && !pinned() && failed()() ? t("chat.toolCards.pinToDashboardFailed") : label()
+      }
       ref={(element) => (button = element)}
-      class="btn btn--ghost btn--icon chat-tool-card__widget-action"
-      type="button"
       data-pin-widget
       disabled={saving() || pinned()}
       data-pinned={!saving() && pinned() ? "" : undefined}
-      title={
-        !saving() && !pinned() && failed()() ? t("chat.toolCards.pinToDashboardFailed") : label()
-      }
-      aria-label={label()}
       onClick={() => {
         // Solid writes flush later; admission still prevents two same-task clicks.
         const target = props.target;
@@ -94,8 +94,6 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
           })
           .catch(() => undefined);
       }}
-    >
-      <Icon name="pin" />
-    </button>
+    />
   );
 }

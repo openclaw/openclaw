@@ -163,33 +163,7 @@
 }
 
 .palette-session-settings__switch {
-  position: relative;
-  width: 28px;
-  height: 16px;
-  border: 1px solid var(--border-strong);
-  border-radius: 999px;
-  background: var(--bg-muted);
-}
-
-.palette-session-settings__switch::after {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--muted);
-  content: "";
-}
-
-.palette-session-settings__worktree[aria-checked="true"] .palette-session-settings__switch {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.palette-session-settings__worktree[aria-checked="true"] .palette-session-settings__switch::after {
-  left: 14px;
-  background: var(--accent-foreground);
+  display: inline-flex;
 }
 
 .palette-session-settings__footer {
@@ -211,14 +185,6 @@
 
 .palette-session-settings__remember input {
   justify-self: center;
-  appearance: auto;
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  padding: 0;
-  accent-color: var(--accent);
-  color-scheme: inherit;
-  box-shadow: none;
 }
 
 .palette-session-settings__heading {
@@ -241,7 +207,6 @@
   max-height: 230px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
 }
 
 .palette-session-settings__choices > section + section {

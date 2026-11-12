@@ -115,6 +115,9 @@ actor OutboxTransportState {
     var sendRoutingChanged = false
     var sendSettingsChanged = false
     var historyFails = false
+    /// A slow health answer that still honors the request timeout, like the gateway request does.
+    var healthDelayMs: Int?
+    var healthTimeoutsMs: [Int] = []
     var activeRun: OpenClawChatInFlightRun?
     var sessionListFails = false
     var historyRequestCount = 0
@@ -565,8 +568,13 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
             sessions: self.sessions)
     }
 
-    func requestHealth(timeoutMs _: Int) async throws -> Bool {
-        await self.state.healthy
+    func requestHealth(timeoutMs: Int) async throws -> Bool {
+        await self.state.update { $0.healthTimeoutsMs.append(timeoutMs) }
+        if let delayMs = await self.state.healthDelayMs {
+            try await Task.sleep(nanoseconds: UInt64(min(delayMs, timeoutMs)) * 1_000_000)
+            if delayMs > timeoutMs { throw URLError(.timedOut) }
+        }
+        return await self.state.healthy
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -772,6 +780,10 @@ actor ScriptedOutbox: OpenClawChatCommandOutbox {
         guard let commands = await base.loadCommandsIfAvailable() else { return nil }
         await self.finishHeldLoad()
         return commands
+    }
+
+    func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        await self.base.loadCommandStatusesIfAvailable()
     }
 
     private func delayLoad() async {

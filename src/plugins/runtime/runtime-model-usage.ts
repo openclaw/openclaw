@@ -10,7 +10,7 @@ import {
   estimateUsageCost,
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
-import type { LlmCompleteUsage } from "./types-core.js";
+import type { LlmCompleteUsage } from "./runtime-llm.types.js";
 
 function readExplicitCostUsd(raw: unknown): number | undefined {
   const usage = asOptionalRecord(raw);

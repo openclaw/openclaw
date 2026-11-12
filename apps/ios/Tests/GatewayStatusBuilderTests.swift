@@ -6,7 +6,7 @@ struct GatewayStatusBuilderTests {
     @Test @MainActor func `connected node does not report disconnected operator chat as connected`() {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
-        appModel.gatewayServerName = "gateway.example.com"
+        appModel.apply(.connected(GatewaySessionInfo(serverName: "gateway.example.com")), to: .node, route: nil)
         appModel.gatewayStatusText = "Connected"
 
         #expect(GatewayStatusBuilder.build(appModel: appModel) == .connected)

@@ -1,0 +1,5 @@
+# PR #194604: 24 production-build recovery/legacy-syntax regression lines and
+# 35 CLI warning lines for report-only and inherited document/CSS overages.
+# One line waits for the resized toast animation before recording its geometry.
+# Reuse the existing build and CLI fixtures; keep the shared scalar unchanged.
+60

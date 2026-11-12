@@ -1,0 +1,2 @@
+# Protect root-only agent document rows and shared complete-file preview navigation for supporting files.
+34

@@ -17,6 +17,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { heartbeatNotifications } from "../infra/heartbeat-events.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
@@ -48,6 +49,11 @@ vi.mock("../audit/audit-recorder.js", () => ({
 }));
 
 it("coalesces background process changes without invalidating session rows and stops on disposal", async () => {
+  const listeners = readGlobalSingleton(Symbol.for("openclaw.internalSessionTranscriptListeners"));
+  if (!(listeners instanceof Set)) {
+    throw new Error("Transcript listener registry is unavailable");
+  }
+  const baseline = listeners.size;
   vi.useFakeTimers();
   const params = createSubscriptionTestFixture().createParams();
   const unsubs = startGatewayEventSubscriptions(params);
@@ -87,6 +93,7 @@ it("coalesces background process changes without invalidating session rows and s
     await unsubs.agentUnsub();
     heartbeatNotifications.onEvent = () => {};
     unsubs.transcriptUnsub();
+    expect.soft(listeners.size).toBe(baseline);
     unsubs.lifecycleUnsub();
     resetProcessRegistryForTests();
   }

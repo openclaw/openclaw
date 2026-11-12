@@ -125,12 +125,10 @@ it.each([
     );
     if (!agentCreation) {
       expect(page.textContent).not.toContain("Creating new agent…");
-      expect(page.textContent).not.toContain("Hi, I’m New agent. Happy to help.");
-    } else {
-      expect(page.querySelector(".chat-group.assistant .chat-text")?.textContent?.trim()).toBe(
-        "Hi, I’m New agent. Happy to help.",
-      );
     }
+    // Creation is progress, not a fabricated assistant turn.
+    expect(page.querySelector(".chat-group.assistant .chat-text")).toBeNull();
+    expect(page.textContent).not.toContain("Happy to help.");
     expect(page.textContent).not.toContain("Reconnecting");
     expect(visiblePane(page)).not.toContain("Transcript:");
     expect(page.textContent).not.toContain(agentId);

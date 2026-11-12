@@ -1,10 +1,13 @@
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
+  jsonNativeFieldsValid,
   jsonPathValue,
   jsonRemovePaths,
   jsonValid,
 } from "../../infra/database-engine/json-values.js";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
+  executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
@@ -13,6 +16,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import { AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION } from "../../state/openclaw-schema-versions.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
 import {
   projectModelContextEventSql,
@@ -98,16 +102,20 @@ export const TRANSCRIPT_PAYLOAD_COLUMNS = [
 export function createTranscriptEventInserter(database: EngineConnection, sessionId: string) {
   const kysely =
     getNodeSqliteKysely<Pick<DB, "transcript_events" | "transcript_event_identities">>(database);
-  const prepareRow = (row: TranscriptEventInsertRow) => {
+  const prepare = (row: TranscriptEventInsertRow): PreparedTranscriptPayload => {
     const prepared = row.preparedPayload;
-    const payload =
-      prepared?.eventJson === row.eventJson &&
+    return prepared?.eventJson === row.eventJson &&
       prepared.storageEncoding === readTranscriptStorageEncoding(database) &&
       (!isPostgresSqlConnection(database) || prepared.payload.event_zstd === null)
-        ? prepared.payload
-        : prepareTranscriptPayload(database, row.eventJson, row.parsedEvent);
-    return { session_id: sessionId, seq: row.seq, ...payload, created_at: row.createdAt };
+      ? prepared
+      : prepareTranscriptPayloadForReuse(database, row.eventJson, row.parsedEvent);
   };
+  const prepareRow = (row: TranscriptEventInsertRow) => ({
+    session_id: sessionId,
+    seq: row.seq,
+    ...prepare(row).payload,
+    created_at: row.createdAt,
+  });
   type StoredRow = ReturnType<typeof prepareRow>;
   type BatchRows = {
     events: readonly StoredRow[];
@@ -321,34 +329,41 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
       insertIdentity ??= createSingleInsert(true, false);
       return insertIdentity({ ...prepareRow(row), eventId: row.eventId }) !== undefined;
     },
-    { batch, withIdentity, batchWithIdentities },
+    { batch, withIdentity, batchWithIdentities, prepare },
   );
 }
 
 export function createTranscriptPayloadUpdater(database: EngineConnection, sessionId: string) {
-  return prepareSqliteQuerySync<TranscriptPayloadRecord & { seq: number }>(database, (parameter) =>
-    getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
-      .updateTable("transcript_events")
-      .set({
-        event_json: parameter((row) => row.event_json),
-        event_zstd: parameter((row) => row.event_zstd),
-        event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
-        navigation_json: parameter((row) => row.navigation_json),
-        navigation_type: parameter((row) => row.navigation_type),
-        navigation_custom_type: parameter((row) => row.navigation_custom_type),
-        navigation_display: parameter((row) => row.navigation_display),
-        message_role: parameter((row) => row.message_role),
-        navigation_last_type: parameter((row) => row.navigation_last_type),
-        navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
-        navigation_valid: parameter((row) => row.navigation_valid),
-      })
-      .where("session_id", "=", sessionId)
-      .where(
-        "seq",
-        "=",
-        parameter((row) => row.seq),
-      ),
+  const update = prepareSqliteQuerySync<TranscriptPayloadRecord & { seq: number }>(
+    database,
+    (parameter) =>
+      getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
+        .updateTable("transcript_events")
+        .set({
+          event_json: parameter((row) => row.event_json),
+          event_zstd: parameter((row) => row.event_zstd),
+          event_utf8_bytes: parameter((row) => row.event_utf8_bytes),
+          navigation_json: parameter((row) => row.navigation_json),
+          navigation_type: parameter((row) => row.navigation_type),
+          navigation_custom_type: parameter((row) => row.navigation_custom_type),
+          navigation_display: parameter((row) => row.navigation_display),
+          message_role: parameter((row) => row.message_role),
+          navigation_last_type: parameter((row) => row.navigation_last_type),
+          navigation_last_custom_type: parameter((row) => row.navigation_last_custom_type),
+          navigation_valid: parameter((row) => row.navigation_valid),
+        })
+        .where("session_id", "=", sessionId)
+        .where(
+          "seq",
+          "=",
+          parameter((row) => row.seq),
+        ),
   );
+  return (row: TranscriptPayloadRecord & { seq: number }) => {
+    const result = update(row);
+    clearSessionTranscriptActiveFacts(database, sessionId, row.seq);
+    return result;
+  };
 }
 
 export function readTranscriptStorageEncoding(database: EngineConnection): string {
@@ -561,15 +576,16 @@ export function transcriptPredicateSql<K extends keyof TranscriptPredicateFields
     THEN ${stored} ELSE ${derived} END`;
 }
 
+/** NULL when native fields cannot decode the row; callers recheck those rows in JavaScript. */
 export function transcriptEventRunIdSql(
   database: EngineConnection,
   alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<string | null> {
-  return jsonPathValue(
-    database,
-    transcriptEventNavigationSql(database, alias),
-    sql.lit("$.message.__openclaw.runId"),
-  );
+  const navigation = transcriptEventNavigationSql(database, alias);
+  return /* kysely-allow-raw: CASE fences native decoding of escapes JSONB rejects. */ sql<
+    string | null
+  >`CASE WHEN ${jsonNativeFieldsValid(database, navigation)}
+    THEN ${jsonPathValue(database, navigation, sql.lit("$.message.__openclaw.runId"))} END`;
 }
 
 function storedProjectionSql(
@@ -617,6 +633,21 @@ export function transcriptEventModelNavigationSql(
     projectModelContextNavigationSql(database, identity, entryType),
     alias,
   );
+}
+
+/** Ordinary history must not invoke the model projection outside its admitted byte window. */
+export function transcriptEventDependencyNavigationSql(
+  database: EngineConnection,
+  contextEligible: Expression<number | null>,
+  alias: TranscriptPayloadAlias = "event",
+): RawBuilder<string> {
+  const type = transcriptPredicateSql(database, "navigation_type", alias);
+  const role = transcriptPredicateSql(database, "message_role", alias);
+  return /* kysely-allow-raw: classifications fence the native model projection for both stored facts and legacy reads. */ sql<string>`CASE
+    WHEN ${type} IN ('custom', 'reset') OR ${type} IS NULL
+      OR (${type} = 'message' AND ${contextEligible} = 0 AND ${role} = 'assistant')
+    THEN ${transcriptEventModelNavigationSql(database, alias)}
+    ELSE '{}' END`;
 }
 
 /** Model admission retains projected byte costs, which can be much smaller than canonical JSON. */
@@ -667,4 +698,40 @@ export function transcriptEventUtf8BytesSql(
   return /* kysely-allow-raw: closed transcript aliases select known UTF-8 bytes without loading payloads. */ sql.ref<
     number | null
   >(`${alias}.event_utf8_bytes`);
+}
+
+/** Repair and projection rebuilds can run under an admitted predecessor before migration. */
+export function isHistoricalTranscriptActiveFactsSchema(database: EngineConnection): boolean {
+  if (isPostgresSqlConnection(database)) {
+    const schema = getPostgresPhysicalFacts(database);
+    return (
+      schema !== undefined &&
+      schema.version < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
+      !schema.catalog.some((fact) => fact.table === "session_transcript_active_event_facts")
+    );
+  }
+  const schema = getAdmittedSqliteSchemaFacts(database);
+  return (
+    schema !== undefined &&
+    schema.userVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
+    !schema.tables.has("session_transcript_active_event_facts")
+  );
+}
+
+/** A rewrite can leave its projection intact, but never its old payload-derived facts. */
+export function clearSessionTranscriptActiveFacts(
+  database: EngineConnection,
+  sessionId: string,
+  seq?: number,
+): void {
+  if (isHistoricalTranscriptActiveFactsSchema(database)) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<DB>(database)
+      .deleteFrom("session_transcript_active_event_facts")
+      .where("session_id", "=", sessionId)
+      .$if(seq !== undefined, (query) => query.where("seq", "=", seq!)),
+  );
 }

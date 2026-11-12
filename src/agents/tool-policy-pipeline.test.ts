@@ -172,6 +172,16 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("does not warn for run-granted core tools absent from this run", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["skill_library", "browser"],
+      label: "tools.allow",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (browser). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
   test("includes the active reason for unavailable core tool warnings", () => {
     const warnings = runAllowlistWarningStep({
       allow: ["apply_patch", "reason_case_unknown"],

@@ -21,7 +21,6 @@ it("benchmarks warm identity filtering across viewers", () => {
       profileId: id,
       label: `Viewer ${index}`,
       avatarUrl: `/avatar/${id}`,
-      hasUploadedAvatar: true,
     });
   }
   const configuredAgentIds = new Set(["main"]);

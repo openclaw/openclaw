@@ -1,0 +1,3 @@
+# Profile precedence plus actual node checkout/setup effects and real prepared lifecycle subprocesses.
+# Existing prepared fixture extracted once to preserve its 1000-line owner budget.
+196

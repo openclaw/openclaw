@@ -148,7 +148,7 @@ describe("chat pane session presentation", () => {
         false,
         "Created title",
       ),
-    ).toBe("Main Session");
+    ).toBe("Main session");
   });
   it.each(Object.entries(presentationChanges))(
     "redraws when the visible %s presentation changes",

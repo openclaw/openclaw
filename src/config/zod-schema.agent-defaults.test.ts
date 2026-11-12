@@ -91,6 +91,27 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts bounded summary limits at both scopes without adding defaults", () => {
+    for (const [schema, entry] of [
+      [AgentDefaultsSchema, {}],
+      [AgentEntrySchema, { id: "ops" }],
+    ] as const) {
+      for (const maxSummaryChars of [1_000, 48_000, 200_000]) {
+        expect(schema.parse({ ...entry, compaction: { maxSummaryChars } })).toMatchObject({
+          compaction: { maxSummaryChars },
+        });
+      }
+      for (const maxSummaryChars of [0, 999, 200_001, 16_000.5]) {
+        expectSchemaFailurePath(
+          schema.safeParse({ ...entry, compaction: { maxSummaryChars } }),
+          "compaction.maxSummaryChars",
+        );
+      }
+    }
+    expect(AgentDefaultsSchema.parse({})?.compaction).toBeUndefined();
+    expect(AgentEntrySchema.parse({ id: "ops" }).compaction).toBeUndefined();
+  });
+
   it("rejects unsafe byte-size strings in compaction defaults", () => {
     const unsafe = String(Number.MAX_SAFE_INTEGER + 1);
     for (const compaction of [

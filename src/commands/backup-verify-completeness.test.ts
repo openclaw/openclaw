@@ -174,6 +174,19 @@ describe("standalone backup database completeness", () => {
       await fs.mkdir(`${anchorPath}.postgres`);
       await fs.writeFile(path.join(`${anchorPath}.postgres`, "database.sqlite"), "undeclared rows");
     }
+    if (damage === "valid") {
+      const agentPath = "/synthetic/state/agents/main/openclaw-agent.sqlite";
+      const agentFile = path.join(
+        fixture.root,
+        buildBackupArchivePath(fixture.archiveRoot, agentPath),
+      );
+      await fs.mkdir(path.dirname(agentFile), { recursive: true });
+      using agent = new DatabaseSync(agentFile);
+      agent.exec(`CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT,
+        schema_version INTEGER, agent_id TEXT);
+        INSERT INTO schema_meta VALUES ('primary', 'agent', 1, 'main')`);
+      manifest.sqliteSnapshots!.push({ sourcePath: agentPath, role: "agent", agentId: "main" });
+    }
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
     const archive = await repack(fixture.root, fixture.archiveRoot, "companion");
     if (damage !== "valid") {
@@ -460,6 +473,7 @@ describe("standalone backup database completeness", () => {
 
 describe("archive PostgreSQL capsule verification", () => {
   it.each([
+    "global image",
     "truncated archive",
     "SQLite snapshot",
     "manifest mismatch",
@@ -474,9 +488,12 @@ describe("archive PostgreSQL capsule verification", () => {
     "inner anchor WAL",
     "outer anchor WAL",
   ])(
-    "rejects incomplete or damaged plugin-only PostgreSQL archives (%s) before restore",
+    "verifies PostgreSQL portable images and rejects damaged capsules before restore (%s)",
     async (damage) => {
-      const sourcePath = "/synthetic/plugins/workboard.sqlite";
+      const globalImage = damage === "global image";
+      const sourcePath = globalImage
+        ? "/synthetic/state/state/openclaw.sqlite"
+        : "/synthetic/plugins/workboard.sqlite";
       const fixture = await writeSmallArchive([], []);
       const anchorPath = buildBackupArchivePath(fixture.archiveRoot, sourcePath);
       const directoryPath = `${anchorPath}.postgres`;
@@ -495,6 +512,11 @@ describe("archive PostgreSQL capsule verification", () => {
       {
         using db = new DatabaseSync(path.join(directory, "database.sqlite"));
         db.exec("CREATE TABLE notes (body TEXT); INSERT INTO notes VALUES ('retained')");
+        if (globalImage) {
+          db.exec(`CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT);
+            INSERT INTO schema_meta VALUES ('primary', 'global');
+            CREATE TABLE agent_databases (agent_id TEXT, path TEXT)`);
+        }
       }
       using walWriter = damage.endsWith(" WAL")
         ? new DatabaseSync(
@@ -543,7 +565,7 @@ describe("archive PostgreSQL capsule verification", () => {
       const manifest = await readManifest(fixture.root, fixture.archiveRoot);
       const globalPath = `${fixture.payload}/state/openclaw.sqlite`;
       await fs.mkdir(path.dirname(path.join(fixture.root, globalPath)), { recursive: true });
-      {
+      if (!globalImage) {
         using db = new DatabaseSync(path.join(fixture.root, globalPath));
         db.exec(`CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT);
           INSERT INTO schema_meta VALUES ('primary', 'global');
@@ -567,6 +589,7 @@ describe("archive PostgreSQL capsule verification", () => {
       await writeJson(archiveManifestPath, manifest);
       const readsBefore = vi.mocked(tar.t).mock.calls.length;
       const extractsBefore = vi.mocked(tar.x).mock.calls.length;
+      using removed = vi.spyOn(fs, "rm");
       await expect(
         verifyBackupArchive(
           await repack(
@@ -584,6 +607,14 @@ describe("archive PostgreSQL capsule verification", () => {
       ).resolves.toMatchObject({ ok: true });
       expect(tar.t).toHaveBeenCalledTimes(readsBefore + 1);
       expect(tar.x).toHaveBeenCalledTimes(extractsBefore);
+      if (globalImage) {
+        expect(
+          removed.mock.calls.some(([file]) =>
+            String(file).endsWith(path.join(directoryPath, "database.sqlite")),
+          ),
+        ).toBe(false);
+        return;
+      }
       if (damage === "SQLite snapshot") {
         const dbPath = path.join(fixture.root, globalPath);
         const bytes = await fs.readFile(dbPath);

@@ -1,4 +1,4 @@
-import { safeParseJson } from "@openclaw/normalization-core";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   SYNCED_PREFS,

@@ -1,0 +1,3 @@
+# Funds 28 inherited comparison-base test lines from main, not this PR's tests.
+# Base 954f1a4fea0f: 6,580,966 test lines versus a 6,580,938 ceiling.
+28

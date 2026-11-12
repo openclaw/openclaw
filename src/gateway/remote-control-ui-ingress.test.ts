@@ -40,6 +40,7 @@ function fixture() {
     }),
     getRuntimeConfig: () => ({}),
     signal: new AbortController().signal,
+    admissionSignal: new AbortController().signal,
     handleRequest: async (req, res) => {
       res.end(JSON.stringify(req.headers));
     },

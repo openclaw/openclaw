@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -54,6 +56,37 @@ function seed() {
 function sql(statement: string) {
   return openOpenClawStateDatabase().db.prepare(statement);
 }
+
+it("adds deferred bootstrap custody only at the workspace writer on existing databases", async () => {
+  await seed();
+  await attest(1000, [["AGENTS.md", "a".repeat(64)]]);
+  const before = await read(dir);
+  const pathname = openOpenClawStateDatabase().path;
+  await closeOpenClawStateDatabaseAsync();
+  {
+    using legacy = new DatabaseSync(pathname);
+    legacy.exec("ALTER TABLE workspace_setup_state DROP COLUMN bootstrap_deferred");
+  }
+  // Offline replacement must acquire a new physical admission, not reuse cached schema facts.
+  fs.copyFileSync(pathname, `${pathname}.legacy`);
+  fs.renameSync(`${pathname}.legacy`, pathname);
+  const { db } = openOpenClawStateDatabase();
+  expect(
+    db
+      .prepare(
+        "SELECT name FROM pragma_table_info('workspace_setup_state') WHERE name = 'bootstrap_deferred'",
+      )
+      .get(),
+  ).toBeUndefined();
+  expect(await read(dir)).toEqual(before);
+  await mergeWorkspaceSetupState(dir, { bootstrapDeferred: true }, 2000);
+  await closeOpenClawStateDatabaseAsync();
+  expect(await read(dir)).toEqual({
+    ...before,
+    setupUpdatedAtMs: 2000,
+    setup: { ...before.setup, bootstrapDeferred: true },
+  });
+});
 
 function observeFacts() {
   const observed = new Map<string, unknown>();

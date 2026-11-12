@@ -1,0 +1,2 @@
+# Two net lines explicitly distinguish admission closure from scheduler retirement and retain post-close retirement proof; no new test cases.
+2

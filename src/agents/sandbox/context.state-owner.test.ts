@@ -84,12 +84,19 @@ it("checks physical custody once per runtime assertion and refuses a successor o
       );
       expect(assertCurrent).toBeDefined();
       const stat = vi.spyOn(fs, "lstatSync");
+      const realpath = vi.spyOn(fs.realpathSync, "native");
       try {
         assertCurrent!();
         // fs-safe brackets one physical custody verification with two leaf observations.
         expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(2);
+        expect(
+          realpath.mock.calls.filter(
+            ([pathname]) => pathname === path.join(root, "state", "openclaw.sqlite"),
+          ),
+        ).toHaveLength(1);
       } finally {
         stat.mockRestore();
+        realpath.mockRestore();
       }
       fs.unlinkSync(owner.path);
       expect(assertCurrent).toThrow();

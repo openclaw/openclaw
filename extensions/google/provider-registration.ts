@@ -18,6 +18,7 @@ import {
   isOfficialGoogleAiStudioBaseUrl,
   isGoogleVertexBaseUrl,
   normalizeGoogleProviderConfig,
+  resolveGoogleFastModeSupport,
   resolveGoogleGenerativeAiTransport,
 } from "./provider-policy.js";
 
@@ -132,6 +133,7 @@ export function buildGoogleProvider(): ProviderPlugin {
       return undefined;
     },
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
+    resolveFastModeSupport: resolveGoogleFastModeSupport,
     // Gemini 2.5+ delivers reasoning via native thinkingParts (thinkingConfig.includeThoughts).
     // Tagged mode simultaneously injects <think>/<final> which the model opens before a tool
     // call, never closes, leaving the post-tool turn empty (payloads=0). The CLI backend keeps

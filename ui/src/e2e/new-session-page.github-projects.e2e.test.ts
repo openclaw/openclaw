@@ -352,7 +352,7 @@ suite.define(() => {
       expect(searchRequest.params).toEqual({ query: "openclaw" });
       await place
         .getByText(
-          "No Control UI GitHub credential or shared Gateway environment token is configured; public GitHub results only.",
+          "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",
         )
         .waitFor();
       await place.getByRole("button", { name: /openclaw\/openclaw/u }).click();

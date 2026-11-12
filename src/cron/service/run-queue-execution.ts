@@ -42,6 +42,7 @@ export type CronLaunchContext = {
   removeCancellation?: () => void;
   completion: ReturnType<typeof createDeferredCore<CronRunResult>>;
   activation: ReturnType<typeof createDeferredCore<void>>;
+  receiptSettlement?: Promise<void>;
 };
 
 export async function launchCronRun(
@@ -245,7 +246,12 @@ export async function launchCronRun(
           : {}),
       },
     ],
-    { discardWhenStopped: true },
+    {
+      discardWhenStopped: true,
+      onReceiptSettlement: (settlement) => {
+        pending.receiptSettlement = settlement;
+      },
+    },
   );
   if (!manual && finalized.length && !pending.batch.notified) {
     pending.batch.notified = maybeNotifyIsolatedAgentSetupTimeout(state, {

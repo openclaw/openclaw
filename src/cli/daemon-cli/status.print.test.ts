@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import { createServiceRuntimeInspectionFailure } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import type { GatewayCrashRecord } from "../../infra/gateway-crash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
@@ -352,10 +353,10 @@ describe("printDaemonStatus", () => {
     expect(output()).not.toContain("Listed lifecycle jobs may be responsible");
   });
 
-  it("prints stale updater launchd job guidance", () => {
-    printDaemonStatus({
-      service: {
-        runtime: { status: "running", pid: 8000 },
+  it.each([
+    {
+      label: "detected jobs",
+      serviceState: {
         staleUpdateLaunchdJobs: [
           {
             label: "ai.openclaw.update.2026.5.12",
@@ -367,14 +368,35 @@ describe("printDaemonStatus", () => {
           },
         ],
       },
+      expected: [
+        "Stale OpenClaw updater launchd job(s) detected.",
+        "ai.openclaw.update.2026.5.12",
+        "ai.openclaw.manual-update.1717168800",
+        "launchctl remove <label>",
+        formatCliCommand("openclaw gateway restart"),
+      ],
+    },
+    {
+      label: "failed inspection",
+      serviceState: {
+        staleLaunchdInspectionError: "launchctl list failed (exit 1): Operation not permitted",
+      },
+      expected: [
+        "Could not inspect stale OpenClaw updater launchd jobs",
+        "launchctl list failed (exit 1): Operation not permitted",
+        "NOT checked",
+        formatCliCommand("openclaw doctor"),
+      ],
+    },
+  ])("prints stale updater $label guidance", ({ serviceState, expected }) => {
+    printDaemonStatus({
+      service: { runtime: { status: "running", pid: 8000 }, ...serviceState },
       gateway,
     });
 
-    expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
-    expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
-    expectMockLineContains(runtime.error, "ai.openclaw.manual-update.1717168800");
-    expectMockLineContains(runtime.error, "launchctl remove <label>");
-    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+    for (const line of expected) {
+      expectMockLineContains(runtime.error, line);
+    }
   });
 
   it("points macOS launchd stdout and stderr at one log when gateway is not listening", () => {
@@ -714,5 +736,26 @@ describe("printDaemonStatus", () => {
     });
     expectMockLineContains(runtime.log, "Gateway service version: 2026.6.35");
     expect(output(runtime.error)).not.toContain("installed Gateway service is version");
+  });
+  it("prints recorded crashes even when the successor is running", () => {
+    const crash: GatewayCrashRecord = {
+      bootId: "previous-run",
+      pid: 42,
+      startedAtMs: 1_000,
+      detectedAtMs: 3_000,
+      signal: "SIGSEGV",
+      version: "2026.11.6",
+    };
+    printDaemonStatus({ service: runningService, gateway: { ...gateway, recentCrashes: [crash] } });
+    expect(output(runtime.error)).toContain("Previous Gateway run ended unexpectedly");
+    expect(output(runtime.error)).toContain("SIGSEGV");
+    expect(output(runtime.error)).toContain("2026.11.6");
+    printDaemonStatus(
+      { service: runningService, gateway: { ...gateway, recentCrashes: [crash] } },
+      { json: true },
+    );
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ gateway: expect.objectContaining({ recentCrashes: [crash] }) }),
+    );
   });
 });

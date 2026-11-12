@@ -1,5 +1,7 @@
 import { requireGitCommandOutput, type GitCommandOptions } from "../../infra/git-exec.js";
+import { appendGitConfig } from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withIsolatedWorktreeGitTransport } from "./base-fetch.js";
 import { requireGit, requireGitBuffer, runGit, WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -12,7 +14,7 @@ export async function missingCommitObjects(
   const objects = (
     await requireGitBuffer(
       repoRoot,
-      ["rev-list", "--objects", "--missing=print", "--no-object-names", "--max-count=1", commit],
+      ["rev-list", "--objects", "--missing=print", "--quiet", "--max-count=1", commit],
       { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
     )
   ).toString("utf8");
@@ -59,28 +61,38 @@ export async function hydrateCommitObjects(
     if (!remote) {
       throw missingObjectsError(commit, missing.length);
     }
-    // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
-    // Shared commits do not prove that their promised blobs are present.
-    // --refetch hints auto-maintenance to repack (gc.autoPackLimit=1); that repack must
-    // never run inside the allocation lease.
-    await requireGit(
+    const refMutationDirectory =
+      options.refMutationDirectory ??
+      (await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options));
+    // Hydrate one batch without auto-maintenance or unused fetch-summary abbreviation scans.
+    // Shared commits do not prove blob presence; noop still skips an already-satisfied batch.
+    await withIsolatedWorktreeGitTransport(
       repoRoot,
-      [
-        "fetch",
-        "--refetch",
-        "--no-auto-maintenance",
-        remote,
-        "--no-tags",
-        "--no-prune",
-        "--no-write-fetch-head",
-        "--recurse-submodules=no",
-        "--stdin",
-      ],
-      {
-        ...options,
-        input: Buffer.from(`${missing.join("\n")}\n`),
-        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-      },
+      repoRoot,
+      options,
+      (transport) =>
+        requireGit(
+          repoRoot,
+          [
+            "fetch",
+            "--quiet",
+            "--no-auto-maintenance",
+            remote,
+            "--no-tags",
+            "--no-prune",
+            "--no-write-fetch-head",
+            "--recurse-submodules=no",
+            "--stdin",
+          ],
+          {
+            ...transport,
+            refMutationDirectory,
+            env: appendGitConfig(transport.env ?? {}, [["fetch.negotiationAlgorithm", "noop"]]),
+            input: Buffer.from(`${missing.join("\n")}\n`),
+            timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+          },
+        ),
+      remote,
     ).catch((error: unknown) => {
       log.warn(
         `worktree prefetch failed: ${missing.length} missing objects for ${commit}; check the promisor remote.`,

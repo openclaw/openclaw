@@ -256,6 +256,8 @@ export type PreparedModelCatalogProviderFacts = {
 
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
+  /** An unscoped provider acquisition completed; retained across provider-local refreshes. */
+  fullProviderDiscovery?: true;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;

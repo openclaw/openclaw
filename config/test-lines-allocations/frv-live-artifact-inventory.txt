@@ -1,0 +1,2 @@
+# Real waiter CLI regressions for live incomplete inventory and immediate identity refusal.
+18

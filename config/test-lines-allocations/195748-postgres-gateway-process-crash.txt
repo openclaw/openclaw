@@ -1,0 +1,5 @@
+# PR #195748: replace graceful in-process reconstruction with actual Gateway SIGKILL.
+# Exact +42 test lines cover the recorded owner PID, fresh-process reclamation,
+# and automatic dispatch while preserving retained history and no-replay assertions.
+# Reuse the existing scenario and process fixture; keep the scalar baseline unchanged.
+42

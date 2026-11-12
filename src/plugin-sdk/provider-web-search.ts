@@ -74,3 +74,5 @@ export { DEFAULT_TIMEOUT_SECONDS } from "../agents/tools/web-shared.js";
 export { enablePluginInConfig } from "../plugins/enable.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
+
+export { nativeWebSearchCodecs } from "./provider-web-search-codecs.js";

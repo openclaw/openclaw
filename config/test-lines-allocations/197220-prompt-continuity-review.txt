@@ -1,0 +1,2 @@
+# Net test-line growth from the #197220 review follow-up: per-attempt authorized enrichment across fallback candidates (model and eligibility), and Codex fuse-rotation / new-thread invalidation.
+80

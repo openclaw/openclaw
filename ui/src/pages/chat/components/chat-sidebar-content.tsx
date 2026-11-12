@@ -203,7 +203,9 @@ export function SidebarPanel(props: SidebarPanelProps) {
   const mobileReader = () =>
     mobileMedia() || (props.filePresentation === "mobile" && props.content?.kind === "file");
   const fillHost = () =>
-    ["file", "markdown", "attachment", "session-diff", "image"].includes(props.content?.kind ?? "");
+    ["file", "markdown", "attachment", "session-diff", "image", "canvas"].includes(
+      props.content?.kind ?? "",
+    );
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
   return (

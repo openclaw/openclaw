@@ -1,6 +1,6 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, lazy, Match, Show, Switch } from "solid-js";
+import { createMemo, Errored, For, lazy, Loading, Match, Show, Switch } from "solid-js";
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
@@ -25,7 +25,13 @@ export type ChatNoticeProps = {
   modelCatalog?: ModelCatalogEntry[];
   recovery?: Pick<
     ChatThreadProps,
-    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
+    | "failureActionsRunId"
+    | "runActive"
+    | "runWorking"
+    | "onRetryRun"
+    | "failedMessageEditSource"
+    | "onFocusComposer"
+    | "onDismissPendingInput"
   >;
 };
 
@@ -35,6 +41,9 @@ const ChatPermissionCard = lazy(() => import("./chat-permission-card.tsx"), {
 });
 const ChatSkillLearnedNotice = lazy(() => import("./chat-skill-learned-notice.tsx"), {
   export: "ChatSkillLearnedNotice",
+});
+const ModelProviderIcon = lazy(() => import("../../../lib/reactive/provider-presentation.tsx"), {
+  export: "ModelProviderIcon",
 });
 
 function SystemLine(props: {
@@ -159,8 +168,8 @@ function NoticeModel(props: {
 }) {
   const reference = createMemo(() => parseProviderModelRef(props.value));
   const provider = () => normalizeChatModelProviderId(reference()?.provider ?? "");
-  const name = createMemo(() => {
-    const entry = props.catalog?.find((candidate) => {
+  const catalogEntry = createMemo(() =>
+    props.catalog?.find((candidate) => {
       const ref = parseProviderModelRef(
         buildQualifiedChatModelValue(candidate.id, candidate.provider),
       );
@@ -168,19 +177,37 @@ function NoticeModel(props: {
         ref?.model === reference()?.model &&
         normalizeChatModelProviderId(ref?.provider ?? "") === provider()
       );
-    });
+    }),
+  );
+  const name = createMemo(() => {
+    const entry = catalogEntry();
     return formatModelLabel({
       provider: provider(),
       label: entry?.name.trim() || entry?.alias?.trim() || reference()?.model || props.value,
     });
   });
+  const icon = () => (
+    <ProviderBrandIcon
+      provider={provider()}
+      presentation={catalogEntry()}
+      class="chat-divider__icon"
+    />
+  );
   return (
     <span class="chat-divider__model" title={props.value}>
       <Show when={props.prefix}>
         <span class="chat-divider__model-affix">{props.prefix}</span>
       </Show>
       <Show when={provider()}>
-        <ProviderBrandIcon provider={provider()} class="chat-divider__icon" />
+        <Errored fallback={icon}>
+          <Loading fallback={icon()}>
+            <ModelProviderIcon
+              provider={provider()}
+              presentation={catalogEntry()}
+              class="chat-divider__icon"
+            />
+          </Loading>
+        </Errored>
       </Show>
       <bdi>{name()}</bdi>
       <Show when={props.suffix}>

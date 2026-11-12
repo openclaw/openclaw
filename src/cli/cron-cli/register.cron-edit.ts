@@ -28,6 +28,7 @@ import {
 import {
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
+  buildCronCommandShellArgvForGateway,
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronNoOutputTimeoutOption,
@@ -126,6 +127,7 @@ export function registerCronEditCommand(cron: Command) {
         `Failure alert channel (${getCronChannelOptions()})`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
+      .option("--failure-alert-thread-id <id>", "Thread ID for failure alerts")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
       .option("--failure-alert-exclude-skipped", "Exclude skips except local-provider outages")
@@ -517,7 +519,11 @@ export function registerCronEditCommand(cron: Command) {
           } else if (payloadKind === "command") {
             payload = {
               kind: "command",
-              argv: commandArgv ?? (commandShell ? ["sh", "-lc", commandShell] : undefined),
+              argv:
+                commandArgv ??
+                (commandShell
+                  ? await buildCronCommandShellArgvForGateway(commandShell, opts)
+                  : undefined),
               cwd: commandCwd,
               env: commandEnv,
               input: hasCommandInput ? opts.commandInput : undefined,
@@ -636,6 +642,7 @@ export function registerCronEditCommand(cron: Command) {
               "failureAlertAfter",
               "failureAlertChannel",
               "failureAlertTo",
+              "failureAlertThreadId",
               "failureAlertCooldown",
               "failureAlertMode",
               "failureAlertAccountId",
@@ -662,6 +669,9 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.failureAlertChannel === "string") {
               failureAlert.channel =
                 normalizeOptionalLowercaseString(opts.failureAlertChannel) ?? null;
+            }
+            if (typeof opts.failureAlertThreadId === "string") {
+              failureAlert.threadId = normalizeOptionalString(opts.failureAlertThreadId) ?? null;
             }
             if (typeof opts.failureAlertTo === "string") {
               failureAlert.to = normalizeOptionalString(opts.failureAlertTo) ?? null;

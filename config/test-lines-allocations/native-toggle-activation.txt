@@ -1,0 +1,2 @@
+# SettingsToggle regression: preserve native activation through unrelated attribute refresh.
+20

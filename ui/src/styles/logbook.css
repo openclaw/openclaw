@@ -382,6 +382,10 @@
   gap: 6px;
 }
 
+.logbook-ask__form > .btn {
+  padding-block: 0;
+}
+
 .logbook-ask__input {
   flex: 1;
   min-width: 0;

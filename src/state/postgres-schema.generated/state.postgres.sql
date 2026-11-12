@@ -1309,6 +1309,7 @@ CREATE TABLE "workspace_setup_state" (
   "updated_at" bigint,
   "attested_at_ms" bigint,
   "attestation_updated_at_ms" bigint,
+  "bootstrap_deferred" bigint,
   PRIMARY KEY ("workspace_key"),
   CHECK ("version" IS NULL OR "workspace_path" IS NOT NULL)
 );

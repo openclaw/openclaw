@@ -6,7 +6,7 @@ import { rememberBoundedKey } from "../infra/dedupe.js";
  */
 import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isKnownCoreToolId } from "./tool-catalog.js";
+import { isKnownCoreToolId, isRunGrantedCoreToolId } from "./core-tool-facts.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -162,8 +162,8 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
             normalizeToolPolicyName(entry),
           ),
         );
-        const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
-          isKnownCoreToolId(entry),
+        const gatedCoreEntries = resolved.unknownAllowlist.filter(
+          (entry) => isKnownCoreToolId(entry) && !isRunGrantedCoreToolId(entry),
         );
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []

@@ -231,7 +231,7 @@ function BoardWidgetCellContent(
         void setActionFailure(completion);
       }
       if (failureMessage) {
-        showToast({ message: failureMessage });
+        showToast({ severity: "error", message: failureMessage });
       }
     });
   }

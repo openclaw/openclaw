@@ -27,6 +27,12 @@ For agent browser tool calls:
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
 
+Status and profile listing are passive: they never start a browser, attach Chrome
+MCP, or open a CDP WebSocket. Use `browser start` or an explicit browser action
+to attach. Chrome MCP and shared extension-relay tab counts reflect the last
+explicit tab enumeration; locally owned relays report their current tab metadata.
+Live readiness and graphics inspection are available through `browser doctor --deep`.
+
 ## Browser panel in the Control UI
 
 The Browser panel follows the current session's latest successful browser tab,

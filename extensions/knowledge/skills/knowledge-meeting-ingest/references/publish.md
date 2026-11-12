@@ -24,7 +24,7 @@
 ## Create, then link
 
 You can't predict paths. Publish a new page with its evidence first, then use the
-returned path for self-citations and cross-links in a follow-up edit. Link to
+returned ID for self-citations and cross-links in a follow-up edit. Link to
 other pages only after they exist. Reread revision/hash before each follow-up
 edit.
 
@@ -34,10 +34,12 @@ edit.
   `knowledge_record` content read, the replacement, a reason and the
   vault/revision/hash/ontology fences. Equal offsets insert; empty replacement
   deletes.
-- Full replacement: read the entire body first (follow `content.nextOffset`;
-  compare hashes across pages). Never edit from a truncated read.
-- Request `metadataView: "full"` before changing domain fields. Preserve
-  unrelated prose and metadata.
+- Full replacement: read the entire body first (follow `nextOffset` with
+  `offset`; compare hashes across pages). Never edit from a truncated read.
+- The record read includes domain fields, aliases, tags and dependencies; send
+  the complete set you want when changing one. Preserve unrelated prose and
+  metadata. If the read's `omitted` lists `metadata.fields`, the fields were
+  too large to return: omit `fields` so they are preserved.
 
 ## Page budgets
 

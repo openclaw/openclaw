@@ -249,7 +249,10 @@ describe("assistant failure recovery", () => {
 
   it.each([
     [{ kind: "timeout", phase: "compaction", source: "observation" }, {}],
-    [{ kind: "timeout", phase: "tool_execution", source: "runtime" }, { stopReason: "timeout" }],
+    [
+      { kind: "timeout", phase: "tool_execution", source: "runtime" },
+      { stopReason: "timeout", timeoutPhase: "tool_execution" },
+    ],
     [
       { kind: "timeout", phase: "prompt", source: "idle" },
       { stopReason: "timeout", timeoutPhase: "provider", providerStarted: true },

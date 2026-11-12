@@ -1,0 +1,3 @@
+# Extend the existing native Add Gateway with actual scheduled provider/tool effects
+# before creator revocation and zero additional effects for the unchanged job afterward.
+174

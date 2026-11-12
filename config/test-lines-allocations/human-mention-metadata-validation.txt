@@ -1,0 +1,2 @@
+# Pass metadata arrays intact; independent eleven-recipient and accepted-ten fixtures.
+9

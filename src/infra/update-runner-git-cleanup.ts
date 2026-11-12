@@ -113,14 +113,6 @@ export async function cleanupGitPreflight(
       MAX_LOG_CHARS,
     );
   }
-  await runCleanupCommand(["git", "-C", options.cwd, "worktree", "prune"], {
-    cwd: options.cwd,
-  }).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    return null;
-  });
   const removed = await fs
     .rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
     .then(

@@ -1,0 +1,2 @@
+# Locale-routing regressions for skill feedback, plugin audit badges, action recovery, and settings/activation failures; required to prove untranslated source fails.
+170

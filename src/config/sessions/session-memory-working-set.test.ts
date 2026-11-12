@@ -8,7 +8,7 @@ import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.test-support.js";
-import { prepareSessionEntriesInWorker } from "./session-transcript-read-worker-runtime.js";
+import { streamSessionEntriesInWorker } from "./session-transcript-read-worker-runtime.js";
 
 const body = "synthetic detail ".repeat(262_144);
 
@@ -36,17 +36,29 @@ it("exports every medium transcript through the production 512 MiB worker", asyn
       ).toBe(true);
     }
     // The previous worker retained all projected sources plus all rendered results and OOMed.
-    const results = await prepareSessionEntriesInWorker(requests);
+    const contents = requests.map((): string[] => []);
+    const results = await streamSessionEntriesInWorker(
+      requests.map((request) => ({ ...request, pages: true, messages: false })),
+      async (index, update) => {
+        if ("reset" in update) {
+          contents[index] = [];
+        } else {
+          contents[index]!.push(...update.page.lines);
+        }
+      },
+    );
     expect(results).toHaveLength(requests.length);
     for (const [index, result] of results.entries()) {
-      if (!("entry" in result) || !result.entry) {
+      if (!("summary" in result) || !result.summary) {
         throw new Error("Synthetic hot source was reported cold");
       }
-      expect(result.entry?.content.startsWith("User: HEAD_" + index + " ")).toBe(true);
-      expect(result.entry?.content.endsWith(" TAIL_" + index)).toBe(true);
+      const content = contents[index]!.join("\n");
+      expect(content.startsWith("User: HEAD_" + index + " ")).toBe(true);
+      expect(content.endsWith(" TAIL_" + index)).toBe(true);
+      expect(result.summary.lineCount).toBe(contents[index]!.length);
       const words = /\b(?:synthetic|detail)\b/g;
       let wordCount = 0;
-      while (words.test(result.entry.content)) {
+      while (words.test(content)) {
         wordCount++;
       }
       expect(wordCount).toBe(262_144 * 2);

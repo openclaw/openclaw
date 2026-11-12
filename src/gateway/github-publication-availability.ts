@@ -3,6 +3,7 @@ import type {
   GitHubPublicationPublisher,
   SessionGitHubReadinessResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import {
   matchesPreparedGitHubPublicationIdentity,
   prepareGitHubPublicationIdentity,
@@ -568,8 +569,8 @@ export async function prepareGitHubPublicationRepositoryIdentity(params: {
   return repositoryIdentity;
 }
 
-function isSupportedGitHubOrigin(originUrl: string): boolean {
-  const remote = parseGitHubRemoteUrl(originUrl);
+function isSupportedGitHubOrigin(originUrl: string, host: string): boolean {
+  const remote = parseGitHubRemoteUrl(originUrl, host);
   return Boolean(
     remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo),
   );
@@ -591,6 +592,7 @@ export async function qualifyGitHubPublicationSource(
   readSession: () => PublicationSessionRead,
   options: { readMode?: "existing-only" } = {},
 ): Promise<PublicationSourceQualification> {
+  const githubHost = resolveGitHubHost();
   const checkSession = () => {
     assertCurrent();
     return requirePublicationSessionOwner(session, readSession(), true);
@@ -626,7 +628,7 @@ export async function qualifyGitHubPublicationSource(
       return {
         ok: true,
         custody: { kind: "qualified", source: "repository" },
-        target: isSupportedGitHubOrigin(owner.workspace.url)
+        target: isSupportedGitHubOrigin(owner.workspace.url, githubHost)
           ? { kind: "supported", basis: "repository-url", freshness: "observed" }
           : { kind: "unsupported" },
         assertCurrent: () => {
@@ -680,7 +682,12 @@ export async function qualifyGitHubPublicationSource(
       };
     }
     const { repoRoot, repoFingerprint } = owner.worktree;
-    const key = JSON.stringify([context.admission.identity.key, repoRoot, repoFingerprint]);
+    const key = JSON.stringify([
+      context.admission.identity.key,
+      githubHost,
+      repoRoot,
+      repoFingerprint,
+    ]);
     let observed = false;
     const target = await repositoryTargets.read(
       key,
@@ -690,7 +697,7 @@ export async function qualifyGitHubPublicationSource(
           assertCurrent: () => context.admission.assertCurrent(),
         });
         observed = true;
-        return isSupportedGitHubOrigin(repository.originUrl);
+        return isSupportedGitHubOrigin(repository.originUrl, githubHost);
       },
       { allowStale: false },
     );

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { releaseBranchForChecks } from "./lib/check-limits.mts";
 import {
   loadRatchetReference,
   loadRatchetSnapshot,
@@ -167,6 +168,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
     }
+    if (!args.prune && releaseBranchForChecks(root)) {
+      console.log("Test-line budget skipped for release branch.");
+      return 0;
+    }
     const parse = (source: string) => parseCount(source, BASELINE);
     const baseline = loadRatchetSnapshot(root, BASELINE, args.staged, parse);
     const allocations = loadAllocations(root, args.staged);
@@ -190,9 +195,12 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       // A prune folds allocations into the scalar. Compare effective ceilings
       // so an older branch cannot count that folded credit a second time.
       const credit = Math.max(0, ceiling - previousCeiling);
-      if (credit > Math.max(0, delta)) {
+      // Exact grants can reconcile base debt without creating new headroom.
+      const inheritedDebt = Math.max(0, total - delta - previousCeiling);
+      const allowedGrowth = Math.max(0, delta + inheritedDebt);
+      if (credit > allowedGrowth) {
         throw new Error(
-          `Test line allocation credit ${credit} exceeds added test lines ${Math.max(0, delta)}.`,
+          `Test line allocation credit ${credit} exceeds allowed ceiling growth ${allowedGrowth}.`,
         );
       }
     }

@@ -210,6 +210,14 @@ Return a native `AbortSignal`. Registration preserves native cancellation and
 cleanup while keeping the assertion and callable abort-reason values bound to
 the plugin instance. Plugin retirement also ends captured access.
 
+The registration owner records a closed diagnostic `failureCause` before relaying
+an abort or failed assertion. This distinguishes grant revocation, plugin lifetime
+retirement, refused plugin invocation, and unclassified policy check failures
+without exposing plugin error text. It does not change authorization: live
+ingress still fails closed, including when ownership or availability is unknown.
+The durable recovery contract below separately distinguishes an unavailable
+observation from a definitively ended grant.
+
 The Gateway binds the returned authority to the original person and carries it
 through WebSocket and HTTP requests, and through commands admitted for a linked
 channel sender. Linked administrators must satisfy the same role-bound person

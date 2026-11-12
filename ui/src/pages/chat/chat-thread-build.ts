@@ -34,12 +34,7 @@ import {
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
-import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
-import {
-  hasHandoffToolCall,
-  pendingSessionsYield,
-  projectSessionsYieldItems,
-} from "./chat-sessions-yield.ts";
+import { hasHandoffToolCall, pendingSessionsYield } from "./chat-sessions-yield.ts";
 import {
   createSubmittedModelNoticeProjector,
   projectChatSystemNotice,
@@ -49,8 +44,12 @@ import {
   collectCanvasTurns,
   reconcileLiveCanvasPreviews,
 } from "./chat-thread-canvas.ts";
+import {
+  groupChatDisplayItems,
+  prepareChatStreamOnset,
+  type ChatThreadDisplayProps,
+} from "./chat-thread-display.ts";
 import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
-import { groupMessages } from "./chat-thread-grouping.ts";
 import {
   placeChatInputs,
   type ChatInputOrderState,
@@ -58,6 +57,7 @@ import {
 } from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
+  appendActiveRunItem,
   buildMessageItems,
   canvasPreviewBaseIdentity,
   createCanvasAssistantMessage,
@@ -84,44 +84,32 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
-import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import type { ChatReasoning, CompactionStatus } from "./tool-stream-contract.ts";
+import type { CompactionStatus } from "./tool-stream-contract.ts";
 
-export type BuildChatItemsProps = ChatInputPlacementProps & {
-  paneId: string;
-  sessionKey: string;
-  archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
-  runId?: string | null;
-  compactionStatus?: CompactionStatus | null;
-  /** Invalidates cached display copy when the active UI language changes. */
-  locale?: string;
-  messages: unknown[];
-  toolMessages: unknown[];
-  guardianNotices?: ChatGuardianNotice[];
-  streamSegments: ChatStreamSegment[];
-  reasoning?: ChatReasoning | null;
-  showReasoning?: boolean;
-  stream: string | null;
-  streamStartedAt: number | null;
-  showToolCalls: boolean;
-  persistCommentary?: boolean;
-  /** True while the agent is visibly working (isChatRunWorking). */
-  runWorking?: boolean;
-  /** The answer is visible or the runtime only owns background settlement. */
-  runFinalizing?: boolean;
-  /** True while the current session has an abortable live run. */
-  runActive?: boolean;
-  /** Set while a run that handed off is idle and its subagents are still running. */
-  subagentWait?: { startedAt: number; runId: string };
-  questionPrompts?: readonly QuestionPrompt[];
-  /** True while chat history is loading (initial load or background reload). */
-  loading?: boolean;
-  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
-  replyPeople?: readonly string[];
-  /** Key of the signed-in viewer, who authors local user messages without a sender. */
-  replyLocalPerson?: string;
-};
+export type BuildChatItemsProps = ChatInputPlacementProps &
+  ChatThreadDisplayProps & {
+    paneId: string;
+    sessionKey: string;
+    archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
+    compactionStatus?: CompactionStatus | null;
+    /** Invalidates cached display copy when the active UI language changes. */
+    locale?: string;
+    messages: unknown[];
+    toolMessages: unknown[];
+    guardianNotices?: ChatGuardianNotice[];
+    streamSegments: ChatStreamSegment[];
+    persistCommentary?: boolean;
+    /** The answer is visible or the runtime only owns background settlement. */
+    runFinalizing?: boolean;
+    /** True while the current session has an abortable live run. */
+    runActive?: boolean;
+    /** Set while a run that handed off is idle and its subagents are still running. */
+    subagentWait?: { startedAt: number; runId: string };
+    questionPrompts?: readonly QuestionPrompt[];
+    /** True while chat history is loading (initial load or background reload). */
+    loading?: boolean;
+  };
 
 export function buildChatItems(
   props: BuildChatItemsProps,
@@ -176,13 +164,27 @@ export function buildChatItems(
     facts.history = history;
   }
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
-  const matchesSearch = createChatSearchMatcher(
+  const matchSource = createChatSearchMatcher(
     searchFiltering ? (props.searchQuery ?? "") : "",
     props.messageRecovery,
   );
+  // Canvas lookahead and row filtering share one result per source in this build.
+  // Derived inline/canvas messages have their own identity and search text.
+  const searchMatches = searchFiltering ? new Map<unknown, boolean>() : undefined;
+  const matchesSearch = (message: unknown) => {
+    if (!searchMatches) {
+      return true;
+    }
+    let matches = searchMatches.get(message);
+    if (matches === undefined) {
+      matches = matchSource(message);
+      searchMatches.set(message, matches);
+    }
+    return matches;
+  };
   const hiddenHistoryKeys = new Set<string>();
   const hideSearchMiss = (item: Extract<ChatItem, { kind: "message" }>) => {
-    if (searchFiltering && !matchesSearch(item.message)) {
+    if (!matchesSearch(item.message)) {
       hiddenHistoryKeys.add(item.key);
     }
   };
@@ -342,22 +344,11 @@ export function buildChatItems(
 
     items.push(...projectChatSystemNotice(item, normalized));
   }
-  const groupDisplayItems = (hidden?: ReadonlySet<string>) => {
-    const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
-      projectSessionsYieldItems(source, props.showToolCalls, complete);
-    // Keep real user boundaries even when search hides their rows.
-    items = projectRunFailureStreaks(items);
-    const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
-    return groupMessages(
-      projectYields(coalesceToolActivityMessages(items, hidden), complete),
-      { items: complete, people: props.replyPeople, localPerson: props.replyLocalPerson, facts },
-      props.showReasoning ? props.reasoning : undefined,
-      props.showReasoning,
-    );
-  };
+  let streamOnset: Extract<ChatItem, { kind: "stream" }> | undefined;
   // History probes must not adopt inputs, resolve timing, or retire live progress.
   if (mode === "history") {
-    return groupDisplayItems(hiddenHistoryKeys.size > 0 ? hiddenHistoryKeys : undefined);
+    const hidden = hiddenHistoryKeys.size > 0 ? hiddenHistoryKeys : undefined;
+    return groupChatDisplayItems(props, items, hidden, facts);
   }
   const currentRunId =
     props.runId ??
@@ -478,12 +469,18 @@ export function buildChatItems(
   }
   // Empty user rows may have disappeared since canvas placement. Preserve the
   // earlier current-turn fallback, but resolve exact bounds over rendered rows.
-  const projectionRunBounds = createRunTurnLookup(executionItems());
+  let projectionRunBounds: ReturnType<typeof createRunTurnLookup> | undefined;
   const resolveProjectionBounds = (
     runId: unknown,
     afterUserSendId?: string,
   ): TurnInsertionBounds | undefined =>
-    boundToPendingInputs(resolveRunBounds(projectionRunBounds, runId, afterUserSendId));
+    boundToPendingInputs(
+      resolveRunBounds(
+        (projectionRunBounds ??= createRunTurnLookup(executionItems())),
+        runId,
+        afterUserSendId,
+      ),
+    );
   if (!searchFiltering) {
     const recordedPermissions = new Set(
       props.guardianNotices?.some((notice) => notice.permissionMissing)
@@ -680,22 +677,13 @@ export function buildChatItems(
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
-  const activeTurnBounds = boundToPendingInputs(
-    (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
-      (activeInputKey ? { afterKey: activeInputKey } : null),
-  );
-  const appendActiveRunItem = (
-    item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
-  ) => {
-    // Queued custody is a ceiling for the whole live response, not just its text.
-    // Moving its working indicator past that ceiling splits and remeasures the run.
-    if (activeTurnBounds) {
-      const { maximum } = insertionIndexesForBounds(items, activeTurnBounds);
-      items.splice(maximum, 0, item);
-    } else {
-      items.push(item);
-    }
-  };
+  const activeTurnBounds =
+    activeReasoning || visibleText.length > 0 || showWorkingIndicator || props.subagentWait
+      ? boundToPendingInputs(
+          (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
+            (activeInputKey ? { afterKey: activeInputKey } : null),
+        )
+      : undefined;
   if (
     activeReasoning ||
     (visibleText.length > 0 && !stripHeartbeatTokenForDisplay(visibleText).shouldSkip)
@@ -703,7 +691,7 @@ export function buildChatItems(
     const liveProgress = resolveProgress();
     const liveRunId = props.runId ?? props.reasoning?.runId ?? liveProgress.runId;
     // Unsaved answer text follows accepted steers at the run's live tail.
-    appendActiveRunItem({
+    appendActiveRunItem(items, activeTurnBounds, {
       kind: "stream",
       key: liveProgress.key,
       text: visibleText,
@@ -720,17 +708,21 @@ export function buildChatItems(
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
-    appendActiveRunItem({
+    const indicator: Extract<ChatItem, { kind: "reading-indicator" }> = {
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(workingRunId),
-    });
+    };
+    if (facts && !activeReasoning && !searchFiltering) {
+      streamOnset = prepareChatStreamOnset(props, items, indicator, hasEmptyLiveStream);
+    }
+    appendActiveRunItem(items, activeTurnBounds, indicator);
   } else if (props.subagentWait && !initialHistoryLoad) {
     // The handoff ended the parent's run, not its work. Carrying that run's
     // identity keeps the claw in the same frame instead of opening another row.
-    appendActiveRunItem({
+    appendActiveRunItem(items, activeTurnBounds, {
       kind: "reading-indicator",
       key: `waiting-subagents:${props.sessionKey}`,
       startedAt: props.subagentWait.startedAt,
@@ -746,5 +738,5 @@ export function buildChatItems(
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
   items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
-  return groupDisplayItems(hidden);
+  return groupChatDisplayItems(props, items, hidden, facts, streamOnset);
 }

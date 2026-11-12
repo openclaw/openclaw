@@ -1,0 +1,2 @@
+# Prove warm Knowledge storage workers check each call's own authority, not the call that started them.
+28

@@ -4,6 +4,11 @@ import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import * as tar from "tar";
 import { normalizeArchivePath } from "../infra/backup-archive-path-policy.js";
+import {
+  createBackupScratchDirectory,
+  finishBackupScratch,
+  type BackupScratch,
+} from "../infra/backup-scratch.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { BACKUP_MAX_DECOMPRESSION_RATIO } from "./backup-shared.js";
@@ -153,7 +158,7 @@ export async function prepareDatabaseArtifacts(
 
 /** Retain possible databases until a trailing manifest and legacy registry establish ownership. */
 export class BackupArchiveSpool {
-  private directory: Promise<string> | undefined;
+  private scratch: Promise<BackupScratch> | undefined;
   private disabled = false;
   private nextFileId = 0;
   private readonly files = new Map<string, string>();
@@ -161,13 +166,13 @@ export class BackupArchiveSpool {
   readonly tempRoot = os.tmpdir();
 
   private async root(): Promise<string> {
-    const pending = (this.directory ??= fs.mkdtemp(
-      path.join(this.tempRoot, "openclaw-backup-verify-"),
-    ));
+    // Keep the lifetime token until verification settles; maintenance can then
+    // reclaim a crashed verifier without deleting a concurrent verifier's payload.
+    const pending = (this.scratch ??= createBackupScratchDirectory(this.tempRoot));
     try {
-      return await pending;
+      return (await pending).directory;
     } catch (error) {
-      this.directory = undefined;
+      this.scratch = undefined;
       throw error;
     }
   }
@@ -305,8 +310,11 @@ export class BackupArchiveSpool {
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    if (this.directory) {
-      await fs.rm(await this.directory, { recursive: true, force: true });
+    if (this.scratch) {
+      const warning = await finishBackupScratch(await this.scratch);
+      if (warning) {
+        throw new Error(warning);
+      }
     }
   }
 }

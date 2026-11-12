@@ -203,14 +203,15 @@ it("windows a large catalog while revealing keyboard targets and filtering searc
   f.select.onSelect = onSelect;
   await f.open();
   await expect.poll(() => f.active?.getAttribute("value")).toBe("agent-250");
-  await expect.poll(() => f.items.length > 0 && f.items.length < 30).toBe(true);
+  // 300 agents; the phone sheet is taller than the desktop menu, so more rows fit its window.
+  await expect.poll(() => f.items.length > 0 && f.items.length < 60).toBe(true);
   expect(f.active?.getAttribute("aria-posinset")).toBe("251");
   expect(f.active?.getAttribute("aria-setsize")).toBe("300");
   await expect.poll(requested).toEqual(visibleTargets());
   await userEvent.keyboard("{End}");
   await expect.poll(() => f.active?.getAttribute("value")).toBe("agent-299");
   await expect.poll(() => requested().includes("agent-299")).toBe(true);
-  expect(Math.max(...ensure.mock.calls.map(([ids]) => ids.length))).toBeLessThan(30);
+  expect(Math.max(...ensure.mock.calls.map(([ids]) => ids.length))).toBeLessThan(60);
   await userEvent.keyboard("{Home}{ArrowDown}");
   await expect.poll(() => f.active?.getAttribute("value")).toBe("agent-1");
   const search = f.select.querySelector<HTMLButtonElement>(".header-search__toggle")!;

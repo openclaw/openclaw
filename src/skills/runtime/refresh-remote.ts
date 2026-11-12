@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -66,7 +67,8 @@ export function ensureRemoteSkillsWatcher(params: {
     if (remoteWatchers.size >= MAX_REMOTE_WATCHERS) {
       await retireWatcher(remoteWatchers.keys().next().value!);
     }
-    if (drainSignal.aborted) {
+    // Retirement can yield across a runtime config publication that disables watching.
+    if (drainSignal.aborted || getRuntimeConfigSnapshot()?.skills?.load?.watch === false) {
       return;
     }
     const state: RemoteSkillsWatch = {

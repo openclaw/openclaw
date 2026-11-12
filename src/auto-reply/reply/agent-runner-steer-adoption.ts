@@ -181,7 +181,7 @@ export async function runActiveReplySteer(
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
-      ...(error ? { error } : {}),
+      ...(error ? { error: error.slice(0, 512) } : {}),
       disposition: queueCapRejected ? "skipped-queue-cap" : "followup-policy",
       channel:
         followupRun.originatingChannel ??
@@ -424,7 +424,11 @@ export async function runActiveReplySteer(
       shouldAbortOnAdoptionError: isIngressAdoptionLostError,
     });
     if (finalization.status === "rejected") {
-      return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
+      return await fallback(
+        finalization.outcome.reason,
+        injectionAttempt.targetRunId,
+        finalization.outcome.errorMessage,
+      );
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.

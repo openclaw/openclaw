@@ -158,14 +158,15 @@ export function mutateSessionColdTranscriptInWorker(
         if ([...protectionKeys].some((key) => !plan.protectionKeys.includes(key))) {
           throw new Error("Transcript ownership changed; cold archival was canceled");
         }
-        const protectedIds = readSessionColdStorageProtection(
-          database,
-          plan.beforeMs,
-          new Set(plan.liveSessionKeys),
-          sessionIds,
-        );
+        let protectedIds: Set<string> | undefined;
         const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {
+          protectedIds ??= readSessionColdStorageProtection(
+            database,
+            plan.beforeMs,
+            new Set(plan.liveSessionKeys),
+            sessionIds,
+          );
           const { sessionId, snapshot } = prepared.plan;
           const fresh = readSessionStateDeleteSnapshot(database.db, sessionId);
           if (

@@ -304,6 +304,7 @@ suite.define(() => {
       ).toBe(true);
       const finalSkill = context.getByText("project-skill-98", { exact: true });
       const header = context.locator(".chat-context-page__header");
+      await waitForControlUiFrameLayout([context]);
       const headerTop = (await header.boundingBox())!.y;
       await finalSkill.scrollIntoViewIfNeeded();
       expect((await header.boundingBox())!.y).toBeCloseTo(headerTop, 0);

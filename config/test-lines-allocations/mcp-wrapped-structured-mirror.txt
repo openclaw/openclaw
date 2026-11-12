@@ -1,0 +1,3 @@
+# Regression coverage for single-key structuredContent mirrors (items/result wrappers),
+# compact MCP projection, the node-host bounding path and one dispatch_action call.
+37

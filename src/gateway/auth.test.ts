@@ -1,12 +1,18 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { createLimiterSpy } from "./auth-rate-limit.test-support.js";
 import {
   assertGatewayAuthConfigured,
+  gatewayPersonPrincipalAuthError,
   authorizeHttpGatewayConnect,
   authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -14,6 +20,7 @@ import {
 } from "./auth.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
+import { setOpenClawIdTunnelPrincipalResolver } from "./openclaw-id/tunnel-principal.js";
 
 function createSingleAttemptLimiter() {
   return createGatewayAuthRateLimiter(
@@ -104,6 +111,44 @@ it.each(["null", "  undefined  ", "  "])(
 );
 
 describe("HTTP shared-secret fields", () => {
+  it.each([
+    "cf-access-authenticated-user-email",
+    "cf-access-jwt-assertion",
+    "x-custom-user",
+    "x-custom-proof",
+  ])("never grants direct-local password fallback with identity header %s", async (header) => {
+    setRuntimeConfigSnapshot({ gateway: { openclawId: { enabled: true } } });
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          password: "local-password",
+          allowTailscale: false,
+          trustedProxy: {
+            userHeader: "x-custom-user",
+            requiredHeaders: ["x-custom-proof"],
+            allowLoopback: true,
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        connectAuth: { password: "local-password" },
+        req: request({ [header]: "remote-identity" }),
+      }),
+    ).resolves.toEqual({ ok: false, reason: "proxy_attribution_required" });
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("keeps loopback identity headers out of attribution while OpenClaw ID is off", async () => {
+    clearRuntimeConfigSnapshot();
+    await expect(
+      authorizeHttpGatewayConnect({
+        auth: { mode: "token", token: "fixture-token", allowTailscale: false },
+        connectAuth: { token: "fixture-token" },
+        req: request({ "cf-access-authenticated-user-email": "remote-identity" }),
+      }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   const authorize = authorizeHttpGatewayConnect;
   const secrets = { token: "token-secret", password: "password-secret", allowTailscale: false };
   it.each(["token", "password"] as const)(
@@ -760,3 +805,71 @@ describe("trusted-proxy auth", () => {
     });
   });
 });
+
+it.each(["ready", "mode", "roles", "user-header", "jwt-header"] as const)(
+  "shares complete person ingress eligibility: %s",
+  (change) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "writer",
+          definitions: {
+            writer: {
+              scopes: ["operator.read", "operator.write"],
+              agents: "*",
+              sessions: { others: "none" },
+            },
+          },
+        },
+      },
+    };
+    const trustedProxy = {
+      userHeader: "cf-access-authenticated-user-email",
+      requiredHeaders: ["cf-access-jwt-assertion"],
+      allowUsers: ["person@example.test"],
+    };
+    const auth = {
+      ...resolveGatewayAuth({ authConfig: { mode: "trusted-proxy", trustedProxy }, env: {} }),
+      trustedProxy,
+    };
+    if (change === "mode") {
+      auth.mode = "token";
+    }
+    if (change === "roles") {
+      cfg.gateway = {};
+    }
+    if (change === "user-header") {
+      trustedProxy.userHeader = "x-unverified-email";
+    }
+    if (change === "jwt-header") {
+      trustedProxy.requiredHeaders = [];
+    }
+    const result = gatewayPersonPrincipalAuthError(auth, cfg, ["person@example.test"]);
+    if (change === "ready") {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toContain("Person ingress requires");
+    }
+  },
+);
+
+// Tunnel admission is explicit peer authority, not ambient Tailscale identity.
+it.each([undefined, "https://linked-claw.example.test"])(
+  "admits tunnel Control UI reads with origin %s while ambient Tailscale is enabled",
+  async (origin) => {
+    const peerKey = `iroh:${"ef".repeat(32)}`;
+    const principal = { kind: "owner" as const, peerKey };
+    setOpenClawIdTunnelPrincipalResolver(async () => principal);
+    const req = request({ host: "linked-claw.example.test", ...(origin ? { origin } : {}) });
+    markGatewayIngressTransport(req, { kind: "openclaw-id-tunnel", peerKey, clientIp: "fd69::1" });
+    try {
+      await expect(authorizeAvatar(req)).resolves.toMatchObject({
+        ok: true,
+        method: "trusted-proxy",
+        openclawId: principal,
+      });
+    } finally {
+      setOpenClawIdTunnelPrincipalResolver(undefined);
+    }
+  },
+);

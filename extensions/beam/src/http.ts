@@ -141,9 +141,36 @@ export function createBeamRequestHandler(params: {
         });
         return true;
       }
-      sendJson(res, 200, {
-        ...(publisher.kind === "guest" ? { canView: false } : {}),
-        ok: true,
+      if (result === "handoff-conflict") {
+        sendJson(res, 409, {
+          ok: false,
+          error:
+            "This source snapshot cannot establish a handoff. Reconcile the current Beam publication before releasing it; no destination was created.",
+        });
+        return true;
+      }
+      const handoff = typeof result === "object" && result.kind === "handoff" ? result : undefined;
+      sendJson(res, handoff?.accepted === false ? 409 : 200, {
+        ...(publisher.kind === "guest" ? { canView: true } : {}),
+        ok: handoff?.accepted !== false,
+        ...(typeof result === "object" && result.kind === "published" && result.id
+          ? { publicationId: result.id }
+          : {}),
+        ...(handoff
+          ? {
+              handoff: {
+                id: handoff.id,
+                owner: "gateway",
+                access: publisher.kind === "guest" ? "owned" : "shared",
+              },
+              ...(handoff.accepted
+                ? {}
+                : {
+                    error:
+                      "This conversation moved to Team. The local snapshot was not accepted; continue through the Beam client's read/continue commands or the returned link.",
+                  }),
+            }
+          : {}),
         beamId: parsed.value.beamId,
         url: buildControlUiCatalogSharePath({
           shareRoute: BEAM_SESSION_SHARE_ROUTE,

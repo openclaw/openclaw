@@ -1,8 +1,5 @@
 import { computeBackoff } from "../../packages/retry/src/index.js";
-import {
-  admitSubagentCompletionInWorker,
-  mutateSubagentCompletionInWorker,
-} from "../agents/subagents/completion/subagent-completion-admission.worker.js";
+import type { subagentCompletionDeliveryOperations } from "../agents/subagents/completion/subagent-completion-admission.worker.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type {
   WorkerOperationHandlers,
@@ -86,14 +83,6 @@ type PreparedMediaResult =
   | { source: "stored"; blocks: Array<Record<string, unknown>> };
 
 export const sessionDeliveryOperations = {
-  "sessionDelivery.mutateSubagentCompletion": (
-    input: Parameters<typeof mutateSubagentCompletionInWorker>[0],
-    { open },
-  ) => mutateSubagentCompletionInWorker(input, open()),
-  "sessionDelivery.admitSubagentCompletion": (
-    input: Parameters<typeof admitSubagentCompletionInWorker>[0],
-    { open },
-  ) => admitSubagentCompletionInWorker(input, open()),
   "sessionDelivery.enqueue": (input: PreparedEntry, { writeAdmitted }) =>
     writeAdmitted(
       (database) => {
@@ -235,4 +224,5 @@ export const sessionDeliveryOperations = {
   },
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;
 
-export type SessionDeliveryWorkerOperations = WorkerOperations<typeof sessionDeliveryOperations>;
+export type SessionDeliveryWorkerOperations = WorkerOperations<typeof sessionDeliveryOperations> &
+  WorkerOperations<typeof subagentCompletionDeliveryOperations>;

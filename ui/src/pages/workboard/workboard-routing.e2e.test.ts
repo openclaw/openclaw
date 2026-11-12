@@ -2,7 +2,8 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway, waitForControlUiRoute } from "../../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiRoute } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import {
   button,
@@ -27,8 +28,11 @@ const boards = [
   makeBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
 ];
 
-function installWorkboard(page: Page, extra: Parameters<typeof installMockGateway>[1] = {}) {
-  return installMockGateway(page, {
+function installWorkboard(
+  page: Page,
+  extra: Parameters<typeof installNativePluginMockGateway>[1] = {},
+) {
+  return installNativePluginMockGateway(page, {
     ...workboardUi,
     sessions: [],
     ...extra,
@@ -186,7 +190,7 @@ suite.define(() => {
 
   it("hides Workboard navigation while the plugin is inactive", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      const gateway = await installNativePluginMockGateway(page, {
         nativePlugins: [],
         sessions: [],
         methodResponses: {

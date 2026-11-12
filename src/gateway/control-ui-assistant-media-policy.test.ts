@@ -278,6 +278,22 @@ it("binds relative media tickets to the execution directory within the session r
   expect((await request("image.png", { unscoped: true })).res.statusCode).toBe(404);
 });
 
+it("reports expired relative scratch media in metadata and existing byte tickets", async () => {
+  const relative = ".openclaw/tmp/proof/expired.png";
+  const source = await image(relative);
+  const ticket = await mediaTicket(relative);
+  await fs.unlink(source);
+  await expectMetadata(relative, {
+    available: false,
+    code: "artifact-file-expired",
+    reason: "file expired (scratch cleaned after 24 h)",
+    retryable: false,
+  });
+  const downloaded = await request(relative, { ticket, bytes: true });
+  expect(downloaded.res.statusCode).toBe(410);
+  expect(downloaded.bytes.toString()).toBe("file expired (scratch cleaned after 24 h)");
+});
+
 it.each(["metadata", "bytes"] as const)(
   "rechecks the execution directory after asynchronous relative %s preparation",
   async (operation) => {

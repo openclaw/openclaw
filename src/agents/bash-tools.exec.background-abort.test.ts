@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import { getFinishedSession, getSession, waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -18,6 +20,7 @@ import { createAgentRunDirectAbortError } from "./run-termination.js";
 
 const supervisorMockState = vi.hoisted(() => ({
   onSpawn: undefined as (() => void) | undefined,
+  holdCancellation: false,
   finish: new Map<string, () => void>(),
   cancelled: [] as string[],
 }));
@@ -54,7 +57,9 @@ vi.mock("../process/supervisor/index.js", async (importOriginal) => {
           wait: () => completion.promise,
           cancel: () => {
             supervisorMockState.cancelled.push(runId);
-            settle("manual-cancel");
+            if (!supervisorMockState.holdCancellation) {
+              settle("manual-cancel");
+            }
           },
         };
       },
@@ -152,6 +157,7 @@ async function yieldExec(
 beforeEach(() => {
   vi.clearAllMocks();
   supervisorMockState.onSpawn = undefined;
+  supervisorMockState.holdCancellation = false;
   supervisorMockState.finish.clear();
   supervisorMockState.cancelled.length = 0;
 });
@@ -160,6 +166,41 @@ afterEach(async () => {
   resetProcessRegistryForTests();
   vi.useRealTimers();
   await resetCodeModeTestState();
+});
+
+test("Send now joins foreground exec exit without aborting the run", async () => {
+  const owner = identity("steer-now", "agent:main:steer-now", "steer-now-session");
+  const runAbort = new AbortController();
+  const callAbort = new AbortController();
+  const spawned = createDeferredCore();
+  supervisorMockState.onSpawn = () => spawned.resolve();
+  supervisorMockState.holdCancellation = true;
+  const tool = wrapToolWithAbortSignal(makeTool(owner, owner.sessionKey), runAbort.signal);
+  let settled = false;
+  const pending = tool
+    .execute("foreground", { ...command, awaitResults: true }, callAbort.signal)
+    .finally(() => {
+      settled = true;
+    });
+  const completed = expect(pending).resolves.toMatchObject({ details: { status: "completed" } });
+  try {
+    await spawned.promise;
+    callAbort.abort(new ToolInterruptedByUser());
+    await vi.waitFor(() => expect(supervisorMockState.cancelled).toHaveLength(1));
+    expect(settled).toBe(false);
+    expect(runAbort.signal.aborted).toBe(false);
+    for (const finish of supervisorMockState.finish.values()) {
+      finish();
+    }
+    await completed;
+    await waitForExecScope(owner.sessionKey);
+    expect(getSession(supervisorMockState.cancelled[0]!)).toBeUndefined();
+  } finally {
+    for (const finish of supervisorMockState.finish.values()) {
+      finish();
+    }
+    await completed;
+  }
 });
 
 test.each([false, true])(

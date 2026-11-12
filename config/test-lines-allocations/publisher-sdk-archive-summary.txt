@@ -1,0 +1,2 @@
+64
+# Exercise downloaded SDK ZIP acceptance, path rejection, digest integrity, and evidence binding through npm preflight.

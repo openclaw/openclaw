@@ -317,7 +317,7 @@ suite.define(() => {
         .filter({
           hasText:
             mode === "denied"
-              ? "Could not change fullscreen mode: Fullscreen permission denied"
+              ? "Couldn’t change fullscreen mode. Try again. Fullscreen permission denied"
               : "Fullscreen is unavailable in this browser",
         })
         .waitFor();

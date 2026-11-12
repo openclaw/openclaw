@@ -6,6 +6,11 @@ import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
+import {
+  formatKeyboardShortcutParts,
+  isApplePlatform,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../../lib/keyboard-shortcut-contract.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
@@ -299,6 +304,7 @@ export function renderChatAbortActionSolid(
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
             onClick={() => props.onAbort?.()}
+            disabled={!props.onAbort}
             aria-label={t("chat.runControls.stop")}
           >
             <Icon name="stop" />
@@ -364,7 +370,15 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
         <span slot="content">
           {label()} <Kbd keys="⏎" inline />
           {" · "}
-          {alternateLabel()} <Kbd keys={t("chat.sendShortcutModifierEnter")} inline />
+          {alternateLabel()}{" "}
+          <Kbd
+            keys={
+              isApplePlatform()
+                ? t("chat.sendShortcutModifierEnter")
+                : formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, false)
+            }
+            inline
+          />
         </span>
       </Show>
       <button

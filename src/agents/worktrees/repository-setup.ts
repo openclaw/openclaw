@@ -151,12 +151,14 @@ export async function materializeRepositoryWorktree(
     params.provisionIgnoredFiles === false
       ? 0
       : (
-          await runGitWorkerOperation(
-            {
-              type: "worktree.provisioning-inspection",
-              input: { sourceRoot: repository.sourceRoot },
-            },
-            { signal: params.signal, assertCurrent: params.commitGuard },
+          await timeWorktreePreparationPhase("provisionEstimate", () =>
+            runGitWorkerOperation(
+              {
+                type: "worktree.provisioning-inspection",
+                input: { sourceRoot: repository.sourceRoot },
+              },
+              { signal: params.signal, assertCurrent: params.commitGuard },
+            ),
           )
         ).estimatedBytes;
   const setupStat =

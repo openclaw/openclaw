@@ -772,10 +772,9 @@ describe("agent request events", () => {
     });
 
     const { request } = nodeFixture("node-revoked-before-detached-start");
-    await request(
-      { sessionKey: "agent:main:revoked-before-detached-start" },
-      { isConnectionCurrent },
-    );
+    await expect(
+      request({ sessionKey: "agent:main:revoked-before-detached-start" }, { isConnectionCurrent }),
+    ).resolves.toEqual(eventResult("agent.request", "pairing_changed"));
 
     await waitForFast(() => {
       expect(runtimeMocks.deleteMediaBuffer).toHaveBeenCalledWith("saved-after-admission");

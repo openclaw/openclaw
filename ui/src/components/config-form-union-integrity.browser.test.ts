@@ -58,9 +58,9 @@ describe("config form primitive union integrity", () => {
       });
       const renderValue = (token: unknown) =>
         renderNodeFixture(container, {
-          schema: analysis.schema!,
-          value: { credentials: { token } },
-          path: [],
+          schema: analysis.schema!.properties!.credentials!,
+          value: { token },
+          path: ["credentials"],
           hints: { "credentials.token": { sensitive: true } },
           unsupported: new Set(analysis.unsupportedPaths),
           disabled: false,

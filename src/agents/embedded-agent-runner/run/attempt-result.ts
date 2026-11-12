@@ -152,6 +152,7 @@ export function completeEmbeddedAttemptResult(
   const hookAgentId = input.setup.sessionAgentId;
   // Output hooks can reenter the runtime; project only the state settled before they run.
   const state = {
+    agentTerminal: input.state.agentTerminal,
     terminal: input.state.terminal,
     preflightRecovery: prompt.preflightRecovery,
     sessionIdUsed: prompt.sessionIdUsed,

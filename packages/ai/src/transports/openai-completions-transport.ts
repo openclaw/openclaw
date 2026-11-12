@@ -73,6 +73,7 @@ import {
 } from "./provider-transport-turn-state.js";
 import { resolveOpencodeSessionHeaders } from "./session-affinity.js";
 import {
+  awaitProviderLifecycleCallback,
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
@@ -414,7 +415,10 @@ export function streamOpenAICompletionsRequest(
       const builtParams = buildOpenAICompletionsRequest(model, requestContext, options, policy);
       let params = builtParams;
       const encodeBody = prepareModelRequestBody(options);
-      const nextParams = await options?.onPayload?.(params, model);
+      const nextParams = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(params, model) : undefined,
+        options?.signal,
+      );
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }

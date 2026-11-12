@@ -102,6 +102,10 @@ prompts mask secrets. This credential guidance also appears in Codex and Copilot
 prompts, based on their callable control tools.
 See [Secrets](/tools/secrets).
 
+Native Codex threads use this prompt's thread-stable policy sections as their base
+instructions in place of Codex's model prompt. See
+[Workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files).
+
 UI presentation guidance is shared with native Codex developer instructions.
 It includes only current callable tools, including deferred and Code Mode tools;
 minimal prompts omit it. Tool eligibility follows client and channel-presenter
@@ -153,9 +157,7 @@ The **Silent Replies** section applies to external message channels, including m
 
 ## Prompt snapshots
 
-OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack for Telegram direct, Discord group, and heartbeat turns: a pinned Codex `gpt-5.5` model prompt fixture, the Codex happy-path permission developer text, parent-local request instructions, OpenClaw developer instructions, native collaboration-mode instructions, user turn input, and references to dynamic tool specs.
-
-Refresh the pinned Codex model prompt fixture with `pnpm prompt:snapshots:sync-codex-model`. By default it looks for `$CODEX_HOME/models_cache.json`, then `~/.codex/models_cache.json`, then the maintainer checkout convention `~/code/codex/codex-rs/models-manager/models.json`; if none exist it exits without changing the committed fixture. Pass `--catalog <path>` to refresh from a specific `models_cache.json` or `models.json` file.
+OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under `test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack for Telegram direct, Discord group, and heartbeat turns: OpenClaw base instructions, the Codex happy-path permission developer text, parent-local request instructions, OpenClaw developer instructions, native collaboration-mode instructions, user turn input, and references to dynamic tool specs.
 
 These snapshots are not a byte-for-byte raw OpenAI request capture. Codex can add runtime-owned workspace context (`AGENTS.md`, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions) after OpenClaw sends thread and turn params.
 
@@ -163,9 +165,9 @@ Regenerate with `pnpm prompt:snapshots:gen`; verify drift with `pnpm prompt:snap
 
 ## Workspace bootstrap injection
 
-Sessions with a recorded workspace root, including managed worktrees, resolve bootstrap files from that root. Runs restricted by `workspaceOnly` use their execution workspace. OpenClaw's guarded reads stay inside the selected root; rejected symlink paths and escapes are treated as missing and logged. Other read failures retain their unreadable diagnostics. Missing files never fall back to another checkout or a packaged template: a worktree without `AGENTS.md` has no project instructions, just as when running a harness directly in that directory. Skill discovery remains anchored to the configured agent workspace.
+Agent identity, instructions, and memory come from the configured agent workspace. When a session runs in another folder, such as a managed worktree of a project repository or a `workspaceOnly` execution workspace, that folder contributes only its `AGENTS.md` as project context after the agent's files; it does not supply `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`. A cwd override alone does not select bootstrap files.
 
-Other sessions resolve agent identity, instructions, and memory from the configured agent workspace. Another execution folder contributes only its `AGENTS.md` as project context after those files; it does not supply `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`. A cwd override alone does not select bootstrap files. Native Codex project-document discovery follows its own documented cwd and permission rules; this bootstrap selection does not change native discovery or configuration.
+When the session's recorded root (or `workspaceOnly` execution workspace) is a checkout of the agent workspace's own Git repository, such as a managed worktree created from a Git-backed agent workspace, bootstrap files come from that checkout instead, except the selected [personal `USER.md`](/concepts/user-model#personal-user-files-on-a-shared-gateway): it is always loaded and provenance-checked in the configured agent workspace where the Profile editor saves it. OpenClaw's guarded reads stay inside that root; rejected symlink paths and escapes are treated as missing and logged. Other read failures retain their unreadable diagnostics. Missing files never fall back to the shared checkout or a packaged template. Skill discovery remains anchored to the configured agent workspace. Native Codex project-document discovery follows its own documented cwd and permission rules; this bootstrap selection does not change native discovery or configuration.
 
 Turn startup seeds missing bootstrap templates only in the configured agent workspace, never in a separate execution folder. This also applies to spawned child sessions and session-bound cron turns.
 

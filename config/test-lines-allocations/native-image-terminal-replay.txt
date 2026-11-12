@@ -1,0 +1,2 @@
+# Real agent session regression: lost sandbox image, tool-loop retries, later turn.
+154

@@ -1,0 +1,2 @@
+# Exercise a real wrapped edit footer before checking keyboard scroll clearance.
+5

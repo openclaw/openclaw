@@ -73,7 +73,8 @@ const links = () => [
 ];
 
 it("retains loaded selection and focused nodes across pending roster refreshes", async () => {
-  const initial = ["one", "two", "three", "four"].map((key, index) => session(key, 3 - index));
+  const initial = ["subagent:a", "one", "two", "three", "four"].map((k, i) => session(k, 4 - i));
+  initial[2]!.spawnedBy = "agent:main:one"; // Interactive children stay; view-only ones do not.
   const openSession = vi.fn();
   show();
   expect(links()).toHaveLength(0);
@@ -105,9 +106,8 @@ it("retains loaded selection and focused nodes across pending roster refreshes",
   refresh.resolve(
     input({
       sessionData: data([
-        { ...initial[1]!, label: "two updated", updatedAt: 4 },
-        initial[2]!,
-        initial[3]!,
+        { ...initial[2]!, label: "two updated", updatedAt: 4 },
+        ...initial.slice(3),
       ]),
       openSession,
     }),

@@ -2,6 +2,10 @@ import { vi } from "vitest";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
 const postAttachMocks = vi.hoisted(() => {
+  const discoverResume: typeof import("./session-restart-resume.js").resumeMarkedSessions = async ({
+    onPrepared,
+  }) => onPrepared?.();
+  const resumeMarkedSessions = vi.fn(discoverResume);
   const commitInternalHooks = vi.fn(() => true);
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const updateCheck = {
@@ -32,7 +36,8 @@ const postAttachMocks = vi.hoisted(() => {
     createGatewayUpdateCheck: vi.fn(() => updateCheck),
     logGatewayStartup: vi.fn(),
     activateSubagentRegistry: vi.fn(async () => {}),
-    resumeMarkedSessions: vi.fn(async () => {}),
+    resumeMarkedSessions,
+    resetResume: () => resumeMarkedSessions.mockReset().mockImplementation(discoverResume),
     getAcpRuntimeBackend: vi.fn<(id?: string) => unknown>(() => null),
     reconcilePendingSessionIdentities: vi.fn(async () => ({ checked: 0, resolved: 0, failed: 0 })),
     isCliProvider: vi.fn(() => false),
@@ -134,7 +139,7 @@ vi.mock("./server-startup-log.js", () => ({
 }));
 
 // mock-isolation: Control update-check lifetime without network refreshes or persistent update campaigns.
-vi.mock("../infra/update-startup.js", () => ({
+vi.mock("../infra/update-startup-scheduler.js", () => ({
   createGatewayUpdateCheck: postAttachMocks.createGatewayUpdateCheck,
 }));
 
@@ -150,6 +155,7 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => {
 // mock-isolation: Sidecar scheduling does not own catalog or native-runtime preparation.
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
+  prewarmDefaultNativeModelCatalog: vi.fn(async () => {}),
   loadPreparedModelCatalogOwnerSnapshot: async (options: unknown) => ({
     modelCatalog: { entries: await postAttachMocks.loadModelCatalog(options) },
   }),

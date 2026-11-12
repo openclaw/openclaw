@@ -27,13 +27,20 @@ export function registerGatewayStartupAdmissionTests(params: {
   startupModuleRestorers: Array<() => void>;
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
-  it("keeps channel and external input closed until retained inputs have acquired queue custody", async () => {
+  it("opens channel and external input after discovery installs session admission waits", async () => {
+    const discovery = createStartupGate();
     const resume = createStartupGate();
     const unlocked = createDeferred();
     const tracked: Promise<unknown>[] = [];
     const lifetime = new AbortController();
     const owner = await import("./session-restart-resume.js");
-    const resumeSpy = vi.spyOn(owner, "resumeMarkedSessions").mockImplementation(resume.run);
+    const resumeSpy = vi
+      .spyOn(owner, "resumeMarkedSessions")
+      .mockImplementation(async ({ onPrepared }) => {
+        await discovery.run();
+        onPrepared?.();
+        await resume.run();
+      });
     const unlockStartupMethods = vi.fn(() => unlocked.resolve());
     const onChannelsStarted = vi.fn();
     try {
@@ -52,15 +59,17 @@ export function registerGatewayStartupAdmissionTests(params: {
         params.createRuntimeDeps(),
       );
       await runtime.startupSettled;
-      await resume.entered;
+      await discovery.entered;
       expect(unlockStartupMethods).not.toHaveBeenCalled();
       expect(onChannelsStarted).not.toHaveBeenCalled();
-      resume.release();
+      discovery.release();
+      await resume.entered;
       await unlocked.promise;
       expect(unlockStartupMethods).toHaveBeenCalledOnce();
       expect(onChannelsStarted).toHaveBeenCalledOnce();
     } finally {
       lifetime.abort();
+      discovery.release();
       resume.release();
       await Promise.allSettled(tracked);
       resumeSpy.mockRestore();

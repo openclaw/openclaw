@@ -26,6 +26,7 @@ import {
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getSessionControllerOperation,
@@ -123,6 +124,7 @@ function resetFixture(clients: Set<GatewayClient & { connId: string }>) {
 test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
   "preserves a prestart steer through workspace preparation when late injection is %s",
   async (injection, { signal }) => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     const realDispatch = await loadRealChatDispatch();
     const workspace = await initializeRepository(tempDirs.make("openclaw-prestart-steer-"), "repo");
     testState.agentConfig = { workspace };
@@ -423,6 +425,12 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
           expect(nativeSession.getSteeringMessages()).toEqual([]);
           expect(isRpcSourceQueued(rpcSourceTesting.get(steerRunId))).toBe(true);
           await withinTest(steeringDispatchFinished.promise, signal);
+          expect(warning).toHaveBeenCalledWith(
+            "steering rejected; applying follow-up policy",
+            expect.objectContaining({
+              error: "queued steering message was not committed to the transcript before timeout",
+            }),
+          );
         }
         // The real dispatch finalizer publishes this change before the parent can reply.
         await withinTest(dispatchSettled.promise, signal);

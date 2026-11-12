@@ -293,7 +293,9 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     const runtime = createRecoveryRuntime(vi.fn(), placements);
     const repositoryReads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
     const sharedReads = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
+    const defer = vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync");
     await runtime.reconcilePublications();
+    expect(defer).not.toHaveBeenCalled();
     expect(pendingResults).not.toHaveBeenCalled();
     expect(repositoryReads.mock.calls.map(([input]) => input)).toEqual([
       { ownerProfileId: null, pending: true },
@@ -365,8 +367,8 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
         }
         return rows;
       });
-    const defer = publicationStore.deferGitHubPublicationRequestsAsync;
-    vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync").mockImplementation(
+    const defer = runtime.coordinator.deferOrphanedRequestsAsync.bind(runtime.coordinator);
+    vi.spyOn(runtime.coordinator, "deferOrphanedRequestsAsync").mockImplementation(
       async (...args) => {
         await defer(...args);
         if (boundary === "defer") {
@@ -386,7 +388,7 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
     await runtime.reconcilePublications();
     expect(changed).toBe(true);
     if (kind === "repository") {
-      expect(repositoryReads).toHaveBeenCalledTimes(boundary === "resume" ? 3 : 4);
+      expect(repositoryReads).toHaveBeenCalledTimes(boundary === "load" ? 4 : 3);
     } else {
       expect(sharedReads.mock.calls.map(([input]) => input)).toEqual([
         { pending: true },
@@ -439,8 +441,8 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
       const runtime = createRecoveryRuntime();
       const reads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
       let stopped = false;
-      const defer = publicationStore.deferGitHubPublicationRequestsAsync;
-      vi.spyOn(publicationStore, "deferGitHubPublicationRequestsAsync").mockImplementationOnce(
+      const defer = runtime.coordinator.deferOrphanedRequestsAsync.bind(runtime.coordinator);
+      vi.spyOn(runtime.coordinator, "deferOrphanedRequestsAsync").mockImplementationOnce(
         async (...args) => {
           await defer(...args);
           if (ending === "failure") {

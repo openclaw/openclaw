@@ -30,9 +30,9 @@ current fingerprint. Then enumerate exactly one starting set:
   call reports at most 10 examples per outcome, so a limit of 10 returns every
   claim it examined.
 - **One page**, for a hub page or a page over its size budget. List its
-  current claims with `knowledge_connections` `id`, `direction: "claims"`,
-  `view: "full"` and `includeCards: true`, following `nextOffset` with the
-  same filters. Restart when `snapshot` changes. On a hub, group from the cards
+  current claims with `knowledge_connections` `id` and `direction: "claims"`;
+  each row carries the claim's text, kind, day, linked page titles and
+  16-character hash. Follow `nextOffset` with the same filters. Restart when `snapshot` changes. On a hub, group from the cards
   first and work one group at a time; do not read every claim in full up front.
 - **One subject, optionally since a date.** When the subject has a page, list
   its claims with `knowledge_timeline` `entity`, `timeField: "recorded_at"`
@@ -42,7 +42,7 @@ current fingerprint. Then enumerate exactly one starting set:
   `since`/`timeField`. Keep only claims that are actually about the subject.
 
 State the scope in the report. Read each claim you will change with
-`knowledge_record` and `metadataView: "full"`. Its `subject_hint`, when
+`knowledge_record`. Its `subjectHint`, when
 present, is the saver's own description of what the claim is about and the
 strongest clue to its subject. Group the claims by what they are about (one
 feature, PR, commit, decision thread, person or preference) before choosing

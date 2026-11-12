@@ -1,0 +1,2 @@
+4
+# Prove un-aborted live authority loss during a native child prevents publication.

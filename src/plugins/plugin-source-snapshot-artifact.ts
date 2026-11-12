@@ -18,6 +18,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginGenerationArtifact } from "./plugin-generation-artifact.types.js";
 import { retainPluginSourceCaptureRoot } from "./plugin-source-capture-context.js";
 import {
+  assertPluginSourceCaptureDiskSpace,
   PLUGIN_SOURCE_SNAPSHOT_PREFIX,
   PLUGIN_SOURCE_SNAPSHOT_STAGING_PREFIX,
   resolvePluginSourceCapturesDirectory,
@@ -214,6 +215,7 @@ export async function stagePluginSourceSnapshot(params: {
     );
   }
   const requestedParent = resolvePluginSourceCapturesDirectory(params.stateDir);
+  assertPluginSourceCaptureDiskSpace(requestedParent);
   fs.mkdirSync(requestedParent, { recursive: true, mode: 0o700 });
   const parent = fs.realpathSync.native(requestedParent);
   privateEntry(parent, parent, "directory");

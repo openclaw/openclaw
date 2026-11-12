@@ -38,10 +38,11 @@ export async function captureSandboxStateOwner(): Promise<() => void> {
     }
     const assertCurrent = () => {
       try {
-        if (resolveTarget() !== databasePath) {
+        if (owner) {
+          owner.assertCurrent(resolveOpenClawStateSqlitePath());
+        } else if (resolveTarget() !== databasePath) {
           throw new SandboxStateOwnerRequiredError();
         }
-        owner?.assertCurrent();
       } catch (error) {
         if (error instanceof SandboxStateOwnerRequiredError) {
           throw error;

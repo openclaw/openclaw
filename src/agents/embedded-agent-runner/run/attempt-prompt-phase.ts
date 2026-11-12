@@ -249,11 +249,23 @@ export async function runEmbeddedAttemptPromptPhase(
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
     setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
+    const imageResult = await prepareEmbeddedAttemptPromptExecution({
+      mediaOwnerAgentId: sessionAgentId,
+      effectiveFsWorkspaceOnly,
+      effectiveWorkspace,
+      sandbox,
+      attempt,
+      prompt: promptContext.promptSubmission.prompt,
+      skipPromptSubmission,
+    });
+    runAbortController.signal.throwIfAborted();
+    promptAssembly.assertHostActive?.();
     if (attempt.operation !== "settled-tool-finalization") {
       const block = await runBeforeAgentRunGate(
         hookRunner,
         {
           prompt: promptForModel,
+          images: imageResult.images,
           systemPrompt: systemPromptForHook,
           messages: hookMessagesForCurrentPrompt,
           channelId: hookCtx.channelId,
@@ -324,15 +336,6 @@ export async function runEmbeddedAttemptPromptPhase(
       }
     }
 
-    const imageResult = await prepareEmbeddedAttemptPromptExecution({
-      mediaOwnerAgentId: sessionAgentId,
-      effectiveFsWorkspaceOnly,
-      effectiveWorkspace,
-      sandbox,
-      attempt,
-      prompt: promptContext.promptSubmission.prompt,
-      skipPromptSubmission,
-    });
     const reserveTokens = settingsManager.getCompactionReserveTokens();
     const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
     let state: PromptPreflightState = {

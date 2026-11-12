@@ -1,0 +1,3 @@
+# PR #195848: explicit saved-owner fixture setup preserves existing personal-scope
+# regressions when the unsaved default becomes All owners. Reuses shared seed helpers.
+44

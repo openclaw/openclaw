@@ -561,6 +561,33 @@ extension OpenClawChatSQLiteTranscriptCache {
         }
     }
 
+    public func loadCommandStatusesIfAvailable() async -> [(id: String, status: OpenClawChatOutboxCommand.Status)]? {
+        guard !self.isRetired else { return nil }
+        let gatewayID = self.gatewayID
+        do {
+            return try await self.databases.stateQueue.write { db in
+                try Self.applyOutboxStaleness(db, gatewayID: gatewayID)
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT client_uuid, status FROM outbox_commands
+                    WHERE gateway_id = ? ORDER BY created_at, enqueue_sequence
+                    """,
+                    arguments: [gatewayID])
+                return try rows.map { row in
+                    let statusRaw: String = row["status"]
+                    guard let status = OpenClawChatOutboxCommand.Status(rawValue: statusRaw) else {
+                        throw DatabaseError(message: "unknown outbox status")
+                    }
+                    return (id: row["client_uuid"], status: status)
+                }
+            }
+        } catch {
+            cacheLogger.error("outbox status read failed \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     @discardableResult
     public func recoverInterruptedSends() async -> Bool {
         guard !self.isRetired else { return false }

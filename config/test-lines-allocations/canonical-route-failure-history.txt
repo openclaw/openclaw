@@ -1,0 +1,3 @@
+# Preserve canonical route guidance and keep empty entries from hiding structured errors.
+# Extends failure-copy and durable-history coverage: 19 added minus 7 removed test lines.
+12

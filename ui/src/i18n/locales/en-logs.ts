@@ -15,7 +15,8 @@ const enLogs = {
     autoFollow: "Auto-follow",
     file: "File: {file}",
     truncated: "Log output truncated; showing latest chunk.",
-    empty: "No log entries.",
+    empty: "No log entries yet.",
+    moreActions: "More actions",
   },
 } satisfies TranslationMap;
 

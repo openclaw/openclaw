@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { moduleResolve } from "import-meta-resolve";
 import { createStandaloneLexicalBindings } from "./bun-standalone-bindings.mjs";
 import { standaloneDataExpression, standaloneLookupExpression } from "./bun-standalone-data.mjs";
+import { resolveStandaloneNativeExports } from "./bun-standalone-native-resolve.mjs";
 
 const TABLE_MARKER = "__OPENCLAW_STANDALONE_NATIVE_TABLE__";
 const NATIVE_LIBRARY = /\.(?:dylib|dll|so(?:\.\d+)*)$/;
@@ -1084,7 +1085,10 @@ export function createStandaloneNativeAdapter({
         }
       }
       function resolutionDependencies(owner) {
-        const dependencies = new Map([[owner.manifest.name, owner], ...owner.dependencies]);
+        const dependencies = new Map([
+          ...(owner.manifest.name ? [[owner.manifest.name, owner]] : []),
+          ...owner.dependencies,
+        ]);
         const additionalNames =
           owner === rootOwner
             ? rootVisibleNames
@@ -1110,31 +1114,39 @@ export function createStandaloneNativeAdapter({
         }
         return dependencies;
       }
+      const resolutionOwners = [...metadataOwners].map((owner) => ({
+        owner,
+        dependencies: [...resolutionDependencies(owner)],
+      }));
+      const captured = resolveStandaloneNativeExports(
+        resolutionOwners.map(({ owner, dependencies }) => ({
+          parent: path.join(owner.directory, "package.json"),
+          dependencies: dependencies.map(([name, dependency]) => ({
+            name,
+            exports: dependency.manifest.exports,
+            main: dependency.manifest.main,
+          })),
+        })),
+      );
       // Keep longest-prefix lookup while making equal-length owners independent of discovery.
-      const owners = [...metadataOwners]
-        .map((owner) => ({
+      const owners = resolutionOwners
+        .map(({ owner, dependencies }, index) => ({
           original: owner.original,
           destination: owner.destination,
           dependencies: Object.fromEntries(
-            [...resolutionDependencies(owner)].map(([name, dependency]) => {
-              const entries = {};
-              const subpaths = Object.keys(dependency.manifest.exports ?? {}).filter(
-                (key) => key.startsWith("./") && !key.includes("*"),
-              );
-              // Public export names need not match filenames (fs-safe's secure-temp-root
-              // exports dist/secure-temp-dir.js). Capture Node's resolution before pruning.
-              for (const specifier of [name, ...subpaths.map((key) => name + key.slice(1))]) {
-                try {
-                  const resolved = owner.require.resolve(specifier);
-                  if (path.isAbsolute(resolved) && contained(resolved)) {
-                    entries[specifier] = relative(resolved);
-                  }
-                } catch {
-                  /* Optional packages and import-only exports may have no require entry. */
-                }
-              }
-              return [name, { original: dependency.original, entries }];
-            }),
+            dependencies.map(([name, dependency]) => [
+              name,
+              {
+                original: dependency.original,
+                entries: Object.fromEntries(
+                  Object.entries(captured[index][name]).flatMap(([specifier, resolved]) =>
+                    path.isAbsolute(resolved) && contained(resolved)
+                      ? [[specifier, relative(resolved)]]
+                      : [],
+                  ),
+                ),
+              },
+            ]),
           ),
         }))
         .toSorted(

@@ -1,0 +1,2 @@
+30
+# Plugin enablement, settings and secret-reference reloads keep scheduled and unscheduled session events; tool policy still revokes.

@@ -1,0 +1,2 @@
+913
+# Exact +885 net regression lines against main 954f1a4fea0f, plus 28 inherited debt (zero slack): node-only authority, pending enrollment and mailbox settlement-before-ack, bounded pairing/manual-removal suppression, removal recovery, authenticated activity, and worker credential isolation.

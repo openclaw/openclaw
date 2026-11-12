@@ -1,0 +1,2 @@
+# Cover retained reader position and marker restoration when native visibility skips a rail.
+8

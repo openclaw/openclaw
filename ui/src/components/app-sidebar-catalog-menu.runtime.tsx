@@ -58,6 +58,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         return;
       }
       showToast({
+        severity: result.complete && result.importedItems > 0 ? "success" : undefined,
         message: t(
           !result.complete
             ? "chat.catalog.importIncomplete"
@@ -83,7 +84,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       });
     } catch (error) {
       if (isMutationCurrent(scope)) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   }
@@ -96,6 +97,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
     const scope = { ...mutation, catalogGeneration: props.host.sessionData.sessionScopeGeneration };
     try {
       const confirmed = await showConfirmDialog({
+        title: t("chat.catalog.deleteSessionTitle"),
         message: t("chat.catalog.deleteSessionConfirm"),
         details: menu.name,
         confirmLabel: t("chat.catalog.deleteSession"),
@@ -104,6 +106,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
       });
       if (!isMutationCurrent(scope)) {
         showToast({
+          severity: "error",
           message: t("sessionsView.deleteSessionStale", { session: menu.name }),
         });
         return;
@@ -134,7 +137,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         });
       }
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     }
   }
 

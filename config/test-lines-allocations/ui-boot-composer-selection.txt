@@ -1,0 +1,2 @@
+# Preserve the boot composer's selection after the pane commits its draft.
+9

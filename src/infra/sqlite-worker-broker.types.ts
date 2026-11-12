@@ -65,7 +65,7 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
-  carrierClass?: "agent" | "shared-state";
+  carrierClass?: "agent" | "shared-state" | "external";
   postgresPoolSent?: boolean;
   custody: SqliteWorkerSlotCustody;
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
@@ -150,6 +150,8 @@ export type SqliteWorkerStoreOptions = {
   databasePath: string;
   input: unknown;
   existingOnly?: boolean;
+  /** External databases use separate admission and worker capacity. */
+  isolation?: "external";
   admission?: { identity: string; birthtime?: string; assertCurrent(): void };
 };
 
@@ -188,6 +190,15 @@ export type PreparedSqliteWorkerOpen = {
 export type SqliteWorkerAdmissionCleanup = {
   readonly pending: boolean;
   close(): Promise<void>;
+};
+
+export type SqliteWorkerClientBinding = Pick<
+  PreparedSqliteWorkerOpen,
+  "maintenanceScope" | "cleanupAccess" | "retireIdle"
+> & {
+  releasePaths: () => void;
+  databaseIdentity: Extract<RequestBody, { type: "execute" }>["databaseIdentity"];
+  resumeScheduledMaintenance: (() => void) | undefined;
 };
 
 export type SqliteWorkerOpenCustody = Pick<

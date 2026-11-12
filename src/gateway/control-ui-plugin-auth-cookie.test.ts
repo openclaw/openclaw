@@ -102,6 +102,30 @@ function authorizeCookie(cookie: string, authGeneration = "generation") {
   });
 }
 
+it("does not let a signed plugin cookie replace tunnel membership authentication", async () => {
+  await withStateConfig(async () => {
+    const req = cookieRequest(issueCookie(undefined, { scopes: ["operator.admin"] }));
+    markGatewayIngressTransport(req, {
+      kind: "openclaw-id-tunnel",
+      peerKey: `iroh:${"dd".repeat(32)}`,
+      clientIp: "fd69:726f:6800::1",
+    });
+    expect(
+      authorizeControlUiPluginCookieRequest(req, { requestPath, authGeneration: "generation" }),
+    ).toBeNull();
+    // A tunnel request is never issued a cookie it could replay on ordinary ingress.
+    const tunnelReq = cookieRequest("");
+    markGatewayIngressTransport(tunnelReq, {
+      kind: "openclaw-id-tunnel",
+      peerKey: `iroh:${"dd".repeat(32)}`,
+      clientIp: "fd69:726f:6800::1",
+    });
+    expect(() => issueCookie(undefined, { request: tunnelReq })).toThrow(
+      "expected plugin auth cookie",
+    );
+  });
+});
+
 function withStateConfig(run: () => Promise<void>, cfg: unknown = {}) {
   return withOpenClawTestState({ scenario: "minimal" }, () => withTempConfig({ cfg, run }));
 }

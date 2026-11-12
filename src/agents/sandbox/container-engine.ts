@@ -3,6 +3,7 @@
  */
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
@@ -46,11 +47,11 @@ export type ExecDockerRawResult = SandboxBackendCommandResult;
 
 export function buildSandboxContainerEngineArgv(engine: SandboxContainerEngine, args: string[]) {
   const argv = [engine.command, ...(engine.globalArgs ?? []), ...args];
-  // Empty global args identify a bound local Podman target; discovery and remote
+  // Explicit native mode identifies a bound local Podman target; discovery and remote
   // clients do not launch container processes on this host.
   if (
     engine.id !== "podman" ||
-    engine.globalArgs?.length !== 0 ||
+    engine.globalArgs?.[0] !== "--remote=false" ||
     process.platform !== "linux" ||
     process.getuid?.() === 0
   ) {
@@ -93,9 +94,11 @@ export async function execContainerRaw(
 ): Promise<ExecDockerRawResult> {
   let result;
   try {
+    const baseEnv = { ...(engine.baseEnv ?? process.env) };
+    stripGatewayAllocatorEnv(baseEnv);
     opts?.assertCurrent?.();
     result = await spawnCommand(buildSandboxContainerEngineArgv(engine, args), {
-      baseEnv: engine.baseEnv,
+      baseEnv,
       cancelSignal: opts?.signal,
       encoding: "buffer",
       input: opts?.input ?? Buffer.alloc(0),

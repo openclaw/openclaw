@@ -2,7 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
-  listLiveSessionPendingInputIds,
+  listLiveSessionPendingInputs,
   preserveSessionQueuedInputOwnersForRestart,
   type SessionPendingInputPage,
   type SessionPendingInput,
@@ -19,6 +19,7 @@ import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
+import type { InternalSessionEntry } from "./types.js";
 
 type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
@@ -31,14 +32,27 @@ export async function captureSessionQueuedInputsForRestart(scope: Scope) {
   const resolved = await prepareSqliteScope(scope);
   const physical = captured.resolve(resolved);
   physical.assertCurrent();
-  const queuedInputIds = listLiveSessionPendingInputIds(
+  const queuedInputs = listLiveSessionPendingInputs(
     physical.identity.canonicalPath,
     resolved.sessionKey,
     scope.sessionId,
     true,
   );
+  const queuedInputIds = queuedInputs.map((input) => input.inputId);
+  const queuedInputSources: NonNullable<
+    InternalSessionEntry["resumeAfterRestart"]
+  >["queuedInputSources"] = {};
+  for (const input of queuedInputs) {
+    if (input.runId) {
+      queuedInputSources[input.inputId] = {
+        runId: input.runId,
+        source: input.recoverySource ?? { kind: "unavailable" },
+      };
+    }
+  }
   return {
     queuedInputIds,
+    queuedInputSources: queuedInputs.length > 0 ? queuedInputSources : undefined,
     preserve: () => {
       physical.assertCurrent();
       preserveSessionQueuedInputOwnersForRestart(queuedInputIds);
@@ -70,11 +84,11 @@ async function readPendingInputRows(
             ...options,
             sessionKey: binding.actor.target.sessionKey,
             sessionId: scope.sessionId,
-            liveInputIds: listLiveSessionPendingInputIds(
+            liveInputIds: listLiveSessionPendingInputs(
               binding.path,
               binding.actor.target.sessionKey,
               scope.sessionId,
-            ),
+            ).map((input) => input.inputId),
           };
           if (onRead) {
             const snapshot = currentWindow(
@@ -115,11 +129,11 @@ async function readPendingInputRows(
     ...options,
     sessionKey: resolved.sessionKey,
     sessionId: scope.sessionId,
-    liveInputIds: listLiveSessionPendingInputIds(
+    liveInputIds: listLiveSessionPendingInputs(
       identity.canonicalPath,
       resolved.sessionKey,
       scope.sessionId,
-    ),
+    ).map((input) => input.inputId),
   };
   if (!identity.key.startsWith("file:")) {
     return { rows: [], total: 0 };

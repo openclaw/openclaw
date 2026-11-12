@@ -115,10 +115,10 @@ suite.define(() => {
       const retry = initialTurn.getByRole("button", { name: "Retry queued message" });
       await retry.waitFor({ state: "visible" });
       await pollLocatorText(initialTurn.locator(".chat-send-status")).toContain("Not sent");
-      const alert = page.getByRole("alert").filter({ hasText: "startup needs attention" });
+      const alert = page.getByRole("alert").filter({ hasText: "Couldn’t start this session" });
       await alert.waitFor({ state: "visible" });
       await alert.locator("summary").click();
-      const details = alert.locator(".chat-error__diagnostic");
+      const details = alert.locator(".lazy-view-error__detail");
       await details.waitFor({ state: "visible" });
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await pollDisabled(composer).toBe(false);
@@ -162,7 +162,7 @@ suite.define(() => {
       const messageId = "late-active-first-turn";
       const message = "Continue the saved cloud task";
       const diagnostic =
-        "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.";
+        "Device setup is still in progress. Retry to check the existing device. Your message hasn’t been sent.";
       const placement = activePlacement("late-active-retry", "/workspace/cloud-proof");
       const sessions = createdSessionListResult(sessionKey);
       const session = { ...sessions.sessions[0], sessionId, placement };
@@ -206,7 +206,7 @@ suite.define(() => {
       await pollLocatorText(initialTurn.locator(".chat-send-status")).toContain("Not sent");
       const alert = page.getByRole("alert").filter({ hasText: diagnostic });
       await alert.waitFor({ state: "visible" });
-      await pollLocatorText(alert).toContain("startup needs attention");
+      await pollLocatorText(alert).toContain("Couldn’t start this session");
       expect(await composer.isDisabled()).toBe(false);
       await composer.fill("Follow-up waiting for startup recovery");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

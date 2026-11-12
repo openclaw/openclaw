@@ -115,6 +115,7 @@ export function createCatalogAttemptReporter(
     ) => {
       const previous = readPendingProviders();
       pendingProviders[kind] = providers;
+      owner.catalogAttempt = attempt;
       if (!isDeepStrictEqual(previous, readPendingProviders())) {
         notifyPreparedModelRuntimePublication({
           phase: "catalog-status",

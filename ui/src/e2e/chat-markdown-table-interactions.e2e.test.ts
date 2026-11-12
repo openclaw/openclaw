@@ -24,6 +24,8 @@ import {
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Markdown table interactions",
+  // Native clipboard contents are shared by every context in one Chromium process.
+  browserLaunchOptions: { headless: true },
   trackBrowserContexts: true,
   startServerBeforeBrowser: true,
   unavailableMessage: (executable) => `Playwright Chromium is unavailable at ${executable}`,
@@ -570,6 +572,7 @@ ${overflowTable}`,
       await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-left");
       await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
 
+      await page.evaluate(() => navigator.clipboard.writeText("Before table copy."));
       await copy.click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))

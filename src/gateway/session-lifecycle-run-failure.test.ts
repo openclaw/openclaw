@@ -17,6 +17,8 @@ import {
 import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import type { EmbeddedAgentRunResult } from "../agents/embedded-agent-runner/types.js";
+import { FailoverError } from "../agents/failover-error.js";
+import { renderAssistantRequestFailureCopy } from "../agents/failover/assistant-request-failure-copy.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { buildEmbeddedRunnerAssistant } from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
@@ -499,29 +501,73 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it("keeps provider authentication copy separate from its redacted diagnostic", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      await seed();
-      const secret = "synthetic-provider-diagnostic-secret";
-      const providerError = `unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401, Authorization: Bearer ${secret}`;
-      await persistGatewaySessionLifecycleEvent({
-        ...target,
-        event: { ...event, data: { ...event.data, error: providerError } },
-      });
-      const [report] = await reports();
-      const failureCopy =
-        "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
-      expect(report).toMatchObject({
-        content: failureCopy,
-        details: {
+  it.each(["raw", "auth", "auth_permanent", "api_key_expired", "route_unavailable"] as const)(
+    "keeps %s provider guidance through terminal persistence and history",
+    async (kind) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
+        await seed();
+        const secret = "synthetic-provider-diagnostic-secret";
+        const reason = kind === "raw" || kind === "api_key_expired" ? "auth" : kind;
+        const code = kind === "api_key_expired" ? kind : undefined;
+        const providerError =
+          kind === "route_unavailable"
+            ? `400 Your credit balance is too low. Authorization: Bearer ${secret}`
+            : `unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses, request id: req_401, Authorization: Bearer ${secret}`;
+        const failureCopy =
+          kind === "api_key_expired"
+            ? "⚠️ This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key."
+            : kind === "route_unavailable"
+              ? "⚠️ The provider cannot serve this model right now. Choose another model."
+              : kind === "auth_permanent"
+                ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`."
+                : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+        const canonicalCopy = renderAssistantRequestFailureCopy({
+          reason,
+          code,
+        });
+        assert(canonicalCopy);
+        const terminalError =
+          kind === "raw"
+            ? new Error(providerError)
+            : new FailoverError(canonicalCopy, {
+                reason,
+                status: reason === "route_unavailable" ? 400 : reason === "auth" ? 401 : 403,
+                rawError: providerError,
+              });
+        let persistence: Promise<void> | undefined;
+        const terminal = createAgentLifecycleTerminalBackstop({
           runId,
-          error: expect.stringContaining("Missing bearer or basic authentication"),
-        },
+          sessionKey: target.sessionKey,
+          getLifecycleGeneration: getAgentEventLifecycleGeneration,
+          resolveTerminationFields: () => ({}),
+          onTerminalEvent: (terminalEvent) => {
+            persistence = persistGatewaySessionLifecycleEvent({
+              ...target,
+              event: { ...terminalEvent, ts: Date.now() },
+            });
+          },
+        });
+        terminal.emit("error", terminalError);
+        await persistence;
+        const [report] = await reports();
+        expect(report).toMatchObject({ content: failureCopy, details: { runId } });
+        if (kind === "raw") {
+          expect(report).toMatchObject({
+            details: { error: expect.stringContaining("Missing bearer or basic authentication") },
+          });
+        }
+        const visible = projectChatDisplayMessages(
+          await readSessionMessagesAsync(target, { mode: "full", reason: "failure presentation" }),
+        );
+        expect(visible.at(-1)).toMatchObject({
+          openclawRunError: { runId, summary: failureCopy },
+        });
+        expect(JSON.stringify(report)).not.toContain(secret);
+        expect(JSON.stringify(visible)).not.toContain(secret);
       });
-      expect(JSON.stringify(report)).not.toContain(secret);
-    });
-  });
+    },
+  );
 
   it("keeps verbose provider format diagnostics out of normal notices", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

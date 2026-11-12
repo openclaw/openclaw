@@ -107,7 +107,8 @@ export async function mount(options: Parameters<typeof createDraftFixture>[0] = 
   const changes = createChangeListeners();
   Object.assign(context.gateway, {
     connectionRevision: 1,
-    subscribe: changes.subscribe,
+    subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) =>
+      changes.subscribe(() => listener(context.gateway.snapshot)),
   });
   Object.assign(context.agents.state, { connected: true, client: context.gateway.snapshot.client });
   Object.assign(context, {

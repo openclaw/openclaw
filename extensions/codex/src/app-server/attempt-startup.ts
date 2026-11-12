@@ -104,6 +104,7 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
+  systemPromptReplaced?: boolean;
   refreshableInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
@@ -459,6 +460,7 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
+                systemPromptReplaced: params.systemPromptReplaced,
                 refreshableInstructions: params.refreshableInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,

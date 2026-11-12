@@ -1,0 +1,2 @@
+28
+# Extend the screenshot lifecycle regression for preserved or missing DMGs and delayed or missing MobileAsset re-registration after partial deletion.

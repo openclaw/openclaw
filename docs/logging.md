@@ -216,6 +216,27 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
+### Operator authority failures
+
+The existing `lane task error` record carries three additional fields when a
+retained operator authority becomes inactive, including through sandbox and
+state-lease error wrappers:
+
+- `operatorAuthorityReason`: `source-invalidated`, `gateway-identity-retired`,
+  `closure-released`, or `closure-revoked`.
+- `operatorAuthorityCheck`: `source-current`, `source-revocation`, `gateway-current`,
+  `before-sources`, or `after-sources`, identifying the owner check that failed.
+- `operatorAuthorityAgeMs`: elapsed monotonic milliseconds from the original
+  run-authority capture to creation of that failure. Retained/delegated copies
+  keep the original capture age; a new admission creates a new capture.
+
+`source-invalidated` identifies the failed source check or revocation callback;
+it does not identify which upstream policy or lifecycle event invalidated it.
+`gateway-identity-retired` means the captured Gateway resolver no longer returns
+the same owner. Closure reasons distinguish a released final hold from a revoked
+closure. These fields add no content or identifiers and emit no additional log
+record. The recovery message remains visible to the user.
+
 ### Steering and input cancellation
 
 Ordinary channel reply routing logs
@@ -433,6 +454,11 @@ enabled.
 latency, and request fields such as method, URL, timeout, proxy, and policy)
 uses `debug` by default. Responses with a non-2xx status remain at `info`,
 and transport failures remain warnings.
+HTTP `400` records also include a bounded, credential-redacted `providerError`
+from the provider's JSON error message when available. This distinguishes request
+validation failures from upstream credit failures that use the same status code.
+Diagnostics read at most 16 KiB with a one-second deadline; the SDK still receives
+the original response body.
 `[model-fetch]` and `[responses]` report caller-signaled `AbortError` as `aborted`
 at `debug` (or `info` with the targeted flags), rather than as provider failures.
 The requesting layer owns the final cancellation or timeout outcome; an SDK can
@@ -535,9 +561,38 @@ parents as inclusive totals; do not add a parent to its children. Prompt-media
 warnings beginning `Native image:` concern image-file access, not container-image
 validation, and occur outside attempt setup.
 
+`detail.attempt.system-prompt.runtime-and-references` covers concurrent runtime
+and reference preparation. `detail.attempt.system-prompt.context` covers concurrent
+tool context, project memory, and TTS preference preparation; its nested
+`tool-context` span covers concurrent memory and watched-session reads. These
+group durations include overlapping work, not separate timings for each read.
+
+Within `detail.attempt.system-prompt.context`, `detail.project-memory.*`
+separates runtime selection, dynamic imports, provider preparation, candidate
+retrieval, authority checks, rendering, provider close, and final publication.
+Legacy memory runtimes instead report `legacy.manager`, `legacy.candidates`, and
+`legacy.render`. The native provider owners further report
+`detail.memory.provider-open.*` (authority preparation, runtime lookup, opening,
+revalidation, failed-open cleanup, and binding) and `detail.memory.provider-call.*` (authority
+preparation, execution, and revalidation). Authority phases include waits for
+pending audience publications; candidate execution includes the provider's own
+storage and filtering work. These fixed labels contain no project keys or memory
+content, and include failed or denied operations. Parent totals overlap their
+children; the same provider phases can also occur during other memory operations.
+
+Fresh managed sandbox projections also record fixed stages beneath
+`sandbox.workspace_selection.prepare.reconcile`: template selection and cloning,
+checkout packing, indexing and materialization, manifest scanning, publication,
+and cleanup. `dependency.install` separates package installation from
+`dependency.retire`, which includes removing the disposable builder before its
+files can be published. A slow reconcile total can therefore reflect container
+removal even after the installer has exited.
+
 `detail.worktree.managed.*` and `detail.worktree.sandbox.*` carry the worktree
 owner's recorded phase durations, including `templatePrepare`, `templateApply`,
-`checkout`, `runtimeQuiesce`, `runtimeResume`, and `unattributed`. Runtime quiescence
+`templateValidate`, `templateRetire`, `checkout`, `runtimeQuiesce`, `runtimeResume`,
+and `unattributed`. Template retirement includes removing an obsolete generation;
+it is separate from retiring a dependency builder. Runtime quiescence
 and resume include pausing and unpausing sandbox writers around synchronization.
 The top-level `worktree` interval can describe an
 earlier managed checkout; it is not the sandbox work inside `attempt.setup`.
@@ -771,6 +826,15 @@ settlement that mutation is actually awaiting. `completionDelayMs` measures
 synchronous owner-release cleanup after the callback settles. A
 caller can cancel before all of its queued work unwinds; `signalAborted`
 reports the signal without claiming that the holder has released.
+
+Subagent-kill mutations also report `subphaseDurationsMs` for awaited caller facts,
+caller Stop hooks, descendant discovery, durable kill intent, admission draining, runtime loading,
+registry settlement and obligation retirement, prefixed with `prepare.` or `run.`.
+These durations include rejected waits and accumulate repeated waits; they exclude
+each operation's synchronous work before returning its promise. Registry settlement
+includes its persistence and session cleanup bookkeeping. The joins for raw source
+settlement and child-command process cleanup occur after the mutation and are not included.
+The subphase totals therefore need not equal the enclosing phase durations.
 
 The tracker preserves outer ownership across reentrant work and retires a
 holder only when its actual callback exits and the owner releases custody. Its

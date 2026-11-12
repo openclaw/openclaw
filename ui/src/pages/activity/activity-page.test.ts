@@ -573,7 +573,7 @@ describe("ActivityPage gateway lifecycle", () => {
       page.container.querySelector<HTMLButtonElement>(".activity-current-work__feedback button");
     await waitForSolid(() => expect(retry()?.textContent?.trim()).toBe("Retry"));
     expect(page.container.querySelector(".activity-current-work__feedback")?.textContent).toContain(
-      "Could not load active sessions",
+      "Couldn’t load active sessions. Try again.",
     );
     expect(rows()).toHaveLength(2);
     expect(rows()[0]).toBe(firstRow);

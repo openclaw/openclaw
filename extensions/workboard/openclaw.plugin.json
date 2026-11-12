@@ -243,5 +243,10 @@
     "styles": [
       "dist/control-ui/2efb22eddf2e20b1dc8056aa181f78460ecbac562653cf1d15c4387ac6626388/index.css"
     ]
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get started with Workboard and choose between Cards and Sessions boards.",
+    "Propose prioritized Workboard cards for my project without creating or assigning them.",
+    "Summarize a Workboard board’s progress, blockers, and evidence without changing it."
+  ]
 }

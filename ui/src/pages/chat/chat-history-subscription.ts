@@ -1,5 +1,9 @@
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { sleepWithAbort } from "@openclaw/retry";
+import {
+  monotonicDeadlineAfter,
+  remainingMonotonicMs,
+} from "../../../../src/shared/monotonic-time.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -156,7 +160,7 @@ async function synchronizeSelectedSessionMessageSubscription(
   }
   const client = state.client;
   const sessions = state.sessions;
-  const retryDeadline = Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS;
+  const retryDeadline = monotonicDeadlineAfter(CHAT_HISTORY_RETRY_WINDOW_MS);
   const connectionEpoch = state.connectionEpoch;
   // Hello advances the pane epoch; the transport receipt spans that admission only.
   const openingDispatch = opts?.beforeHello ? client.connectSent : undefined;
@@ -183,6 +187,8 @@ async function synchronizeSelectedSessionMessageSubscription(
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
   const replaceSubscription = opts?.force === true || selectedKeyChanged || selectedAgentChanged;
   const shouldUnsubscribePrevious = previousSubscription !== null && replaceSubscription;
+  const retainPreviousUntilAdmitted =
+    shouldUnsubscribePrevious && !selectedKeyChanged && !selectedAgentChanged;
   const shouldSubscribe =
     replaceSubscription || previousCanonicalKey === null || previousRequestedKey === null;
   const isCurrent = () =>
@@ -297,7 +303,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         if (!isCurrent() || !isRetryableChatReadError(error, "sessions.messages.subscribe")) {
           throw error;
         }
-        const remaining = retryDeadline - Date.now();
+        const remaining = remainingMonotonicMs(retryDeadline);
         if (remaining <= 0) {
           throw error;
         }
@@ -309,7 +315,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         if (!isCurrent()) {
           return null;
         }
-        if (Date.now() >= retryDeadline) {
+        if (remainingMonotonicMs(retryDeadline) <= 0) {
           throw error;
         }
       }
@@ -334,24 +340,28 @@ async function synchronizeSelectedSessionMessageSubscription(
   paneRequests.pendingApprovalReplay = approvalReplayOwner;
   state.chatSessionApprovalQueue = [];
   let upgradingApprovals = false;
-  try {
-    if (shouldUnsubscribePrevious && previousSubscription) {
-      // The capability retains failed releases for cleanup. An old observer
-      // must not delay readiness or fail history for the newly selected session.
+  const releasePrevious = () => {
+    if (previousSubscription) {
       void sessions.unsubscribeMessages(previousSubscription).catch((error: unknown) => {
         console.warn("[chat] Failed to release message subscription:", formatUiError(error));
       });
     }
+  };
+  try {
+    // A same-session refresh must not discard a usable observer when admission fails.
+    if (shouldUnsubscribePrevious && !retainPreviousUntilAdmitted) {
+      releasePrevious();
+    }
     const subscribePromise = shouldSubscribe && isCurrent() ? subscribe() : Promise.resolve(null);
     const subscribed = await subscribePromise.catch((error: unknown) => {
-      if (isCurrent() && shouldUnsubscribePrevious) {
+      if (isCurrent() && shouldUnsubscribePrevious && !retainPreviousUntilAdmitted) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
       }
       throw error;
     });
     if (!subscribed) {
-      if (isCurrent() && shouldUnsubscribePrevious) {
+      if (isCurrent() && shouldUnsubscribePrevious && !retainPreviousUntilAdmitted) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
       }
@@ -386,6 +396,9 @@ async function synchronizeSelectedSessionMessageSubscription(
       }
     };
     adoptSubscription(subscribed);
+    if (retainPreviousUntilAdmitted) {
+      releasePrevious();
+    }
     if (initialHistoryReceipt) {
       paneRequests.initialHistory = initialHistoryReceipt;
     }

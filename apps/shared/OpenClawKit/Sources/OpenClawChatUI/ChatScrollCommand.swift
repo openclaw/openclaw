@@ -14,8 +14,56 @@ func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
     }
 }
 
+enum ScrollFollowTarget: Equatable {
+    case latest
+    case turn(UUID)
+}
+
+/// What the transcript follows. Held by reference and read only by the small views below, so
+/// the start and end of a swipe do not re-evaluate the transcript and rebuild every row.
+@MainActor
+@Observable
+final class ChatScrollFollowState {
+    var followTarget: ScrollFollowTarget? = .latest
+    var isAtLiveEdge = true
+    var isUserScrolling = false
+    var hasNewerContentBelow = false
+}
+
+struct ChatScrollFollowAnchorModifier: ViewModifier {
+    let scroll: ChatScrollFollowState
+
+    func body(content: Content) -> some View {
+        content.defaultScrollAnchor(
+            self.scroll.followTarget == .latest && !self.scroll.isUserScrolling ? .bottom : nil,
+            for: .sizeChanges)
+    }
+}
+
+struct ChatJumpToLatestSlot<Content: View>: View {
+    let scroll: ChatScrollFollowState
+    let hasVisibleContent: Bool
+    let isLoading: Bool
+    @ViewBuilder let button: Content
+
+    var body: some View {
+        if chatReaderShowsJumpToLatest(
+            hasNewerContentBelow: self.scroll.hasNewerContentBelow,
+            isAtLiveEdge: self.scroll.isAtLiveEdge,
+            hasVisibleContent: self.hasVisibleContent,
+            isLoading: self.isLoading)
+        {
+            self.button
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+}
+
 struct ChatScrollCommand {
     struct Request: Equatable {
+        // periphery:ignore - Synthesized Equatable keeps identical scroll requests distinct.
         let id = UUID()
         let targetID: UUID
         let anchor: UnitPoint

@@ -1,0 +1,2 @@
+# Verify bounded cross-file compiler queries preserve independent caller violations and snapshot identity.
+21

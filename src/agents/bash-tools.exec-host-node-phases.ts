@@ -50,7 +50,7 @@ import {
 } from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { resolveNodeExecTimeouts } from "./exec-tool-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";

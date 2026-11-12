@@ -286,7 +286,10 @@ it("tracks Doctor ownership", async ({ auth: { agentDir, stateDir } }) => {
     await upsert(agentDir, key);
   }
   expect(sourceInspections).toBe(1);
-  const detected = detectSharedAuthStoreMigration({ stateDir, doctorOnlyStateMigrations: true });
+  const detected = await detectSharedAuthStoreMigration({
+    stateDir,
+    doctorOnlyStateMigrations: true,
+  });
   await migrateSharedAuthStore({ detected, stateDir });
   const inspectionsAfterDoctor = sourceInspections;
   await upsert(agentDir, "sk-after-doctor");

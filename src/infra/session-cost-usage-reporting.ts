@@ -7,7 +7,6 @@ import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-display.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
-import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -26,6 +25,7 @@ import { captureSessionActorStorageOwner } from "../config/sessions/session-acto
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { loadSessionTranscriptEvents } from "../config/sessions/session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "../config/sessions/session-transcript-hydration-caller.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -407,18 +407,18 @@ async function* readTranscriptRecords(
           },
         )) ?? [];
     } else {
-      events = await loadSessionTranscriptEvents(marker);
+      events = await withSessionTranscriptHydrationCaller("usage-diagnostic", () =>
+        loadSessionTranscriptEvents(marker),
+      );
     }
     const records = events.filter(isRecord);
     const visible = selectVisibleTranscriptEvents(records);
     yield* options.countedOnly ? dropInheritedTranscriptEvents(records, visible) : visible;
     return;
   }
-  // Durable byte-offset scans own their checkpoint reader. Diagnostic history
-  // shares the canonical transcript stream and materializes archive bytes once.
+  // Diagnostic history and durable scans decode archives without plaintext files.
   // Legacy JSONL transcripts predate the inherited-history marker, as in their rollup scan.
-  const transcriptPath = materializeSessionArchiveForRead(filePath);
-  for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+  for await (const line of streamSessionTranscriptLines(filePath)) {
     try {
       const parsed: unknown = JSON.parse(line);
       if (isRecord(parsed)) {

@@ -201,6 +201,9 @@ async function createFixture(stateDir: string, agentDir: string) {
     );
   };
   return {
+    getConfig: () => cfg,
+    getCron: () => cron,
+    publish,
     invoke,
     reload,
     stop,

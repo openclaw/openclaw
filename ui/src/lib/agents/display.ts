@@ -417,7 +417,7 @@ export function buildModelOptions(
     const separator = current.indexOf("/");
     options.unshift({
       value: current,
-      label: `Current (${current})`,
+      label: current,
       provider: separator > 0 ? current.slice(0, separator) : undefined,
     });
   }

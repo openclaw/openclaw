@@ -306,8 +306,9 @@ If the model loads cleanly but full agent turns misbehave, check transport first
 OpenClaw sends the resolved model output limit to local model servers. Native
 Ollama receives it as `num_predict`; an explicit request `maxTokens` or authored
 `params.num_predict` takes precedence. Set realistic `maxTokens` and context
-limits for custom model entries. Discovered local Ollama models default to 8,192
-output tokens. Ollama Cloud models use their documented output limit, or their
+limits for custom model entries. Discovered local Ollama models default to half
+of the 32,768-token local context cap (16,384 output tokens), or less for smaller
+windows. Ollama Cloud models use their documented output limit, or their
 context window when a separate output limit is unavailable. Set
 `params: { num_predict: -1 }` to restore Ollama's unlimited default; an explicit
 request output cap still wins.

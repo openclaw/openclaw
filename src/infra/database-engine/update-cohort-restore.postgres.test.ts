@@ -37,30 +37,45 @@ const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.
 const connection = typeof configured === "string" ? configured : undefined;
 
 describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () => {
-  const client = new Client({ connectionString: connection });
-  const namespaces = new Set<string>();
-  beforeAll(() => client.connect());
+  const database = `cohort_restore_${randomUUID().replaceAll("-", "")}`;
+  const databaseUrl = connection ? new URL(connection) : undefined;
+  if (databaseUrl) {
+    databaseUrl.pathname = `/${database}`;
+  }
+  const client = new Client({ connectionString: databaseUrl?.href });
+  const sibling = new Client({ connectionString: connection });
+  const siblingNamespace = `restore_${randomUUID().replaceAll("-", "")}`;
+  beforeAll(async () => {
+    await sibling.connect();
+    // The complete orphan inventory must not include other suites' restores.
+    await sibling.query(`CREATE DATABASE "${database}"`);
+    await client.connect();
+    await client.query(
+      "CREATE EXTENSION unaccent; CREATE EXTENSION pg_trgm; CREATE EXTENSION vector",
+    );
+  });
   afterAll(async () => {
     try {
-      for (const namespace of namespaces) {
-        await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
-      }
-    } finally {
       await client.end();
+      await sibling.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      await sibling.query(`DROP SCHEMA IF EXISTS "${siblingNamespace}" CASCADE`);
+    } finally {
+      await sibling.end();
     }
   });
 
   it("retains only the exact post-backup pair through repeat restore and canonical reopen", async () => {
-    if (!connection) {
+    if (!databaseUrl) {
       throw new Error("PostgreSQL conformance connection is required");
     }
+    const isolatedConnection = databaseUrl.href;
     const config = {
       plugins: { enabled: false },
-      database: { engine: "postgres" as const, postgres: { connection } },
+      database: { engine: "postgres" as const, postgres: { connection: isolatedConnection } },
     };
     const selection = {
       effectiveEngines: resolveDatabaseFamilyEngines(config),
-      postgres: { connection, schemaPrefix: "cohort_restore" },
+      postgres: { connection: isolatedConnection, schemaPrefix: "cohort_restore" },
     };
     await withOpenClawTestState({ label: "cohort-postgres-restore" }, async (state) => {
       await state.writeConfig(config);
@@ -74,7 +89,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
         if (!facts) {
           throw new Error("Fixture did not open the canonical PostgreSQL state owner");
         }
-        namespaces.add(facts.namespace);
         try {
           const { runId } = admitted(() => createUpdateRun({ trigger: "cli" }, { env: state.env }));
           await seedInstalledPluginIndex(
@@ -219,7 +233,6 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
           };
           for (const name of ["first-restore", "repeated-restore"]) {
             const restored = await restore(name);
-            namespaces.add(restored.result.namespace);
             opened.add(restored.anchorPath);
             expect(readBackupEngineImage(restored.anchorPath, restored.anchorPath)).toEqual({
               engine: "postgres",
@@ -251,6 +264,7 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
           }
           expect(await readPairRows(facts.namespace)).toEqual(originalPairRows);
           admitted(() => deletePluginCohortRecovery(pair, fence, { env: state.env }));
+          await sibling.query(`CREATE SCHEMA "${siblingNamespace}"`);
           const beforeRefusal = (
             await client.query<{ nspname: string }>(
               "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
@@ -259,22 +273,12 @@ describe.skipIf(!connection)("PostgreSQL plugin cohort backup restoration", () =
           await expect(restore("missing-live-pair")).rejects.toThrow(
             "lost its live plugin cohort recovery pair",
           );
+          await sibling.query(`DROP SCHEMA "${siblingNamespace}"`);
           const afterRefusal = (
             await client.query<{ nspname: string }>(
               "SELECT nspname FROM pg_namespace WHERE nspname LIKE 'restore_%' ORDER BY nspname",
             )
           ).rows;
-          for (const { nspname } of afterRefusal) {
-            if (beforeRefusal.some((entry) => entry.nspname === nspname)) {
-              continue;
-            }
-            const metadata = await client.query<{ store_id: string }>(
-              `SELECT store_id FROM "${nspname}".openclaw_schema_meta`,
-            );
-            if (metadata.rows.some((row) => row.store_id === facts.storeId)) {
-              namespaces.add(nspname);
-            }
-          }
           expect(afterRefusal).toEqual(beforeRefusal);
           expect(
             admitted(() => readConfigMachineState("cohort.fixture", { env: state.env })),

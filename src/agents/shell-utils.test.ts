@@ -75,6 +75,7 @@ describe("sanitizeBinaryOutput", () => {
     [["\u009b31\u0018done"], "done"],
     [["\u001b[31\u001adone"], "done"],
     [["a\u0000\u0007\u007f\u0080b\t\n"], "a\\x00\\x07\\x7f\\x80b\t\n"],
+    [["\t\n\r\x08\x0b\x0c\x0e\x1f\x7f\x9f"], "\t\n\r\\x08\\x0b\\x0c\\x0e\\x1f\\x7f\\x9f"],
   ] as const)("sanitizes controls independently across chunks %j", (chunks, expected) => {
     expect(chunks.map((text) => sanitizeBinaryOutput(text)).join("")).toBe(expected);
   });

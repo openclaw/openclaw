@@ -1,8 +1,13 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "../auth-policy.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import { dispatchProfile, gatewayConnect } from "./client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./ws-origin-policy.js";
 import { onGatewayPolicyClientInvalidated } from "./ws-policy-close.js";
@@ -120,18 +125,18 @@ describe("committed browser origin policy", () => {
       const revoked = {
         ...browserClient("https://revoked.example.test", "revoked.example.test"),
         connId: "revoked",
-        connect: { client: { id: "openclaw-control-ui" }, role: "operator" },
+        connect: gatewayConnect(undefined),
         invalidated: false,
         invalidatedReason: undefined as string | undefined,
       };
       const retained = {
         ...browserClient("https://retained.example.test"),
         connId: "retained",
-        connect: { client: { id: "openclaw-control-ui" }, role: "operator" },
+        connect: gatewayConnect(undefined),
       };
       const backend = {
         connId: "backend",
-        connect: { client: { id: "gateway-client" }, role: "operator" },
+        connect: gatewayConnect(undefined, { id: "gateway-client" }),
         socket: { close: vi.fn() },
       };
       const registry = new GatewayClientRegistry([revoked, retained, backend] as never);
@@ -175,6 +180,55 @@ type AuthPolicyTransition = {
 };
 
 describe("committed authentication policy", () => {
+  it("refreshes only a changed person-timeline claim, then still revokes its retained source", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = ensureProfileForEmail("timeline@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const initial: OpenClawConfig = {
+        gateway: {
+          auth: { mode: "none" },
+          roles: {
+            default: "member",
+            definitions: {
+              member: {
+                sessions: { others: "view" },
+                agents: "*",
+                scopes: ["operator.read", "operator.sessions.write"],
+              },
+            },
+          },
+        },
+      };
+      const client = {
+        ...policyClient(initial, { role: "operator", authMethod: "none" }),
+        connect: gatewayConnect(["operator.sessions.write"]),
+        authenticatedUserProfile: dispatchProfile(person.id),
+        profileActivity: { viewerId: undefined },
+      };
+      const revoked = vi.fn();
+      onTestFinished(onGatewayPolicyClientInvalidated(client, revoked));
+      setDisplayName(person.id, "Updated name");
+      const unrelated = structuredClone(initial);
+      unrelated.gateway!.roles!.definitions.other = {
+        sessions: { others: "none" },
+        agents: [],
+        scopes: [],
+      };
+      disconnectDisallowedGatewayPolicyClients([client], unrelated);
+      expect(client.socket.close).not.toHaveBeenCalled();
+      const restricted = structuredClone(unrelated);
+      restricted.gateway!.roles!.definitions.member!.scopes = ["operator.sessions.write"];
+      disconnectDisallowedGatewayPolicyClients([client], restricted);
+      expect(client.socket.close).toHaveBeenCalledExactlyOnceWith(4001, "gateway policy changed");
+      expect(client.sourceInvalidated).toBe(false);
+      expect(revoked).not.toHaveBeenCalled();
+      const revokedAuth = structuredClone(restricted);
+      revokedAuth.gateway!.auth = { mode: "token", token: "synthetic-replacement" };
+      disconnectDisallowedGatewayPolicyClients([client], revokedAuth);
+      expect(client.sourceInvalidated).toBe(true);
+      expect(revoked).toHaveBeenCalledOnce();
+    });
+  });
   const identity = "retained@example.test";
   const grants = {
     "Retained@example.test": ["operator.write", "operator.read"],

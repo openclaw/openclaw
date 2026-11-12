@@ -1,0 +1,2 @@
+29
+# Prove companion-only delivery revisions reuse instruction indexes while changed bodies refresh results.

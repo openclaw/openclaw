@@ -1,0 +1,2 @@
+# Browser-local read-only notice dismissal and Gateway isolation regression.
+15

@@ -1,0 +1,2 @@
+42
+# Prove FRV forwards per-dispatch npm preflight hosted routing to declared artifact inputs and the source check serializes oxlint shards on the delivered 32-class host.

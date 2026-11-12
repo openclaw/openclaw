@@ -1,0 +1,2 @@
+# Real delegated owner-tool approval and config persistence, including revocation after validation.
+231

@@ -332,6 +332,12 @@ Stop awaited acquisition when it aborts and finish resource cleanup before the
 hook settles. OpenClaw discards cancelled results and joins cleanup before a
 replacement can acquire the same agent resources.
 
+A native-login synthetic auth result can include optional `nativeAuth.display`
+metadata: `kind: "subscription" | "api" | "native"` and a validated `plan` label.
+Use only non-secret facts reported by the native runtime. This display metadata
+travels with the prepared auth generation; it does not grant authority, create
+a saved profile, or change the native runtime's token/refresh ownership.
+
 For a separate authoritative metadata feed, the same
 `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:
 each entry pairs a runtime model with its lifecycle status.

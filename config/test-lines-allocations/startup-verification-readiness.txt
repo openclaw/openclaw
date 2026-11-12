@@ -1,0 +1,2 @@
+# Await fixture startup before the existing write and full-verification assertions.
+2

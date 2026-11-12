@@ -116,6 +116,7 @@ export function applyJobResult(
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
   const previousRunInterruptedByRestart = job.state.lastError === STARTUP_INTERRUPTED_ERROR;
+  delete job.state.admissionDeferred;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
@@ -254,6 +255,14 @@ export function applyJobResult(
     }
     if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
+    }
+    if (
+      ownsSchedule &&
+      result.status === "error" &&
+      previousScheduleState.pacedNextRunAtMs !== undefined
+    ) {
+      // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
+      job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
     // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
     const failureNotification = result.parentUnavailable
@@ -464,7 +473,9 @@ export function applyJobResult(
       let normalNextComputed = false;
       const computeNormalNext = () => {
         if (!normalNextComputed) {
-          normalNext = computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
+          normalNext =
+            previousScheduleState.pacedNextRunAtMs ??
+            computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
           normalNextComputed = true;
         }
         return normalNext;

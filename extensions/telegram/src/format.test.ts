@@ -37,20 +37,15 @@ describe("Telegram formatting", () => {
     expect(chunkHtml(promotedHtml)).toEqual([protectedHtml]);
   });
 
-  it("preserves supported Telegram HTML in stream markdown rendering", () => {
-    const input =
-      "<b>Rollup</b>\n\n<blockquote>No emails.</blockquote>\n\n<pre><code>error</code></pre>";
-
-    expect(markdownToTelegramHtml(input)).toBe(input);
-    expect(chunkHtml(input).join("")).toBe(input);
-  });
-
   it.each([
+    "<b>Rollup</b>\n\n<blockquote>No emails.</blockquote>\n\n<pre><code>error</code></pre>",
     "<blockquote expandable>hidden details</blockquote>",
     '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+    '<pre><code class="language-python">print(1)\n</code></pre>',
   ])("preserves supported Telegram HTML: %s", (input) => {
     expect(markdownToTelegramHtml(input)).toBe(input);
     expect(htmlText(input)).toBe(input);
+    expect(chunkHtml(input).join("")).toBe(input);
   });
 
   it.each([
@@ -91,19 +86,20 @@ describe("Telegram formatting", () => {
       '<code class="language-text">/queue followup debounce:0\n</code>',
       "<code>/queue followup debounce:0\n</code>",
     ],
-    [
-      '<pre><code class="language-python">print(1)\n</code></pre>',
-      '<pre><code class="language-python">print(1)\n</code></pre>',
-    ],
     ['```bash\necho "hello"\n```', '<pre><code class="language-bash">echo "hello"\n</code></pre>'],
     // #4071: overlapping bold and autolink ranges must nest, not cross.
     [
       "**start https://example.com** end",
       '<b>start <a href="https://example.com">https://example.com</a></b> end',
     ],
+    ["Use the <b> tag to make text **bold**.", "Use the &lt;b&gt; tag to make text <b>bold</b>."],
+    ["<i>one <i>two</i>", "&lt;i&gt;one <i>two</i>"],
+    ['<a href="https://example.com">docs', '&lt;a href="https://example.com"&gt;docs'],
+    ['<pre><code class="language-js">x', '&lt;pre&gt;&lt;code class="language-js"&gt;x'],
+    ["[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)", "<code>Nova_Core.md</code>"],
   ])("renders code, escaping, and nested formatting: %s", (input, expected) => {
     expect(markdownToTelegramHtml(input)).toBe(expected);
-    if (input.startsWith('<b class="x">')) {
+    if (input.startsWith("<")) {
       expect(htmlText(input)).toBe(expected);
     }
   });
@@ -137,22 +133,22 @@ describe("Telegram formatting", () => {
     },
   );
 
-  it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
-    const res = markdownToTelegramHtml("[Nova_Core.md](file:///home/x/workspace/Nova_Core.md)");
-    expect(res).not.toContain("file://");
-    expect(res).toContain("Nova_Core.md");
-  });
-
-  it.each([".", ")"])(
-    "preserves list boundary spacing before numbered sections using %s",
-    (marker) => {
-      const input = `2${marker} Checklist:\n\n  • Sample A.\n  • Sample B.\n3${marker} Next:`;
-      const expected = "2. Checklist:\n\n• Sample A.\n• Sample B.\n\n3. Next:";
-
+  it.each([".", ")"])("keeps section gaps and ordered children tight: %s", (marker) => {
+    for (const [input, expected] of [
+      [
+        `2${marker} Checklist:\n\n  • Sample A.\n  • Sample B.\n3${marker} Next:`,
+        "2. Checklist:\n\n• Sample A.\n• Sample B.\n\n3. Next:",
+      ],
+      [`1${marker} Parent\n   - Child\n2${marker} Next`, "1. Parent\n  • Child\n2. Next"],
+      [
+        `1${marker} Install\n   - run setup\n   - check version\n2${marker} Configure\n   • edit config\n3${marker} Start`,
+        "1. Install\n  • run setup\n  • check version\n2. Configure\n• edit config\n3. Start",
+      ],
+    ] as const) {
       expect(markdownToTelegramHtml(input)).toBe(expected);
       expect(chunkHtml(input)).toEqual([expected]);
-    },
-  );
+    }
+  });
 
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);
@@ -307,8 +303,10 @@ describe("Telegram formatting", () => {
 });
 
 describe("file references", () => {
-  it("does not wrap in HTML mode (trusts caller markup)", () => {
+  it("keeps native HTML text, tags and file refs intact", () => {
     expect(htmlText("Check README.md")).toBe("Check README.md");
+    expect(htmlText("x<y <b>z</b>")).toBe("x&lt;y <b>z</b>");
+    expect(htmlText("<code>i<n</code>")).toBe("<code>i&lt;n</code>");
     expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
   });
 

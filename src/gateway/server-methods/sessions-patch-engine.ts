@@ -463,6 +463,7 @@ export async function executeSessionPatchMutations(params: {
                           entry: projected.entry,
                           expectedEntry: existingEntry,
                           callerCanConsent: callerIsAdmin,
+                          operatorAuthority,
                           catalog: (await catalogs.available(target.targetAgentId))?.entries,
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },

@@ -1,0 +1,2 @@
+# Existing owner lifecycle test now proves immediate sampling, fresh row counts, and five-minute byte estimate refresh.
+7

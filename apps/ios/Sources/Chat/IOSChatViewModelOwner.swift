@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import OpenClawChatUI
 import OpenClawProtocol
+import UIKit
 
 @MainActor
 @Observable
@@ -12,6 +13,7 @@ final class IOSChatViewModelOwner {
     private(set) var presentationAgentID = "main"
     private(set) var presentationAgentName = "Main"
     private(set) var presentationAgentBadge = "M"
+    private(set) var presentationAgentAvatar: UIImage?
     private(set) var hasVerifiedOfflineRoutingIdentity = false
     private var transportAgentID = ""
     private var routingContract = ""
@@ -155,6 +157,7 @@ final class IOSChatViewModelOwner {
         self.presentationAgentBadge = AgentIdentityPresentation.badge(
             avatarText: agent?.identity?["emoji"]?.value as? String,
             displayName: self.presentationAgentName)
+        self.presentationAgentAvatar = appModel.agentAvatarImage(for: self.presentationAgentID)
         self.hasVerifiedOfflineRoutingIdentity = appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 

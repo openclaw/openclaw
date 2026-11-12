@@ -1,0 +1,2 @@
+1
+# Extend the existing compaction fallback matrix with HTTP 429 quota wording.

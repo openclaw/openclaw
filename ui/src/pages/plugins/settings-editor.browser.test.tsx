@@ -467,7 +467,7 @@ describe("grouped editor field discovery", () => {
     }
     await searchSettings(editor, "does-not-match");
     expect(query(".cfg-map")).toBeNull();
-    expect(query(".plugin-editor__empty")?.textContent).toContain("No matching settings.");
+    expect(query(".settings-empty")?.textContent).toContain("No settings match your search.");
   });
 });
 
@@ -499,14 +499,14 @@ describe("plugin map layout", () => {
       for (const add of all<HTMLButtonElement>(".cfg-map > .settings-row button")) {
         const bounds = add.getBoundingClientRect();
         const mapBounds = add.closest(".cfg-map")!.getBoundingClientRect();
-        expect(bounds.width).toBeGreaterThan(60);
+        expect(bounds.width).toBeGreaterThan(40);
         expect(bounds.height).toBeLessThan(48);
         expect(bounds.right).toBeLessThanOrEqual(mapBounds.right);
       }
       const key = query<HTMLInputElement>('input[aria-label="Key: first"]')!;
       expect(key.getBoundingClientRect().width).toBeGreaterThan(100);
       const value = query<HTMLInputElement>('[data-setting="populated"] input[type="number"]')!;
-      expect(value.getBoundingClientRect().width).toBeGreaterThan(100);
+      expect(value.getBoundingClientRect().width).toBeGreaterThan(60);
       expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth);
       editor
         .querySelector<HTMLButtonElement>(

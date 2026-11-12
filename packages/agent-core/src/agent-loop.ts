@@ -318,8 +318,8 @@ async function runLoop(
         signal,
         emit,
         newMessages,
-        async (assistantMessage, toolCalls, executionSignal, toolEmit, scheduling) => {
-          const batch = await executeToolCalls(
+        (assistantMessage, toolCalls, executionSignal, toolEmit, scheduling) =>
+          executeToolCalls(
             state.context,
             assistantMessage,
             streamedSteering.config,
@@ -331,9 +331,7 @@ async function runLoop(
             scheduling,
             scheduling.hasUnobservedAsyncToolResults,
             runtime?.isLocalError,
-          );
-          return batch;
-        },
+          ),
         (message) => withAssistantTurnTaint(message, turnTainted),
         streamFn,
         runtime,
@@ -946,6 +944,7 @@ async function prepareToolCallEntry(
     batch.signal,
     batch.emit,
     batch.isLocalError,
+    batch.config.toolInterruptions,
   );
   return execution.kind === "immediate"
     ? await finalizeExecutedToolCall(batch, preparation, execution.outcome, preparation.args)

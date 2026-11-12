@@ -1,0 +1,5 @@
+# Codex base-instruction and native AGENTS.md reporting: rollout world-state parsing
+# (appends, compaction, rollback, abort), report accounting, non-blocking settlement,
+# the estimated configured base instructions Codex prefers over session_meta on resume,
+# and leaving out session_meta's copy of the base OpenClaw sent itself.
+362

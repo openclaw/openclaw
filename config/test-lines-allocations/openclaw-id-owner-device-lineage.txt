@@ -1,0 +1,3 @@
+# OpenClaw ID owner-device approval lineage and re-add authority: security regressions
+# through submitStatement (self/reciprocal reparenting, peer graft, old R-signed cert replay).
+197

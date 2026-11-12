@@ -11,6 +11,7 @@ import {
   type ModelRef,
 } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import {
   type OpenClawConfig,
   type ConfigFileSnapshot,
@@ -37,7 +38,7 @@ export { formatTokenK } from "./list.format.js";
 
 export function ensureFlagCompatibility(opts: { json?: boolean; plain?: boolean }): void {
   if (opts.json && opts.plain) {
-    throw new Error("Choose either --json or --plain, not both.");
+    throwExpectedCliError("Choose either --json or --plain, not both.");
   }
 }
 

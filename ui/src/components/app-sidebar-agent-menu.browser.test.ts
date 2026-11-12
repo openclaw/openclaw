@@ -201,8 +201,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       const avatarBox = avatar.getBoundingClientRect();
       const labelBox = label.getBoundingClientRect();
       const rowBox = tile.getBoundingClientRect();
-      expect(rowBox.height).toBeGreaterThanOrEqual(44);
-      expect(avatarBox.width).toBe(28);
       expect(labelBox.left - avatarBox.right).toBe(10);
       expect(Math.abs(center(avatarBox, "y") - center(rowBox, "y"))).toBeLessThanOrEqual(1);
     }

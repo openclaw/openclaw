@@ -326,7 +326,7 @@ suite.define(() => {
           .poll(() => card.locator("a").allTextContents())
           .toEqual(
             expect.arrayContaining(
-              ["Release checklist", "Main Session", recentLabel, "View activity"].map((text) =>
+              ["Release checklist", "Main session", recentLabel, "View activity"].map((text) =>
                 expect.stringContaining(text),
               ),
             ),

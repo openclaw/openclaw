@@ -1,0 +1,2 @@
+# Exact net test-line growth for PR #196123: caret-bounded leading commands and dispatch admission, Goal objective preservation, and built Control UI browser coverage including colon-terminated skill completion. Gateway transport is mocked.
+200

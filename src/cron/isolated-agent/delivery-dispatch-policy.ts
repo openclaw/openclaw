@@ -228,14 +228,14 @@ export async function maybeApplyTtsToCronPayloads(params: {
 }): Promise<ReplyPayload[]> {
   const preparedTtsPreferences = await prepareTtsPreferences();
   if (
-    !shouldAttemptTtsPayload({
+    !(await shouldAttemptTtsPayload({
       cfg: params.cfg,
       preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.delivery.channel,
       accountId: params.delivery.accountId,
-    })
+    }))
   ) {
     return params.payloads;
   }

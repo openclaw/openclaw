@@ -161,6 +161,8 @@ export function pinExecToolTarget(tool: AnyAgentTool, target: PinnedExecToolTarg
   const getExecutionTimeoutMs = tool.getExecutionTimeoutMs;
   return {
     ...tool,
+    // Remote system.run does not expose an owned process cancellation handle.
+    interruptible: target.host === "node" ? undefined : tool.interruptible,
     parameters: restrictExecToolParameters(tool.parameters, target.host, Boolean(pinnedNode)),
     ...(getExecutionTimeoutMs
       ? { getExecutionTimeoutMs: (args: unknown) => getExecutionTimeoutMs(pinArgs(args)) }

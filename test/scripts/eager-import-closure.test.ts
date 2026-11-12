@@ -14,7 +14,8 @@ import {
 } from "node:fs";
 import { dirname, join, posix, relative } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as nativeTypeScript from "../../scripts/lib/native-typescript.mts";
 import {
   collectRuntimeImportClosure,
   createRuntimeImportGraph,
@@ -25,7 +26,12 @@ import { createRuntimeProcessEntrypoints } from "../../src/infra/runtime-process
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
-import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+import {
+  anchoredStdio,
+  copyPrRoutingWrapperSources,
+  copyPrWrapperSources,
+  linkPrWrapperDependencies,
+} from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
@@ -260,7 +266,7 @@ itPosix("refuses an env-only legacy handoff before running its materializer", ()
   const marker = join(root, "caller-materializer-ran");
   mkdirSync(canonical);
   git(root, "init", canonical);
-  copyPrWrapperSources(anchor);
+  copyPrRoutingWrapperSources(anchor);
   writeFileSync(
     join(anchor, "scripts/pr-lib/materialize-dependencies.mjs"),
     `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "ran");`,
@@ -282,7 +288,13 @@ itPosix.each(["empty", "legacy", "outdated"])(
     const anchor = mkdtempSync(join(root, `${ANCHOR_PREFIX}${process.pid}.`));
     mkdirSync(canonical);
     git(root, "init", canonical);
-    copyPrWrapperSources(anchor);
+    copyPrRoutingWrapperSources(anchor);
+    writeFixture(anchor, {
+      "packages/markdown-core/package.json": readFileSync(
+        "packages/markdown-core/package.json",
+        "utf8",
+      ),
+    });
     linkPrWrapperDependencies(canonical);
     const legacyPins = new Map<string, string>();
     if (dependencies === "legacy") {
@@ -322,18 +334,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
               OPENCLAW_PR_ANCHOR_CREATOR_PID: String(process.pid),
               OPENCLAW_PR_ANCHOR_FD: "9",
             },
-            stdio: [
-              "ignore",
-              "pipe",
-              "pipe",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              "ignore",
-              descriptor,
-            ],
+            stdio: anchoredStdio(descriptor),
           },
         );
       const result = materialize();
@@ -406,7 +407,7 @@ itPosix.each([
     git(canonical, "add", ".");
     git(canonical, "commit", "-m", "test: pre-helper anchor");
     const selected = git(canonical, "rev-parse", "HEAD");
-    copyPrWrapperSources(canonical);
+    copyPrRoutingWrapperSources(canonical);
     if (!bootstrap) {
       rmSync(join(canonical, "scripts/pr-lib/cache-lifetime.mjs"));
     }
@@ -504,6 +505,49 @@ it("traverses runtime sources in mixed inventories and still rejects missing run
   );
 });
 
+it("reuses overlapping runtime edges only within the same native snapshot", () => {
+  const root = tempDirs.make("openclaw-runtime-graph-reuse-");
+  writeFixture(root, {
+    "tsconfig.json": { compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext" } },
+    "entry.mts": 'import "./shared.mjs";',
+    "other.mts": 'import "./shared.mjs";',
+    "shared.mts": 'import "./leaf.mjs";',
+    "leaf.mts": "export {};",
+    "extra.mts": 'import "./entry.mjs";',
+  });
+  const openProject = nativeTypeScript.createNativeTypeScriptProject;
+  let session: ReturnType<typeof openProject> | undefined;
+  using projectSpy = vi
+    .spyOn(nativeTypeScript, "createNativeTypeScriptProject")
+    .mockImplementation((options) => {
+      session = openProject({ ...options, observer: () => {} });
+      return session;
+    });
+  using graph = createRuntimeImportGraph(root, ["entry.mts", "other.mts"]);
+  expect(projectSpy).toHaveBeenCalledOnce();
+  const requests = () => session!.api.getTimingInfo().totals.requestCount;
+  const baseline = requests();
+  const measurementOverhead = requests() - baseline;
+  expect(graph.collect(["entry.mts", "other.mts"])).toEqual([
+    "entry.mts",
+    "leaf.mts",
+    "other.mts",
+    "shared.mts",
+  ]);
+  const beforeReuse = requests();
+  expect(graph.collect(["entry.mts"])).toEqual(["entry.mts", "leaf.mts", "shared.mts"]);
+  expect(requests() - beforeReuse).toBe(measurementOverhead);
+
+  // Admitting a root replaces the compiler snapshot; old edge answers must be discarded.
+  graph.dependencies("extra.mts");
+  const beforeRefresh = requests();
+  expect(graph.collect(["entry.mts"])).toEqual(["entry.mts", "leaf.mts", "shared.mts"]);
+  expect(requests() - beforeRefresh).toBeGreaterThan(measurementOverhead);
+  const afterRefresh = requests();
+  graph.collect(["entry.mts"]);
+  expect(requests() - afterRefresh).toBe(measurementOverhead);
+});
+
 it("preserves declaration resolution for source-import graphs", () => {
   const root = tempDirs.make("openclaw-source-declarations-");
   writeFixture(root, {
@@ -590,7 +634,12 @@ const sessionMemoryOwners: string[] = [
   "src/config/sessions/session-actor-storage-acquisition.ts",
 ];
 
-it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?: boolean]>([
+const deferredOwnerCases: Array<[string, string[], string[], boolean?]> = [
+  [
+    "operator role policy",
+    ["src/gateway/operator-role-policy.ts"],
+    ["packages/gateway-protocol/src/protocol-validator.ts"],
+  ],
   [
     "native session worker transactions",
     [
@@ -708,9 +757,16 @@ it.each<[name: string, entrypoints: string[], deferredOwners: string[], dynamic?
       "src/plugins/provider-replay-helpers.ts",
     ],
   ],
-])("keeps %s independent of deferred owners", (_name, entrypoints, deferredOwners, dynamic) => {
-  const closure = collectRuntimeImportClosure(process.cwd(), entrypoints, {
-    includeDynamicImports: dynamic ?? false,
-  });
-  expect(closure.filter((file) => deferredOwners.includes(file))).toEqual([]);
+];
+
+it.each([false, true])("keeps deferred owners out of runtime closures (dynamic=%s)", (dynamic) => {
+  const cases = deferredOwnerCases.filter((row) => (row[3] ?? false) === dynamic);
+  const roots = cases.flatMap(([, entrypoints]) => entrypoints);
+  using graph = createRuntimeImportGraph(process.cwd(), roots, { includeDynamicImports: dynamic });
+  for (const [name, entrypoints, deferredOwners] of cases) {
+    expect(
+      graph.collect(entrypoints).filter((file) => deferredOwners.includes(file)),
+      name,
+    ).toEqual([]);
+  }
 });

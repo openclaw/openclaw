@@ -1,0 +1,2 @@
+# Keep account-boundary launch assertions while excluding initialize-only discovery.
+3

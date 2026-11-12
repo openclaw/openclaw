@@ -9,6 +9,20 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 
 - **PR CI = default broad proof.** Change builds + focused tests pass → open
   ready PR. CI runs broad suites; never delay PR for pre-PR suite runs.
+- **Build unavailable before publication:** when publication is already authorized,
+  remote capacity is unavailable, and local execution is unqualified, push/open a
+  draft PR with the exact missing build and capacity gap recorded. Defer that build
+  to exact-head CI. Require its success before marking ready or merging. This
+  changes proof timing only, not publication authority, source trust, credentials,
+  owner approval, or merge gates.
+  Automatic CI skips drafts. For a trusted canonical branch, use the existing
+  `ci.yml` manual dispatch with `target_ref` set to the full pushed head SHA
+  (`ghx workflow run ci.yml --repo openclaw/openclaw --ref main -f target_ref=<sha>`).
+  Verify the selected checkout SHA and successful `build-artifacts` job cover the
+  required build. CI's `build:ci-artifacts` omits full declaration emission. Keep
+  uncovered proof pending. A skipped job or workflow-ref SHA is not build proof.
+  Link the run in the PR, then use normal ready-PR CI and landing gates.
+  Untrusted source keeps its secretless route.
 - **Before PR, prove narrowly:** touched tests with
   `pnpm test <file> --maxWorkers=1`, targeted typecheck, lint, format.
   Prefer local proof for trusted, bounded work when dependencies and current
@@ -37,7 +51,10 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 - Runtime defect: reproduce real entry point; rerun it + relevant siblings.
 - Trusted source: `pnpm changed:lanes --json`, focused tests + targeted typecheck/lint/format; `pnpm check:changed` = optional smart local check.
 - Public SDK/plugin contract: representative consumers, not all-plugin sweep.
-- Build output, lazy imports, package boundaries: include `pnpm build`.
+- Build output, lazy imports, package boundaries: include `pnpm build` or the
+  repository CI build that covers the changed contract. Record uncovered
+  packaging/platform/declaration requirements. Required full package or release
+  builds still need their matching proof.
 - Workflow: `git diff --check` + `pnpm check:workflows`.
 - Docs only: relevant docs/link/format checks + `git diff --check`; no runtime tests.
 
@@ -99,6 +116,12 @@ ceiling growth against actual LF growth and preserves inherited debt. Other
 raises, including scalar-only reconciliation, need approval. See the
 [cost budget](../../../docs/help/testing/writing-tests.md#cost-budget) for record
 format and pruning.
+
+For module mocks, follow the
+[fixture contract](../../../docs/help/testing/fixtures.md#module-mocks-and-export-completeness).
+When an isolation annotation retires an existing baseline entry, commit the annotation and corresponding baseline removal together.
+Inspect the full baseline diff because `--prune` scans the whole checkout.
+Verify the updated baseline with a guard run without `--prune`.
 
 ### Test failure policy
 

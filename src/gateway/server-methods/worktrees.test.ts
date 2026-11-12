@@ -12,6 +12,7 @@ import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeRecord,
 } from "../../agents/worktrees/types.js";
+import * as gitReads from "../../infra/git-read-cache.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -114,18 +115,19 @@ it("routes checkout operations through the managed worktree service", async () =
 });
 
 it("lists branches for admin clients and configured workspaces only", async () => {
-  const branches = vi
-    .spyOn(managedWorktrees, "listRepositoryBranches")
-    .mockResolvedValue({ branches: [] });
+  const branches = vi.spyOn(gitReads, "runGitReadOperation").mockResolvedValue({ branches: [] });
   const invoke = requests(admin);
 
   for (const includeRepositoryStatus of [false, true]) {
     const options = includeRepositoryStatus ? { includeRepositoryStatus: true } : {};
     const response = await invoke("branches", { repoRoot: "/anywhere", ...options });
-    expect(response?.[0]).toBe(true);
+    expect(response).toEqual([true, { branches: [] }, undefined]);
     expect(branches).toHaveBeenCalledWith(
-      "/anywhere",
-      ...(includeRepositoryStatus ? [options] : []),
+      {
+        type: "repository.branches",
+        input: { repoRoot: "/anywhere", includeRepositoryStatus: options.includeRepositoryStatus },
+      },
+      expect.objectContaining({ snapshot: true }),
     );
   }
 
@@ -144,14 +146,15 @@ it("authorizes registered project aliases but not outside paths", async () => {
   await fs.mkdir(outside);
   const project = await registerProjectRegistry({ path: repoRoot, name: "Registered" });
   const create = vi.spyOn(managedWorktrees, "create").mockResolvedValue(record);
-  const branches = vi
-    .spyOn(managedWorktrees, "listRepositoryBranches")
-    .mockResolvedValue({ branches: [] });
+  const branches = vi.spyOn(gitReads, "runGitReadOperation").mockResolvedValue({ branches: [] });
   const invoke = requests(writer);
   try {
     const allowed = await invoke("branches", { repoRoot: alias });
-    expect(allowed?.[0]).toBe(true);
-    expect(branches).toHaveBeenCalledWith(repoRoot);
+    expect(allowed).toEqual([true, { branches: [] }, undefined]);
+    expect(branches).toHaveBeenCalledWith(
+      { type: "repository.branches", input: { repoRoot, includeRepositoryStatus: undefined } },
+      expect.objectContaining({ snapshot: true }),
+    );
 
     const created = await invoke("create", {
       repoRoot: alias,

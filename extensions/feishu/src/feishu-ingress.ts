@@ -219,6 +219,29 @@ export function buildFeishuFlushIngressLifecycle(
     releaseReplayClaims();
     await transportLifecycle.onAbandoned();
   };
+  const commitReplayClaims = async () => {
+    const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
+    for (const result of results) {
+      if (result.status === "rejected") {
+        options?.onReplayCommitError?.(result.reason);
+      }
+    }
+  };
+  const dropAll = async (
+    reason: Parameters<NonNullable<FeishuIngressLifecycle["onDropped"]>>[0],
+  ) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    try {
+      await transportLifecycle.onDropped?.(reason);
+    } catch (error) {
+      releaseReplayClaims();
+      throw error;
+    }
+    await commitReplayClaims();
+  };
   const adoptAll = async () => {
     if (settled) {
       return;
@@ -234,12 +257,7 @@ export function buildFeishuFlushIngressLifecycle(
       throw error;
     }
     // Commit twin suppression only after the durable turn is adopted.
-    const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
-    for (const result of results) {
-      if (result.status === "rejected") {
-        options?.onReplayCommitError?.(result.reason);
-      }
-    }
+    await commitReplayClaims();
   };
   return {
     lifecycle: {
@@ -263,6 +281,12 @@ export function buildFeishuFlushIngressLifecycle(
         handedOff = true;
         await abandonAll();
       },
+      onDropped: transportLifecycle.onDropped
+        ? async (reason) => {
+            handedOff = true;
+            await dropAll(reason);
+          }
+        : undefined,
     },
     // A gated/no-turn envelope is terminal for transport replay, but its
     // logical claim releases so a different event_id twin can run the gate.
@@ -271,13 +295,13 @@ export function buildFeishuFlushIngressLifecycle(
         return;
       }
       handedOff = true;
+      settled = true;
       releaseReplayClaims();
       try {
         transportLifecycle.onAdoptionFinalizing();
         await transportLifecycle.onAdopted();
-        settled = true;
       } catch (error) {
-        await abandonAll().catch(() => undefined);
+        await Promise.resolve(transportLifecycle.onAbandoned()).catch(() => undefined);
         throw error;
       }
     },
@@ -340,6 +364,13 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions) {
               .then(() => wrappedLifecycle.onBeforeAbandon?.())
               .catch(() => undefined);
             await lifecycle.onAbandoned();
+          } finally {
+            handoff.resolve();
+          }
+        },
+        onDropped: async (reason) => {
+          try {
+            await lifecycle.onDropped?.(reason);
           } finally {
             handoff.resolve();
           }

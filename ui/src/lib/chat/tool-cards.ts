@@ -25,6 +25,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
+import { getMessageDerivations } from "./message-derivations.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
 import { readPreparedActivity } from "./tool-call-grouping.ts";
@@ -514,18 +515,17 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-const toolCardsByMessage = new WeakMap<object, ToolCard[]>();
-
 export function extractToolCardsCached(message: unknown): ToolCard[] {
   if (!message || typeof message !== "object") {
     return extractToolCards(message);
   }
-  const cached = toolCardsByMessage.get(message);
+  const facts = getMessageDerivations(message);
+  const cached = facts.toolCards;
   if (cached) {
     return cached;
   }
   const cards = extractToolCards(message);
-  toolCardsByMessage.set(message, cards);
+  facts.toolCards = cards;
   return cards;
 }
 

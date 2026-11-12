@@ -1,0 +1,2 @@
+# Native persisted-reload geometry plus ordinary child display retention/retirement and optional chunk failure containment.
+344

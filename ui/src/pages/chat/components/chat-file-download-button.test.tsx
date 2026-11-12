@@ -97,7 +97,10 @@ it("shows download progress, rejects duplicate clicks, and lets a failed downloa
   expect(download).toHaveBeenCalledOnce();
   bytes.reject(new Error("Download unavailable"));
   await waitForSolid(() => expect(button.hasAttribute("disabled")).toBe(false));
-  expect(report).toHaveBeenCalledWith({ message: expect.stringContaining("Download unavailable") });
+  expect(report).toHaveBeenCalledWith({
+    severity: "error",
+    message: expect.stringContaining("Download unavailable"),
+  });
   expect(save).not.toHaveBeenCalled();
   button.click();
   await waitForSolid(() => expect(save).toHaveBeenCalledOnce());

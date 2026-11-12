@@ -1,0 +1,2 @@
+# Exact net test-line growth from the claude-cli native compaction accounting fix (#158353, #181559): boundary parsing, count and sizes regressions.
+97

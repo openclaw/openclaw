@@ -1,0 +1,2 @@
+# Service restart regression: a stale publication must not stop periodic refresh.
+47

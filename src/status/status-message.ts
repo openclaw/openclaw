@@ -9,6 +9,10 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  findDecisionReason,
+  summarizeDecisionReason,
+} from "../../packages/media-understanding-common/src/format.js";
 import type { MediaUnderstandingDecision } from "../../packages/media-understanding-common/src/types.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
@@ -59,10 +63,6 @@ import type {
   MessagePresentationBlock,
   MessagePresentationTableCell,
 } from "../interactive/payload.js";
-import {
-  findDecisionReason,
-  summarizeDecisionReason,
-} from "../media-understanding/runner.entries.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";

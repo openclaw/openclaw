@@ -56,11 +56,10 @@ it("admits channel detail presentations only for the manifest's declared channel
 it("carries normalized built entrypoints through discovery into runtime ownership", () => {
   useNoBundledPlugins();
   const style = "dist/control-ui/theme.css";
-  const plugin = fixture({ entry: `./${entry}`, styles: [`./${style}`, style] }, [
-    "widget",
-    "page",
-    "widget",
-  ]);
+  const plugin = fixture(
+    { entry: `./${entry}`, styles: [`./${style}`, style], panelIcon: "./assets/panel.svg" },
+    ["widget", "page", "widget"],
+  );
   const registry = loadOpenClawPlugins({
     cache: false,
     workspaceDir: plugin.dir,
@@ -70,7 +69,7 @@ it("carries normalized built entrypoints through discovery into runtime ownershi
   expect(registry.plugins.find((record) => record.id === plugin.id)).toMatchObject({
     status: "loaded",
     uiCapabilities: ["page", "widget"],
-    controlUi: { entry, styles: [style] },
+    controlUi: { entry, styles: [style], panelIcon: "assets/panel.svg" },
   });
 });
 
@@ -134,6 +133,12 @@ it.each([
   { styles: ["dist/server.css"] },
   { styles: ["dist/control-ui/.secret.css"] },
   { styles: ["dist/control-ui/code.js"] },
+  { panelIcon: "../outside.svg" },
+  { panelIcon: "/absolute.svg" },
+  { panelIcon: "assets/../outside.svg" },
+  { panelIcon: "https://example.com/icon.svg" },
+  { panelIcon: "assets/icon.png" },
+  { panelIcon: "assets\\icon.svg" },
   { root: "/private" },
 ])("rejects unsafe or source declarations %j", (overrides) => {
   expect(readManifest({ entry, ...overrides })).toMatchObject({

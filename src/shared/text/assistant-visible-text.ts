@@ -9,6 +9,7 @@ import {
   stripRelevantMemoriesTags,
   stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
+  scanLegacyBracketToolCallBlocks,
   plainToolCallTransform,
   stripInvisibleAssistantText,
   traceLineHeads,
@@ -152,6 +153,17 @@ export function minimaxToolCallTextFilter(streaming = false): TextFilter {
 export const legacyBracketToolCallTextFilter: TextFilter = {
   transform: stripLegacyBracketToolCallBlocks,
   activationTokens: ["TOOL_CALL", "TOOL_RESULT"],
+  checkpoint(text, boundary, context) {
+    const regions = context.codeRegions();
+    const scan = scanLegacyBracketToolCallBlocks(text, regions);
+    const prefix = scanLegacyBracketToolCallBlocks(text.slice(0, boundary), regions);
+    const retainStart = scan.pending || prefix.pending ? 0 : boundary;
+    return {
+      text: scan.text,
+      retainStart,
+      retainedOutputStart: retainStart ? prefix.text.length : 0,
+    };
+  },
 };
 
 export const assistantTraceTextFilter: TextFilter = {

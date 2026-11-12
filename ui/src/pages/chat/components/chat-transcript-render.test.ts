@@ -30,13 +30,17 @@ import {
   toggleTranscriptSearch,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import { transcriptContainer } from "./chat-transcript-fixture.test-support.tsx";
+import {
+  emitTranscriptResize,
+  transcriptContainer,
+} from "./chat-transcript-fixture.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
   requireElement,
   resetTranscriptTestDom,
   threadProps,
+  transcriptSize,
   transcriptMessage as message,
 } from "./chat-transcript.test-support.ts";
 
@@ -700,6 +704,44 @@ describe("chat transcript rendering", () => {
     flush();
     expect(container.querySelector("input")).toBeNull();
     render(null, container);
+  });
+
+  it("shows a search match above a tall live reply without waiting for history refresh", async () => {
+    const props = threadProps(
+      "search-above-live",
+      "agent:main:search-above-live",
+      [
+        message("user", "Find this checkpoint", 1_000),
+        message("assistant", "Earlier answer", 2_000),
+        message("user", "Continue the work", 3_000),
+      ],
+      { stream: "Unrelated live tail", streamStartedAt: 4_000 },
+    );
+    const fixture = threadFixture(props, createTestTranscript(), true);
+    fixture.rerender(true);
+    await flushDeferredRowPrune();
+    const thread = requireElement(fixture.container, ".chat-thread");
+    Object.defineProperty(thread, "scrollHeight", {
+      configurable: true,
+      get: () => transcriptSize(fixture.container),
+    });
+    const liveRow = [...thread.querySelectorAll<HTMLElement>(".chat-virtual-row")].find((row) =>
+      row.textContent?.includes("Unrelated live tail"),
+    );
+    expect(liveRow).toBeDefined();
+    emitTranscriptResize(liveRow!, 800, 12_000);
+    await flushDeferredRowPrune();
+    thread.scrollTop = thread.scrollHeight - thread.clientHeight;
+    thread.dispatchEvent(new Event("scroll"));
+    await flushDeferredRowPrune();
+    props.loading = true;
+    fixture.rerender();
+    toggleTranscriptSearch(props.paneId);
+    flush();
+    await searchFor(fixture.searchContainer, "Find this checkpoint");
+    await flushDeferredRowPrune();
+    expect(thread.scrollTop).toBe(0);
+    expect(thread.textContent).toContain("Find this checkpoint");
   });
 
   it("keeps live metadata absent while revealing stored metadata within each transcript", async () => {

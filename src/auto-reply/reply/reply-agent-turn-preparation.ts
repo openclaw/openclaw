@@ -56,6 +56,7 @@ import {
   type FollowupRun,
 } from "./queue/types.js";
 import {
+  admitReplyMaintenance,
   prepareReplySourceAdmission,
   prepareReplySystemPrincipalAuthority,
 } from "./reply-source-admission.js";
@@ -96,18 +97,6 @@ export type AdmittedFollowupTurn = {
   preflightError?: Error;
   releaseSourceAdmission?: () => Promise<void>;
 };
-
-function isSameSessionGeneration(
-  left: SessionEntry | undefined,
-  right: SessionEntry | undefined,
-): boolean {
-  return Boolean(
-    left &&
-    right &&
-    left.sessionId === right.sessionId &&
-    left.lifecycleRevision === right.lifecycleRevision,
-  );
-}
 
 type PrepareReplyAgentTurnParams<TConfigured> = {
   queued: FollowupRun;
@@ -462,7 +451,12 @@ export async function prepareReplyAgentTurn<TConfigured>(
         entry: SessionEntry | undefined,
         previousEntry: SessionEntry | undefined,
       ) => {
-        const generationRotated = Boolean(entry && !isSameSessionGeneration(entry, previousEntry));
+        const generationRotated = Boolean(
+          entry &&
+          (!previousEntry ||
+            entry.sessionId !== previousEntry.sessionId ||
+            entry.lifecycleRevision !== previousEntry.lifecycleRevision),
+        );
         if (entry && generationRotated) {
           operation.updateSessionId(entry.sessionId);
           turn.queued = {
@@ -569,6 +563,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
               // Compaction decides whether work is needed, then replans from the
               // checkpoint result. A queued source must not bypass this memory write.
               beforeCompaction: async (entry) => {
+                await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
                 const flushed = await tracePhase("reply.memory_flush", () =>
                   runMemoryFlushIfNeeded({
                     ...preparation,

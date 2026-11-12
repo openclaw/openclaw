@@ -839,17 +839,19 @@ it.each(["owned", "involving", "unresolved"] as const)(
         },
       },
     });
-    let service: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
+    const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
     const api = createTestPluginApi({
       runtime,
-      registerService: (registered) => {
-        service = registered;
-      },
+      registerService,
       registerSessionCatalog: (catalog) => {
         hoisted.activeRegistry.sessionCatalogs = [{ provider: catalog }];
       },
     });
     sessionSharePlugin.register(api);
+    const service = registerService.mock.calls[0]?.[0];
+    if (service?.apiVersion !== 2) {
+      throw new Error("Expected service API version 2");
+    }
     bindPluginRegistryRuntime(hoisted.activeRegistry as PluginRegistry, runtime);
     const scheduler = createTestPluginServiceScheduler();
     const context = { config, logger: api.logger, stateDir: "/unused", invokeNode, scheduler };

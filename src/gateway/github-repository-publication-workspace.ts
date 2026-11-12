@@ -18,7 +18,7 @@ import {
   type GitHubRepositoryPublicationSnapshot,
 } from "./github-repository-publication-snapshot.js";
 import { captureRepositoryDiskCheckpoint } from "./worker-environments/repository-workspace-snapshot.js";
-import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
+import { withSessionRepositoryPublicationCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { workerWorkspaceResultRef } from "./worker-environments/workspace-result-staging.js";
 
 export type RepositoryDiskPublicationSource = Pick<
@@ -186,7 +186,7 @@ export async function captureCheckpoint<T>(
     ...authority,
     assertAction: assertSelected,
   };
-  return await withSessionRepositoryCheckpoint(
+  return await withSessionRepositoryPublicationCheckpoint(
     {
       workspaceId: row.workspace_id,
       checkpointRef: checkpointRef ?? undefined,

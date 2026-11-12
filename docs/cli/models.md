@@ -115,10 +115,10 @@ Options:
 | `--probe-profile <id>`    | Check specific auth profile ids (repeat or comma-separated).                                                  |
 | `--probe-timeout <ms>`    | Per-check timeout.                                                                                            |
 | `--probe-concurrency <n>` | Concurrent checks.                                                                                            |
-| `--probe-max-tokens <n>`  | Maximum tokens per check (best effort).                                                                       |
+| `--probe-max-tokens <n>`  | Optional output-token cap per check (best effort). Unset sends no cap, like chat.                             |
 | `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                          |
 
-`--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit these options to use their defaults (`8000`, `2`, and `8`, respectively); explicitly empty values are rejected.
+`--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit `--probe-timeout` and `--probe-concurrency` to use their defaults (`8000` and `2`). Omit `--probe-max-tokens` to send no cap: reasoning models can spend a small cap on thinking and return no visible reply, which the check reports as `format`. Explicitly empty values are rejected.
 
 Check rows can come from auth profiles, env credentials, or `models.json`. Check status buckets: `ok`, `auth`, `rate_limit`, `billing`, `timeout`, `format`, `unknown`, `no_model`.
 
@@ -371,6 +371,10 @@ openclaw models accounts --timeout 45000 list --json
 openclaw models accounts list --timeout 45000 --json
 ```
 
+When the Gateway is unreachable, account commands use the same connection
+guidance as other Gateway commands instead of exposing a raw socket error.
+Account actions still require a connected Gateway and an identified person.
+
 ## Auth profiles
 
 `models auth list` escapes control characters in terminal output. Its `--json` output preserves the original field values.
@@ -510,7 +514,7 @@ Notes:
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a relative duration such as `365d` or `12h`.
 - For `openai`, OpenAI API keys and ChatGPT/OAuth token material are different auth shapes. Use `paste-api-key` for `sk-...` OpenAI API keys and `paste-token` only for token auth material.
 - Anthropic: `setup-token`/`paste-token` are supported OpenClaw auth paths for `anthropic`, but OpenClaw prefers reusing the Claude CLI (`claude -p`) on the host when it is available.
-- `auth order get/set/clear` manages a per-agent auth profile order override for one provider in the SQLite auth store, separate from the `auth.order.<provider>` config key. `set` takes one or more profile ids in priority order. The stored order takes precedence over config for profile selection and CLI runtime routing; `clear` falls back to config/round-robin ordering.
+- `auth order get/set/clear` manages a per-agent auth profile order override for one provider in the SQLite auth store, separate from the `auth.order.<provider>` config key. `set` takes one or more profile ids in priority order. The stored order takes precedence over config for profile selection and CLI runtime routing. `clear` removes only the selected agent's override and reports the effective order, including any inherited shared order. Without an inherited order, selection falls back to config/round-robin ordering.
 
 ## Related
 

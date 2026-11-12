@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import * as harness from "../src/agents/decision-inference.test-support.js";
+import { withPreparedModelInference } from "../src/agents/prepared-model-inference.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { withEnvAsync } from "../src/test-utils/env.js";
 import { VERSION } from "../src/version.js";
@@ -111,6 +112,13 @@ it("runs the registered native ONNX worker and joins cancellation before replace
     assert(runtime);
     await using prepared = await harness.prepareDecisionRuntime(cfg, "onnx", modelId);
     expect(prepared.snapshot.isCurrent()).toBe(true);
+    await withPreparedModelInference(
+      { cfg, signal: new AbortController().signal },
+      { provider: "onnx", modelId },
+      async ({ preparedModelRuntime }) => {
+        expect(preparedModelRuntime.pluginRegistry).toBe(prepared.snapshot.pluginRegistry);
+      },
+    );
     const usage = harness.trackDecisionUsage();
     const questions = {
       route: { type: "choice" as const, criteria: { first: "high", second: "low" } },

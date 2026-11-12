@@ -52,6 +52,8 @@ export type NodeEventHandleResult = {
 };
 
 export type NodeEventHandlerOptions = {
+  /** Publish the decided result before an actor source drains its accepted work. */
+  onResult?: (result: NodeEventHandleResult) => void;
   connId?: string;
   deviceId?: string;
   pairingGeneration?: NodePairingGeneration;

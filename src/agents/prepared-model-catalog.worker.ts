@@ -6,7 +6,6 @@ import {
   restoreConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
@@ -76,19 +75,27 @@ import {
 import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.resources.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { AuthStorage } from "./sessions/auth-storage.core.js";
 
 type WorkerGeneration = {
+  config: Readonly<{
+    runtime: PreparedModelCatalogWorkerInput["input"]["config"];
+    source: PreparedModelCatalogWorkerInput["sourceConfigForSecrets"];
+  }>;
   pluginGeneration: Omit<
     PreparedModelRuntimePluginGeneration,
     "inlineProviderModels" | "configuredCatalogEntries"
   > & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
+  plannedPluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
 };
 
-function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
+function restoreWorkerConfig(
+  value: PreparedModelCatalogWorkerInput,
+  config: WorkerGeneration["config"],
+) {
   // Restore the captured pair before discovery, including known-empty facts and shared identity.
   // Without loader facts, decoded literal strings can be reparsed as references.
   restoreConfigResolutionFacts(value.input.config, value.configResolutionFacts);
@@ -97,13 +104,14 @@ function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
   } else {
     restoreConfigResolutionFacts(value.sourceConfigForSecrets, value.sourceConfigResolutionFacts);
   }
-  setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
-  return getRuntimeConfigSnapshot({ capture: true })!;
+  // Alternating workspaces must republish the pair already owned by their registrations.
+  setRuntimeConfigSnapshot(config.runtime, config.source);
+  return getRuntimeConfigSnapshot()!;
 }
 
 async function prepareWorkerGeneration(
   value: PreparedModelCatalogWorkerInput,
-  config: OpenClawConfig,
+  config: WorkerGeneration["config"],
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
 ): Promise<WorkerGeneration> {
@@ -114,9 +122,10 @@ async function prepareWorkerGeneration(
     restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
   // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
-  const normalizedConfig = normalizePluginsConfig(config.plugins);
+  const normalizedConfig = normalizePluginsConfig(config.runtime.plugins);
   const basePluginIds =
     pluginIds ??
+    (previous && [...previous.pluginIds]) ??
     metadata.plugins
       .filter(
         (plugin) =>
@@ -124,7 +133,7 @@ async function prepareWorkerGeneration(
           isManifestPluginAvailableForControlPlane({
             snapshot: metadata,
             plugin,
-            config,
+            config: config.runtime,
             normalizedConfig,
             ...(value.input.env ? { env: value.input.env } : {}),
           }),
@@ -132,18 +141,23 @@ async function prepareWorkerGeneration(
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
   await using resources = new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry);
-  const pluginRegistry = await resources.load(
-    {
-      ...value.input,
-      config,
-      metadataSnapshot: metadata,
-      preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
-      basePluginIds,
-      reusableRegistry: previous?.pluginGeneration.pluginRegistry,
-      purpose: "model-catalog",
-    },
-    () => {},
-  );
+  // A remote refresh changes derived catalogs, not the registered module's state.
+  // Retain the same registry before retiring the predecessor's catalog generation.
+  const pluginRegistry =
+    previous && !pluginIds
+      ? previous.pluginGeneration.pluginRegistry
+      : await resources.load(
+          {
+            ...value.input,
+            config: config.runtime,
+            metadataSnapshot: metadata,
+            preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
+            basePluginIds,
+            reusableRegistry: previous?.pluginGeneration.pluginRegistry,
+            purpose: "model-catalog",
+          },
+          () => {},
+        );
   const pluginGeneration = Object.freeze({
     // Configured model facts arrive with each request; retaining host-only projections here
     // duplicates those rows for every workspace without contributing to discovery.
@@ -155,8 +169,12 @@ async function prepareWorkerGeneration(
     preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
   });
   return {
+    config,
     pluginGeneration,
     pluginIds: new Set([...basePluginIds, ...pluginRegistry.plugins.map((plugin) => plugin.id)]),
+    // Scope growth preserves admission facts. A remote catalog replacement must
+    // replan, because refreshed manifest rows can change which owners need runtime.
+    plannedPluginIds: previous && pluginIds ? previous.plannedPluginIds : new Set(),
     staticProviderIds: previous?.staticProviderIds ?? new Set(),
     release: ownPreparedPluginGeneration(pluginGeneration).retain(),
   };
@@ -164,9 +182,10 @@ async function prepareWorkerGeneration(
 
 async function runCatalogRequest(
   value: PreparedModelCatalogWorkerInput,
+  generationConfig: WorkerGeneration["config"],
   request: PreparedModelWorkerRequest,
   work: AsyncWorkScope,
-  prepareGeneration: (config: OpenClawConfig) => Promise<WorkerGeneration>,
+  prepareGeneration: () => Promise<WorkerGeneration>,
   beginDiscovery: () => Promise<void>,
 ): Promise<PreparedModelWorkerOutcome> {
   const directoryOwner = value.input.agentId
@@ -189,17 +208,19 @@ async function runCatalogRequest(
       }
     }
     // Structured-cloned requests need their own provenance even when preparation is reused.
-    // Pin the publisher's immutable runtime/source pair for registration before yielding.
-    // Keep request-local config identities below: synthetic auth receipts belong to each request.
-    const registrationConfig = restoreWorkerConfig(value);
-    restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
-      env: value.input.env,
-      workspaceDir: value.input.workspaceDir,
-    });
-    restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
-      workspaceDir: value.input.workspaceDir,
-    });
-    prepared = await prepareGeneration(registrationConfig);
+    const publishedConfig = restoreWorkerConfig(value, generationConfig);
+    // Publication can deduplicate equal configs. Bind its actual identity and the
+    // request identity to the same closed facts after the preceding task has drained.
+    restorePreparedSyntheticAuthFacts(
+      request.syntheticAuth,
+      [...new Set([value.input.config, generationConfig.runtime, publishedConfig])].flatMap(
+        (config) => [
+          { config, env: value.input.env, workspaceDir: value.input.workspaceDir },
+          { config, workspaceDir: value.input.workspaceDir },
+        ],
+      ),
+    );
+    prepared = await prepareGeneration();
     // The loader owns scoped registration facts. Request config and auth inputs
     // travel explicitly below; attaching them must not rerun broad auto-enable.
     const pluginGenerationScope = {
@@ -313,18 +334,25 @@ async function runCatalogRequest(
         ]),
       ],
     });
-    const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
-    const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-      planRuntimePluginDiscovery({
-        config: value.input.config,
-        env: value.input.env,
-        workspaceDir: value.input.workspaceDir,
-        pluginMetadataSnapshot,
-        onlyPluginIds: discoveryPluginIds,
-      }),
+    // Unknown credential providers are not plugin owners. Keep planning coverage bounded
+    // by this metadata generation, independently of which owners require runtime loading.
+    const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])].filter((id) =>
+      pluginMetadataSnapshot.byPluginId.has(id),
     );
+    const { plannedPluginIds } = prepared;
+    const discoveryPlan = discoveryPluginIds.every((id) => plannedPluginIds.has(id))
+      ? undefined
+      : await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+          planRuntimePluginDiscovery({
+            config: value.input.config,
+            env: value.input.env,
+            workspaceDir: value.input.workspaceDir,
+            pluginMetadataSnapshot,
+            onlyPluginIds: discoveryPluginIds,
+          }),
+        );
     let catalogGeneration = prepared.pluginGeneration;
-    if (discoveryPlan.kind === "runtime") {
+    if (discoveryPlan?.kind === "runtime") {
       // Keep newly observed owners in this bounded metadata generation. Alternating agents
       // must not reconstruct each other's registrations or retry recorded load failures.
       const pluginIds = [
@@ -333,7 +361,7 @@ async function runCatalogRequest(
       if (pluginIds.length > prepared.pluginIds.size) {
         acquiredGeneration = await prepareWorkerGeneration(
           value,
-          registrationConfig,
+          prepared.config,
           prepared,
           pluginIds,
         );
@@ -343,12 +371,18 @@ async function runCatalogRequest(
     }
     const staticOwner = acquiredGeneration ?? prepared;
     await beginDiscovery();
+    const ownedProviderIds = new Set(
+      discoveryPluginIds.flatMap((id) => discoveryScope?.get(id) ?? []),
+    );
     const staticProviderIds = new Set([
       ...staticOwner.staticProviderIds,
-      ...exactAgentFacts.providerIds,
+      ...exactAgentFacts.providerIds
+        .map(normalizeProviderId)
+        .filter((id) => ownedProviderIds.has(id)),
     ]);
-    // Static preparation grows only with requested provider scope. Registry replacement
-    // clears its result so retired provider handles cannot survive in the next generation.
+    // Unknown credential identities cannot add static hooks. Retain only requested refs
+    // with a plugin owner, including aliases and sibling providers of the same owner.
+    // Registry replacement clears the result so retired handles cannot survive.
     if (
       !catalogGeneration.preparedStaticProviderCatalog ||
       staticProviderIds.size > staticOwner.staticProviderIds.size
@@ -469,6 +503,11 @@ async function runCatalogRequest(
       acquiredGeneration = undefined;
       await releasePrevious();
     }
+    if (discoveryPlan) {
+      // Publish only after successful discovery/adoption; failed expansion must not
+      // make the predecessor skip admission on the next request.
+      prepared.plannedPluginIds = new Set([...prepared.plannedPluginIds, ...discoveryPluginIds]);
+    }
     return result;
   } catch (error) {
     return {
@@ -501,7 +540,7 @@ if (parentPort) {
   // Keep each workspace's current context within this inventory-owned worker lifetime.
   const contexts = new Map<
     string | undefined,
-    { fingerprint: string; prepared: WorkerGeneration }
+    { fingerprint: string; registrationFingerprint: string; prepared: WorkerGeneration }
   >();
   let activeRequest: PreparedModelCatalogWorkerInput | undefined;
   serveWorkerTasks(
@@ -563,8 +602,16 @@ if (parentPort) {
           async () => {
             const { result: outcome, receipts: authCredentials } =
               await captureAuthProfileCredentialCommits(async () => {
-                const { workspaceDir, fingerprint } = context;
+                const { workspaceDir, fingerprint, registrationFingerprint } = context;
                 let previous = contexts.get(workspaceDir);
+                const config =
+                  previous?.registrationFingerprint === registrationFingerprint
+                    ? previous.prepared.config
+                    : freezeTrustedJsonSnapshot({
+                        // Freeze decoded inputs at admission; a fingerprint cannot protect mutable roots.
+                        runtime: value.input.config,
+                        source: value.sourceConfigForSecrets,
+                      });
                 let attempted: WorkerGeneration | undefined;
                 let replacing = false;
                 try {
@@ -578,14 +625,20 @@ if (parentPort) {
                           work.run(() =>
                             runCatalogRequest(
                               value,
+                              config,
                               request,
                               work,
-                              async (config) => {
+                              async () => {
                                 if (previous?.fingerprint === fingerprint) {
                                   return previous.prepared;
                                 }
-                                replacing = true;
-                                return (attempted = await prepareWorkerGeneration(value, config));
+                                replacing =
+                                  previous?.registrationFingerprint !== registrationFingerprint;
+                                return (attempted = await prepareWorkerGeneration(
+                                  value,
+                                  config,
+                                  replacing ? undefined : previous?.prepared,
+                                ));
                               },
                               async () => {
                                 // Admission can outlast a refresh on slow filesystems; only completed
@@ -605,7 +658,11 @@ if (parentPort) {
                     ),
                   );
                   if (attempted && result.status === "ok") {
-                    contexts.set(workspaceDir, { fingerprint, prepared: attempted });
+                    contexts.set(workspaceDir, {
+                      fingerprint,
+                      registrationFingerprint,
+                      prepared: attempted,
+                    });
                     attempted = undefined;
                     replacing = false;
                     // Acquire the replacement before releasing shared source registrations.
@@ -642,6 +699,10 @@ if (parentPort) {
         ...measurePreparedCatalogRetainedData(
           Array.from(contexts.values(), ({ prepared }) => prepared.pluginGeneration),
           activeRequest,
+          Array.from(contexts.values()).flatMap(({ prepared }) => [
+            prepared.config.runtime,
+            prepared.config.source,
+          ]),
         ),
         ...getLiveCatalogRetainedData(),
       ],

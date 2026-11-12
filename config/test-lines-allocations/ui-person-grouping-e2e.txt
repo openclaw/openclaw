@@ -1,0 +1,2 @@
+# Explicitly switch the existing drag-and-drop scenario between Person and Custom groups.
+3

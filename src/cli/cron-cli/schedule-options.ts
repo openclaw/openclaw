@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isValidCronExpression } from "../../cron/schedule.js";
+import { isValidCronExpression } from "../../cron/expression.js";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {

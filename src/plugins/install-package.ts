@@ -168,6 +168,7 @@ async function installBundleFromSourceDir(
       workTimeoutMs,
       mode: targetResult.target.effectiveMode,
       dryRun,
+      prepareOnly: params.prepareOnly,
       copyErrorPrefix: "failed to copy plugin bundle",
       hasDeps: false,
       depsLogMessage: "",
@@ -287,6 +288,7 @@ async function installPluginFromPackageDir(
       workTimeoutMs,
       mode: effectiveMode,
       dryRun,
+      prepareOnly: params.prepareOnly,
       copyErrorPrefix: "failed to copy plugin",
       hasDeps: shouldInstallRuntimeDeps,
       sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
@@ -317,13 +319,13 @@ async function installPluginFromPackageDir(
   );
 }
 
-export async function installPluginFromArchive<
+async function processPluginArchive<
   TFailure extends { ok: false; error: string; code?: string } = never,
 >(
   params: {
     archivePath: string;
     verification?: ExtractedArchiveVerification<TFailure>;
-  } & PackageInstallCommonParams,
+  } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult | NoInfer<TFailure>> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, workTimeoutMs, mode } = runtime.resolveTimedInstallModeOptions(
@@ -361,6 +363,7 @@ export async function installPluginFromArchive<
           logger,
           mode,
           dryRun: params.dryRun,
+          prepareOnly: params.prepareOnly,
           config: params.config,
           expectedPluginId: params.expectedPluginId,
           trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
@@ -386,10 +389,10 @@ export async function installPluginFromArchive<
   return result;
 }
 
-export async function installPluginFromPath(
+async function processPluginPath(
   params: {
     path: string;
-  } & PackageInstallCommonParams,
+  } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const pathResult = await runtime.resolveExistingInstallPath(params.path);
@@ -419,7 +422,7 @@ export async function installPluginFromPath(
 
   const archiveKind = runtime.resolveArchiveKind(resolved);
   if (archiveKind) {
-    return await installPluginFromArchive({
+    return await processPluginArchive({
       ...params,
       archivePath: resolved,
       installPolicyRequest: installPolicyRequestForPath(params, "plugin-archive"),
@@ -432,4 +435,41 @@ export async function installPluginFromPath(
     error:
       "Plain file plugin installs are not supported. Install a plugin directory or archive that contains openclaw.plugin.json, or list standalone plugin files in plugins.load.paths.",
   };
+}
+
+export async function installPluginFromArchive<
+  TFailure extends { ok: false; error: string; code?: string } = never,
+>(
+  params: {
+    archivePath: string;
+    verification?: ExtractedArchiveVerification<TFailure>;
+  } & PackageInstallCommonParams,
+): Promise<InstallPluginResult | NoInfer<TFailure>> {
+  return await processPluginArchive(params);
+}
+
+export async function installPluginFromPath(
+  params: { path: string } & PackageInstallCommonParams,
+): Promise<InstallPluginResult> {
+  return await processPluginPath(params);
+}
+
+/** Run the native dependency and policy phases in isolation, without publishing an install. */
+export async function preparePluginFromPath(
+  params: { path: string; extensionsDir: string } & Omit<
+    PackageInstallCommonParams,
+    "dryRun" | "mode" | "onBeforePluginArtifactCommit" | "beforePersistentApply"
+  >,
+): Promise<
+  | (Omit<Extract<InstallPluginResult, { ok: true }>, "targetDir" | "outcome"> & {
+      outcome: "prepared";
+    })
+  | Extract<InstallPluginResult, { ok: false }>
+> {
+  const result = await processPluginPath({ ...params, dryRun: false, prepareOnly: true });
+  if (!result.ok) {
+    return result;
+  }
+  const { targetDir: _targetDir, ...prepared } = result;
+  return { ...prepared, outcome: "prepared" };
 }

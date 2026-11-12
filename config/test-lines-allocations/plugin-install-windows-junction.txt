@@ -1,0 +1,4 @@
+51
+# One installer-level regression for the Windows junction staging filter: without the
+# filter, installing a folder that links the host package fails with EPERM when the
+# symbolic-link privilege is unavailable.

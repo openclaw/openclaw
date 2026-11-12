@@ -487,7 +487,11 @@ describe("session tool surface", () => {
 
   it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
     const entries: SessionEntry[] = [];
-    surface([tool("read"), tool("exec")]);
+    const parameters = publishRuntimeToolInputSchema({
+      type: "object",
+      properties: { path: { type: "string", description: "Path to read 🦞\ud800" } },
+    }).schema;
+    surface([tool("read", "Read a file", parameters), tool("exec")]);
     const write = (customType: string, data: unknown) => {
       const entry = {
         ...entryMetadata,
@@ -499,6 +503,8 @@ describe("session tool surface", () => {
       const expected = JSON.stringify(entry);
       const canonical = canonicalizeSessionEntry(entry);
       expect(JSON.stringify(canonical)).toBe(expected);
+      const saved = canonical.data as { tools: { name: string; parameters: unknown }[] };
+      expect(saved.tools.find((pin) => pin.name === "read")?.parameters).toBe(parameters);
       entries.push(canonical);
     };
     fixture.prepare("Base.", entries).commit();

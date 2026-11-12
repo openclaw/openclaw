@@ -43,6 +43,7 @@ export function recoverCronRunsInWorker(
         deps: {
           nowMs: () => input.nowMs,
           cronConfig: input.cronConfig,
+          defaultAgentId: input.defaultAgentId,
           failureRepairTimeoutMs: input.failureRepairTimeoutMs,
           log: createCronMutationLogger(outcome.logs),
         },

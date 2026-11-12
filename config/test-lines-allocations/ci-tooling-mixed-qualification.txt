@@ -1,0 +1,2 @@
+# Cover the source-only tooling row's shared worker preset and child agreement.
+12

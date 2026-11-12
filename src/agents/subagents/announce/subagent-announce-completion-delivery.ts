@@ -92,16 +92,16 @@ export async function runAnnounceAgentCall(params: {
   timer?.unref();
   try {
     signal.throwIfAborted();
-    const dispatch = async () => {
-      if (params.onBeforeDispatch) {
-        await params.onBeforeDispatch();
-      }
-      signal.throwIfAborted();
-      if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
-        throw new SourceOwnerChangedError();
-      }
-      return runOutsideAdmittedGenerationScopes(() =>
-        dispatchGatewayMethodInProcess("agent", params.agentParams, {
+    const dispatch = () =>
+      runOutsideAdmittedGenerationScopes(async () => {
+        if (params.onBeforeDispatch) {
+          await params.onBeforeDispatch();
+        }
+        signal.throwIfAborted();
+        if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
+          throw new SourceOwnerChangedError();
+        }
+        return dispatchGatewayMethodInProcess("agent", params.agentParams, {
           controllerInput: params.controllerInput,
           cancelOnDeadline: true,
           privateCompletion: params.privateCompletion,
@@ -174,9 +174,8 @@ export async function runAnnounceAgentCall(params: {
             }
           },
           resolveGatewayContext: params.resolveGatewayContext,
-        }),
-      );
-    };
+        });
+      });
     const continuationCaller = params.controllerInput?.continuationCaller;
     const dispatched = runOutsideOperatorToolGatewayAuthority(() =>
       continuationCaller ? continuationCaller.run(dispatch) : dispatch(),

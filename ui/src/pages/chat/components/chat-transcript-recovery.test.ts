@@ -253,15 +253,14 @@ describe("chat transcript full-message recovery", () => {
         },
       ],
     };
-    await pane.updateComplete;
-    await expectDefined(load.mock.results[0]?.value, "full-message load");
-    await pane.updateComplete;
-    expect(load).toHaveBeenCalledExactlyOnceWith({
-      sessionKey: "agent:work:main",
-      agentId: "work",
-      messageId: "oversized-tools",
-      maxChars: 8_000_000,
-    });
+    await waitForSolid(() =>
+      expect(load).toHaveBeenCalledExactlyOnceWith({
+        sessionKey: "agent:work:main",
+        agentId: "work",
+        messageId: "oversized-tools",
+        maxChars: 8_000_000,
+      }),
+    );
     const disclosure = await waitForSolid(() =>
       expectDefined(
         pane.querySelector<HTMLButtonElement>(".chat-tool-msg-summary:enabled"),
@@ -273,13 +272,13 @@ describe("chat transcript full-message recovery", () => {
       expect(pane.querySelector(".chat-tool-term__out")?.textContent).toBe(output),
     );
     expect(pane.textContent).not.toContain("This message is too large to display here.");
-    expect(pane.textContent).not.toContain("Could not load the full message.");
+    expect(pane.textContent).not.toContain("Couldn’t load the full message. Try again.");
   });
 
   it("keeps the preview through bounded retries and recovers on manual retry", async () => {
     const load = vi.fn<SidebarFullMessageLoader>().mockRejectedValue(new Error("offline"));
     const pane = mountTranscript("recovery-unavailable", load);
-    await shows(pane, "Could not load the full message.");
+    await shows(pane, "Couldn’t load the full message. Try again.");
     expect(load).toHaveBeenCalledTimes(3);
     expect(pane.textContent).toContain("Preview");
     expect(pane.textContent).toContain("...(truncated)...");

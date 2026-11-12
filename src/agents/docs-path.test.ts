@@ -1,6 +1,7 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveOpenClawReferencePaths } from "./docs-path.js";
 import { createSandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -35,10 +36,12 @@ describe("resolveOpenClawReferencePaths", () => {
     if (!complete) {
       await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
     }
+    using exists = vi.spyOn(syncFs, "existsSync");
     expect(await resolveOpenClawReferencePaths({ cwd: root })).toEqual({
       docsPath: complete ? path.join(root, "docs") : null,
       sourcePath: complete ? root : null,
     });
+    expect(exists).not.toHaveBeenCalled();
   });
   it.each([
     ["unmounted", null, null],
@@ -95,11 +98,13 @@ describe("resolveOpenClawReferencePaths", () => {
       const context = { ...sandbox, backend: { runShellCommand: rejectShell } };
       sandbox.fsBridge = createSandboxFsBridge({ sandbox: context });
     }
+    using realpath = vi.spyOn(syncFs, "realpathSync");
     const references = await resolveOpenClawReferencePaths({
       workspaceDir: sandbox.workspaceDir,
       cwd: scenario === "remote-alias" ? workspaceDir : root,
       sandbox,
     });
     expect(references).toEqual({ docsPath, sourcePath });
+    expect(realpath).not.toHaveBeenCalled();
   });
 });

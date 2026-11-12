@@ -54,7 +54,11 @@ function createFleet() {
     expectInspections: (count: number) =>
       expect(onAgentInspection).toHaveBeenLastCalledWith(
         count === 0
-          ? { schemaInspectionCount: 0, schemaProcessCount: 0, schemaSnapshotCount: 0 }
+          ? expect.objectContaining({
+              schemaInspectionCount: 0,
+              schemaProcessCount: 0,
+              schemaSnapshotCount: 0,
+            })
           : expect.objectContaining({ schemaInspectionCount: count }),
       ),
     ready: () =>
@@ -283,7 +287,7 @@ it("carries fleet compatibility once into bootstrap while readiness always inspe
     await fleet.inspect();
     fleet.expectInspections(fleet.paths.length);
   });
-  await fleet.inspect();
+  expect(await fleet.inspect()).toEqual(compatible);
   fleet.expectInspections(fleet.paths.length);
 });
 
@@ -309,6 +313,16 @@ it("preserves configured ownership when reusing an unchanged inspected database"
     ]);
     fleet.expectInspections(0);
   });
+});
+
+it("reads unsealed state for runtime preflight without a private snapshot", async () => {
+  const fleet = databaseFixture(tempDirs.make("preflight-live-state-"));
+  fleet.state();
+  closeDatabases();
+  revokeSqliteDatabaseAdmissionsForPath(fleet.statePath);
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+  expect(await fleet.inspect({ scope: "state" }, "runtime")).toEqual(compatible);
+  expect(prepare).not.toHaveBeenCalled();
 });
 
 it("reads newly registered stores without copying admitted state after startup writes", async () => {

@@ -15,7 +15,6 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
-import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -727,35 +726,6 @@ describe("createOpenClawCodingTools", () => {
   });
 
   registerPluginOnlyCallerIdentityCase({ testConfig, requireTool });
-
-  it("materializes additive runtime tools while preserving normal deny policy", async () => {
-    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
-    createOpenClawToolsMock.mockClear();
-    const config: OpenClawConfig = { tools: { profile: "coding", deny: ["workboard_block"] } };
-
-    createOpenClawCodingTools({
-      config,
-      conversationCapabilityProfile: await prepareConversationCapabilityProfile({
-        config,
-        runtimePluginToolGrant: {
-          pluginId: "workboard",
-          toolNames: ["workboard_heartbeat", "workboard_complete"],
-        },
-      }),
-    });
-
-    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
-    const options = lastCoreOptions();
-    expect(options.pluginToolAllowlist).not.toContain("workboard_heartbeat");
-    expect(
-      createPluginToolAllowlist(options.pluginToolAllowlist).allowsTool(
-        "workboard",
-        "workboard_heartbeat",
-      ),
-    ).toBe(true);
-    expect(options).not.toHaveProperty("runtimePluginToolGrant");
-    expect(options.pluginToolDenylist).toContain("workboard_block");
-  });
 
   it("removes message from persisted visible child sessions on every turn", async () => {
     const storeTemplate = sessionStoreTemplate();

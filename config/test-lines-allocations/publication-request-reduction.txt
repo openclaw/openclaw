@@ -1,0 +1,4 @@
+# Actual CLI request/callsite accounting, ordinary/recovery final authority mutation regressions,
+# complete paginated inventory, distinct-package reuse, forged-projection regression,
+# and updated release client fixture contracts. Exact net test-line growth.
+197

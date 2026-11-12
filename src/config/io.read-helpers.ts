@@ -26,6 +26,7 @@ import type {
   NormalizedConfigIoDeps,
   ParseConfigJson5Result,
 } from "./io.read.types.js";
+import { normalizeLegacyWorkboardDatabaseConfig } from "./legacy-workboard-database.js";
 import { resolveConfigPath, resolveIncludeRoots, resolveStateDir } from "./paths.js";
 import { createConfigResolutionFacts, type ConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
@@ -287,7 +288,7 @@ export function resolveConfigForRead(
     onResolvedEnvSecretRef: (id, configPath) => resolvedEnvSecretRefs.set(configPath, id),
   });
   return {
-    resolvedConfigRaw,
+    resolvedConfigRaw: normalizeLegacyWorkboardDatabaseConfig(resolvedConfigRaw, env),
     envSnapshotForRestore: cloneEnvWithPlatformSemantics(env),
     envWarnings,
     resolutionFacts: createConfigResolutionFacts(

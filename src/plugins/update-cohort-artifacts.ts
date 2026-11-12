@@ -17,23 +17,51 @@ import {
 export type PluginCohortArtifactIdentity = NonNullable<
   PluginCohortRecovery["priorArtifacts"][number]["identity"]
 >;
+type PluginCohortPublishedArtifactIdentity =
+  PluginCohortRecovery["artifacts"][number]["stagedIdentity"];
 
 /** Small metadata observations run in the index worker or the owning updater. */
-export function readPluginCohortArtifactIdentity(packageDir: string): PluginCohortArtifactIdentity {
+function observeArtifact<Manifest extends string | null>(
+  packageDir: string,
+  manifestSha256: (manifestPath: string) => Manifest,
+) {
   const stat = fs.lstatSync(packageDir, { bigint: true });
   const identity = {
     realPath: fs.realpathSync.native(packageDir),
     dev: String(stat.dev),
     ino: String(stat.ino),
-    manifestSha256: createHash("sha256")
-      .update(fs.readFileSync(path.join(packageDir, "package.json")))
-      .digest("hex"),
+    manifestSha256: manifestSha256(path.join(packageDir, "package.json")),
   };
   assertPluginCohortArtifactDirectory(packageDir, identity);
   return identity;
 }
 
-/** A missing directory is a baseline; an existing partial payload is still an error. */
+function sha256File(file: string): string {
+  return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+}
+
+/** A damaged prior install without package.json is still the exact state rollback restores. */
+export function readPluginCohortArtifactIdentity(packageDir: string): PluginCohortArtifactIdentity {
+  return observeArtifact(packageDir, (manifestPath) => {
+    try {
+      return sha256File(manifestPath);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        return null;
+      }
+      throw error;
+    }
+  });
+}
+
+/** Artifacts this update stages or publishes must be complete packages. */
+export function readPluginCohortPublishedArtifactIdentity(
+  packageDir: string,
+): PluginCohortPublishedArtifactIdentity {
+  return observeArtifact(packageDir, sha256File);
+}
+
+/** A missing directory is a baseline; any other unreadable payload is still an error. */
 export function readPluginCohortArtifactPreimage(
   packageDir: string,
 ): PluginCohortArtifactIdentity | null {

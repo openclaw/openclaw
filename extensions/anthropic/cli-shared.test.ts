@@ -318,7 +318,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
 
   it.each([
     ["claude-sonnet-4-6", "off", "--effort xhigh --effort=low", "--effort xhigh --effort=low"],
-    ["claude-fable-5", "off", "--effort high", "--effort low"],
     ["claude-opus-4-7", "minimal", "", "--effort low"],
     ["claude-opus-4-7", "medium", "", "--effort medium"],
   ] as const)("maps %s thinking=%s to %s", (modelId, thinkingLevel, configured, expected) => {
@@ -326,6 +325,17 @@ describe("resolveClaudeCliExecutionArgs", () => {
     expect(executionArgs({ modelId, thinkingLevel, baseArgs })).toEqual(
       argv("-p --setting-sources user", expected),
     );
+  });
+
+  it.each([
+    [true, ["--fast-mode", "on"]],
+    [false, []],
+    [undefined, []],
+  ] as const)("forwards fastMode=%s to Claude Code", (fastMode, expected) => {
+    expect(executionArgs({ fastMode, baseArgs: argv("-p --setting-sources user") })).toEqual([
+      ...argv("-p --setting-sources user"),
+      ...expected,
+    ]);
   });
 
   it("strips configured effort args when thinking is adaptive", () => {

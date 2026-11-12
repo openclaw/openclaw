@@ -17,7 +17,6 @@ import {
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
@@ -127,7 +126,7 @@ const { pathToFileURL } = require("node:url");
 
 ${MANAGED_HANDOFF_BOOTSTRAP_SOURCE}
 
-const { parseLaunchctlJob, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, handoffLedger, packageActivationIdentity, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
+const { parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, handoffLedger, packageActivationIdentity, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
@@ -755,8 +754,7 @@ async function collectUpdateFailureTriage() {
     // Only this invocation's direct child result carries the producer decision.
     // Success may change install roots; only recovery requires the original root.
     // Sentinels and diagnostic exports never authorize activation.
-    let result = null;
-    try { if (!outputOverflow) result = JSON.parse(updaterOutput); } catch {}
+    const result = outputOverflow ? null : parseManagedUpdateResult(updaterOutput);
     if ((exit.signal || !result) && shouldRecoverInterruptedUpdater()) {
       await recoverInterruptedUpdater();
       return;
@@ -775,7 +773,7 @@ async function collectUpdateFailureTriage() {
     if (result?.status === "ok" && resultRoot && resultRoot !== params.updateLeaseKey) {
       terminalRuntimePath = path.join(resultRoot, "dist", "cli", "daemon-cli.js");
     }
-    const reportedFailure = isFailedUpdateOutcome(result?.status, result?.reason);
+    const reportedFailure = classifyUpdateOutcome(result ?? {}) === "failed";
     if (!exit.signal && exit.code === 0 && resultRoot && result?.status === "ok") {
       runOutcome = { status: "succeeded", after: result.after };
     } else if (resultRoot && ["error", "skipped"].includes(result?.status)) {
@@ -1054,7 +1052,6 @@ async function spawnManagedServiceUpdateHandoff(
       "Update triage runs after service recovery; see the managed update helper log for the outcome and the installation-specific openclaw triage command.",
     commandLabel,
     handoffId: params.handoffId,
-    nonFailureSkippedReasons: Object.keys(SKIPPED_UPDATE_OUTCOMES),
     logPath,
     metaPath,
     stateDatabasePath,

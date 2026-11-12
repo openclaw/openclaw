@@ -99,6 +99,30 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 }
 
 describe("Picker", () => {
+  it("opens long lists as a phone sheet and keeps short or opted-out lists anchored", async () => {
+    const media = window.matchMedia("(max-width: 640px)");
+    const long = Array.from({ length: 9 }, (_, index) => ({
+      value: `model/${index}`,
+      label: `Model ${index}`,
+    }));
+    const p = await mount({ searchable: false, options: long, value: "model/0" });
+    const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+    const opensAsSheet = async () => {
+      await p.open();
+      const sheet = menu.classList.contains("picker-select__menu--phone-sheet");
+      await p.key("Escape");
+      expect(menu.classList.contains("picker-select__menu--phone-sheet")).toBe(false);
+      return sheet;
+    };
+    expect(await opensAsSheet()).toBe(media.matches);
+    await p.update({ options: long.slice(0, 8), value: "model/0" });
+    expect(await opensAsSheet()).toBe(false);
+    await p.update({ options: long, value: "model/0", phoneSheet: false });
+    expect(await opensAsSheet()).toBe(false);
+    await p.update({ options: long.slice(0, 2), value: "model/0", phoneSheet: true });
+    expect(await opensAsSheet()).toBe(media.matches);
+  });
+
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
     const groupBy = vi.fn(() => undefined);
     const p = await mount({ searchable: false, groupBy });

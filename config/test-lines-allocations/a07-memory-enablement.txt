@@ -1,0 +1,4 @@
+# Mounted Memory/config-owner regression for unavailable versus accepted enablement,
+# runtime precedence, retained refresh/reconnect data and read-only action guards.
+# Exact net test/helper LF growth for campaign A07.
+137

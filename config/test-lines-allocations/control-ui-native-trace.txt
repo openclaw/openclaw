@@ -1,0 +1,3 @@
+# Seven native trace regressions protect exclusive timing, incomplete clocks,
+# renderer selection, profiler lead-in, signed sample order, and invalid profiles.
+170

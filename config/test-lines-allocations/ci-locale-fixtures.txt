@@ -1,0 +1,3 @@
+# Deterministic locale dictionaries preserve mounted label updates and untranslated fallback.
+# Keep dialog focus, host identity, submission values, and original locale cleanup covered.
+39

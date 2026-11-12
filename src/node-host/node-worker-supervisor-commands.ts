@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { parseUnixGatewayUrl } from "../../packages/gateway-client/src/unix-target.js";
 import type {
   SessionsProcessesListResult,
   SessionsProcessesStopResult,
@@ -69,6 +70,7 @@ import { invokeNodeWorkerDesktopStream } from "./desktop-stream-command.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
+import type { NodeWorkerMcpSession } from "./node-worker-mcp.js";
 import {
   projectNodeWorkerSupervisorReceipt,
   type NodeWorkerSupervisorControl,
@@ -176,6 +178,10 @@ function resolveWorkerConnectionEndpoint(params: {
   if (!params.gatewayUrl) {
     throw new Error("node worker gateway connection unavailable");
   }
+  const unix = parseUnixGatewayUrl(params.gatewayUrl);
+  if (unix) {
+    return { kind: "unix", socketPath: unix.socketPath, path: WORKER_PUBLIC_INGRESS_PATH };
+  }
   const endpointUrl = new URL(params.gatewayUrl);
   if (endpointUrl.protocol !== "ws:" && endpointUrl.protocol !== "wss:") {
     throw new Error("node worker gateway connection must use WebSocket transport");
@@ -203,6 +209,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   command: string;
   paramsJSON?: string | null;
   supervisor?: NodeWorkerSupervisorControl;
+  localMcp?: NodeWorkerMcpSession;
   bundleInstaller?: NodeWorkerBundleInstallerControl;
   workspace?: NodeWorkerWorkspaceRuntime;
   gatewayUrl?: string;
@@ -308,6 +315,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
           parseNodeWorkerLaunchInput(paramsJSON),
           resolveWorkerConnectionEndpoint(params),
           signal,
+          params.localMcp,
         )
         .then(receipt),
     [NODE_WORKER_SUPERVISOR_STATUS_COMMAND]: () => {

@@ -128,8 +128,9 @@ it.each([
 
 it("creates the selected declarative job and keeps its returned identity", async () => {
   const created = job("autoArchive");
-  request.mockResolvedValueOnce({ created: true, job: created });
-  expect(await set("autoArchive", true)).toEqual(created);
+  const warning = "Protected actions require a restartable operator grant";
+  request.mockResolvedValueOnce({ created: true, job: created, warning });
+  expect(await set("autoArchive", true)).toEqual({ job: created, warning });
   expect(request).toHaveBeenCalledExactlyOnceWith("cron.add", jobSpec(target, "autoArchive"));
 });
 
@@ -140,7 +141,7 @@ it.each(["autoFix", "autoMerge"] as const)(
     const resetTarget = { ...target, sessionId: "replacement" };
     const disabled = { ...current, enabled: false, configRevision: "revision-2" };
     request.mockResolvedValueOnce(disabled);
-    expect(await set(option, false, current, resetTarget)).toEqual(disabled);
+    expect(await set(option, false, current, resetTarget)).toEqual({ job: disabled });
     expect(request).toHaveBeenCalledExactlyOnceWith("cron.update", {
       id: current.id,
       expectedConfigRevision: "revision-1",

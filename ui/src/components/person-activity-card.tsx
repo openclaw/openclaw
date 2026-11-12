@@ -26,6 +26,7 @@ import {
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { isSubagentsPanelSession } from "../pages/chat/chat-spawned-subagent.ts";
 import { ElapsedTime } from "./elapsed-time.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
@@ -226,6 +227,7 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
     ).filter(
       ({ row, agentId }) =>
         !watched.has(sessionIdentity(row.key, agentId, input)) &&
+        !isSubagentsPanelSession(row) &&
         [row.owner?.actor, row.createdActor].some((actor) =>
           presenceMatchesProfile(input.user, actor?.identity),
         ),

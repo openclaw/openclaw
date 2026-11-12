@@ -22,7 +22,7 @@ import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js"
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-read.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";

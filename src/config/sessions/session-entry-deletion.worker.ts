@@ -5,7 +5,7 @@ import { prepareSessionDeletionInDatabase } from "./session-accessor.sqlite-dele
 import type { SessionDeletionPlanningOperation } from "./session-accessor.sqlite-lifecycle-types.js";
 import { collectReclamationEntryReplacement } from "./session-accessor.sqlite-reclamation-publication.js";
 import { reclaimSqliteSessionInTransaction } from "./session-accessor.sqlite-reclamation.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import type {
   SessionEntryDeletionCommitted,
   SessionEntryDeletionInput,

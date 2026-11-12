@@ -38,6 +38,7 @@ import {
   tableExists,
   withSqliteDatabaseWriteScope,
   type SqliteWorkerBackend,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
@@ -270,7 +271,7 @@ function createPublicationBackend(
     }
   };
   const write = <T>(
-    run: () => T,
+    run: SynchronousSqliteCallback<T>,
     scopes = [MEMORY_INDEX_WRITE_SCOPE],
   ): MemoryPublicationResult<T> =>
     transact((hooks) =>
@@ -284,7 +285,9 @@ function createPublicationBackend(
         { withCommit: hooks.withCommit },
       ),
     );
-  const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
+  const writeSingleStatement = <T>(
+    statement: SynchronousSqliteCallback<T>,
+  ): MemoryPublicationResult<T> => {
     let committed = false;
     try {
       admit("transaction");

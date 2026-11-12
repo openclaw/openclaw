@@ -1,0 +1,2 @@
+121
+# Native fast mode offered to new Claude models with a remembered standard-speed fallback; live fast-mode matrix.

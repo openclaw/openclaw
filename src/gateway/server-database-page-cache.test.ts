@@ -43,20 +43,32 @@ it.each([
   { state: "postgres", agent: "sqlite", warmed: ["agent"] },
   { state: "sqlite", agent: "postgres", warmed: ["state"] },
   { state: "sqlite", agent: "sqlite", warmed: ["state", "agent"] },
-] as const)("warms only SQLite families (state=$state, agent=$agent)", async (engines) => {
+] as const)("shares the pass budget (state=$state, agent=$agent)", async (engines) => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   const stateDir = dirs.make("gateway-page-cache-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const statePath = resolveOpenClawStateSqlitePath();
-  const agentPath = path.join(stateDir, "agent.sqlite");
+  const agentPaths = ["first.sqlite", "second.sqlite"].map((name) => path.join(stateDir, name));
   mkdirSync(path.dirname(statePath), { recursive: true });
   writeFileSync(statePath, "");
-  writeFileSync(agentPath, "");
-  const identity = readDatabasePathIdentitySync(agentPath);
+  const databases = agentPaths.map((agentPath, index) => {
+    writeFileSync(agentPath, "");
+    const identity = readDatabasePathIdentitySync(agentPath);
+    return {
+      database: { path: agentPath, agentId: `agent-${index}` },
+      assertCurrent: () =>
+        assertExistingDatabaseIdentity(agentPath, identity.key, identity.birthtime),
+    };
+  });
   const stateAdmission = vi.spyOn(stateContext, "captureOpenClawStateReadContext");
   const read = vi.mocked(runSqliteReadOnlyOperation);
   read.mockReset();
-  read.mockResolvedValue(complete);
+  read.mockImplementation(async (_pathname, command) => {
+    if (command.type !== "pageCache.begin" || !command.input || !("maxBytes" in command.input)) {
+      throw new Error("Expected a complete page-cache pass");
+    }
+    return { ...complete, readBytes: command.input.maxBytes };
+  });
   const log = { info: vi.fn(), warn: vi.fn() };
   try {
     await withDatabaseEngineSelection(
@@ -76,21 +88,26 @@ it.each([
       },
       () =>
         warmGatewayDatabasePageCache({
-          databases: [
-            {
-              database: { path: agentPath, agentId: "main" },
-              assertCurrent: () =>
-                assertExistingDatabaseIdentity(agentPath, identity.key, identity.birthtime),
-            },
-          ],
+          databases,
           signal: new AbortController().signal,
           log,
         }),
     );
-    const paths = { state: statePath, agent: agentPath };
+    const paths = { state: [statePath], agent: agentPaths };
     expect(read.mock.calls.map(([pathname]) => pathname)).toEqual(
-      engines.warmed.map((family) => paths[family]),
+      engines.warmed.flatMap((family) => paths[family]),
     );
+    const budgets = read.mock.calls.map(([, command]) => {
+      if (command.type !== "pageCache.begin" || !command.input || !("maxBytes" in command.input)) {
+        throw new Error("Expected a page-cache budget");
+      }
+      return command.input.maxBytes;
+    });
+    if (budgets.length > 0) {
+      expect(Math.min(...budgets)).toBeGreaterThan(0);
+      expect(Math.max(...budgets) - Math.min(...budgets)).toBeLessThanOrEqual(1);
+      expect(budgets.reduce((total, bytes) => total + bytes, 0)).toBe(2 * 1024 * 1024 * 1024);
+    }
     expect(stateAdmission).toHaveBeenCalledTimes(engines.state === "sqlite" ? 1 : 0);
     expect(log.warn).not.toHaveBeenCalled();
   } finally {

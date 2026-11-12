@@ -143,3 +143,9 @@ it("leaves a replacement notice owed when an earlier send finishes", async () =>
   await attempt;
   expect(entry().pendingDeliveryNotice).toEqual(replacement);
 });
+
+it("does not deliver a successor intent while settling an earlier failure", async () => {
+  await deliverPendingDeliveryNotice(sessionKey, storePath, undefined, "earlier-intent");
+  expect(sendNotice).not.toHaveBeenCalled();
+  expectNotice("owed");
+});

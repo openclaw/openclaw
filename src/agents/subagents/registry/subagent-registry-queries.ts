@@ -151,7 +151,7 @@ export function selectConnectedSettledSubagentWave(
 }
 
 export function listRunsForControllerFromRuns<T extends SubagentRunReadRecord>(
-  runs: Map<string, T>,
+  runs: ReadonlyMap<string, T>,
   controllerSessionKey: string,
   controllerAgentId?: string,
 ): T[] {

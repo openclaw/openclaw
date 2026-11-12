@@ -2098,6 +2098,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
+  {
+    testFile: "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
+    ownerRoots: ["ui/src/lib/openclaw-id/onepassword-save.ts"],
+    watchGlobs: [],
+  },
 ];
 
 export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = ownerWatches.map((watch) => ({

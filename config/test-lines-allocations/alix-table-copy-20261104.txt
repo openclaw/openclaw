@@ -1,0 +1,2 @@
+# Preserve the existing owner controls and cover the native table-copy regression.
+13

@@ -28,11 +28,11 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
 } from "../admitted-run-context.js";
+import * as agentTools from "../agent-tools.async.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import * as agentTools from "../agent-tools.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import {

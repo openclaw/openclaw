@@ -50,12 +50,18 @@ type SessionMenuProps = {
   trigger: HTMLElement | null;
   disabled: boolean;
   actionDisabledReasons: Partial<Record<SessionMenuActionKind, string>>;
+  nestedSession: {
+    creating: boolean;
+    disabledReason?: string;
+    onCreate: () => void;
+  } | null;
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
   snoozeAllowed: boolean;
   deleteAllowed: boolean;
   cloudWorkerStopAllowed: boolean;
+  cloudWorkerStopLabel?: string;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
   work: SessionMenuWork | null;
@@ -146,6 +152,31 @@ function SessionMenuContent(
     }
     return [
       ...view.primary(),
+      ...(!batch() && props.nestedSession
+        ? [
+            {
+              id: "new-nested-session",
+              label: t(
+                props.nestedSession.creating
+                  ? "sessionsView.creatingNestedSession"
+                  : "sessionsView.newNestedSession",
+              ),
+              class: "session-menu__item",
+              labelClass: "session-menu__text",
+              disabled:
+                props.disabled ||
+                props.nestedSession.creating ||
+                Boolean(props.nestedSession.disabledReason),
+              attributes: { title: props.nestedSession.disabledReason },
+              icon: (
+                <span class="session-menu__icon" aria-hidden="true">
+                  <Icon name="plus" />
+                </span>
+              ),
+              closeOnSelect: false,
+            },
+          ]
+        : []),
       primaryDivider,
       ...view.organization(),
       ...(!batch()
@@ -193,7 +224,7 @@ function SessionMenuContent(
         ? [
             {
               id: "stop-cloud-worker",
-              label: t("sessionsView.stopCloudWorker"),
+              label: props.cloudWorkerStopLabel || t("sessionsView.stopCloudWorker"),
               class: "session-menu__item session-menu__item--destructive",
               labelClass: "session-menu__text",
               variant: "danger" as const,
@@ -232,6 +263,11 @@ function SessionMenuContent(
       );
       if (action && props.selectionCount === 1 && !actionDisabled("plugin", action.disabled)) {
         runAction({ kind: "plugin", id: action.id });
+      }
+    } else if (value === "new-nested-session") {
+      const nested = props.nestedSession;
+      if (nested && !props.disabled && !nested.creating && !nested.disabledReason) {
+        nested.onCreate();
       }
     } else if (value === "stop-cloud-worker") {
       runAction({ kind: value });
@@ -324,12 +360,14 @@ export const SessionMenu = defineSolidBridge<SessionMenuProps>(
       trigger: { default: null, attribute: false },
       disabled: { default: false, attribute: false },
       actionDisabledReasons: { default: {}, attribute: false },
+      nestedSession: { default: null, attribute: false },
       forkDisabled: { default: false, attribute: false },
       forkFromLastCompleted: { default: false, attribute: false },
       archiveAllowed: { default: false, attribute: false },
       snoozeAllowed: { default: false, attribute: false },
       deleteAllowed: { default: false, attribute: false },
       cloudWorkerStopAllowed: { default: false, attribute: false },
+      cloudWorkerStopLabel: { default: "", attribute: false },
       groups: { default: [], attribute: false },
       currentOwner: { default: null, attribute: false },
       work: { default: null, attribute: false },

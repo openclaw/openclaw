@@ -9,6 +9,7 @@ export type TemplatesCreateOptions = TemplatesInspectOptions & {
   name?: string;
   agentId?: string;
 };
+export type TemplatesDraftOptions = { json?: boolean };
 export type TemplatesValidateOptions = { json?: boolean };
 export type TemplatesBuildOptions = { out: string; json?: boolean };
 export type TemplatesDevOptions = { agentId?: string; workspace?: string; json?: boolean };
@@ -31,6 +32,16 @@ export function registerTemplatesCli(program: Command) {
     .action(async (path: string, opts: TemplatesCreateOptions) => {
       const { runTemplatesCreateCommand } = await import("./templates-cli.project.js");
       await runTemplatesCreateCommand(path, opts);
+    });
+
+  templates
+    .command("draft")
+    .description("Prepare a private Template draft without publishing")
+    .argument("<workspace>", "Agent workspace for the private draft")
+    .option("--json", "Print JSON", false)
+    .action(async (workspace: string, opts: TemplatesDraftOptions) => {
+      const { runTemplatesDraftCommand } = await import("./templates-cli.project.js");
+      await runTemplatesDraftCommand(workspace, opts);
     });
 
   templates
@@ -69,7 +80,7 @@ export function registerTemplatesCli(program: Command) {
   templates
     .command("inspect")
     .description("Validate a Template package or local development manifest")
-    .argument("<source>", "Path to a Template package directory or grouped manifest")
+    .argument("<source>", "Path to a canonical Template package directory or CLAW.md")
     .option("--json", "Print JSON", false)
     .action(async (source: string, opts: TemplatesInspectOptions) => {
       const { runTemplatesInspectCommand } = await import("./templates-cli.runtime.js");
@@ -79,7 +90,7 @@ export function registerTemplatesCli(program: Command) {
   templates
     .command("add")
     .description("Add a new agent and its requirements from a Template")
-    .argument("<source>", "Path to a Template package directory or grouped manifest")
+    .argument("<source>", "ClawHub package name, local package directory, or CLAW.md")
     .option("--dry-run", "Preview all actions without mutating state", false)
     .option("--accept-capabilities", "Accept required plugin capabilities", false)
     .option("--acknowledge-clawhub-risk", "Acknowledge ClawHub trust warnings", false)

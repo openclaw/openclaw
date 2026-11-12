@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Client } from "pg";
-import { stateEngineInput, stateEngineSchema } from "../state/openclaw-state-db-engine.js";
+import { stateEngineInput } from "../state/openclaw-state-db-engine-input.js";
+import { stateEngineSchema } from "../state/openclaw-state-db-engine.js";
 import { readEngineAnchorIdentity } from "./database-engine/physical-store.js";
 import {
   readPostgresStoreMetadata,

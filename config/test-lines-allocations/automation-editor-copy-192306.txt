@@ -1,0 +1,2 @@
+# Preserve authored automation editor select-value assertions.
+10

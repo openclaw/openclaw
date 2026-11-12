@@ -1,0 +1,3 @@
+# Historical gate authority, exact interrupted publication replay, stale readers,
+# and actual shell preparation require production-boundary regression coverage.
+212

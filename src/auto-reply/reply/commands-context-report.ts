@@ -347,7 +347,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const skillsLine = `Skills list (system prompt text): ${formatCharsAndTokens(report.skills.promptChars)} (${skillNames.length} skills)`;
   const skillsNamesLine = `Skills: ${formatNameList(skillNames, 20)}`;
   const toolsNamesLine = `Tools: ${formatNameList(toolNames, 30)}`;
-  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
+  const estimatedChars = report.systemPrompt.estimatedChars;
+  const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)}${estimatedChars ? `; estimated ${formatCharsAndTokens(estimatedChars)}` : ""})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =

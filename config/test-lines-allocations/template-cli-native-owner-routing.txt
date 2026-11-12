@@ -1,0 +1,4 @@
+# CLI owner routing: exact consent and partial/unknown outcomes.
+# Current main already removed the old polling tests; native owner coverage adds 343 lines.
+# Four more lines bind apply and separate trust consent to the exact reviewed agent target.
+347

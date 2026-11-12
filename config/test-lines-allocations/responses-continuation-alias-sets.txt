@@ -1,0 +1,2 @@
+29
+# Regression proves continuation resolves replay aliases without allocating a Set per historical call.

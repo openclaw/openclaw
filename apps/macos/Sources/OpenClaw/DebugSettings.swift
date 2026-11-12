@@ -635,8 +635,8 @@ struct DebugSettings: View {
         let result = await DebugActions.killProcess(Int(pid))
         switch result {
         case .success:
-            self.portKillStatus = "Sent kill to \(pid)."
             await self.runPortCheck()
+            self.portKillStatus = "Sent kill to \(pid)."
         case let .failure(err):
             self.portKillStatus = "Kill \(pid) failed: \(err.localizedDescription)"
         }

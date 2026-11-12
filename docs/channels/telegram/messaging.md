@@ -294,6 +294,8 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
     Telegram send also supports `--presentation` with `buttons` blocks for inline keyboards (when `channels.telegram.capabilities.inlineButtons` allows it), `--pin` or `--delivery '{"pin":true}'` to request pinned delivery when the bot can pin in that chat, and `--force-document` to send outbound images, GIFs, and videos as documents instead of compressed/animated/video uploads.
 
+    Message-tool sends accept `effectId` (alias `effect`) for Telegram message effects: a numeric Bot API `message_effect_id`. The effect applies once per send, on its first message (for location sends, on the location itself). Effects are forwarded only for known private chats. Other targets and non-numeric effect names retain ordinary delivery without an effect. Sends without `effectId` are unchanged.
+
     Action gating: `channels.telegram.actions.sendMessage=false` disables all outbound messages including polls; `channels.telegram.actions.poll=false` disables poll creation while leaving regular sends enabled.
 
   </Accordion>

@@ -3,8 +3,16 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
-import { loadavg } from "node:os";
+import {
+  closeSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
@@ -27,6 +35,16 @@ const { values } = parseArgs({
     engine: { type: "string", default: "sqlite" },
     connection: { type: "string" },
     prefix: { type: "string", default: "turn_gateway" },
+    "sync-fs": { type: "boolean", default: false },
+    "state-fixture": { type: "string" },
+    turns: { type: "string", default: "3" },
+    live: { type: "boolean", default: false },
+    sandbox: { type: "boolean", default: false },
+    "delay-ms": { type: "string", default: "0" },
+    "delay-match": { type: "string", default: "readTtsPrefs" },
+    timings: { type: "boolean", default: false },
+    allocations: { type: "boolean", default: false },
+    profile: { type: "boolean", default: false },
   },
 });
 assert(values.root, "--root must name a new synthetic directory");
@@ -34,17 +52,39 @@ assert(values.engine === "sqlite" || values.engine === "postgres");
 assert(values.engine !== "postgres" || values.connection, "PostgreSQL needs --connection");
 const root = path.resolve(values.root);
 mkdirSync(root);
-const workspace = path.join(root, "workspace");
-mkdirSync(workspace);
+const fixture = values["state-fixture"] && path.resolve(values["state-fixture"]);
+const workspace = path.join(fixture || root, "workspace");
+if (!fixture) {
+  mkdirSync(workspace);
+}
+const turnCount = Number(values.turns);
+assert(Number.isSafeInteger(turnCount) && turnCount > 0 && turnCount <= 30);
+const delayMs = Number(values["delay-ms"]);
+assert(Number.isSafeInteger(delayMs) && delayMs >= 0 && delayMs <= 1000);
 const port = await getFreePort();
 const mockPort = await getFreePort();
+const probePort = values["sync-fs"] ? await getFreePort() : undefined;
 const config: OpenClawConfig = {
   ...structuredClone(BASE_GATEWAY_BENCH_CONFIG),
   tools: { codeMode: false },
   agents: { defaults: { skipBootstrap: true } },
   cron: { enabled: false },
+  session: { maintenance: { mode: "warn", maxDiskBytes: false } },
 };
 applyMockOpenAiModelConfig(config, { mockPort, modelRef: "openai/gpt-4.1" });
+if (values.live) {
+  assert(process.env.OPENAI_API_KEY, "Live proof requires a task-scoped OpenAI key");
+  config.models!.providers!.openai!.baseUrl = "https://api.openai.com/v1";
+  config.models!.providers!.openai!.request = undefined;
+}
+if (values.sandbox) {
+  config.agents!.defaults!.sandbox = {
+    mode: "all",
+    scope: "session",
+    workspaceAccess: "rw",
+    docker: { image: "node:26.12.1-bookworm-slim", network: "none" },
+  };
+}
 config.plugins = {
   ...config.plugins,
   entries: {
@@ -66,24 +106,19 @@ const configPath = writeGatewayBenchConfig(root, config, {
 });
 const trace = path.join(root, "statements.jsonl");
 writeFileSync(trace, "");
+const cacheRoot = mkdtempSync(path.join(tmpdir(), "openclaw-turn-gateway-cache-"));
 const env = createGatewayBenchEnv(root, configPath, {
   caseEnv: {
-    OPENAI_API_KEY: "synthetic-localhost-fixture",
+    XDG_CACHE_HOME: cacheRoot,
+    OPENAI_API_KEY: values.live ? process.env.OPENAI_API_KEY! : "synthetic-localhost-fixture",
+    ...(fixture ? { OPENCLAW_STATE_DIR: fixture } : {}),
     ...(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH
       ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }
       : {}),
     ...(values.connection ? { OPENCLAW_BENCH_POSTGRES_CONNECTION: values.connection } : {}),
   },
 });
-const validation = spawnSync(process.execPath, ["openclaw.mjs", "config", "validate", "--json"], {
-  env,
-  encoding: "utf8",
-  timeout: 120_000,
-});
-writeFileSync(path.join(root, "config-validation.log"), validation.stdout + validation.stderr);
-assert.equal(validation.status, 0, "Config validation failed; inspect config-validation.log");
 const control = path.join(root, "responses.json");
-writeFileSync(control, JSON.stringify({ text: "Synthetic answer 1." }));
 const children: ChildProcess[] = [];
 let gateway: ChildProcess | undefined;
 let client: ReturnType<typeof createGatewayWsClient> | undefined;
@@ -125,6 +160,9 @@ function cleanup() {
         failure ??= result.reason;
       }
     }
+    if (results.every((result) => result.status === "fulfilled")) {
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
   })());
 }
 for (const [signal, code] of [
@@ -134,18 +172,29 @@ for (const [signal, code] of [
   process.once(signal, () => void cleanup().finally(() => process.exit(code)));
 }
 const turns: Array<{ turn: number; start: number; end: number; elapsedMs: number }> = [];
+const filesystem: unknown[] = [];
 let history: Array<{ role: string; text: string }> = [];
 try {
-  launch(
-    ["scripts/e2e/mock-openai-server.mjs"],
-    {
-      ...env,
-      MOCK_PORT: String(mockPort),
-      MOCK_RESPONSE_CONTROL: control,
-      MOCK_REQUEST_LOG: path.join(root, "provider-requests.jsonl"),
-    },
-    "mock",
-  );
+  const validation = spawnSync(process.execPath, ["openclaw.mjs", "config", "validate", "--json"], {
+    env,
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+  writeFileSync(path.join(root, "config-validation.log"), validation.stdout + validation.stderr);
+  assert.equal(validation.status, 0, "Config validation failed; inspect config-validation.log");
+  writeFileSync(control, JSON.stringify({ text: "Synthetic answer 1." }));
+  if (!values.live) {
+    launch(
+      ["scripts/e2e/mock-openai-server.mjs"],
+      {
+        ...env,
+        MOCK_PORT: String(mockPort),
+        MOCK_RESPONSE_CONTROL: control,
+        MOCK_REQUEST_LOG: path.join(root, "provider-requests.jsonl"),
+      },
+      "mock",
+    );
+  }
   const ready = async (targetPort: number, pathname: string) => {
     const result = await waitForInitialProbe({
       port: targetPort,
@@ -155,9 +204,12 @@ try {
     });
     assert.equal(result.status, 200, `Readiness failed for ${pathname}; inspect child logs`);
   };
-  await ready(mockPort, "/health");
+  if (!values.live) {
+    await ready(mockPort, "/health");
+  }
   gateway = launch(
     [
+      ...(values.profile ? ["--cpu-prof", `--cpu-prof-dir=${root}`] : []),
       "openclaw.mjs",
       "gateway",
       "run",
@@ -172,8 +224,18 @@ try {
     ],
     {
       ...env,
-      OPENCLAW_TURN_TRACE: trace,
-      NODE_OPTIONS: `--import=${new URL("../bench-transcript-turn-preload.mjs", import.meta.url).href}`,
+      ...(probePort
+        ? {
+            OPENCLAW_SYNC_FS_PROBE_PORT: String(probePort),
+            OPENCLAW_SYNC_FS_PROBE_MODE: values.timings ? "timing" : "trace",
+          }
+        : { OPENCLAW_TURN_TRACE: trace }),
+      NODE_OPTIONS: `--enable-source-maps --import=${
+        new URL(
+          probePort ? "./sync-fs-turn-preload.mjs" : "../bench-transcript-turn-preload.mjs",
+          import.meta.url,
+        ).href
+      }`,
     },
     "gateway",
   );
@@ -194,12 +256,28 @@ try {
     scopes: ["operator.read", "operator.write", "operator.admin"],
     caps: [],
   });
-  const sessionKey = "agent:main:transcript-turn-proof";
+  const sessionKey = `agent:main:transcript-turn-proof-${path.basename(root)}`;
   const expected: typeof history = [];
-  for (let turn = 1; turn <= 3; turn++) {
-    const message = `Synthetic prompt ${turn}.`;
+  for (let turn = 1; turn <= turnCount; turn++) {
+    const liveFile = `lane2113-payload-${turn}.txt`;
+    const liveContent = `SYNTHETIC_FS_TURN_OK_${turn}`;
+    if (values.live) {
+      writeFileSync(path.join(workspace, liveFile), `${liveContent}\n`);
+    }
+    const message = values.live
+      ? `Turn ${turn}: I just created ${liveFile} in the workspace. Use the read tool to inspect this new file and reply with its exact contents.`
+      : `Synthetic prompt ${turn}.`;
     const answer = `Synthetic answer ${turn}.`;
     writeFileSync(control, JSON.stringify({ text: answer }));
+    if (probePort) {
+      const probe = new URL(`http://127.0.0.1:${probePort}/start`);
+      probe.searchParams.set("delayMs", String(turn > 1 ? delayMs : 0));
+      probe.searchParams.set("match", values["delay-match"]!);
+      if (values.allocations) {
+        probe.searchParams.set("allocations", "1");
+      }
+      await fetch(probe);
+    }
     const start = performance.timeOrigin + performance.now();
     const started = await rpc("chat.send", {
       sessionKey,
@@ -213,9 +291,16 @@ try {
     const settled = await rpc("agent.wait", { runId: started.runId, timeoutMs: 100_000 });
     const end = performance.timeOrigin + performance.now();
     assert(isRecord(settled) && settled.status === "ok");
+    if (probePort) {
+      filesystem.push({
+        turn,
+        ...(await (await fetch(`http://127.0.0.1:${probePort}/stop`)).json()),
+      });
+    }
     turns.push({ turn, start, end, elapsedMs: end - start });
-    const result = await rpc("chat.history", { sessionKey, limit: 20 });
+    const result = await rpc("chat.history", { sessionKey, limit: 1_000 });
     assert(isRecord(result) && Array.isArray(result.messages));
+    const previousHistoryLength = history.length;
     history = result.messages.map((item: unknown) => {
       assert(isRecord(item) && typeof item.role === "string");
       const text =
@@ -231,7 +316,26 @@ try {
       return { role: item.role, text };
     });
     expected.push({ role: "user", text: message }, { role: "assistant", text: answer });
-    assert.deepEqual(history, expected);
+    if (values.live) {
+      assert(
+        history
+          .slice(previousHistoryLength)
+          .some((item) => item.role === "toolResult" && item.text.trim() === liveContent),
+        "Each live turn must actually read the synthetic file",
+      );
+      assert.equal(history.at(-1)?.role, "assistant");
+      assert(history.at(-1)?.text.trim(), "The live turn must produce a final answer");
+    } else {
+      assert.deepEqual(history, expected);
+    }
+    if (probePort) {
+      await fetch(`http://127.0.0.1:${probePort}/start`);
+      await rpc("sessions.list", { limit: 50, includeActivitySummary: true });
+      filesystem.push({
+        rowsAfterTurn: turn,
+        ...(await (await fetch(`http://127.0.0.1:${probePort}/stop`)).json()),
+      });
+    }
   }
 } catch (error) {
   failure = error;
@@ -286,12 +390,23 @@ try {
     runtime: process.version,
     load: loadavg(),
     counts,
+    filesystem,
     history,
     shutdown,
     error: failure instanceof Error ? failure.stack : failure,
   };
   writeFileSync(path.join(root, "evidence.json"), JSON.stringify(evidence, null, 2));
-  console.log(JSON.stringify(evidence));
+  console.log(
+    JSON.stringify({
+      ...evidence,
+      filesystem: filesystem.map((sample) => {
+        assert(isRecord(sample));
+        return Object.assign({}, sample, {
+          records: Array.isArray(sample.records) ? sample.records.length : undefined,
+        });
+      }),
+    }),
+  );
 }
 if (failure) {
   throw failure instanceof Error ? failure : new Error("Gateway proof failed", { cause: failure });

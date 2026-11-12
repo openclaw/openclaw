@@ -47,8 +47,7 @@ import {
 } from "./session-data-catalog.ts";
 import {
   hasSidebarListFilter,
-  clearSidebarSessionError,
-  publishSidebarSessionError,
+  clearSidebarSessionListError,
   publishScopedSessionError,
   publishSidebarSessionList,
   refreshSidebarSessionList,
@@ -81,6 +80,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   activeSessionLineageRoot: GatewaySessionRow | null = null;
   activeSessionLineageSelectedRow: GatewaySessionRow | null = null;
   sessionMutationError: string | null = null;
+  sessionListError: string | null = null;
   presencePayload: PresencePayload | undefined;
   presenceInstanceId?: string;
   readonly ownerCounts = new SidebarOwnerSessionCounts(() => this.requestSessionDataUpdate());
@@ -249,6 +249,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     if (!this.active) {
       return;
     }
+    this.synchronizeOwnerSessionCounts();
     const roster =
       this.inputs.sidebarAgentsMode === "roster" && this.sessionLineageVisible
         ? rosterActivityStore(this.context)
@@ -287,7 +288,6 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   refreshPresentation(): void {
     if (this.active && this.inputs.isConnected) {
       this.synchronizeSessionScope();
-      this.synchronizeOwnerSessionCounts();
       this.lineage.synchronize();
       this.synchronizePresentedSessions();
     }
@@ -344,9 +344,13 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   }
 
   private synchronizeOwnerSessionCounts(): void {
-    const hasProfiles = projectPresencePayload(this.presencePayload).users.some(
-      (user) => user.identity?.type === "profile",
-    );
+    const hasProfiles =
+      this.inputs.navigationVisible &&
+      !this.inputs.navigationCollapsed &&
+      this.inputs.navigationView === "online" &&
+      projectPresencePayload(this.presencePayload).users.some(
+        (user) => user.identity?.type === "profile",
+      );
     this.ownerCounts.synchronize(
       this.inputs.connected && hasProfiles ? this.context.sessions : undefined,
       this.context.gateway.snapshot.selfUser?.id ?? null,
@@ -487,7 +491,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     }
     publishSidebarSessionList(this, { ...snapshot, ...presentation });
     if (listErrorChanged) {
-      publishSidebarSessionError(this, listError, "list");
+      this.sessionListError = listError;
     }
     this.requestSessionDataUpdate();
   };
@@ -714,7 +718,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     this.requestSessionDataUpdate();
   }
 
-  dismissSessionMutationError = clearSidebarSessionError.bind(null, this);
+  dismissSessionListError = clearSidebarSessionListError.bind(null, this);
 
   resetSessionList(): void {
     this.retireFilteredSessions();
@@ -740,7 +744,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
 
   private invalidateSessionMutations(): void {
     this.mutations.retireScope();
-    publishSidebarSessionError(this, null, "action");
+    this.sessionMutationError = null;
     this.requestSessionDataUpdate();
   }
 
@@ -754,7 +758,7 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       selectedAgentId: this.inputs.selectedAgentIdForSessions(),
     });
     if (scope) {
-      this.dismissSessionMutationError();
+      this.sessionMutationError = null;
     }
     return scope;
   }

@@ -519,7 +519,7 @@ describe("server-owned pending input display", () => {
     },
   );
 
-  it.each(["send", "agent.run.started", "agent.input.settled"])(
+  it.each(["send", "agent.run.started", "agent.input.steering", "agent.input.settled"])(
     "refreshes accepted inputs on %s while a retained pane is running",
     async (reason) => {
       const host = makeChatPageHost({

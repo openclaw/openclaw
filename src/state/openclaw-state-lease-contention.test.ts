@@ -1,7 +1,12 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import * as backoff from "../infra/backoff.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { withOpenClawStateLease } from "./openclaw-state-lease.js";
@@ -95,3 +100,50 @@ it.each([
     }
   }),
 );
+
+it("releases a lease after its cleanup met another process's offline maintenance", async () => {
+  await withOpenClawTestState({ label: "lease-maintenance-release" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const ownerPath = resolveGatewayStateOwnerPath(database.path);
+    // A live foreign process records offline maintenance custody, as a CLI one-shot can.
+    const holder = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    const endMaintenance = () => fs.rmSync(ownerPath, { force: true });
+    const leaseOwners = () =>
+      database.db
+        .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+        .all("core:test", "maintenance-release");
+    const options = {
+      scope: "core:test",
+      key: "maintenance-release",
+      database: { scope: "shared" as const, options: { env: state.env } },
+      leaseMs: 30_000,
+    };
+    try {
+      await expect(
+        withOpenClawStateLease({ ...options, waitMs: 0 }, async () => {
+          fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+          fs.writeFileSync(
+            ownerPath,
+            JSON.stringify({
+              ...defaultPayload(database.path),
+              pid: holder.pid,
+              startTime: undefined,
+            }),
+          );
+        }),
+      ).rejects.toThrow("State lease operation and cleanup failed");
+      expect(leaseOwners()).toHaveLength(1);
+      endMaintenance();
+      // Without a retried release, the stored lease holds every acquirer until it expires.
+      await expect(
+        withOpenClawStateLease({ ...options, waitMs: 10_000 }, async () => leaseOwners()),
+      ).resolves.toHaveLength(1);
+      expect(leaseOwners()).toEqual([]);
+    } finally {
+      endMaintenance();
+      holder.kill();
+    }
+  });
+});

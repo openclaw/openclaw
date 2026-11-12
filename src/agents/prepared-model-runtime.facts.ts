@@ -79,7 +79,7 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import type { AuthStorage } from "./sessions/auth-storage.core.js";
 
 type PreparedConfiguredModelRegistry = {
   oauthProviders: ReturnType<AuthStorage["getOAuthProviders"]>;
@@ -610,11 +610,13 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
       registryCount += 1;
     }
     const templateModelRegistry = prepared.modelRegistry;
-    const configuredRuntimeModels = completeConfiguredRuntimeModels(
+    const configuredRuntimeModels = await completeConfiguredRuntimeModels(
       facts,
       params.pluginGeneration,
       templateModelRegistry,
+      () => params.assertCurrent?.(facts.input),
     );
+    params.assertCurrent?.(facts.input);
     catalogs.set(
       facts.input,
       prepareCapturedRuntimeFacts({

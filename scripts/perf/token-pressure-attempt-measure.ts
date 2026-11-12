@@ -10,6 +10,8 @@
  * request, lower CPU/allocation, no >20% latency regression. Setup is excluded.
  * This measures the real in-memory attempt request path, not Gateway I/O,
  * startup, provider network latency, or durable SQLite/workspace scale.
+ * --large-results uses 120 megabyte-scale CJK tool results and checks projection bytes.
+ * Counts include character floors as well as token pressure.
  * Tools use the production finalizer; --mutable-tools covers raw SDK declarations.
  * --mode profile writes a warm main-thread CPU profile alongside --output.
  */
@@ -22,7 +24,7 @@ import { loadavg } from "node:os";
 import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import type { AssistantMessage, Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Message, Model } from "@openclaw/llm-core";
 import type { EmbeddedAttemptExecutionPhaseInput } from "../../src/agents/embedded-agent-runner/run/attempt-execution-types.js";
 import type { AgentMessage } from "../../src/agents/runtime/index.js";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.js";
@@ -34,6 +36,7 @@ const { values } = parseArgs({
     "base-dir": { type: "string" },
     output: { type: "string" },
     "mutable-tools": { type: "boolean", default: false },
+    "large-results": { type: "boolean", default: false },
   },
 });
 const requestCount = Number(values.requests);
@@ -55,6 +58,7 @@ Reflect.set(globalThis, scanKey, (chars: number) => {
   scanOwners.set(owner, value);
 });
 const ownerPaths = [
+  "src/agents/embedded-agent-runner/tool-result-truncation.ts",
   "src/agents/sessions/context-token-pressure.ts",
   "src/agents/embedded-agent-runner/run/preemptive-compaction.ts",
   "src/agents/sessions/compaction/request-budget.ts",
@@ -79,9 +83,9 @@ const loader = registerHooks({
         : fileURLToPath(url),
       "utf8",
     );
-    if (url === cjkUrl) {
+    if (values.mode === "counts" && url === cjkUrl) {
       source = source.replace(
-        /export function estimateStringTokenPressure\([\s\S]*?\) \{/,
+        /export function estimateStringCharsWithMinimumRawWeight\([\s\S]*?\): number \{/,
         (signature) =>
           `${signature}\n globalThis[Symbol.for("openclaw.perf.token-pressure.scan")](text.length);`,
       );
@@ -129,7 +133,7 @@ const [
 loader.deregister();
 const { getPublishedRuntimeToolInputSchema } = await import("@openclaw/ai/internal/tool-schema");
 const noop = () => {};
-const contextTokenBudget = 1_000_000;
+const contextTokenBudget = values["large-results"] ? 10_000_000 : 1_000_000;
 const model: Model = {
   id: "synthetic-pressure",
   name: "Synthetic pressure",
@@ -145,8 +149,12 @@ const model: Model = {
 const systemPrompt = "Inspect source evidence. 保持上下文。 Report exact identifiers.\n".repeat(
   700,
 );
-const sourceText = "const value = inspect(input); // 中文证据 한국어 カタカナ\n".repeat(90);
-const pendingText = "New source evidence 中文工具结果. value = 12345;\n".repeat(120);
+const sourceText = "const value = inspect(input); // 中文证据 한국어 カタカナ\n".repeat(
+  values["large-results"] ? 24_000 : 90,
+);
+const pendingText = "New source evidence 中文工具结果. value = 12345;\n".repeat(
+  values["large-results"] ? 24_000 : 120,
+);
 function assistant(round: number, tool: boolean): AssistantMessage {
   return {
     role: "assistant",
@@ -290,13 +298,15 @@ const contextGuards = installEmbeddedAttemptContextGuards({
 });
 let requestIndex = 0;
 let warming = true;
+const requestHistories: Message[][] = [];
 const pressures: number[] = [];
 const budgets: number[] = [];
 const requestScans: Array<{ calls: number; chars: number; lengths: number[] }> = [];
 const requestMs: number[] = [];
 let requestStarted = 0;
 let previousScans = { calls: 0, chars: 0 };
-session.agent.streamFn = () => {
+session.agent.streamFn = (_model, context) => {
+  requestHistories.push(context.messages);
   requestMs.push(performance.now() - requestStarted);
   requestScans.push({
     calls: scans.calls - previousScans.calls,
@@ -469,6 +479,7 @@ const coldScans = { ...scans };
 initialMessages = session.messages.length;
 warming = false;
 requestIndex = 0;
+requestHistories.length = 0;
 pressures.length = 0;
 budgets.length = 0;
 requestScans.length = 0;
@@ -504,17 +515,14 @@ try {
   assert.equal(pressures.length, requestCount);
   assert(pressures[0]! >= 100_000, "fixture must exceed 100k estimated tokens");
   assert.equal(contextGuards.takePendingMidTurnPrecheckRequest(), null);
-  if (values.mode === "counts" && estimateFixed && !values["mutable-tools"]) {
-    const tail = requestScans.slice(1);
+  if (values.mode === "counts" && !values["base-dir"] && !values["mutable-tools"]) {
+    // Two requests warm projections of the initial history and first appended result.
+    const tail = requestScans.slice(2);
     assert(
-      tail.every(({ chars }) => chars < 10_000),
-      "steady requests must scan only appended text",
+      tail.every(({ chars }) => chars < pendingText.length * 4 + 10_000),
+      "steady requests must scan only appended text and its truncation slices",
     );
-    assert.equal(
-      new Set(tail.map(({ chars }) => chars)).size,
-      1,
-      "scan work must stay constant as history grows",
-    );
+    assert(new Set(tail.map(({ chars }) => chars)).size <= 1, "scan work must stay constant");
   }
 } finally {
   unsubscribe();
@@ -543,13 +551,22 @@ if (inspector) {
 const sortedMs = requestMs.toSorted((a, b) => a - b);
 const result = {
   mode: values.mode,
-  arm: estimateFixed ? "candidate" : "base",
+  arm: values["base-dir"] ? "base" : "candidate",
   requestCount,
   initialMessages,
   tools: 100,
   mutableTools: values["mutable-tools"],
   initialPressure: pressures[0],
   finalPressure: pressures.at(-1),
+  projectionHash: createHash("sha256")
+    .update(
+      JSON.stringify(
+        requestHistories.map((messages) =>
+          messages.map(({ role, content }) => ({ role, content })),
+        ),
+      ),
+    )
+    .digest("hex"),
   estimateHash: createHash("sha256").update(JSON.stringify({ pressures, budgets })).digest("hex"),
   pressures,
   budgets,

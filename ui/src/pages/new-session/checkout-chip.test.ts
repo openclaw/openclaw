@@ -219,7 +219,7 @@ describe("Checkout chip state", () => {
         afterHide(container);
         expect(onConfirm).toHaveBeenCalledOnce();
         expect(container.textContent).toContain(
-          "Clones OpenClaw on the selected runner. No Gateway checkout is created.",
+          "Clones OpenClaw on the selected device. No checkout is created on this computer.",
         );
         return;
       }
@@ -230,7 +230,7 @@ describe("Checkout chip state", () => {
       expect(current.disabled).toBe(remotePlacement || Boolean(currentCheckoutUnavailableReason));
       expect(current.getAttribute("title")).toBe(
         remotePlacement
-          ? "Devices and cloud run in a worktree"
+          ? "Paired and cloud devices use a worktree"
           : (currentCheckoutUnavailableReason ?? null),
       );
       expect(isolated.getAttribute("aria-pressed")).toBe(String(worktree));
@@ -242,7 +242,7 @@ describe("Checkout chip state", () => {
       );
 
       expect(container.querySelectorAll("input")).toHaveLength(worktree ? 2 : 0);
-      expect(container.textContent?.includes("Syncs OpenClaw to the selected runner")).toBe(
+      expect(container.textContent?.includes("Syncs OpenClaw to the selected device")).toBe(
         remotePlacement,
       );
     },

@@ -497,6 +497,11 @@ export async function buildStatusReplyParts(
         : accountConfig?.richMessages === false
           ? "Telegram rich messages: off · enable richMessages for this Telegram account"
           : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
+    const widgetsSetting = accountConfig?.widgets ?? telegramConfig?.widgets;
+    channelFeatureLine +=
+      widgetsSetting === true
+        ? "\nTelegram widgets: on · Bot API 10.4 message widgets in private chats"
+        : "\nTelegram widgets: off · set channels.telegram.widgets=true for interactive widgets";
   }
   const { buildStatusMessageParts } = await loadStatusMessageRuntime();
   const configuredThinkingDefault = resolveConfiguredThinkingDefault({

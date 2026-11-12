@@ -1,0 +1,2 @@
+192
+# Registered Commander commands with real scope authorization and kit signing: status/rebind access, committed-but-unobservable JSON/text outcomes, commit refusal, and full-command rerun distinction.

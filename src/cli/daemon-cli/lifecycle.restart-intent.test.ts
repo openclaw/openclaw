@@ -14,6 +14,7 @@ import {
   prepareGatewayRestartIntentConsumption,
   type GatewayRestartIntent,
 } from "../../infra/restart-intent.js";
+import * as snapshotWorker from "../../infra/sqlite-readonly-worker.js";
 import * as processOwners from "../../infra/state-lease-process-owner.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -315,6 +316,11 @@ it.each([false, true])(
       exclusion?.release();
       return { outcome: "completed" };
     });
+    const synchronousSnapshot = active
+      ? undefined
+      : vi.spyOn(snapshotWorker, "runSqliteReadOnlyWorkerSync").mockImplementation(() => {
+          throw new Error("Stopped-service intent admission must not synchronously copy state");
+        });
 
     try {
       if (active) {
@@ -327,10 +333,13 @@ it.each([false, true])(
         });
       } else {
         await expect(runServiceRestart(createGatewayServiceRunArgs())).resolves.toBe(true);
+        expect(synchronousSnapshot).not.toHaveBeenCalled();
+        synchronousSnapshot?.mockRestore();
         expect(service.restart).toHaveBeenCalledOnce();
         expect(readIntent()).toBeUndefined();
       }
     } finally {
+      synchronousSnapshot?.mockRestore();
       coordinator?.release();
     }
   },

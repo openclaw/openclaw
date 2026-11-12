@@ -161,6 +161,28 @@ Concurrent publishers and replacement of private recovery files are unsupported;
 this protocol does not promise power-loss durability. After successful publication,
 cleanup failures warn with retained paths without reporting the pair as unpublished.
 
+The generator also refuses catalogs that released clients would misread:
+
+- An unknown key anywhere under a model's `inference` fails publication, as unknown
+  row, provider, and pricing fields already do. Readers would drop it silently.
+- When every auth choice a plugin declares for a provider names only non-chat
+  `onboardingScopes` (such as `image-generation`), each of that provider's rows must
+  set `inference.chat: false`. Every reader treats a row without `inference` as chat.
+- Each output warns above 90% of the 4 MiB client limit and fails above it. With
+  `--skip-oversized-v1`, an oversized v1 is not written (the served v1 stays as it
+  was) and v2/v3 still publish.
+- `--previous <v1-file>`, `--previous-v2 <file>` and `--previous-v3 <file>` name the
+  last published file of each feed. Publication fails when a feed loses more than 5%
+  of its rows or any provider against it, unless `--allow-shrink` is given. A missing
+  previous file is reported and not compared.
+
+Before deploying, `pnpm catalog:compare-released --check --candidate <next> --baseline <published>`
+runs the latest, extended-stable and beta releases that read the candidate's wire
+version against it. It fails when a release rejects the file or keeps fewer rows than
+the publisher wrote, beyond the loss the same release already had on the published
+file. `--allow-row-loss <n>` accepts an intended loss for one publish. Releases
+without a reader for that version are listed as skipped.
+
 Model fields:
 
 | Field                  | Type                                                           | What it means                                                                        |
@@ -236,6 +258,9 @@ GitHub Copilot's model `vendor`. The family appears on `models.list` rows and in
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
 
 After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
+
+Default picker views honor that replacement rather than re-adding static fallback
+rows. Explicitly configured rows and retained current selections remain listed.
 
 Catalog refresh plans keep manual root declarations separate from generated provider inventory. A plugin owning the same provider ID does not turn a manual model into disposable cache data. Merge mode preserves those declarations and auth-only records; explicit replace mode retains its replacement contract. Generated catalogs still follow current ownership, endpoint eligibility, and authoritative replacement rules.
 

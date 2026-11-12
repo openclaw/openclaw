@@ -199,9 +199,11 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           {!params.triggerLoading &&
           !params.triggerStatusLabel &&
           state().triggerModelOption &&
-          hasProviderBrandIcon(state().triggerModelOption!.provider) ? (
+          (state().triggerModelOption!.presentation ||
+            hasProviderBrandIcon(state().triggerModelOption!.provider)) ? (
             <ProviderBrandIcon
               provider={state().triggerModelOption!.provider}
+              presentation={state().triggerModelOption!.presentation}
               class="chat-controls__trigger-provider-icon"
             />
           ) : undefined}

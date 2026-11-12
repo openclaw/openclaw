@@ -63,6 +63,8 @@ function request() {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  // Adapter fixtures own deadline progression, not hosted-runner scheduling.
+  vi.spyOn(performance, "now").mockReturnValue(1_000);
   getImageMetadata.mockResolvedValue({ width: 320, height: 320 });
   respond(wire());
 });
@@ -279,6 +281,20 @@ describe("Liquid native Decision provider", () => {
       expect(fetchWithProviderHttpGuard).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects a deadline that expires during image inspection before HTTP", async () => {
+    const ctx = context();
+    getImageMetadata.mockImplementationOnce(async () => {
+      vi.spyOn(performance, "now").mockReturnValue(ctx.deadlineMonotonicMs);
+      return { width: 32, height: 32 };
+    });
+    expect(await provider.evaluate(image, ctx)).toEqual({
+      status: "unavailable",
+      reason: "transport",
+    });
+    expect(getImageMetadata).toHaveBeenCalledOnce();
+    expect(fetchWithProviderHttpGuard).not.toHaveBeenCalled();
+  });
 
   it("checks caller authority again after image inspection", async () => {
     const failure = new Error("synthetic revoked authority");

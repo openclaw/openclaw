@@ -246,7 +246,7 @@ it("preserves draft intent through failed defaults refresh and agent replacement
   fresh.reject(new Error("roster temporarily unavailable"));
   await read;
   await host.updateComplete;
-  await expectBlocked("Could not refresh agent defaults. Reload to try again.");
+  await expectBlocked("Couldn’t refresh agent defaults. Reload to try again.");
   read = agents.ensureList();
   retry.resolve({
     defaultId: "replacement",

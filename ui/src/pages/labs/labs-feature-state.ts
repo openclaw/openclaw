@@ -8,7 +8,6 @@ export type LabFeature = {
   id: string;
   title: () => string;
   description: () => string;
-  docsUrl: string;
   /** Leaf whose value decides whether the row reads as on. */
   configPath: readonly [string, ...string[]];
   /** Explicit writes preserve gates whose on/off values are modes, not booleans. */

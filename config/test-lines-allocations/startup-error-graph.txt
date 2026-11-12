@@ -1,0 +1,2 @@
+# Offline formatter rejection, redaction, scope guidance, and legacy/malformed scope, and visible offline toast recovery regressions.
+100

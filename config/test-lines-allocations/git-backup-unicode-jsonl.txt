@@ -1,0 +1,2 @@
+# Preserve literal Unicode separators through the existing SQLite backup round trip.
+1

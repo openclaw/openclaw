@@ -484,7 +484,15 @@ export async function launchCronRunQueueResult(
                 await launchCronRun(state, entry, launch, (reason) =>
                   cancelCronRunRequests(state, [entry.runReceipt.receiptId], reason),
                 );
-                launchState(state).contexts.delete(entry.runReceipt.receiptId);
+                if (launch.receiptSettlement) {
+                  // Admission joins the receipt tail; queue shutdown retains its result boundary.
+                  void launch.receiptSettlement.then(() => {
+                    launchState(state).contexts.delete(entry.runReceipt.receiptId);
+                    pumpCronRunQueues(state);
+                  });
+                } else {
+                  launchState(state).contexts.delete(entry.runReceipt.receiptId);
+                }
               }
             };
             return state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run();
@@ -543,9 +551,10 @@ export async function launchCronRunQueueResult(
 export async function stopCronRunQueue(state: CronServiceState) {
   await launchState(state).drain;
   const queued = [...launchState(state).contexts.values()].filter(
-    ({ receipt }) =>
+    ({ receipt, started }) =>
+      !started &&
       state.store?.jobs.find((job) => job.id === receipt.jobId)?.state.runningReceiptId !==
-      receipt.receiptId,
+        receipt.receiptId,
   );
   for (const pending of queued) {
     pending.preparation?.controller.abort();
@@ -567,7 +576,10 @@ export async function waitForCronJobRun(state: CronServiceState, jobId: string):
   const runs = listCronRunQueueOwners(state).flatMap((owner) =>
     [...launchState(owner).contexts.values()]
       .filter((pending) => pending.receipt.jobId === jobId)
-      .map((pending) => pending.completion.promise),
+      .map(async (pending) => {
+        await pending.completion.promise;
+        await pending.receiptSettlement;
+      }),
   );
   await Promise.allSettled(runs);
   return runs.length > 0;

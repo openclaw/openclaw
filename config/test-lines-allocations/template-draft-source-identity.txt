@@ -1,0 +1,2 @@
+44
+# Independent public draft exclusions for bundled and ClawHub skills sharing one path/ref.

@@ -369,7 +369,7 @@ export const toolIconData = {
   ),
   sessionPanels: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
-    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
   ]),
   // Dock is a destination action, so it has no open/close chevron or active fill.
   sessionPanelDockBottom: strokeIconData([
@@ -387,7 +387,7 @@ export const toolIconData = {
       },
     ],
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
-    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
   ]),
   sessionSidebarOpen: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],

@@ -473,6 +473,45 @@ it("guards publication mutation entry paths and the existing repeated factory ca
   );
 });
 
+it("admits only the personal restart owner and its selected registry export", () => {
+  const personal = "src/gateway/github-personal-publication-store.worker.ts";
+  const registry = "src/state/openclaw-state-worker-registry.ts";
+  const writer = "requirePersonalGitHubPublicationConfirmationInDatabase";
+  const message = "unreviewed GitHub publication writer reference";
+  const reject = allowedGraph({
+    [personal]: `
+      export function ${writer}() {}
+      export const personalPublicationRestartOperations = {
+        'githubPublications.personalRestart': () => ${writer}(),
+      };
+    `,
+    [registry]: `
+      export const loaders = {
+        'githubPublications.personalRestart': () =>
+          import('../gateway/github-personal-publication-store.worker.js').then(
+            ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+          ),
+      };
+    `,
+  });
+  reject(
+    personal,
+    (source) => source.replace("githubPublications.personalRestart", "githubPublications.bypass"),
+    message,
+  );
+  reject(
+    publicationWorker,
+    `import { ${writer} } from '../gateway/github-personal-publication-store.worker.js';
+     function personalMutation() { ${writer}(); }`,
+    message,
+  );
+  reject(
+    registry,
+    (source) => source.replaceAll("personalPublicationRestartOperations", writer),
+    message,
+  );
+});
+
 it("counts the receipt deletion loop and lifecycle deletion as two reviewed sinks", () => {
   const file = "src/state/github-personal-publication-lifecycle.ts";
   const source = `export function deletePersonalGitHubSessionReceiptsInDatabase() {
@@ -942,16 +981,31 @@ it("permits supplied-database SDK save custody without granting sibling factory 
 });
 
 const authStorageSources = {
-  "src/agents/sessions/auth-storage.ts": `
+  "src/agents/sessions/auth-storage.core.ts": `
     export class AuthStorage {
       static forAgent() { return new AuthStorage(); }
-      static create() { return AuthStorage.forAgent(); }
       static forAgentAsync() { return new AuthStorage(); }
       static fromStorage() { return new AuthStorage(); }
       static inMemory() { return new AuthStorage(); }
       set() {}
       remove() {}
     }
+  `,
+  "src/agents/sessions/auth-storage.ts": `
+    import { AuthStorage as CoreAuthStorage } from './auth-storage.core.js';
+    declare const Object: {
+      assign<T, U>(target: T, source: U): T & U;
+      defineProperty(target: unknown, property: string, descriptor: unknown): void;
+    };
+    export type AuthStorage = CoreAuthStorage;
+    const forAgent = CoreAuthStorage.forAgent;
+    const forAgentAsync = CoreAuthStorage.forAgentAsync;
+    export const AuthStorage = Object.assign(CoreAuthStorage, {
+      forAgent() { return forAgent(); },
+      async forAgentAsync() { return forAgentAsync(); },
+      create() { return AuthStorage.forAgent(); },
+    });
+    Object.defineProperty(AuthStorage, 'create', { enumerable: false });
   `,
   "src/agents/sessions/index.ts": `export * from './auth-storage.js';`,
   "src/plugin-sdk/agent-sessions.ts": `export { AuthStorage } from '../agents/sessions/index.js';`,
@@ -974,6 +1028,9 @@ it("preserves the released AuthStorage barrel and nonnative constructors", () =>
 
 it.each([
   "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; AuthStorage.forAgent().set();",
+  "import { AuthStorage } from './agents/sessions/auth-storage.core.js'; AuthStorage.forAgent().set();",
+  "import { AuthStorage } from './agents/sessions/auth-storage.core.js'; export const Storage = AuthStorage;",
+  "import { AuthStorage } from './plugin-sdk/agent-sessions.js'; new AuthStorage();",
   "import { AuthStorage as Storage } from './plugin-sdk/agent-sessions.js'; Storage.create().remove();",
   "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage.forAgent().set();",
   "import * as sdk from './plugin-sdk/agent-sessions.js'; sdk.AuthStorage['create']().remove();",
@@ -987,6 +1044,36 @@ it.each([
     expect.arrayContaining([
       expect.stringContaining("unreviewed personal credential writer reference"),
     ]),
+  );
+});
+
+it.each([
+  "Object.defineProperty(AuthStorage, 'create', { value: () => undefined });",
+  "Object.defineProperty(AuthStorage, 'forAgent', { enumerable: false });",
+  "export const escaped = forAgent;",
+  "{ const forAgent = CoreAuthStorage.forAgent; }",
+  "export function escapeNestedFactory() { const forAgent = CoreAuthStorage.forAgent; return forAgent; }",
+  "export function escapeNestedConstructor() { const AuthStorage = Object.assign(CoreAuthStorage, { forAgent() {}, async forAgentAsync() {}, create() {} }); return AuthStorage; }",
+])("rejects AuthStorage facade escapes beyond its descriptor adapter: %s", (extra) => {
+  expectDenied({
+    ...authStorageSources,
+    "src/agents/sessions/auth-storage.ts":
+      authStorageSources["src/agents/sessions/auth-storage.ts"] + extra,
+  });
+});
+
+it("rejects exporting the captured synchronous AuthStorage factory", () => {
+  expectDenied(
+    {
+      ...authStorageSources,
+      "src/agents/sessions/auth-storage.ts": authStorageSources[
+        "src/agents/sessions/auth-storage.ts"
+      ].replace("const forAgent =", "export const forAgent ="),
+    },
+    [
+      "auth-storage.core.ts:AuthStorage/forAgent",
+      "auth-storage.ts:forAgent from src/agents/sessions/index.ts",
+    ],
   );
 });
 

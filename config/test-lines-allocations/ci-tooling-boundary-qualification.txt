@@ -1,0 +1,2 @@
+# Cover qualified boundary workers, empty selection and new-owner fallbacks.
+39

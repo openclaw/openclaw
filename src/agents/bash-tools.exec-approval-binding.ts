@@ -8,7 +8,7 @@ import {
   type ApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
 import { buildGatewayExecApprovalDeniedToolResult } from "./bash-tools.exec-host-gateway.output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 export async function resolveGatewayExecApprovalDrift(params: {

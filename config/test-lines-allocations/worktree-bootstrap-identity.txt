@@ -1,0 +1,3 @@
+# Project-worktree bootstrap regressions (embedded, CLI, roster-less personal file, Gateway SOUL assertion): +15 net on top of personal-instructions-worktree.txt.
+# The remaining 22 cover main's pre-existing overage at 7283c51 (main was 22 lines over its ceiling before this change).
+37

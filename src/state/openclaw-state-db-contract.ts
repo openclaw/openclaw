@@ -93,6 +93,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pair_setup_completions",
   "github_publication_requests",
   "device_pairing_join_codes",
+  "device_pairing_browser_requests",
   "skill_workshop_changes",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",

@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
@@ -13,6 +14,7 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const scrollTop = (target: Locator) => target.evaluate((element) => element.scrollTop);
@@ -119,19 +121,43 @@ suite.define(() => {
       );
 
       const beforeFooter = await scrollTop(thread);
+      const footerAnchor = await captureTopVisibleVirtualRow(thread);
       await gateway.emitGatewayEvent("chat", {
         sessionKey: "agent:main:main",
         runId,
         state: "delta",
         message: { role: "assistant", content: "Reviewing the workspace.\n\nAnother finding." },
       });
-      await expect.poll(() => thread.textContent()).toContain("Another finding.");
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const pane = document.querySelector<
+              HTMLElement & { state: Pick<ChatPageHost, "sessionKey" | "chatRunId" | "chatStream"> }
+            >("openclaw-chat-pane.chat-pane-cache__pane--active");
+            return {
+              sessionKey: pane?.state.sessionKey,
+              runId: pane?.state.chatRunId,
+              text: pane?.state.chatStream,
+            };
+          }),
+        )
+        .toEqual({
+          sessionKey: "agent:main:main",
+          runId,
+          text: "Reviewing the workspace.\n\nAnother finding.",
+        });
       await waitForChatScrollIdle(page);
-      expect(await scrollTop(thread)).toBe(beforeFooter);
+      expect(await captureTopVisibleVirtualRow(thread)).toMatchObject({
+        key: footerAnchor.key,
+        viewportTop: footerAnchor.viewportTop,
+      });
       await page.locator(".agent-chat__composer-footer").hover();
       await page.mouse.wheel(200, 0);
       await waitForChatScrollIdle(page);
-      expect(await scrollTop(thread)).toBe(beforeFooter);
+      expect(await captureTopVisibleVirtualRow(thread)).toMatchObject({
+        key: footerAnchor.key,
+        viewportTop: footerAnchor.viewportTop,
+      });
       await page.waitForTimeout(201); // Start a second gesture beyond the 200 ms burst window.
       await page.mouse.wheel(0, -200);
       await expect.poll(() => scrollTop(thread)).toBeLessThan(beforeFooter - 100);
@@ -142,18 +168,27 @@ suite.define(() => {
         element.scrollTop = element.scrollHeight;
       });
       await waitForChatScrollIdle(page);
-      const beforeDraft = await scrollTop(thread);
+      const draftAnchor = await captureTopVisibleVirtualRow(thread);
       const draftTop = await scrollTop(composer);
       await composer.hover();
       await page.mouse.wheel(0, -200);
       await expect.poll(() => scrollTop(composer)).toBeLessThan(draftTop);
-      expect(await scrollTop(thread)).toBe(beforeDraft);
+      expect(await captureTopVisibleVirtualRow(thread)).toMatchObject({
+        key: draftAnchor.key,
+        viewportTop: draftAnchor.viewportTop,
+      });
       await composer.evaluate((element) => {
         element.scrollTop = 0;
       });
       await page.mouse.wheel(0, -200);
       await waitForChatScrollIdle(page);
-      expect(await scrollTop(thread)).toBe(beforeDraft);
+      expect(await captureTopVisibleVirtualRow(thread)).toMatchObject({
+        key: draftAnchor.key,
+        viewportTop: draftAnchor.viewportTop,
+      });
+      await page.getByRole("button", { name: "Scroll to latest" }).click();
+      await expect.poll(() => chatThreadDistanceFromBottom(page)).toBeLessThanOrEqual(4);
+      await thread.getByText("Another finding.", { exact: false }).waitFor({ state: "visible" });
     });
   });
 

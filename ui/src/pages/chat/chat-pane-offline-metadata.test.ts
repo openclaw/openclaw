@@ -10,6 +10,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { closeArchiveUndoToast } from "../../test-helpers/archive-undo-window.ts";
 import {
   gatewayHelloForMethods,
   SESSION_MUTATION_TEST_METHODS,
@@ -392,6 +393,8 @@ it.each(["toggle-archived", "delete"] as const)(
       const dialog = await waitForConfirmDialogActions();
       expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
       answerConfirmDialog(dialog, "confirm");
+    } else {
+      await closeArchiveUndoToast();
     }
     await waitForSolid(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(1));
     if (action === "delete") {

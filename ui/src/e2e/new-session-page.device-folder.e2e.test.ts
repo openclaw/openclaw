@@ -113,7 +113,7 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await input.inputValue()).toBe(deviceFolder.path);
       const folder = page.locator(".new-session-page__device-folder");
-      await expect.poll(() => folder.textContent()).toContain("This model can't work");
+      await expect.poll(() => folder.textContent()).toContain("This model can’t work");
       await message.press("Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);

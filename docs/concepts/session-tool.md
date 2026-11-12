@@ -77,22 +77,29 @@ It is not a supervised child and does not send a completion event to the caller;
 do not yield expecting one.
 
 - Supply a nonblank `message` to start the first turn, or omit it to create an idle session.
-- Optional `label`, `agentId`, `cwd`, `group`, `model`, and `permissionMode` configure
+- Optional `label`, `agentId`, `cwd`, `group`, and `model` configure
   the new session. `user` selects the verified requester when needed, as described
-  above. `agentId` defaults to the requesting agent; omitted settings use destination
-  defaults. `group` selects a sidebar category, not execution parentage. The tool
+  above. `agentId` defaults to the requesting agent; model selection follows a
+  visible `sessions_spawn`. `group` selects a sidebar category, not execution parentage. The tool
   does not accept creator identity, role, key, parent, fork, spawn, or adoption fields.
 - The result identifies the new `sessionKey` and `sessionId`. `runStarted` reports
   whether the first turn started; `runId` is present when available. If creation
   succeeds but startup fails, `runError` reports the failure and the session remains
   available. Inspect that session before retrying creation.
 
-The `sessions_create` definition stays in the session's tool catalog across turns;
-execution requires live admitted `operator.sessions.write` authority. The existing
-`sessions` management tool does not create sessions, and senderless runs do not
-gain creation authority. The default sandbox surface for an
-admitted non-owner with session-write authority includes creation and renaming.
-Tool policy and execution-time authority checks still apply.
+`sessions_create` has the same authority as `sessions_spawn` with `visible: true`.
+Any turn that can start a visible spawn can create a session, including a channel
+turn from a sender without a linked operator profile. The new session records the
+requesting session as its parent. It inherits that turn's sandbox requirement, tool
+policy, and permission mode, so it is never less contained than the turn that
+created it. Agent targets, spawn depth, and child limits follow the same
+`subagents` admission rules. Unlike a visible spawn, the session is not registered
+as a supervised run.
+
+The `sessions_create` definition stays in the session's tool catalog across turns.
+The existing `sessions` management tool does not create sessions. The default
+sandbox surface for an admitted non-owner with session-write authority includes
+creation and renaming. Tool policy still applies.
 
 Use `sessions_spawn` for actual delegated helpers. Hidden children are the default;
 `visible: true` remains available for deliberately supervised child work the user

@@ -38,6 +38,7 @@ import {
 } from "../sessions/session-key-utils.js";
 import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
+export type * from "./core-service.types.js";
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -49,10 +50,6 @@ export type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-  OpenClawPluginServiceContextV2,
-  OpenClawPluginServiceV2,
   PluginCommandContext,
   PluginCommandResult,
   PluginAgentEventEmitParams,
@@ -70,7 +67,6 @@ export type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
-  PluginServiceSchedulerV1,
   PluginSessionActionContext,
   PluginSessionActionRegistration,
   PluginSessionActionResult,
@@ -761,7 +757,6 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.setupContract ? { setupContract: params.setupContract } : {}),
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 export type {
   ChannelGatewayContextV2,

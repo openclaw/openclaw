@@ -3,7 +3,12 @@ import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
-import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
+import {
+  canShareSqliteDatabaseAdmissions,
+  getSqliteDatabaseAdmissionIdentityForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../infra/sqlite-database-admission.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -162,7 +167,7 @@ export function runOpenClawAgentWriteAdmission<T>(
 }
 
 /** A captured physical actor needs no logical agent or ambient path resolution. */
-export function runOpenClawAgentPathWriteAdmission<T>(
+export async function runOpenClawAgentPathWriteAdmission<T>(
   pathname: string,
   run: (identity: DatabasePathIdentity, assertCurrent: () => void) => Promise<T> | T,
   reentrant = false,
@@ -171,10 +176,21 @@ export function runOpenClawAgentPathWriteAdmission<T>(
   caller?: DirectReservationCaller,
   concurrentBoardReads?: "transcript-only",
 ): Promise<T> {
-  const identity = readDatabasePathIdentitySync(pathname);
+  const admitted = getSqliteDatabaseAdmissionIdentityForPath(pathname);
+  const retained =
+    canShareSqliteDatabaseAdmissions() &&
+    admitted &&
+    hasSqliteDatabaseSchemaAdmissionForIdentity(admitted)
+      ? retainSqliteDatabaseAdmissionForPath(pathname)
+      : undefined;
+  const identity = retained?.identity ?? readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
   const assertCurrent = () => {
-    if (identity.key.startsWith("file:")) {
+    if (retained) {
+      if (!retained.isCurrent()) {
+        throw new Error("Agent database target changed before write admission");
+      }
+    } else if (identity.key.startsWith("file:")) {
       try {
         assertExistingDatabaseIdentity(pathname, identity.key, identity.birthtime);
       } catch (cause) {
@@ -184,43 +200,47 @@ export function runOpenClawAgentPathWriteAdmission<T>(
       throw new Error("Agent database target changed before write admission");
     }
   };
-  return observeWriteAdmission(
-    "direct",
-    timing,
-    (observed) => {
-      observeBlockingWriter(storePath, observed);
-      // Cold tasks may need a host write before releasing their admission turn.
-      return runWithSqliteDatabaseAdmissionTurn(
-        [pathname],
-        () =>
-          runQueuedStoreWrite({
-            queues: admission.queues,
-            storePath,
-            label: "agent database write admission",
-            keys: concurrentBoardReads ? ["transcript"] : undefined,
-            // Worker callbacks inherit their parent's async context, but not its native
-            // writer lock. Their foreground writes must queue, never reenter that owner.
-            reentrant: reentrant && !admission.queues.get(storePath)?.holder?.worker,
-            fn: async () => {
-              assertCurrent();
-              const queue = admission.queues.get(storePath)!;
-              const previousHolder = queue.holder;
-              queue.holder = observed;
-              try {
-                return await run(identity, assertCurrent);
-              } finally {
-                queue.holder = previousHolder;
-              }
-            },
-            timing: observed,
-            signal,
-          }),
-        [],
-        signal,
-      );
-    },
-    caller,
-  );
+  try {
+    return await observeWriteAdmission(
+      "direct",
+      timing,
+      (observed) => {
+        observeBlockingWriter(storePath, observed);
+        // Cold tasks may need a host write before releasing their admission turn.
+        return runWithSqliteDatabaseAdmissionTurn(
+          [pathname],
+          () =>
+            runQueuedStoreWrite({
+              queues: admission.queues,
+              storePath,
+              label: "agent database write admission",
+              keys: concurrentBoardReads ? ["transcript"] : undefined,
+              // Worker callbacks inherit their parent's async context, but not its native
+              // writer lock. Their foreground writes must queue, never reenter that owner.
+              reentrant: reentrant && !admission.queues.get(storePath)?.holder?.worker,
+              fn: async () => {
+                assertCurrent();
+                const queue = admission.queues.get(storePath)!;
+                const previousHolder = queue.holder;
+                queue.holder = observed;
+                try {
+                  return await run(identity, assertCurrent);
+                } finally {
+                  queue.holder = previousHolder;
+                }
+              },
+              timing: observed,
+              signal,
+            }),
+          [],
+          signal,
+        );
+      },
+      caller,
+    );
+  } finally {
+    retained?.release();
+  }
 }
 
 /** Reserve a native write permit without admitting inherited foreground callbacks. */

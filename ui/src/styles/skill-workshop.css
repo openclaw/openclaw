@@ -276,9 +276,8 @@
   font-size: var(--control-ui-text-sm);
 }
 
-.sw-notice--warning {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--text);
+.sw-detail-alert {
+  margin: 0 var(--space-5) var(--space-3);
 }
 
 .sw-tabs {
@@ -553,6 +552,8 @@
   font-size: var(--control-ui-text-xs);
 }
 
+/* Outranks the carapace settings-group block display so the panel stacks with gaps. */
+.sw-empty.settings-group.oc-settings-group,
 .sw-empty {
   display: grid;
   justify-items: center;
@@ -562,15 +563,51 @@
   text-align: center;
 }
 
+.sw-empty__title {
+  color: var(--oc-text-primary);
+}
+
+.sw-empty .oc-banner {
+  justify-self: stretch;
+  text-align: start;
+}
+
 .sw-empty__icon svg {
   width: 28px;
   height: 28px;
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .sw-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    /* Holds the mode row's space until the first read returns it. */
+    min-height: 84px;
+    align-content: start;
+  }
+
+  .sw-toolbar__end {
+    display: contents;
+  }
+
+  .sw-learning {
+    grid-area: 2 / 1 / auto / -1;
+    justify-content: space-between;
+  }
+
+  .sw-tabs {
+    border-bottom: 0;
+  }
 }
 
 @media (max-width: 900px) {
   .sw-layout,
   .sw-files {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sw-layout > .sw-detail {
+    scroll-margin-top: var(--space-3);
   }
 
   .sw-detail__body {

@@ -234,6 +234,49 @@ describe("grouped chat rendering", () => {
     expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
   });
 
+  it.each(["image only", "text then image", "image then text"])(
+    "keeps inspected images in tool details with %s",
+    async (order) => {
+      const images = ["one", "two", "three"].map((alt) => ({
+        type: "image",
+        data: "cG5n",
+        mimeType: "image/png",
+        alt,
+      }));
+      const imageCall = createToolCall("inspect", "view_image", { path: "avatar-previews.png" });
+      const textCall = createToolCall("read", "read_file", { path: "brief.md" });
+      const call = createAssistantMessage(
+        order === "image only"
+          ? [imageCall]
+          : order === "text then image"
+            ? [textCall, imageCall]
+            : [imageCall, textCall],
+      );
+      const textResult = createToolResultMessage(
+        "read",
+        "read_file",
+        "Inspect the preview images.",
+      );
+      const result = createToolResultMessage("inspect", "view_image", [
+        { type: "text", text: "Loaded 3 images for inspection." },
+        ...images,
+      ]);
+      const delivered = createAssistantMessage(images);
+      const groups = buildItems({
+        messages: [call, ...(order === "image only" ? [] : [textResult]), result, delivered],
+      }).filter((item) => item.kind === "group");
+      for (const expanded of [false, true, false]) {
+        await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
+        if (order === "image only") {
+          expect(elementText(".chat-tool-msg-summary")).toContain("avatar-previews.png");
+        }
+        expectCount(".chat-group.assistant .chat-message-image", 3);
+        expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);
+        expectCount(".chat-message-image", expanded ? 6 : 3);
+      }
+    },
+  );
+
   it("keeps text visible beside an orphan tool-result image", async () => {
     await renderToolGroups(
       [

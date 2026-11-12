@@ -297,14 +297,23 @@ sessions or its Board agent conversation.
 
 ## Card fields
 
-| Field       | Values                                                                                                        |
-| ----------- | ------------------------------------------------------------------------------------------------------------- |
-| `status`    | `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`                     |
-| `priority`  | `low`, `normal`, `high`, `urgent`                                                                             |
-| `labels`    | free-form strings                                                                                             |
-| `agentId`   | optional assigned agent                                                                                       |
-| linked refs | optional task, run, session, or source URL                                                                    |
-| `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status) |
+| Field       | Values                                                                                                                                 |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`     | required, up to 180 characters                                                                                                         |
+| `notes`     | optional, up to 4000 characters                                                                                                        |
+| `status`    | `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`, `review`, `blocked`, `done`                                              |
+| `priority`  | `low`, `normal`, `high`, `urgent`                                                                                                      |
+| `labels`    | free-form strings, up to 40 characters each; duplicates are removed and only the first 12 distinct labels are kept, extras are dropped |
+| `agentId`   | optional assigned agent                                                                                                                |
+| linked refs | optional task, run, session, or source URL                                                                                             |
+| `execution` | optional metadata for a Codex/Claude run started from the card (engine, mode, model, session, run id, status)                          |
+
+Values over a length limit are rejected with an error such as `labels must be 40 characters or fewer.`
+Labels after the 12th distinct one are ignored without being checked, so an over-long label in that
+position does not cause an error.
+When creating cards (for example with `workboard_create`), `parents` (card ids, up to 120 characters
+each) and `skills` (up to 80 characters each) accept at most 20 distinct entries; more
+are rejected.
 
 Cards also carry compact metadata:
 
@@ -680,9 +689,13 @@ If an active linked session stops reporting recent activity, Workboard marks the
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
 not depend on an open browser tab. Subagent completion hooks persist terminal
-outcomes immediately. Agent attempt hooks consult the linked session state:
-finishing a model attempt does not move a card into `review` or `blocked` while
-its run is still active. A recovery sweep runs once per minute and reads only the
+outcomes immediately. For ordinary agent runs, Workboard consumes the execution
+owner's settled lifecycle event and final outcome, not the attempt-level
+`agent_end` hook or a timed session re-read. Intermediate fallback attempts and
+yielded turns leave the card running. Success moves the matching run to `review`;
+failure, cancellation, or timeout moves it to `blocked`. Events for an older
+linked run cannot settle a newer run, and retired services discard queued events.
+A recovery sweep runs once per minute and reads only the
 sessions linked to active cards, sharing each read across cards with the same link.
 Settled cards stop polling unless they retain pending lifecycle state. Provisional
 Workboard links share one configured-agent roster per sweep and check exact candidates; ambiguous

@@ -48,6 +48,7 @@ export function gatewaySnapshot(
   connected = true,
   methods: string[] = [],
   scopes = ["operator.read", "operator.pairing"],
+  roleAllowsAdmin?: boolean,
 ): ApplicationGatewaySnapshot {
   return createApplicationGatewaySnapshot({
     client,
@@ -56,7 +57,7 @@ export function gatewaySnapshot(
     hello: {
       type: "hello-ok",
       protocol: 1,
-      auth: { role: "operator", scopes },
+      auth: { role: "operator", scopes, roleAllowsAdmin },
       features: { methods },
       snapshot: { presence: [gatewayPresence] },
     },
@@ -129,6 +130,7 @@ export function mountPage(
   );
   const configListeners = new Set<() => void>();
   const reloadConfig = vi.fn(async () => undefined);
+  const refreshConfig = vi.fn(async () => undefined);
   const router = createRouter({
     routes: [
       definePage({ id: "devices", path: "/devices", component: () => ({}) }),
@@ -144,6 +146,7 @@ export function mountPage(
     runtimeConfig: runtimeConfig ?? {
       state: { configSnapshot: {}, configForm: {}, configLoading: false, configFormMode: "form" },
       ensureLoaded: async () => undefined,
+      refresh: refreshConfig,
       subscribe: (listener: () => void) => {
         configListeners.add(listener);
         return () => configListeners.delete(listener);
@@ -178,6 +181,7 @@ export function mountPage(
     container,
     config: context.runtimeConfig.state,
     reloadConfig,
+    refreshConfig,
     publishConfig: () => configListeners.forEach((listener) => listener()),
     router,
     dispose,
@@ -246,19 +250,13 @@ export async function selectEntryAction(
 ) {
   // Let initial native readiness settle before keeping an interactive row reference.
   await waitForSolid(() => expect(container.textContent).toContain(name));
+  const selector = `[data-device-action="${action}"]`;
   const row = [...container.querySelectorAll(".device-entry")].find(
-    (entry) => entry.querySelector(".settings-row__title")?.textContent === name,
+    (entry) =>
+      entry.querySelector(".settings-row__title")?.textContent === name &&
+      entry.querySelector(selector) !== null,
   );
-  const trigger = expectDefined(
-    row?.querySelector<HTMLButtonElement>(".device-entry__menu-trigger"),
-    "device actions trigger",
-  );
-  trigger.click();
-  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-  expectDefined(
-    row?.querySelector<HTMLButtonElement>(`[role="menuitem"][data-value="${action}"]`),
-    `device action ${action}`,
-  ).click();
+  expectDefined(row?.querySelector<HTMLButtonElement>(selector), `device action ${action}`).click();
   await Promise.resolve();
   flush();
 }
@@ -302,7 +300,7 @@ export function setupDevicesPageFixtures() {
   beforeEach(() => {
     dialogs = createModalDialogTestFixture((modal) => {
       const acknowledge = modal.querySelector<HTMLButtonElement>(
-        ".exec-approval-actions button[autofocus]",
+        "openclaw-modal-actions button[autofocus]",
       );
       if (acknowledge) {
         acknowledge.click();

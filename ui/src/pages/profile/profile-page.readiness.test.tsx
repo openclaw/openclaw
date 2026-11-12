@@ -41,18 +41,20 @@ it("reveals identity and following settings before preferences finish, then enab
   try {
     await waitForSolid(() => {
       expect(request).not.toHaveBeenCalledWith("users.self", {});
-      expect(page.querySelector(".profile-hero")).not.toBeNull();
+      // No person yet and the identity is pending: no agent header that the person would replace.
+      expect(page.querySelector(".profile-hero")).toBeNull();
       expect(page.querySelector("#settings-profile-access")).not.toBeNull();
       expect(page.querySelector(".settings-loading-skeleton")).not.toBeNull();
       expect(personalInstructions).not.toBeNull();
       expect(page.querySelector("openclaw-model-accounts")).toBeNull();
-      expect(page.querySelector(".settings-row--nav")).toBeNull();
+      expect(page.querySelector("button.settings-row--nav")).toBeNull();
     });
     harness.emitSnapshot({ selfUser: { id: modelAccountProfile.id, name: "Ada" } });
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledWith("users.self", {});
+      expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada");
       expect(page.querySelector("openclaw-model-accounts")).toBeNull();
-      expect(page.querySelector(".settings-row--nav")).toBeNull();
+      expect(page.querySelector("button.settings-row--nav")).toBeNull();
     });
     identity.resolve({ profile: modelAccountProfile });
     await waitForSolid(() => {
@@ -61,11 +63,15 @@ it("reveals identity and following settings before preferences finish, then enab
       });
       expect(page.textContent).toContain("ada@example.test");
       expect(page.querySelector("openclaw-model-accounts")).not.toBeNull();
-      expect(page.querySelector(".settings-row--nav")?.textContent).toContain("Usage statistics");
+      expect(page.querySelector("button.settings-row--nav")?.textContent).toContain(
+        "Usage statistics",
+      );
       expect(input()).toMatchObject({ value: "Ada", disabled: true });
       expect(
         [
-          ...page.querySelectorAll<HTMLInputElement>('#settings-profile-identity [role="switch"]'),
+          ...page.querySelectorAll<HTMLInputElement>(
+            '#settings-profile-attribution [role="switch"]',
+          ),
         ].map((toggle) => toggle.disabled),
       ).toEqual([true, true]);
     });
@@ -77,7 +83,9 @@ it("reveals identity and following settings before preferences finish, then enab
       expect(input()).toMatchObject({ value: "Ada", disabled: false });
       expect(
         [
-          ...page.querySelectorAll<HTMLInputElement>('#settings-profile-identity [role="switch"]'),
+          ...page.querySelectorAll<HTMLInputElement>(
+            '#settings-profile-attribution [role="switch"]',
+          ),
         ].map((toggle) => ({ checked: toggle.checked, disabled: toggle.disabled })),
       ).toEqual([
         { checked: false, disabled: false },

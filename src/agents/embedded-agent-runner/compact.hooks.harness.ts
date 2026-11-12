@@ -12,6 +12,7 @@ import {
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
 import type { AgentSession } from "../sessions/agent-session.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 import type { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import {
   getMemoryProviderMock,
@@ -229,9 +230,7 @@ const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) 
   flushPendingToolResultsAsync: vi.fn(async () => undefined),
 }));
 const applyAgentCompactionSettingsFromConfigMock = vi.fn();
-const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
-  getGlobalSettings: vi.fn(() => ({})),
-}));
+const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => SettingsManager.inMemory());
 const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
   params?.surface === "subagent"
     ? ["Subagent compact command guidance."]
@@ -240,7 +239,7 @@ const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: 
       : ["Main compact command guidance."],
 );
 export const buildConfiguredAgentSystemPromptMock = vi.fn<typeof buildConfiguredAgentSystemPrompt>(
-  () => "",
+  async () => "",
 );
 export const resolveSkillsPromptMock = vi.fn<
   typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt
@@ -488,9 +487,9 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   guardSessionManagerMock.mockReset();
   applyAgentCompactionSettingsFromConfigMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReset();
-  createPreparedEmbeddedAgentSettingsManagerMock.mockReturnValue({
-    getGlobalSettings: vi.fn(() => ({})),
-  });
+  createPreparedEmbeddedAgentSettingsManagerMock.mockImplementation(() =>
+    SettingsManager.inMemory(),
+  );
 }
 
 export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
@@ -931,7 +930,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   return {
     ...compactModule,
     compactEmbeddedAgentSession: (params, host = {}) =>
-      compactQueuedModule.compactEmbeddedAgentSession(params, {
+      compactQueuedModule.compactQueuedEmbeddedAgentSession(params, {
         ...host,
         sourceAuthority: host.sourceAuthority ?? {
           assertActive: host.assertActive ?? (() => {}),

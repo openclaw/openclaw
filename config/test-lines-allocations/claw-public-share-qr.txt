@@ -1,0 +1,2 @@
+# Exact net regression growth: recover the single-pincer notch and wrist from rendered QR pixels.
+17

@@ -1,0 +1,2 @@
+# Unix socket path byte limits, inherited cleanup claims, and agent output guidance.
+56

@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -20,7 +21,9 @@ import {
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { getBackgroundOwnerLane } from "../process/background-work.js";
+import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
@@ -36,8 +39,13 @@ import {
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
-import type { SessionForkRequester } from "./session-fork-requester.js";
+import {
+  readSessionForkRequesterFromTurn,
+  type SessionForkRequester,
+} from "./session-fork-requester.js";
+import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 /**
@@ -46,7 +54,7 @@ import { SessionManager } from "./sessions/session-manager.js";
  * transcript, yields to foreground work, and stops when the source session is reset, replaced
  * or rewritten. Tools see the source through `inputProvenance` (`sourceTool: "session_fork"`).
  */
-export type SessionForkRunParams = {
+type SessionForkRunParams = {
   config: OpenClawConfig;
   /** The completed transcript entry the fork reads through. */
   source: TranscriptEntryAnchor;
@@ -61,6 +69,8 @@ export type SessionForkRunParams = {
   workspaceDir: string;
   /** The finished turn's requester; its current policy is checked again for the run. */
   requester?: SessionForkRequester;
+  /** Plugin-owned tools added for this run; the source session's deny policy still applies. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
   timeoutMs: number;
   abortSignal?: AbortSignal;
   /** The caller's own liveness, rechecked with the source fences (for example, a feature switch). */
@@ -68,6 +78,72 @@ export type SessionForkRunParams = {
   /** The exact source generation the fork read, reported before the model runs. */
   onSourceAdmitted?: (entry: { sessionId: string; lifecycleRevision?: string | null }) => void;
 };
+
+// A fork reads only a bounded suffix through the completed entry; it does not need to repay the
+// entire conversation's token budget for one background task.
+const FORK_CONTEXT_LIMITS = {
+  maxBytes: 32_768,
+  maxEvents: 64,
+  toolResultOverflow: "omit",
+} as const;
+
+// Retain initiating input across long tool loops without hydrating every result body.
+const FORK_TURN_SEARCH_LIMITS = {
+  maxBytes: 8_388_608,
+  maxEvents: 20_000,
+  toolResultOverflow: "omit",
+} as const;
+
+type SessionForkTurn = {
+  /** Undefined for a turn stored before requester recording; callers use session facts. */
+  requester?: SessionForkRequester;
+  model?: { provider: string; model: string };
+};
+
+/**
+ * Facts of the turn a fork reads through: the requester its initiating user message recorded and
+ * the model its last assistant message ran on. The search stops at that turn's initiating input,
+ * within a bounded window. Returns undefined when that window no longer holds the input
+ * (too large or compacted mid-turn), so callers refuse instead of guessing the requester.
+ */
+export async function readSessionForkTurn(
+  source: TranscriptEntryAnchor,
+  signal?: AbortSignal,
+): Promise<SessionForkTurn | undefined> {
+  let model: SessionForkTurn["model"];
+  const sessionManager = await SessionManager.openModelContextAsync(source, {
+    through: source,
+    limits: FORK_TURN_SEARCH_LIMITS,
+    ...(signal ? { signal } : {}),
+  });
+  for (const entry of sessionManager.getBranch().toReversed()) {
+    if (entry.type !== "message") {
+      continue;
+    }
+    const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    if (
+      !model &&
+      message.role === "assistant" &&
+      typeof message.provider === "string" &&
+      typeof message.model === "string" &&
+      message.provider &&
+      message.model
+    ) {
+      model = { provider: message.provider, model: message.model };
+    }
+    if (message.role !== "user") {
+      continue;
+    }
+    const meta = asOptionalRecord(Reflect.get(message, "__openclaw"));
+    // Steering joins a running turn; the turn's requester is its initiating input.
+    if (typeof meta?.steerTargetRunId === "string") {
+      continue;
+    }
+    const requester = readSessionForkRequesterFromTurn(meta);
+    return { ...(requester ? { requester } : {}), ...(model ? { model } : {}) };
+  }
+  return undefined;
+}
 
 /**
  * Admits a fork before any model call: every fork tool must pass the source session's policy.
@@ -80,6 +156,7 @@ export async function prepareSessionFork(params: {
   model: { provider: string; model: string };
   workspaceDir: string;
   requester?: SessionForkRequester;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
 }): Promise<{ workspaceDir: string } | undefined> {
   const { prepareConversationCapabilityProfile } =
     await import("./conversation-capability-profile.js");
@@ -100,6 +177,7 @@ export async function prepareSessionFork(params: {
     agentId: params.source.agentId,
     ...sessionConversationFacts(entry),
     ...params.requester,
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
     modelProvider: params.model.provider,
     modelId: params.model.model,
     workspaceDir,
@@ -132,9 +210,13 @@ function sessionConversationFacts(entry: SessionEntry | undefined) {
   };
 }
 
-export type SessionForkOutcome =
-  | { ok: true; result: Awaited<ReturnType<typeof runSessionForkInner>> }
-  | { ok: false; error: unknown };
+/**
+ * `cancelled` marks an expected stop: the caller's signal, a Gateway restart drain, yielding to
+ * foreground work, or the source session changing under the fork. Anything else is a failure.
+ */
+type SessionForkOutcome =
+  | { ok: true; result: EmbeddedAgentRunResult }
+  | { ok: false; error: unknown; cancelled: boolean };
 
 /**
  * Runs the fork, then the caller's settlement (for example, announcing what the fork's tools
@@ -153,9 +235,18 @@ export async function runSessionFork<T>(
     async () => {
       let outcome: SessionForkOutcome;
       try {
-        outcome = { ok: true, result: await runSessionForkInner(params, abortSignal) };
+        const result = await runSessionForkInner(params, abortSignal);
+        assertSessionForkRunSucceeded(result);
+        outcome = { ok: true, result };
       } catch (error) {
-        outcome = { ok: false, error };
+        outcome = {
+          ok: false,
+          error,
+          cancelled:
+            abortSignal.aborted ||
+            isExpectedRunCancellation(error) ||
+            (error instanceof Error && error.name === "AbortError"),
+        };
       }
       return await settle(outcome);
     },
@@ -180,8 +271,6 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     },
   };
 
-  // Read only a bounded suffix through the completed entry. A fork does not need to repay the
-  // entire conversation's token budget for one background task.
   const prepare = async (
     scoped: TranscriptEntryAnchor,
     assertPhysicalCurrent: () => void,
@@ -191,7 +280,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     const sessionManager = await SessionManager.openModelContextAsync(scoped, {
       cwd: workspaceDir,
       through: source,
-      limits: { maxBytes: 32_768, maxEvents: 64, toolResultOverflow: "omit" },
+      limits: FORK_CONTEXT_LIMITS,
       signal: abortSignal,
     });
     assertPreparationCurrent();
@@ -375,6 +464,9 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       sandboxAgentId: agentId,
       ...sessionConversationFacts(entry),
       ...params.requester,
+      ...(params.runtimePluginToolGrant
+        ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
       inputProvenance: {
         kind: "internal_system",
         sourceTool: SESSION_FORK_SOURCE_TOOL,

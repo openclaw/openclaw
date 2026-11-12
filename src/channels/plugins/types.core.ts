@@ -259,7 +259,17 @@ export type ChannelSecurityContext<ResolvedAccount = unknown> = {
   account: ResolvedAccount;
 };
 
+/** Display-only native references; never recipients, routing, or sender authority. */
+export type ChannelDisplayMention = {
+  start: number;
+  end: number;
+  senderId: string;
+  fallbackLabel?: string;
+};
+
 export type ChannelMentionAdapter = {
+  /** Return ordered, non-overlapping native ranges using canonical sender IDs. */
+  readDisplayMentions?: (text: string) => readonly ChannelDisplayMention[];
   stripRegexes?: (params: {
     ctx: MsgContext;
     cfg: OpenClawConfig | undefined;
@@ -706,6 +716,11 @@ export type ChannelMessageActionContext = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Revalidate the same owner synchronously after waits and immediately before platform I/O. */
   assertDirectAdapterHandoff?: () => void;
+  /**
+   * Host-owned cancellation for the originating invocation. Plugins may drop
+   * work that was never issued; platform I/O already dispatched settles normally.
+   */
+  abortSignal?: AbortSignal;
   /** Ephemeral-authority sends must not enter replayable recovery. */
   skipQueue?: boolean;
 };

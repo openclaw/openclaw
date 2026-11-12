@@ -29,6 +29,7 @@ export function hasLoadedDetailsSubagents(
 ) {
   return (
     details.subagentSessionsHydrated &&
+    !details.subagentSessionsPending &&
     details.subagentSessions?.some((row) =>
       areUiSessionKeysEquivalent(row.key, details.selectedSession?.key),
     )

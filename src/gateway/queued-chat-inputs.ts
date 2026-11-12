@@ -5,17 +5,21 @@ import { readSessionQueuedInputPage } from "../config/sessions/session-pending-i
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
 import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
 import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
+import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { queuedChatInputAdmission } from "./queued-chat-input-admission.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
 type Target = { agentId: string; storePath: string; sessionKey: string; sessionId: string };
+type QueuedInputSources = NonNullable<
+  NonNullable<InternalSessionEntry["resumeAfterRestart"]>["queuedInputSources"]
+>;
 
 async function failQueuedInput(
   target: Target,
@@ -51,6 +55,7 @@ export async function continueSessionQueuedInputs(
     signal: AbortSignal;
     assertCurrent: () => void;
     queuedInputIds: readonly string[];
+    queuedInputSources?: QueuedInputSources;
   },
 ): Promise<void> {
   const assertCurrent = () => {
@@ -61,7 +66,7 @@ export async function continueSessionQueuedInputs(
     assertCurrent();
     const message = parseSessionPendingInputMessage(row.message_json);
     const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
-    let admitted: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>> | undefined;
+    let admitted: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
     try {
       // A paired browser's process-local tab/profile capability cannot survive restart.
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
@@ -70,14 +75,20 @@ export async function continueSessionQueuedInputs(
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
       }
-      admitted = await prepareSessionPrincipalRunAuthority({
+      const retained = options.queuedInputSources?.[row.input_id];
+      if (!retained || retained.runId !== row.run_id) {
+        throw new Error("Queued input has no original operator source; submit a new request.");
+      }
+      admitted = await restoreGatewayQueuedOperatorRecovery({
         context,
-        ...target,
-        profileId: sender.id,
+        source: retained.source,
         assertCurrent,
       });
       const { authority } = admitted;
       authority.assertCurrent();
+      if (authority.profileId !== sender.id) {
+        throw new Error("Queued input operator source does not match its sender.");
+      }
       const profile = getResidentUserProfileDisplay(authority.profileId);
       const client = createSyntheticPluginRuntimeClient({
         operatorRoleActor: { kind: "operator", profileId: authority.profileId },

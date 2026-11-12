@@ -9,6 +9,11 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { i18n } from "../../i18n/index.ts";
+import {
+  captureI18nStateForTesting,
+  createI18nManagerForTesting,
+} from "../../i18n/lib/translate.test-support.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -68,16 +73,13 @@ function createCatalogContinuationPane(request: ReturnType<typeof vi.fn>) {
   return fixture;
 }
 
-function startContinuation() {
+async function startContinuation() {
   const continued = createDeferred<{ sessionKey: string }>();
   const request = vi.fn(() => continued.promise);
   const fixture = createCatalogContinuationPane(request);
-  return {
-    ...fixture,
-    request,
-    continued,
-    pending: fixture.pane.continueCatalogSession(fixture.key),
-  };
+  const pending = fixture.pane.continueCatalogSession(fixture.key);
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+  return { ...fixture, request, continued, pending };
 }
 
 function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogContinuationPane>) {
@@ -88,6 +90,47 @@ function expectNoContinuation({ pane, state }: ReturnType<typeof createCatalogCo
 }
 
 describe("chat pane catalog", () => {
+  it("preserves publisher-only Beam read routing after lazy admission", async () => {
+    const key = { ...catalogKey, catalogId: "beam" };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalogList(key, [catalogSession]))
+      .mockResolvedValueOnce({ hostId: key.hostId, threadId: key.threadId, items: [] });
+    const { pane } = createCatalogPane(request, key, true);
+    Object.assign(pane.context.gateway.snapshot, {
+      hello: {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: ["operator.sessions.write"] },
+        features: { methods: ["beam.owned.list", "beam.owned.read"] },
+      },
+    });
+    expect(await pane.loadCatalogSession(key, false)).toBe(true);
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "beam.owned.list",
+      "beam.owned.read",
+    ]);
+  });
+
+  it("refreshes selected metadata without replacing retained transcript or pagination", async () => {
+    const query = { relationship: "involving", target: { type: "me" } } as const;
+    const request = vi.fn().mockResolvedValueOnce(catalogList(catalogKey, [catalogSession]));
+    const { pane } = createCatalogPane(request, catalogKey, true);
+    pane.catalogProfileRelation = query;
+    const messages = [{ role: "assistant", content: [{ type: "text", text: "Retained page" }] }];
+    pane.history.catalogMessages = messages;
+    pane.history.catalogCursor = "older-retained";
+    expect(await pane.loadCatalogSession(catalogKey, false, true)).toBe(true);
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "sessions.catalog.list",
+      expect.objectContaining({ profileRelation: query }),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(pane.history.catalogMessages).toBe(messages);
+    expect(pane.history.catalogCursor).toBe("older-retained");
+    expect(pane.history.catalogSession).toEqual(catalogSession);
+  });
+
   it("carries a relationship query from metadata lookup through transcript pagination", async () => {
     const query = { relationship: "involving", target: { type: "me" } } as const;
     const request = vi
@@ -185,6 +228,72 @@ describe("chat pane catalog", () => {
     expect(await pending).toBe(false);
     expect(JSON.stringify(pane.history.catalogMessages)).not.toContain("obsolete");
   });
+  it("localizes the source handoff gate and clears it after handoff", async () => {
+    onTestFinished(captureI18nStateForTesting());
+    const localized = "原始发布者必须在原始会话中运行移交命令，才能在此继续。";
+    const manager = createI18nManagerForTesting(async () => ({
+      chat: { catalog: { sourceHandoffRequired: localized } },
+    }));
+    await manager.setLocale("zh-CN");
+    const translate = vi.spyOn(i18n, "t").mockImplementation(manager.t.bind(manager));
+    onTestFinished(() => translate.mockRestore());
+    const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture());
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
+    pane.sessionKey = state.sessionKey = buildCatalogSessionKey(catalogKey, "main");
+    pane.history.catalogSession = {
+      ...catalogSession,
+      canContinue: false,
+      continuationUnavailableReasonCode: "source-handoff-required",
+      continuationUnavailableReason: "Untranslated source explanation.",
+    };
+
+    pane.render();
+    expect(pane.chatProps?.disabledReason).toBe(localized);
+
+    pane.history.catalogSession.canContinue = true;
+    pane.render();
+    expect(pane.chatProps?.disabledReason).toBeNull();
+  });
+
+  it("preserves provider explanations without a known localization code", () => {
+    const { pane, state } = createRefreshChatPane(createGatewayBrowserClientFixture());
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
+    pane.sessionKey = state.sessionKey = buildCatalogSessionKey(catalogKey, "main");
+    pane.history.catalogSession = {
+      ...catalogSession,
+      canContinue: false,
+      continuationUnavailableReason: "Release this source before continuing.",
+    };
+
+    pane.render();
+    expect(pane.chatProps?.disabledReason).toBe("Release this source before continuing.");
+  });
+
+  it("does not dispatch a continuation after its owner changes during action loading", async () => {
+    const held = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    vi.doMock("./chat-pane-catalog-continuation.runtime.ts", async (importOriginal) => {
+      started.resolve();
+      await held.promise;
+      return importOriginal();
+    });
+    const request = vi.fn();
+    const fixture = createCatalogContinuationPane(request);
+    const pending = fixture.pane.continueCatalogSession(fixture.key);
+    onTestFinished(async () => {
+      fixture.pane.connectionGeneration += 1;
+      held.resolve();
+      vi.doUnmock("./chat-pane-catalog-continuation.runtime.ts");
+      await pending;
+    });
+    await started.promise;
+    fixture.pane.connectionGeneration += 1;
+    held.resolve();
+    await pending;
+    expect(request).not.toHaveBeenCalled();
+    expectNoContinuation(fixture);
+  });
+
   it("reuses catalog history while admitting an older page", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);
@@ -427,6 +536,11 @@ describe("chat pane catalog", () => {
     const pending = pane.loadCatalogSession(key, true);
     const continuing = pane.continueCatalogSession(key);
     await vi.waitFor(() => expect(reads).toBe(1));
+    await vi.waitFor(() =>
+      expect(request.mock.calls.some(([method]) => method === "sessions.catalog.continue")).toBe(
+        true,
+      ),
+    );
     pane.presented = false;
     expect(signal?.aborted).toBe(true);
     expect(
@@ -548,6 +662,22 @@ describe("chat pane catalog", () => {
     },
   );
 
+  it("keeps the composed draft when catalog adoption fails", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("Synthetic adoption refused"));
+    const { key, pane, state } = createCatalogContinuationPane(request);
+    const draft = state.chatMessage;
+    const attachments = state.chatAttachments;
+
+    await pane.continueCatalogSession(key);
+
+    expect(state.chatMessage).toBe(draft);
+    expect(state.chatAttachments).toBe(attachments);
+    expect(state.chatSending).toBe(false);
+    expect(state.lastError).toContain("Synthetic adoption refused");
+    expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
+    expect(state.handleSendChat).not.toHaveBeenCalled();
+  });
+
   it("still ignores a continuation with no draft and no attachments", async () => {
     const request = vi.fn();
     const { key, pane, state } = createCatalogContinuationPane(request);
@@ -582,6 +712,7 @@ describe("chat pane catalog", () => {
       const { key, pane, state, sessions } = fixture;
       state.assistantAgentId = "main";
       const pending = pane.continueCatalogSession(key);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       const replacement = { request: vi.fn() } as unknown as GatewayBrowserClient;
       if (changed === "conversation" || changed === "pane owner") {
         state.sessionKey =
@@ -621,7 +752,7 @@ describe("chat pane catalog", () => {
   );
 
   it("does not clear a newer scoped send when a stale catalog continuation resolves", async () => {
-    const { pane, state, continued, pending } = startContinuation();
+    const { pane, state, continued, pending } = await startContinuation();
     state.sessionKey = "agent:main:different-conversation";
     pane.sessionKey = state.sessionKey;
     pane.catalogLoadGeneration += 1;
@@ -645,8 +776,10 @@ describe("chat pane catalog", () => {
     const { key, pane, state } = createCatalogContinuationPane(request);
 
     const staleContinuation = pane.continueCatalogSession(key);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     state.chatMessage = "Only send the latest catalog draft";
     const currentContinuation = pane.continueCatalogSession(key);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
     first.resolve({ sessionKey: "agent:main:stale-continuation" });
     await staleContinuation;
 
@@ -670,7 +803,7 @@ describe("chat pane catalog", () => {
   it.each([false, true])(
     "scopes catalog continuation failure to its conversation (stale=%s)",
     async (stale) => {
-      const { pane, state, continued, pending } = startContinuation();
+      const { pane, state, continued, pending } = await startContinuation();
       if (stale) {
         state.sessionKey = "agent:main:different-conversation";
         pane.sessionKey = state.sessionKey;

@@ -11,11 +11,11 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
+  registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import {
   createAttachmentSidebarHarness,
-  renderAttachmentHarness,
   renderSettledPastedTextAttachment,
 } from "./chat-attachment-picker.test-support.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
@@ -146,16 +146,19 @@ describe("chat attachment paste", () => {
   });
 
   it("preserves pasted-text presentation and restore behavior across handoff", async () => {
-    let attachments: ChatAttachment[] = [];
-    const producer = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
     const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
-    getComposerTextarea(producer).dispatchEvent(createPasteEvent(pastedText));
-    const original = expectDefined(attachments[0], "pasted attachment");
+    const original = registerChatAttachmentPayload({
+      attachment: {
+        id: "retained-paste",
+        fileName: "pasted-text-123.txt",
+        mimeType: "text/plain",
+        origin: "paste",
+      },
+      dataUrl: `data:text/plain;base64,${btoa(pastedText)}`,
+      file: new File([pastedText], "pasted-text-123.txt", { type: "text/plain" }),
+    });
+    payloads.push(original);
+    let attachments = [original];
     const originalDataUrl = getChatAttachmentDataUrl(original);
 
     const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);

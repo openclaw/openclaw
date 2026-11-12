@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as backoff from "../infra/backoff.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSETS,
   readPluginControlUiAssets,
@@ -126,6 +127,7 @@ describe("native plugin browser builds", () => {
           ? {
               controlUi: {
                 entry: "dist/control-ui/authored/index.js",
+                panelIcon: "assets/panel.svg",
                 ...(settingsViews
                   ? {
                       activation: "settings-only",
@@ -153,6 +155,7 @@ describe("native plugin browser builds", () => {
       const generated = await readJson(project.rootDir, "dist/openclaw.plugin.json");
       expect(generated.controlUi.activation).toBe(settingsViews ? "settings-only" : undefined);
       expect(generated.controlUi.settingsViews).toEqual(settingsViews);
+      expect(generated.controlUi.panelIcon).toBe(authoredUi ? "assets/panel.svg" : undefined);
       expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
       generated.id = "previous-name";
       generated.configSchema = { type: "object", properties: {} };
@@ -170,7 +173,12 @@ describe("native plugin browser builds", () => {
     },
   );
 
-  it("preserves esbuild's existing non-Solid JSX compilation", async () => {
+  it("requires author-installed compilers without replacing existing builds", async () => {
+    const missing = await fixture();
+    await fs.unlink(path.join(missing.rootDir, "node_modules/esbuild"));
+    const failure = buildPluginControlUi(missing);
+    await expect(failure).rejects.toHaveProperty("humanOutput");
+    await expect(failure).rejects.toHaveProperty("cause.code", "MODULE_NOT_FOUND");
     const project = await fixture();
     await writeFiles(project.rootDir, {
       "renderer.js":
@@ -182,6 +190,16 @@ describe("native plugin browser builds", () => {
     const declaration = await buildPluginControlUi(project);
     const built = await browserModule(project.rootDir, declaration.entry);
     expect(built.view).toEqual({ tag: "p", props: null, children: ["Existing JSX"] });
+    await writeFiles(project.rootDir, {
+      "view.tsx": "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
+      [project.source]: 'export * from "./view.tsx";',
+    });
+    await expect(buildPluginControlUi(project)).rejects.toThrow(
+      "Install @solidjs/compiler in this plugin's devDependencies",
+    );
+    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+      path.basename(path.dirname(declaration.entry)),
+    ]);
   });
 
   it("bundles a Solid TSX view with reactive updates and owned disposal", async () => {
@@ -248,21 +266,6 @@ export { flush };
     }
   });
 
-  it("requires the author-installed Solid compiler only for opted-in TSX", async () => {
-    const project = await fixture();
-    const first = await buildPluginControlUi(project);
-    await writeFiles(project.rootDir, {
-      "view.tsx": "/** @jsxImportSource @solidjs/web */\nexport const view = <p>Ready</p>;",
-      [project.source]: 'export * from "./view.tsx";',
-    });
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "Install @solidjs/compiler in this plugin's devDependencies",
-    );
-    expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
-      path.basename(path.dirname(first.entry)),
-    ]);
-  });
-
   it("removes unused dependency loaders without treating text as imports", async () => {
     const project = await fixture();
     await writeFiles(project.rootDir, {
@@ -282,9 +285,7 @@ export { flush };
       [project.source]: 'export const loadPage = () => import("./page.js");',
     });
     await expect(buildPluginControlUi(project)).rejects.toThrow("will not be bundled");
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it.each([
@@ -296,12 +297,11 @@ export { flush };
   ])("rejects a retained external $name", async ({ source }) => {
     const project = await fixture();
     await write(project.rootDir, project.source, source);
-    await expect(buildPluginControlUi(project)).rejects.toThrow(
-      "must bundle their browser dependencies",
-    );
-    await expect(fs.access(path.join(project.rootDir, "dist/control-ui"))).rejects.toThrow(
-      "ENOENT",
-    );
+    const reason = "must bundle their browser dependencies";
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(reason);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(reason));
+    await expect(fs.readdir(project.rootDir)).resolves.not.toContain("dist");
   });
 
   it("publishes complete immutable generations and detects stale source", async () => {
@@ -369,11 +369,52 @@ export { flush };
     );
   });
 
+  it.each(["EPERM", "EBUSY", "EACCES"])(
+    "publishes a complete generation after a transient Windows %s rename denial",
+    async (code) => {
+      const project = { ...(await fixture()), platform: "win32" as const };
+      const denial = Object.assign(new Error("scanner holds staging"), { code });
+      vi.spyOn(fs, "rename").mockRejectedValueOnce(denial);
+      const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+
+      const published = await buildPluginControlUi(project);
+      expect(await buildPluginControlUi({ ...project, check: true })).toEqual(published);
+      expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
+        path.basename(path.dirname(published.entry)),
+      ]);
+      expect(sleep.mock.calls).toEqual([[100]]);
+    },
+  );
+
+  it.each([
+    { platform: "win32", code: "EPERM", attempts: 6 },
+    { platform: "win32", code: "EBUSY", attempts: 6 },
+    { platform: "win32", code: "EACCES", attempts: 6 },
+    { platform: "win32", code: "ENOSPC", attempts: 1 },
+    { platform: "linux", code: "EPERM", attempts: 1 },
+    { platform: "linux", code: "EBUSY", attempts: 1 },
+    { platform: "darwin", code: "EACCES", attempts: 1 },
+  ] as const)(
+    "cleans staging and preserves $platform $code after $attempts attempts",
+    async ({ platform, code, attempts }) => {
+      const project = { ...(await fixture()), platform };
+      const denial = Object.assign(new Error("rename denied"), { code });
+      const rename = vi.spyOn(fs, "rename").mockRejectedValue(denial);
+      const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
+
+      await expect(buildPluginControlUi(project)).rejects.toBe(denial);
+      expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([]);
+      expect(rename).toHaveBeenCalledTimes(attempts);
+      expect(sleep.mock.calls).toEqual(attempts === 6 ? [[100], [200], [400], [800], [1600]] : []);
+    },
+  );
+
   it("reuses a Windows build collision only when every asset matches", async () => {
-    const project = await fixture();
+    const project = { ...(await fixture()), platform: "win32" as const };
     const first = await buildPluginControlUi(project);
     const collision = Object.assign(new Error("directory already exists"), { code: "EPERM" });
     vi.spyOn(fs, "rename").mockRejectedValue(collision);
+    const sleep = vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue();
 
     expect(await buildPluginControlUi(project)).toEqual(first);
     assert.ok(first.styles?.[0]);
@@ -405,6 +446,7 @@ export { flush };
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),
     ]);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   // Windows chmod only toggles the read-only attribute, so exact POSIX mode bits
@@ -504,7 +546,9 @@ export { flush };
       path.join(project.rootDir, project.source),
       `export { loadDependency } from "./runtime/${file}";\n`,
     );
-    await expect(buildPluginControlUi(project)).rejects.toThrow(diagnostic);
+    const failed = buildPluginControlUi(project);
+    await expect(failed).rejects.toThrow(diagnostic);
+    await expect(failed).rejects.toHaveProperty("humanOutput", expect.stringContaining(diagnostic));
     expect(await fs.readFile(manifestPath, "utf8")).toBe(manifest);
     expect(await fs.readdir(path.join(project.rootDir, "dist/control-ui"))).toEqual([
       path.basename(path.dirname(first.entry)),

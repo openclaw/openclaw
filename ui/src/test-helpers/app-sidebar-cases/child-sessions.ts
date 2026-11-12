@@ -76,6 +76,7 @@ describe("AppSidebar agent chip", () => {
     ];
     harness.list.mockResolvedValue(listResult(children, 100_000));
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.setSessionSortMode("created");
     harness.publishList({
       result: parentResult(["agent:main:child-one", "agent:main:child-two"], 2, {
         label: "Plan release",

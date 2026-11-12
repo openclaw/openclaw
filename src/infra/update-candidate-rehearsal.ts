@@ -307,6 +307,15 @@ export async function prepareUpdateCandidateRehearsal(params: {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     await fs.mkdir(workspaceDir, { recursive: true, mode: 0o700 });
+    if (
+      Object.values(params.config.secrets?.providers ?? {}).some(
+        (provider) => provider.source === "exec",
+      )
+    ) {
+      snapshotWarnings.push(
+        "Update rehearsal leaves exec SecretRef providers cold; credential availability is not verified.",
+      );
+    }
     return {
       stateDir: tempDir,
       configPath,

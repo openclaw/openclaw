@@ -4,6 +4,7 @@ import { createAssistantMessageEventStream, type Message } from "openclaw/plugin
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { expectCollected, expectLiveObjects } from "../../test-utils/retention.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { estimateMessageTokenPressure } from "../sessions/context-token-pressure.js";
 import { convertToLlm } from "../sessions/messages.js";
@@ -515,5 +516,31 @@ describe("installContextEngineLoopHook", () => {
     expect(messages).toEqual([result]);
     expect(await run(messages)).toBe(assembled);
     expect(engine.afterTurn).toHaveBeenCalledOnce();
+  });
+
+  it("drops its assembled history when removed while the hook stays reachable", async () => {
+    const agent = makeGuardableAgent();
+    const remove = installContextEngineLoopHook({
+      agent,
+      contextEngine: {
+        info: { id: "retention-engine", name: "Retention Engine", version: "0.0.1" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async () => ({ messages: [makeUser("assembled")], estimatedTokens: 0 }),
+        compact: async () => {
+          throw new Error("unexpected direct compaction");
+        },
+      },
+      sessionId: "test-session",
+      sessionFile: "/tmp/test-session.jsonl",
+      modelId: "test-model",
+      getPrePromptMessageCount: () => 1,
+    });
+    // Run callbacks that outlive the attempt keep the removed hook reachable the same way.
+    const installed = expectDefined(agent.transformContext, "installed hook");
+    const assembled = new WeakRef(await installed(exchange(), new AbortController().signal));
+    await expectLiveObjects([assembled], 1);
+    remove();
+    await expectCollected(assembled);
+    expect(agent.transformContext).not.toBe(installed);
   });
 });

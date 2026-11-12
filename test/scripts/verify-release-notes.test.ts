@@ -147,6 +147,33 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("explains how to recover when a shallow checkout cannot resolve the beta merge base", () => {
+    const origin = tempDirs.make("openclaw-shallow-release-origin-");
+    git(origin, ["init", "-q", "-b", "main"]);
+    git(origin, ["config", "commit.gpgsign", "false"]);
+    commitAll(origin, "chore: baseline");
+    git(origin, ["tag", "--no-sign", "v2026.7.1"]);
+    commitAll(origin, "chore: candidate");
+
+    const cloneParent = tempDirs.make("openclaw-shallow-release-clone-");
+    const cwd = join(cloneParent, "repo");
+    git(cloneParent, ["clone", "-q", "--depth=1", "--no-tags", `file://${origin}`, cwd]);
+    git(cwd, ["fetch", "-q", "--depth=1", "origin", "tag", "v2026.7.1"]);
+
+    const result = runVerifier(cwd, {
+      base: "v2026.7.1",
+      target: "HEAD",
+      version: "2026.7.2-beta.1",
+      mainRef: null,
+      write: false,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "this checkout is shallow; fetch complete history (for example, git fetch --unshallow origin) and retry",
+    );
+  });
+
   it("rejects an off-branch generation target before release-note discovery", () => {
     const cwd = tempDirs.make("openclaw-off-branch-notes-");
     git(cwd, ["init", "-q", "-b", "main"]);
@@ -352,9 +379,18 @@ describe("release-note verification", () => {
   it("credits human maintainers but excludes automation identities", () => {
     expect(isEligibleHandle("human-contributor")).toBe(true);
     expect(isEligibleHandle("steipete")).toBe(true);
-    expect(isEligibleHandle("steipete-oai")).toBe(false);
-    expect(isEligibleHandle("hugin-bot")).toBe(false);
-    expect(isEligibleHandle("roboclaw-bot")).toBe(false);
+    expect(isEligibleHandle("copilot-contributor")).toBe(true);
+    for (const handle of [
+      "steipete-oai",
+      "hugin-bot",
+      "roboclaw-bot",
+      "tideclaw-bot",
+      "Copilot",
+      "copilot",
+      "COPILOT",
+    ]) {
+      expect(isEligibleHandle(handle)).toBe(false);
+    }
   });
 
   it("accepts only canonical commit PR suffixes", () => {
@@ -677,7 +713,7 @@ Release provenance for ${hash} -> #3`
     },
   );
 
-  it("requires release provenance PRs to be merged into current main", () => {
+  it("requires main provenance PRs to be merged into current main", () => {
     const releaseCommit = "a".repeat(40);
     const mainCommit = "b".repeat(40);
     const mergeCommit = "c".repeat(40);
@@ -702,11 +738,68 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(validNode)).not.toThrow();
     for (const node of [
       { ...validNode, baseRefName: "release/2026.7.1" },
+      { ...validNode, baseRefName: "feature/unrelated" },
       { ...validNode, mergedAt: null },
     ]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
-    expect(() => validate(validNode, false)).toThrow("references non-main PR #104905");
+    expect(() => validate(validNode, false)).toThrow("references invalid source PR #104905");
+  });
+
+  it("checks canonical main origins through the production Git matcher", () => {
+    const { cwd, base } = seedRepository("openclaw-release-original-", "main");
+    writeFileSync(join(cwd, "shared.txt"), "main\n");
+    const main = commitAll(cwd, "fix: durable  writes (#7)");
+    const mainNode = {
+      baseRefName: "main",
+      mergedAt: "2026-07-12T00:00:00Z",
+      mergeCommit: { oid: main },
+    };
+    const cases = [
+      {
+        subject: "fix: renamed original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: true,
+      },
+      {
+        subject: "fix: renamed original",
+        body: "Backport of #7 to release/2026.7.1.",
+        shared: true,
+      },
+      { subject: "fix: durable writes", body: "", shared: true },
+      {
+        subject: "fix: independent original",
+        body: "(cherry picked from commit " + main + ")",
+        shared: false,
+      },
+    ];
+    for (const [index, scenario] of cases.entries()) {
+      git(cwd, ["checkout", "-qb", "release/case-" + index, base]);
+      writeFileSync(join(cwd, scenario.shared ? "shared.txt" : "independent.txt"), "release\n");
+      const source = commitAll(cwd, scenario.subject + "\n\n" + scenario.body);
+      const node = {
+        __typename: "PullRequest",
+        baseRefName: "release/2026.7.1",
+        mergedAt: mainNode.mergedAt,
+        mergeCommit: { oid: source },
+      };
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `import { validateReleaseProvenanceOverrides as validate } from ${JSON.stringify(verifier)};
+const { source, node, main, mainNode } = ${JSON.stringify({ source, node, main, mainNode })};
+validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => new Map([[7, mainNode]]));`,
+        ],
+        { cwd, encoding: "utf8" },
+      );
+      if (scenario.shared) {
+        expect(result.stderr).toContain("references invalid source PR #9");
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+      }
+    }
   });
 
   it("validates release provenance PRs that shipped-ref subtraction left unresolved", () => {
@@ -736,7 +829,7 @@ Release provenance for ${hash} -> #3`
     expect(() => validate(mainNode)).not.toThrow();
     expect(requested).toEqual([[104905]]);
     for (const node of [{ ...mainNode, baseRefName: "release/2026.7.1" }, undefined]) {
-      expect(() => validate(node)).toThrow("references non-main PR #104905");
+      expect(() => validate(node)).toThrow("references invalid source PR #104905");
     }
   });
 
@@ -1088,7 +1181,7 @@ Release provenance for ${hash} -> #3`
   it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
     const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
     const originalMessage =
-      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>";
+      "fix: preserve playback errors (#21)\n\nFixes #20\nCo-authored-by: Helper <helper@example.invalid>\nCo-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>";
     writeFileSync(join(cwd, "playback.txt"), "fixed\n");
     const original = commitAll(cwd, originalMessage);
     git(cwd, ["checkout", "-qb", "release", base]);
@@ -1115,7 +1208,7 @@ const data = {};
 for (const [, alias, hash] of query.matchAll(/(c\\d+): repository[\\s\\S]*?object\\(expression: "([0-9a-f]+)"\\)/g)) {
   data[alias] = { object: {
     associatedPullRequests: { nodes: hash === original ? [{ number: 21, mergedAt: "2020-01-01T00:00:00Z", mergeCommit: { oid: original } }] : [], pageInfo: { hasNextPage: false } },
-    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
+    authors: { nodes: [{ email: "helper@example.invalid", user: { login: "original-helper" } }, { email: "223556219+Copilot@users.noreply.github.com", user: { login: "Copilot" } }, ...(hash === target ? [{ email: "6581799+RomneyDa@users.noreply.github.com", user: { login: "RomneyDa" } }] : [])] },
     author: { user: { login: "release-operator" } }
   } };
 }
@@ -1153,6 +1246,7 @@ console.log(JSON.stringify({ data }));
     expect(section).toContain(
       "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
     );
+    expect(section).not.toContain("@Copilot");
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);
@@ -1517,7 +1611,12 @@ console.log(JSON.stringify({ data }));
     mkdirSync(privateTmp);
     const index = join(cwd, git(cwd, ["rev-parse", "--git-path", "index"]));
     const originalIndex = readFileSync(index);
-    const originalObjects = git(cwd, ["count-objects", "-v"]);
+    // Packing or pruning duplicate loose copies must not affect object isolation.
+    const originalObjects = git(cwd, [
+      "cat-file",
+      "--batch-all-objects",
+      "--batch-check=%(objectname)",
+    ]);
     const hooks = join(cwd, "test-hooks");
     mkdirSync(hooks);
     const hook = join(hooks, "post-index-change");
@@ -1537,7 +1636,9 @@ console.log(JSON.stringify({ data }));
     });
     expect(readFileSync(index)).toEqual(originalIndex);
     expect(git(cwd, ["rev-parse", "HEAD"])).toBe(target);
-    expect(git(cwd, ["count-objects", "-v"])).toBe(originalObjects);
+    expect(git(cwd, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"])).toBe(
+      originalObjects,
+    );
     expect(readdirSync(privateTmp)).toEqual([]);
     expect(readdirSync(cwd)).not.toContain("hook-fired");
     if (

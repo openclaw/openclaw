@@ -1,0 +1,2 @@
+3
+# Preserve focused smoke-apt-index regression coverage against main 071ea8338d93.

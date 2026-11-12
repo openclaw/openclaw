@@ -1,0 +1,2 @@
+# Real idle-GC regression: terminal oversized checkpoint, recovery guidance, and reopen persistence.
+64

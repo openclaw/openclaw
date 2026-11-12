@@ -73,6 +73,43 @@ describe("Gateway core reload policy", () => {
     ).toBe(true);
   });
 
+  it("hot-applies visitor limits while preserving replacement for resource changes", async () => {
+    const { default: visitor } = await loadBundledPluginFacade<{
+      default: OpenClawPluginDefinition;
+    }>({ pluginId: "visitor-access", artifactBasename: "index.ts" });
+    const registry = createEmptyPluginRegistry();
+    if (visitor.reload) {
+      registry.reloads.push({
+        pluginId: "visitor-access",
+        source: "test",
+        registration: visitor.reload,
+      });
+    }
+    setActivePluginRegistry(registry);
+    const limits = ["maxVisitors", "defaultTtlDays"].map(
+      (key) => `plugins.entries.visitor-access.config.${key}`,
+    );
+    expect(buildGatewayReloadPlan(limits)).toMatchObject({
+      reloadPlugins: false,
+      restartGateway: false,
+    });
+    for (const key of ["accountId", "appId", "apiToken", "policyName"]) {
+      expect(
+        buildGatewayReloadPlan([...limits, `plugins.entries.visitor-access.config.${key}`])
+          .reloadPlugins,
+      ).toBe(true);
+    }
+    expect(
+      buildGatewayReloadPlan(limits, {
+        pluginLifecycle: {
+          pluginIds: ["visitor-access"],
+          reason: "reload",
+          operationId: "code-replacement",
+        },
+      }).reloadPlugins,
+    ).toBe(true);
+  });
+
   it.each(["memory-core", "none"])(
     "reloads the selected memory index service for provider changes (memory slot: %s)",
     async (memorySlot) => {

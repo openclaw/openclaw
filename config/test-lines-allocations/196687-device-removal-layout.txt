@@ -1,0 +1,2 @@
+70
+# Browser geometry regression for phone removal-action containment and desktop row stability.

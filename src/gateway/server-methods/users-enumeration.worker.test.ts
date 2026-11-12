@@ -281,7 +281,7 @@ it("enforces scoped, bounded users.list dispatch without filtering profiles or r
       }),
     ]);
   }
-  for (const scopes of [[], ["operator.approvals"]]) {
+  for (const scopes of [[], ["operator.approvals"], ["operator.sessions.write"]]) {
     await check(
       { githubAccountIds: [102, 999] },
       [

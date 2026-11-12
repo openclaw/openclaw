@@ -79,7 +79,6 @@ it("selects canonical participant involvement without reading display fields", (
         return label();
       },
       avatarUrl: "/synthetic/avatar",
-      hasUploadedAvatar: false,
     });
   }
   const storePath = "/synthetic/involvement.sqlite";
@@ -133,7 +132,6 @@ it("selects canonical participant involvement without reading display fields", (
     kind: "resolved",
     profileId: "bob",
     avatarUrl: "/synthetic/avatar",
-    hasUploadedAvatar: false,
   });
   context.identityProjection.invalidate();
   expect(keys("bob", false)).toEqual([key]);

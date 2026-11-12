@@ -1,0 +1,2 @@
+# Regression tests for Unicode Discord channel-name resolution and directory search.
+40

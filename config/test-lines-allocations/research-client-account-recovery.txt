@@ -1,0 +1,2 @@
+34
+# Prove plugin view reactivation when the first recovery account becomes ready.

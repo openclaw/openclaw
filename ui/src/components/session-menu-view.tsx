@@ -282,15 +282,6 @@ export function useSessionMenuEntries(
               : undefined,
           }),
           submenu({ view: "copy", label: t("sessionsView.copyDetails"), icon: "copy" }),
-          ...(state.navigationAllowed || state.worktreePath || options.openInExtra
-            ? [
-                submenu({
-                  view: "open-in",
-                  label: t("sessionsView.openInEditorMenu"),
-                  icon: "externalLink",
-                }),
-              ]
-            : []),
           communicationDivider,
           ...details.communication(),
           details.readStatus,
@@ -404,6 +395,16 @@ export function useSessionMenuEntries(
           }),
         ]
       : []),
+    ...(!batch() &&
+    (state.navigationAllowed || state.splitAllowed || state.worktreePath || options.openInExtra)
+      ? [
+          submenu({
+            view: "open-in",
+            label: t("sessionsView.openInEditorMenu"),
+            icon: "externalLink",
+          }),
+        ]
+      : []),
     ...(!batch() && state.session.placementAction
       ? [
           item({
@@ -491,10 +492,7 @@ export function useSessionMenuEntries(
   const backDivider = separator("back-divider");
   const compact = (view: CompactSessionMenuView): MenuEntry[] => [
     {
-      id:
-        view === "icon" || view === "copy" || view === "open-in"
-          ? "compact:back-advanced"
-          : "compact:back",
+      id: view === "icon" || view === "copy" ? "compact:back-advanced" : "compact:back",
       label: t("common.back"),
       class: "session-menu__item session-menu__back",
       icon: icon("arrowLeft"),

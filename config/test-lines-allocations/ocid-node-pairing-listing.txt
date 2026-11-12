@@ -1,0 +1,2 @@
+34
+# One automatic OpenClaw ID node pairing per owner-approved listing: re-listed rejoin, manual-grant consumption, and same-listing refusals.

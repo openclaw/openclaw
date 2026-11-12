@@ -81,7 +81,21 @@ suite.define(() => {
         const { top, height } = rect(selector);
         return top + height / 2;
       };
+      // Every desktop header control shares the rail action size and radius.
+      const controls = [
+        ".chat-pane__session-title-button",
+        ".chat-header-session-menu__trigger",
+        ".chat-details-toggle",
+      ].map((selector) => ({
+        selector,
+        height: rect(selector).height,
+        radius: getComputedStyle(element(selector)).borderRadius,
+      }));
       return {
+        controls,
+        radiusToken: getComputedStyle(document.documentElement)
+          .getPropertyValue("--radius-md")
+          .trim(),
         nav: centerY(".chat-details-toggle svg"),
         menu: centerY(".chat-header-session-menu__trigger svg"),
         headerBottom: root.getBoundingClientRect().bottom,
@@ -92,6 +106,10 @@ suite.define(() => {
     });
 
     expect(Math.abs(geometry.menu - geometry.nav)).toBeLessThanOrEqual(0.1);
+    for (const control of geometry.controls) {
+      expect(control.height, control.selector).toBe(28);
+      expect(control.radius, control.selector).toBe(geometry.radiusToken);
+    }
     expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
     expect(geometry.headerOverflow).toBeLessThanOrEqual(1);
     expect(geometry.titleWidth).toBeGreaterThan(0);
