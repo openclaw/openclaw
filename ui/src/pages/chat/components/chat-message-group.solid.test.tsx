@@ -317,7 +317,10 @@ it("renders speech-only Talk replies as a reply and restated speech as a disclos
   expect(replyView.container.querySelector(".chat-group--turn-block")).toBeNull();
 
   const restatedView = mountSolid(() => <MessageGroup group={restated} options={options} />);
-  expect(restatedView.container.querySelector(".chat-voice-transcript details")?.open).toBe(false);
+  expect(
+    restatedView.container.querySelector<HTMLDetailsElement>(".chat-voice-transcript details")
+      ?.open,
+  ).toBe(false);
   expect(restatedView.container.querySelector(".chat-group--turn-block")).not.toBeNull();
 });
 
