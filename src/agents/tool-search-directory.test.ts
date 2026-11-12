@@ -66,7 +66,7 @@ describe("run-granted tools in the Tool Search directory", () => {
 
     expect(listed).toBeDefined();
     expect(listed).not.toBe("skill_library");
-    const runtime = new ToolSearchRuntime({ catalogRef: ref });
+    const runtime = new ToolSearchRuntime({ catalogRef: ref }, resolveToolSearchConfig());
     await expect(runtime.describe(listed!)).resolves.toMatchObject({ name: "skill_library" });
   });
 });
