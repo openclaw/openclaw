@@ -3875,7 +3875,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             requestId: "req-talk",
             retryable: false,
             pauseReconnect: true)
-        appModel.gatewayAutoReconnectEnabled = false
         appModel.applyOperatorGatewayConnectionProblem(pairingProblem, route: nil)
         appModel.setTalkEnabled(false)
         #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
