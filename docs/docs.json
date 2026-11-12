@@ -2367,6 +2367,7 @@
                         ]
                       },
                       "providers/omlx",
+                      "providers/rapid-mlx",
                       "providers/sglang",
                       "providers/vllm"
                     ]

@@ -1,0 +1,35 @@
+{
+  "id": "rapid-mlx",
+  "categories": ["models"],
+  "activation": { "onStartup": false },
+  "enabledByDefault": true,
+  "providers": ["rapid-mlx"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "modelCatalog": { "discovery": { "rapid-mlx": "refreshable" } },
+  "providerRequest": {
+    "providers": { "rapid-mlx": { "openAICompletions": { "supportsStreamingUsage": true } } }
+  },
+  "modelPricing": { "providers": { "rapid-mlx": { "external": false } } },
+  "nonSecretAuthMarkers": ["rapid-mlx-local"],
+  "syntheticAuthRefs": ["rapid-mlx"],
+  "setup": { "providers": [{ "id": "rapid-mlx", "envVars": ["RAPID_MLX_API_KEY"] }] },
+  "providerAuthChoices": [
+    {
+      "provider": "rapid-mlx",
+      "method": "local",
+      "choiceId": "rapid-mlx",
+      "choiceLabel": "Rapid-MLX",
+      "choiceHint": "Local Apple Silicon server",
+      "icon": "https://rapidmlx.com/apple-touch-icon.png",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect server",
+      "appGuidedSecret": true,
+      "website": "https://github.com/raullenchai/Rapid-MLX",
+      "groupId": "rapid-mlx",
+      "groupLabel": "Rapid-MLX",
+      "groupHint": "Local chat and memory embeddings"
+    }
+  ],
+  "contracts": { "embeddingProviders": ["rapid-mlx"] },
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+}

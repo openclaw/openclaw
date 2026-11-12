@@ -725,6 +725,10 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: rapid-mlx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/rapid-mlx/**"
 "extensions: rerank":
   - changed-files:
       - any-glob-to-any-file:

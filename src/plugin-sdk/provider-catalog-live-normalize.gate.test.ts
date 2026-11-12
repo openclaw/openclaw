@@ -46,3 +46,14 @@ describe("live discovery unknown-model gate", () => {
     expect(ids).toEqual(["brand-new-model", "known-model"]);
   });
 });
+
+it("rejects explicit embedding-only capabilities without hiding mixed chat rows", () => {
+  const capabilityRows = [
+    { id: "mlx-community/all-MiniLM-L6-v2-4bit", capabilities: ["embedding"] },
+    { id: "mixed-model", capabilities: ["text", "embedding"] },
+    { id: "unknown-model", capabilities: ["tools"] },
+  ];
+  expect(
+    buildOpenAICompatibleLiveModels(capabilityRows, fallback).map((model) => model.id),
+  ).toEqual(["mixed-model", "unknown-model"]);
+});

@@ -126,6 +126,12 @@ model ID from the server's `/v1/models` endpoint. Chat and memory share
 an authenticated memory-only connection, set `memory.search.remote.apiKey`
 explicitly, for example to `"${OMLX_API_KEY}"`.
 
+For [Rapid-MLX](/providers/rapid-mlx), set `provider: "rapid-mlx"` and an explicit embedding
+model ID from the server's `/v1/models` endpoint. Chat and memory share
+`models.providers.rapid-mlx.baseUrl` and optional credentials saved by setup. For
+an authenticated memory-only connection, set `memory.search.remote.apiKey`
+explicitly, for example to `"${RAPID_MLX_API_KEY}"`.
+
 <Warning>
 Changing the embedding provider, model, provider settings, sources, scope,
 chunking, or tokenizer can make the existing SQLite vector index incompatible.
@@ -199,6 +205,7 @@ Remote embedding authentication depends on the provider. Bedrock uses the AWS SD
 | Ollama         | `OLLAMA_API_KEY` (placeholder)                      | --                                  |
 | oMLX           | `OMLX_API_KEY` (via setup or `remote.apiKey`)       | `models.providers.omlx.apiKey`      |
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
+| Rapid-MLX      | `RAPID_MLX_API_KEY` (setup / `remote.apiKey`)       | `models.providers.rapid-mlx.apiKey` |
 | Voyage         | `VOYAGE_API_KEY`                                    | `models.providers.voyage.apiKey`    |
 
 For custom OpenAI-compatible providers, `models.providers.<id>.apiKey` can name
@@ -418,7 +425,7 @@ again to avoid reusing vectors from the previous model.
 
   </Accordion>
   <Accordion title="OpenAI-compatible output dimensions">
-    Providers that use the OpenAI-compatible embeddings transport (`openai-compatible`, `omlx`, and custom `models.providers` entries with an OpenAI-compatible API) receive `outputDimensionality` as the `dimensions` request field. Set it only when the server supports that field for the configured model, for example a Matryoshka embedding model served by a runtime that shortens vectors server-side.
+    Providers that use the OpenAI-compatible embeddings transport (`openai-compatible`, `omlx`, `rapid-mlx`, and custom `models.providers` entries with an OpenAI-compatible API) receive `outputDimensionality` as the `dimensions` request field. Set it only when the server supports that field for the configured model, for example a Matryoshka embedding model served by a runtime that shortens vectors server-side.
 
     | Key                    | Type     | Default       | Description                                    |
     | ---------------------- | -------- | ------------- | ---------------------------------------------- |
