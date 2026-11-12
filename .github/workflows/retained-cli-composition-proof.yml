@@ -1,249 +1,271 @@
-name: Required Backports Targeted Proof
+name: Compiler Delegation Targeted Proof
 on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Reviewed five-backport candidate SHA
+        description: Exact reviewed compiler-delegation commit (bind CANDIDATE_SHA first)
         required: true
         type: string
 permissions:
   contents: read
 concurrency:
-  group: required-backports-targeted-${{ inputs.target_ref }}
+  group: compiler-delegation-targeted-${{ inputs.target_ref }}
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  BASE_SHA: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
-  CANDIDATE_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
-  PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
-  PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  BEFORE_SHA: f38131f934b45447558cf6f431353a49656198d5
-  SOURCE_TREE: a63db9c73534279f63f03c2043565927c97c9a7a
-  PATHS_SHA256: 85e3d04cb739af85ae7cb6fd69ea047c07e39aec92c526b28bfec6da3edd053e
+  BASE_SHA: e0dd0206412af448b324387435dd8fed6575fd7b
+  # Bound to the independently reviewed and remotely verified source commit.
+  CANDIDATE_SHA: d26d3ea3eb710ea964de48a34a5599a11fb0be49
+  SOURCE_TREE: eeef06d328ce0c6a0546b7345cb1bb35845a33e8
+  PATCH_SHA256: f53b39c6dad901216366d4b43d0bddf34e055e7e7307e3abe70553d373bd4f9a
+  WORKFLOW_PATH: .github/workflows/retained-cli-composition-proof.yml
 jobs:
-  checks:
+  tests:
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
-        lane: [checks, tests]
+        revision: [before, after]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      PROOF_LANE: tests-${{ matrix.revision }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - &checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Bind exact source
+      - &bind
+        name: Bind reviewed source and evidence
         env:
           TARGET_SHA: ${{ inputs.target_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
+          evidence=.artifacts/compiler-delegation
+          mkdir -p "$evidence"
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$TARGET_SHA" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 1
           test -z "$(git status --porcelain)"
-          git merge-base --is-ancestor "$BASE_SHA" HEAD
-          mkdir -p .artifacts/required-backports
-          git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/required-backports/source-paths.txt
-          echo "$PATHS_SHA256  .artifacts/required-backports/source-paths.txt" | sha256sum -c -
-          printf 'candidate=%s\nbase=%s\ntree=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$CANDIDATE_SHA" "$BASE_SHA" "$SOURCE_TREE" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/required-backports/identity.txt
-      - uses: ./.github/actions/setup-node-env
-        with:
-          semantic-checks: "true"
-          install-bun: "false"
-          cache-mode: "restore"
-      - uses: ./.github/actions/setup-test-bun
-      - name: Run canonical changed checks
-        if: matrix.lane == 'checks'
-        run: |
-          set -euo pipefail
-          pnpm check:changed --base "$BASE_SHA" --head HEAD --dry-run 2>&1 | tee .artifacts/required-backports/check-plan.log
-          pnpm check:changed --base "$BASE_SHA" --head HEAD --timed 2>&1 | tee .artifacts/required-backports/checks.log
-      - name: Run touched tests through canonical project router
-        if: matrix.lane == 'tests'
-        run: |
-          set -euo pipefail
-          git diff --name-only "$BASE_SHA" HEAD -- '*.test.ts' '*.test.tsx' '*.spec.ts' '*.spec.tsx' > .artifacts/required-backports/test-paths.txt
-          test "$(wc -l < .artifacts/required-backports/test-paths.txt)" -eq 21
-          cat >> .artifacts/required-backports/test-paths.txt <<'PATHS'
-          src/agents/code-mode.agent-loop.test.ts
-          src/agents/code-mode.failure-phase.test.ts
-          src/agents/code-mode.wait.test.ts
-          src/agents/code-mode-shell-source.test.ts
-          src/agents/code-mode.bridge.test.ts
-          src/agents/code-mode.catalog-index.test.ts
+          git diff --name-only "$BASE_SHA" HEAD > "$evidence/changed-paths.txt"
+          cat > "$evidence/expected-paths.txt" <<'PATHS'
+          docs/ci/local-proof.md
+          scripts/check-changed.mts
+          scripts/ci-check-plan.mts
+          test/scripts/changed-lanes.test.ts
+          test/scripts/check-changed-compiler-delegation.test.ts
           PATHS
-          LC_ALL=C sort -u .artifacts/required-backports/test-paths.txt -o .artifacts/required-backports/test-paths.txt
-          grep -Fx src/gateway/server.delegated-administration.product.test.ts .artifacts/required-backports/test-paths.txt
-          grep -Fx test/system-agent-delegation-authority.e2e.test.ts .artifacts/required-backports/test-paths.txt
-          mapfile -t tests < .artifacts/required-backports/test-paths.txt
-          test "${#tests[@]}" -eq 27
-          node scripts/test-projects.mts "${tests[@]}" -- --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/required-backports/tests.json" 2>&1 | tee .artifacts/required-backports/tests.log
-      - name: Verify critical suites actually ran
-        if: matrix.lane == 'tests'
-        run: |
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          import assert from 'node:assert/strict';
-          const report = JSON.parse(fs.readFileSync('.artifacts/required-backports/tests.json', 'utf8'));
-          const selected = fs.readFileSync('.artifacts/required-backports/test-paths.txt', 'utf8').trim().split('\n');
-          assert.equal(selected.length, 27);
-          for (const suffix of selected) {
-            const matches = report.testResults.filter((item) => item.name.replaceAll('\\', '/').endsWith('/' + suffix));
-            assert.equal(matches.length, 1, 'Missing or duplicate selected suite: ' + suffix);
-            assert(matches[0].assertionResults.some((item) => item.status === 'passed'), 'No executed passing cases: ' + suffix);
-            assert(matches[0].assertionResults.every((item) => ['passed', 'pending', 'skipped', 'todo', 'disabled'].includes(item.status)), 'Failed selected suite: ' + suffix);
-          }
-          for (const suffix of ['src/agents/code-mode.catalog-lifetime.test.ts', 'src/gateway/server.delegated-administration.product.test.ts', 'test/system-agent-delegation-authority.e2e.test.ts', 'ui/src/e2e/session-management.trailing-state.e2e.test.ts']) {
-            const file = report.testResults.find((item) => item.name.replaceAll('\\', '/').endsWith(suffix));
-            assert(file && file.assertionResults.length > 0, 'Missing executed suite: ' + suffix);
-            assert(file.assertionResults.every((item) => item.status === 'passed'), 'Non-passing critical suite: ' + suffix);
-          }
-          NODE
-      - name: Record artifact hashes
-        if: always()
-        run: |
-          if test -d .artifacts/required-backports; then
-            (cd .artifacts/required-backports && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
-          fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
-        with:
-          name: required-backports-${{ matrix.lane }}-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/required-backports/
-          if-no-files-found: error
-          retention-days: 14
-  before-capacity:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: f38131f934b45447558cf6f431353a49656198d5
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Bind BEFORE source and identical prerequisite plus regression inputs
+          cmp "$evidence/expected-paths.txt" "$evidence/changed-paths.txt"
+          git diff --no-ext-diff --no-textconv --no-renames --binary --full-index "$BASE_SHA" HEAD > "$evidence/source.patch"
+          echo "$PATCH_SHA256  $evidence/source.patch" | sha256sum --check --strict
+          git ls-tree -r HEAD -- $(cat "$evidence/expected-paths.txt") > "$evidence/source-blobs.txt"
+          git show "$WORKFLOW_SHA:$WORKFLOW_PATH" > "$evidence/workflow.yml"
+          printf 'candidate=%s\nbase=%s\ntree=%s\npatch_sha256=%s\nworkflow=%s\nrun=%s\nattempt=%s\nlane=%s\n' "$CANDIDATE_SHA" "$BASE_SHA" "$SOURCE_TREE" "$PATCH_SHA256" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PROOF_LANE" > "$evidence/identity.txt"
+      - &select
+        name: Select bound revision
         env:
-          TARGET_SHA: ${{ inputs.target_ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          REVISION: ${{ matrix.revision }}
         run: |
           set -euo pipefail
-          test "$TARGET_SHA" = "$CANDIDATE_SHA"
-          test "$(git rev-parse HEAD)" = "$BEFORE_SHA"
-          test "$(git rev-parse HEAD^{tree})" = a2b41999e8f0ac728cec97457e0500a76a7fd71e
-          test -z "$(git status --porcelain)"
-          test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$SOURCE_TREE"
-          test "$(git rev-parse "$CANDIDATE_SHA^")" = "$PREREQUISITE_PARENT"
-          test "$(git rev-parse "$PREREQUISITE_PARENT^")" = "$BEFORE_SHA"
-          mkdir -p .artifacts/before-capacity
-          printf 'candidate=%s\nbefore=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$CANDIDATE_SHA" "$BEFORE_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/before-capacity/identity.txt
-          # Apply only the reviewed build prerequisites, identically to the AFTER tree.
-          git diff --binary --full-index "$PREREQUISITE_PARENT" "$CANDIDATE_SHA" > .artifacts/before-capacity/prerequisite.patch
-          echo "$PREREQUISITE_PATCH_SHA256  .artifacts/before-capacity/prerequisite.patch" | sha256sum -c -
-          git apply --check .artifacts/before-capacity/prerequisite.patch
-          git apply .artifacts/before-capacity/prerequisite.patch
-          for path in src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts src/system-agent/delegated-change-policy.ts; do
-            test "$(git hash-object "$path")" = "$(git rev-parse "$CANDIDATE_SHA:$path")"
-          done
-          for path in src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs; do
-            git show "$CANDIDATE_SHA:$path" > "$path"
-            test "$(git hash-object "$path")" = "$(git rev-parse "$CANDIDATE_SHA:$path")"
-          done
-          printf '%s\n' src/agents/code-mode.catalog-lifetime.test.ts src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts src/system-agent/delegated-change-policy.ts test/vitest/vitest.database-worker-core-paths.mjs > .artifacts/before-capacity/expected-overlay.txt
-          git diff --name-only | LC_ALL=C sort > .artifacts/before-capacity/actual-overlay.txt
-          diff -u .artifacts/before-capacity/expected-overlay.txt .artifacts/before-capacity/actual-overlay.txt
-          git diff --exit-code -- src/agents/code-mode-execution.ts src/agents/code-mode-state.ts
-          git diff --binary > .artifacts/before-capacity/overlay.patch
-          sha256sum src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts src/system-agent/delegated-change-policy.ts src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs src/agents/code-mode-execution.ts src/agents/code-mode-state.ts > .artifacts/before-capacity/source-sha256.txt
-      - uses: ./.github/actions/setup-node-env
+          if [[ "$REVISION" == before ]]; then
+            git switch --detach "$BASE_SHA"
+          else
+            test "$REVISION" = after
+          fi
+          printf 'execution_commit=%s\nexecution_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" >> .artifacts/compiler-delegation/identity.txt
+      - &setup
+        uses: ./.github/actions/setup-node-env
         with:
           semantic-checks: "true"
           install-bun: "false"
           cache-mode: "restore"
-      - uses: ./.github/actions/setup-test-bun
-      - name: Execute unchanged native capacity regression on BEFORE owners
-        id: regression
-        env:
-          OPENCLAW_TEST_FILE_LOG: "1"
-          OPENCLAW_LOG_LEVEL: error
+      - &bun
+        uses: ./.github/actions/setup-test-bun
+      - &ripgrep
+        uses: ./.github/actions/setup-ripgrep
+      - name: BEFORE isolated regression inputs
+        if: matrix.revision == 'before'
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          file=test/scripts/check-changed-compiler-delegation.test.ts
+          git show "$CANDIDATE_SHA:$file" > "$file"
+          cmp <(git show "$CANDIDATE_SHA:$file") "$file"
+          git diff --quiet
+          test "$(git status --porcelain -- "$file")" = "?? $file"
+          test "$(git status --porcelain --untracked-files=all | grep -v '^?? .artifacts/' | wc -l)" -eq 1
+          git status --porcelain --untracked-files=all > .artifacts/compiler-delegation/before-overlay-status.txt
+          sha256sum "$file" > .artifacts/compiler-delegation/before-overlay-sha256.txt
+      - name: BEFORE exact missing API and flag proof
+        if: matrix.revision == 'before'
+        run: |
+          set -euo pipefail
+          evidence="$GITHUB_WORKSPACE/.artifacts/compiler-delegation"
           set +e
-          node scripts/test-projects.mts src/agents/code-mode.catalog-lifetime.test.ts -- --maxWorkers=1 --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/before-capacity/tests.json" 2>&1 | tee .artifacts/before-capacity/tests.log
-          pipeline_status=("${PIPESTATUS[@]}")
+          node scripts/test-projects.mts test/scripts/check-changed-compiler-delegation.test.ts -- --maxWorkers=1 --testNamePattern='^removes only the explicitly mapped compiler commands from the selected check plan$' --reporter=default --reporter=json --outputFile="$evidence/tests.json" 2>&1 | tee "$evidence/tests.log"
+          codes=("${PIPESTATUS[@]}")
+          test_code=${codes[0]}
           set -e
-          test "${pipeline_status[1]}" -eq 0
-          status=${pipeline_status[0]}
-          printf '%s\n' "$status" > .artifacts/before-capacity/exit-code.txt
-          # The classifier below alone admits the specific expected assertion failure.
-          exit 0
-      - name: Require named native capacity failure, never generic failure
-        if: always()
-        env:
-          REGRESSION_OUTCOME: ${{ steps.regression.outcome }}
-        run: |
+          test "${codes[1]}" -eq 0
+          if (( test_code == 124 || test_code >= 128 )); then exit "$test_code"; fi
+          set +e
+          node scripts/check-changed.mjs --delegate-compilers --dry-run --paths-from-git -- docs/ci/local-proof.md > "$evidence/cli.log" 2>&1
+          cli_code=$?
+          set -e
+          printf '%s\n' "$test_code" > "$evidence/test-exit.txt"
+          printf '%s\n' "$cli_code" > "$evidence/cli-exit.txt"
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
-          const root = '.artifacts/before-capacity/';
-          fs.mkdirSync(root, { recursive: true });
-          const result = { classification: 'failed', before: process.env.BEFORE_SHA, candidate: process.env.CANDIDATE_SHA };
-          try {
-            assert.equal(process.env.REGRESSION_OUTCOME, 'success', 'Regression command did not complete');
-            const exitCode = Number(fs.readFileSync(root + 'exit-code.txt', 'utf8').trim());
-            assert.equal(exitCode, 1, 'Expected ordinary assertion exit 1, not pass or infrastructure failure');
-            const report = JSON.parse(fs.readFileSync(root + 'tests.json', 'utf8'));
-            assert.equal(report.numFailedTests, 1);
-            assert.equal(report.numTotalTests, 1);
-            assert.equal(report.testResults.length, 1);
-            const suite = report.testResults[0];
-            assert(suite.name.replaceAll('\\', '/').endsWith('/src/agents/code-mode.catalog-lifetime.test.ts'));
-            assert.equal(suite.assertionResults.length, 1);
-            const test = suite.assertionResults[0];
-            assert.equal(test.title, 'keeps the suspension limit while required observers collect existing process results');
-            assert.equal(test.status, 'failed');
-            const failure = test.failureMessages.join('\n');
-            // Native toMatchObject output may omit received fields outside the expected subset.
-            // Read the frozen product's existing structured diagnostic, not a generic log match.
-            const diagnostics = [];
-            for (const name of fs.readdirSync('.artifacts/test-logs')) {
-              if (!name.endsWith('.log')) continue;
-              for (const line of fs.readFileSync('.artifacts/test-logs/' + name, 'utf8').split('\n').filter(Boolean)) {
-                const record = JSON.parse(line);
-                const fields = Object.values(record).find((value) => value && typeof value === 'object' && value.toolCallId === 'required-observer');
-                if (record.message === 'Code Mode execution failed' && fields && fields.error === 'too many suspended code mode runs.' && fields.bridgeDispatchStarted === false) {
-                  diagnostics.push({ toolCallId: fields.toolCallId, error: fields.error, failurePhase: fields.failurePhase, bridgeDispatchStarted: fields.bridgeDispatchStarted });
-                }
-              }
-            }
-            assert(diagnostics.length > 0, 'Missing producer diagnostic: required-observer rejected at capacity before dispatch');
-            result.diagnostics = diagnostics;
-            assert(failure.includes('benchmark-result'), 'Failure was not the required native-result collection assertion');
-            assert(failure.includes('completed') && failure.includes('failed'), 'Missing completion-versus-rejection assertion');
-            result.classification = 'expected-capacity-failure';
-            result.exitCode = exitCode;
-            result.suite = suite.name;
-            result.test = test.title;
-            result.failureMessages = test.failureMessages;
-          } catch (error) {
-            result.reason = String(error);
-            process.exitCode = 1;
-          }
-          fs.writeFileSync(root + 'classification.json', JSON.stringify(result, null, 2) + '\n');
-          console.log(JSON.stringify(result));
+          const root = '.artifacts/compiler-delegation/';
+          const report = JSON.parse(fs.readFileSync(root + 'tests.json', 'utf8'));
+          assert.equal(fs.readFileSync(root + 'test-exit.txt', 'utf8').trim(), '1');
+          assert.equal(report.numFailedTests, 1);
+          assert.equal(report.numPassedTests, 0);
+          assert.equal(report.numFailedTestSuites, 1);
+          assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
+          const suites = report.testResults.filter(item => item.name.replaceAll(String.fromCharCode(92), '/').endsWith('/test/scripts/check-changed-compiler-delegation.test.ts'));
+          assert.equal(suites.length, 1);
+          const failed = suites[0].assertionResults.filter(item => item.status === 'failed');
+          assert.equal(failed.length, 1);
+          assert.equal(failed[0].fullName.trim(), 'removes only the explicitly mapped compiler commands from the selected check plan');
+          assert.match(failed[0].failureMessages.join('\n'), /expected undefined to deeply equal \[\]/);
+          assert.equal(fs.readFileSync(root + 'cli-exit.txt', 'utf8').trim(), '1');
+          assert.equal(fs.readFileSync(root + 'cli.log', 'utf8').trim(), 'Unknown option: --delegate-compilers\n[check:changed] FAILED (exit 1)');
+          fs.writeFileSync(root + 'classification.json', JSON.stringify({ expectedRegression: true, api: 'missing delegatedTypeGraphs', cli: 'unknown --delegate-compilers', setupFailureAccepted: false }, null, 2) + '\n');
           NODE
-      - name: Record BEFORE artifact hashes
+      - name: AFTER touched and sibling owner suites
+        if: matrix.revision == 'after'
+        env:
+          OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1"
+        run: |
+          set -euo pipefail
+          evidence="$GITHUB_WORKSPACE/.artifacts/compiler-delegation"
+          cat > "$evidence/test-paths.txt" <<'PATHS'
+          test/scripts/check-changed-compiler-delegation.test.ts
+          test/scripts/changed-lanes.test.ts
+          test/scripts/changed-lanes-env-budget.test.ts
+          test/scripts/changed-lanes-generated-extension-lint.test.ts
+          test/scripts/changed-lanes.format-argv.test.ts
+          test/scripts/changed-lanes.stylelint.test.ts
+          test/scripts/changed-lanes.max-lines.test.ts
+          test/scripts/check-changed-delegation.test.ts
+          test/scripts/check-changed-cancellation.test.ts
+          test/scripts/ci-check-plan.test.ts
+          test/scripts/ci-collect-checks.test.ts
+          test/scripts/tsgo-core-test-shards.test.ts
+          test/scripts/tsgo-shard-cancellation.test.ts
+          test/scripts/tsgo-ci-continuation.test.ts
+          PATHS
+          mapfile -t tests < "$evidence/test-paths.txt"
+          test "${#tests[@]}" -eq 14
+          set +e
+          node scripts/test-projects.mts "${tests[@]}" -- --maxWorkers=1 --reporter=default --reporter=json --outputFile="$evidence/tests.json" 2>&1 | tee "$evidence/tests.log"
+          codes=("${PIPESTATUS[@]}")
+          code=${codes[0]}
+          set -e
+          test "${codes[1]}" -eq 0
+          printf '%s\n' "$code" > "$evidence/test-exit.txt"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const root = '.artifacts/compiler-delegation/';
+          assert.equal(fs.readFileSync(root + 'test-exit.txt', 'utf8').trim(), '0');
+          const report = JSON.parse(fs.readFileSync(root + 'tests.json', 'utf8'));
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.numFailedTestSuites, 0);
+          assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
+          const selected = fs.readFileSync(root + 'test-paths.txt', 'utf8').trim().split('\n');
+          assert.equal(selected.length, 14);
+          for (const file of selected) {
+            const matches = report.testResults.filter(item => item.name.replaceAll(String.fromCharCode(92), '/').endsWith('/' + file));
+            assert.equal(matches.length, 1, file);
+            assert(matches[0].assertionResults.some(item => item.status === 'passed'), file + ': no passed cases');
+            assert(matches[0].assertionResults.every(item => ['passed', 'pending', 'skipped', 'todo', 'disabled'].includes(item.status)), file + ': failed cases');
+          }
+          fs.writeFileSync(root + 'classification.json', JSON.stringify({ passedSelectedSuites: selected }, null, 2) + '\n');
+          NODE
+      - &hashes
+        name: Record complete evidence hashes
         if: always()
         run: |
-          if test -d .artifacts/before-capacity; then
-            (cd .artifacts/before-capacity && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          set -euo pipefail
+          if test -d .artifacts/compiler-delegation; then
+            (cd .artifacts/compiler-delegation && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS)
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - &upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: required-backports-before-capacity-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/before-capacity/
+          name: compiler-delegation-${{ env.PROOF_LANE }}-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/compiler-delegation/
           if-no-files-found: error
           retention-days: 14
+  types:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        revision: [before, after]
+        graph: [scripts, test-root-tooling, test-root-scripts]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PROOF_LANE: types-${{ matrix.revision }}-${{ matrix.graph }}
+    steps:
+      - *checkout
+      - *bind
+      - *select
+      - *setup
+      - *bun
+      - *ripgrep
+      - name: Run one canonical compiler graph (no serial full core-test graph)
+        env:
+          GRAPH: ${{ matrix.graph }}
+        run: |
+          set -euo pipefail
+          evidence=.artifacts/compiler-delegation
+          graphs=$(node --input-type=module -e 'console.log(JSON.stringify([process.env.GRAPH]))')
+          printf '%s\n' "$graphs" > "$evidence/type-graphs.json"
+          set +e
+          node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "$graphs" 2>&1 | tee "$evidence/types.log"
+          codes=("${PIPESTATUS[@]}")
+          code=${codes[0]}
+          set -e
+          test "${codes[1]}" -eq 0
+          printf '%s\n' "$code" > "$evidence/types-exit.txt"
+          exit "$code"
+      - *hashes
+      - *upload
+  static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PROOF_LANE: static-after
+    steps:
+      - *checkout
+      - *bind
+      - *setup
+      - *bun
+      - *ripgrep
+      - name: Targeted lint, format, script syntax and docs sanity
+        run: |
+          set -euo pipefail
+          source scripts/ci-collect-checks.sh
+          {
+            run_check format node scripts/run-format.mts --check scripts/check-changed.mts scripts/ci-check-plan.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts docs/ci/local-proof.md
+            run_check script-lint node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/check-changed.mts scripts/ci-check-plan.mts
+            run_check test-lint node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts
+            run_check script-erasability pnpm check:script-erasability
+            run_check docs-mdx node scripts/check-docs-mdx.mjs docs/ci/local-proof.md --json-out .artifacts/compiler-delegation/docs-mdx.json
+            run_check docs-links pnpm docs:check-links
+            run_check patch-whitespace git diff --check "$BASE_SHA" HEAD
+            finish_checks
+          } 2>&1 | tee .artifacts/compiler-delegation/static.log
+      - *hashes
+      - *upload
