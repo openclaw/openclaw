@@ -509,6 +509,50 @@ it.each(["text", "text with creation", "voice", "photo", "untranscribed voice"] 
   },
 );
 
+it("names an implicitly named DM topic from its first text while its reply is held", async () => {
+  const generated = vi
+    .spyOn(replyRuntime, "generateConversationLabel")
+    .mockResolvedValue("Invoice review");
+  const release = createDeferred<void>();
+  harness.replySpy.mockImplementationOnce(async () => {
+    await release.promise;
+    return { text: "Done" };
+  });
+  const bot = await configuredBot({ ...openUnstreamed, autoTopicLabel: true }, {}, true);
+  const title = "Скачай через дан...";
+  await handleMessage(bot, 2800, {
+    message_id: 99,
+    date: messageBase.date,
+    chat,
+    from,
+    message_thread_id: 99,
+    is_topic_message: true,
+    forum_topic_created: { name: title, icon_color: 0, is_name_implicit: true },
+  });
+  const pending = handleMessage(bot, 2801, {
+    ...commandMessage("Review invoice"),
+    entities: [],
+    message_thread_id: 99,
+    is_topic_message: true,
+  });
+  try {
+    await vi.waitFor(() => expect(apiPayloads("editForumTopic")).toHaveLength(1), {
+      timeout: 15_000,
+    });
+    expect(generated).toHaveBeenCalledWith(
+      expect.objectContaining({ userMessage: "Review invoice" }),
+    );
+    expect(apiPayloads("editForumTopic")).toEqual([
+      expect.objectContaining({ chat_id: chat.id, message_thread_id: 99, name: "Invoice review" }),
+    ]);
+    expect(apiPayloads("sendMessage")).toHaveLength(0);
+  } finally {
+    release.resolve();
+    await pending;
+    generated.mockRestore();
+  }
+});
+
 it("commits a first sticker description before model admission and never describes a supplemental image as that sticker", async () => {
   const describeStarted = createDeferred<void>();
   const description = createDeferred<{ text: string }>();

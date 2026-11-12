@@ -450,6 +450,105 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
       lastMessageId: "7",
     });
   });
+  it.each(["implicit", "observed", "explicit", "edited"] as const)(
+    "respects %s creation provenance while the first reply is held",
+    async (kind) => {
+      const base = createContext();
+      const scope = resolveTelegramDirectTopicNameCacheScope(base.turn.storePath, "default");
+      const sdk = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+        "openclaw/plugin-sdk/session-store-runtime",
+      );
+      const title = "Скачай через дан...";
+      await sdk.prepareSessionEntryPatch({
+        agentId: "default",
+        storePath: base.turn.storePath,
+        sessionKey: base.ctxPayload.SessionKey!,
+        fallbackEntry: { sessionId: "implicit-first", updatedAt: 1 },
+        prepare: () => ({ sessionId: "implicit-first", topicName: title, displayName: title }),
+        authority: { kind: "host", assertCurrent() {} },
+        requireWriteSuccess: true,
+      });
+      const { resolveTelegramForumTopicMetadata } = await import("./forum-topic-metadata.js");
+      await resolveTelegramForumTopicMetadata({
+        msg: {
+          message_id: 777,
+          date: 1,
+          chat: { id: 123, type: "private", first_name: "Tester" },
+          forum_topic_created: {
+            name: title,
+            icon_color: 0,
+            ...(kind !== "explicit" ? { is_name_implicit: true as const } : {}),
+          },
+        },
+        threadId: 777,
+        scope,
+      });
+      if (kind === "edited") {
+        await updateTopicName(123, 777, { name: title }, scope);
+      } else if (kind === "observed") {
+        await updateTopicName(
+          123,
+          777,
+          {
+            labelState: {
+              sessionId: "implicit-first",
+              remainingMessages: 2,
+              lastMessageId: "earlier",
+            },
+          },
+          scope,
+        );
+      }
+      mockDefaultSessionEntry({ sessionId: "implicit-first", systemSent: false });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await gate;
+        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+        return { queuedFinal: true };
+      });
+      generateTopicLabel.mockResolvedValue("Invoice review");
+      const bot = createBot();
+      const edit = vi.spyOn(bot.api, "editForumTopic");
+      const pending = dispatchWithContext({
+        context: createContext({
+          accountId: "default",
+          ctxPayload: {
+            ...base.ctxPayload,
+            RawBody: "Review invoice",
+            ThreadLabel: title,
+            MessageSid: "1",
+          },
+        }),
+        bot,
+        streamMode: "off",
+      });
+      try {
+        if (kind === "implicit" || kind === "observed") {
+          await waitForNaming(async () =>
+            expect((await getTopicLabelMetadata(123, 777, scope))?.name).toBe("Invoice review"),
+          );
+          expect(edit).toHaveBeenCalledWith(123, 777, { name: "Invoice review" });
+          expect(generateTopicLabel).toHaveBeenCalledWith(
+            expect.objectContaining({ userMessage: "Review invoice" }),
+          );
+        } else {
+          await waitForNaming(async () =>
+            expect((await getTopicLabelMetadata(123, 777, scope))?.labelState?.lastMessageId).toBe(
+              "1",
+            ),
+          );
+          expect(generateTopicLabel).not.toHaveBeenCalled();
+          expect(edit).not.toHaveBeenCalled();
+        }
+      } finally {
+        release();
+        await pending;
+      }
+    },
+  );
   it("names after recording while the agent reply is still pending", async () => {
     const base = createContext();
     const scope = resolveTelegramDirectTopicNameCacheScope(base.turn.storePath, "default");

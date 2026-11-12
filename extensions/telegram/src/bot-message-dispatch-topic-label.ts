@@ -94,8 +94,12 @@ export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
       topicThreadId,
       topicNameScope,
     );
+    // Only Telegram's creation provenance can identify an arbitrary implicit name.
+    // A session label is a deliberate name and must always win.
+    const implicitName =
+      metadata?.isNameImplicit && !snapshot.entry.label?.trim() ? metadata.name : undefined;
     const isPlaceholder = (name: string | undefined) =>
-      !name?.trim() || name === "New Thread" || name === "New Chat";
+      !name?.trim() || name === "New Thread" || name === "New Chat" || name === implicitName;
     const currentName = [
       snapshot.entry.label,
       metadata?.name,

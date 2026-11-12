@@ -17,6 +17,7 @@ import {
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import {
   getTopicName,
+  getTopicLabelMetadata,
   resolveTelegramDirectTopicNameCacheScope,
   updateTopicName,
 } from "./topic-name-cache.js";
@@ -255,7 +256,7 @@ describeTelegramDispatch("DM topic label recovery", () => {
         createContext().turn.storePath,
         "default",
       );
-      await updateTopicName(123, 777, { name: "New Thread" }, scope);
+      await updateTopicName(123, 777, { name: "Auto preview...", isNameImplicit: true }, scope);
       let messageId = 0;
       const context = () =>
         createContext({
@@ -263,21 +264,24 @@ describeTelegramDispatch("DM topic label recovery", () => {
           ctxPayload: {
             ...createContext().ctxPayload,
             RawBody: "Review an invoice",
-            ThreadLabel: "New Thread",
+            ThreadLabel: "Auto preview...",
             MessageSid: String(++messageId),
           },
         });
       await dispatchWithContext({ context: context(), bot, streamMode: "off" });
       await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(1));
       if (failure === "Telegram error") {
-        await vi.waitFor(() => expect(edit).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(edit).toHaveBeenCalledTimes(1), { timeout: 20_000 });
       }
+      expect((await getTopicLabelMetadata(123, 777, scope))?.isNameImplicit).toBe(true);
       mockDefaultSessionEntry({ sessionId: "s1", systemSent: true });
       await dispatchWithContext({ context: context(), bot, streamMode: "off" });
       await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(2));
-      await vi.waitFor(async () =>
-        expect(await getTopicName(123, 777, scope)).toBe("Invoice review"),
+      await vi.waitFor(
+        async () => expect(await getTopicName(123, 777, scope)).toBe("Invoice review"),
+        { timeout: 20_000 },
       );
+      expect((await getTopicLabelMetadata(123, 777, scope))?.isNameImplicit).toBeUndefined();
       await dispatchWithContext({
         context: createContext({
           accountId: "default",
@@ -292,6 +296,41 @@ describeTelegramDispatch("DM topic label recovery", () => {
       });
       expect(generate).toHaveBeenCalledTimes(2);
       expect(edit).toHaveBeenLastCalledWith(123, 777, { name: "Invoice review" });
+      const sdk = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+        "openclaw/plugin-sdk/session-store-runtime",
+      );
+      const base = createContext();
+      await sdk.prepareSessionEntryPatch({
+        agentId: "default",
+        storePath: base.turn.storePath,
+        sessionKey: base.ctxPayload.SessionKey!,
+        prepare: () => ({
+          sessionId: "s2",
+          topicName: "Invoice review",
+          displayName: "Invoice review",
+        }),
+        authority: { kind: "host", assertCurrent() {} },
+        requireWriteSuccess: true,
+      });
+      mockDefaultSessionEntry({ sessionId: "s2", systemSent: true });
+      await dispatchWithContext({
+        context: createContext({
+          accountId: "default",
+          ctxPayload: {
+            ...base.ctxPayload,
+            RawBody: "Continue invoice",
+            ThreadLabel: "Invoice review",
+            MessageSid: "4",
+          },
+        }),
+        bot,
+        streamMode: "off",
+      });
+      await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(3));
+      expect(generate.mock.calls[2]?.[0].prompt).toContain(
+        "Reassess the existing conversation title",
+      );
+      expect(generate.mock.calls[2]?.[0].prompt).toContain("Invoice review");
     },
   );
 });

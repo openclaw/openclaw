@@ -16,6 +16,7 @@ const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
 
 type TopicEntry = {
   name: string;
+  isNameImplicit?: boolean;
   creatorUserId?: number;
   iconColor?: number;
   iconCustomEmojiId?: string;
@@ -159,6 +160,11 @@ export async function updateTopicName(
   const closed = patch.closed ?? existing?.closed;
   const creatorUserId = patch.creatorUserId ?? existing?.creatorUserId;
   const labelState = patch.labelState ?? existing?.labelState;
+  // A name update supersedes creation provenance, including a human edit.
+  const isNameImplicit =
+    patch.name !== undefined
+      ? patch.isNameImplicit
+      : (patch.isNameImplicit ?? existing?.isNameImplicit);
   const nameRevision =
     patch.name !== undefined ? (existing?.nameRevision ?? 0) + 1 : existing?.nameRevision;
   const merged: TopicEntry = {
@@ -166,6 +172,7 @@ export async function updateTopicName(
     updatedAt: nextUpdatedAt(scope),
     ...(nameRevision !== undefined ? { nameRevision } : {}),
     ...(labelState !== undefined ? { labelState } : {}),
+    ...(isNameImplicit ? { isNameImplicit } : {}),
     ...(iconColor !== undefined ? { iconColor } : {}),
     ...(iconCustomEmojiId !== undefined ? { iconCustomEmojiId } : {}),
     ...(closed !== undefined ? { closed } : {}),
@@ -191,6 +198,7 @@ export async function getTopicLabelMetadata(
   | {
       name: string;
       nameRevision: number;
+      isNameImplicit?: boolean;
       labelState?: ConversationLabelRefinementState;
     }
   | undefined
@@ -202,6 +210,7 @@ export async function getTopicLabelMetadata(
     ? {
         name: entry.name,
         nameRevision: entry.nameRevision ?? 0,
+        isNameImplicit: entry.isNameImplicit,
         labelState: entry.labelState,
       }
     : undefined;
@@ -226,7 +235,10 @@ export async function getTopicName(
 export async function recordTopicCreation(
   chatId: number | string,
   threadId: number | string,
-  creation: Pick<TopicEntry, "name" | "creatorUserId" | "iconColor" | "iconCustomEmojiId">,
+  creation: Pick<
+    TopicEntry,
+    "name" | "isNameImplicit" | "creatorUserId" | "iconColor" | "iconCustomEmojiId"
+  >,
   scope?: string,
 ): Promise<void> {
   const state = getTopicStoreState(scope);
