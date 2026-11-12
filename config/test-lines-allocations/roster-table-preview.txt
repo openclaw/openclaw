@@ -1,0 +1,2 @@
+# Table normalization, legacy preview-cache recovery, and retained cache guards.
+39

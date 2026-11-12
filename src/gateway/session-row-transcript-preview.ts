@@ -9,6 +9,9 @@ import {
 } from "../sessions/transcript-terminal-model.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 
+// Transcript watermarks do not cover formatting changes; older cached previews need backfill.
+const SESSION_ROW_TRANSCRIPT_PREVIEW_REVISION = 1;
+
 export const SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES = 64 * 1024;
 export const SESSION_ROW_TRANSCRIPT_TERMINAL_MAX_BYTES = 256 * 1024;
 
@@ -49,6 +52,12 @@ export type SessionRowTranscriptProjection = {
   terminalModel: SessionTranscriptTerminalModel | null;
   indexedSeq: number | null;
 };
+
+export function serializeSessionRowTranscriptProjection(
+  fields: SessionRowTranscriptProjection,
+): string {
+  return JSON.stringify({ ...fields, previewRevision: SESSION_ROW_TRANSCRIPT_PREVIEW_REVISION });
+}
 
 /** Undefined needs a bounded tail lookup; a complete projection can include empty fields. */
 export function projectSessionRowTranscriptFields(
@@ -101,6 +110,7 @@ export function readStoredSessionRowTranscriptProjection(params: {
   try {
     const value: unknown = JSON.parse(params.json);
     return isRecord(value) &&
+      value.previewRevision === SESSION_ROW_TRANSCRIPT_PREVIEW_REVISION &&
       (value.lastMessagePreview === null || typeof value.lastMessagePreview === "string") &&
       (value.lastAssistantMessage === undefined ||
         value.lastAssistantMessage === "unknown" ||

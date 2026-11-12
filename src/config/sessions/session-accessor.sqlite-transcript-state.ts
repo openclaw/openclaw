@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { serializeSessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import { engineGreatest } from "../../infra/database-engine/scalar.js";
 import {
   createSqliteQueryCache,
@@ -513,7 +514,7 @@ export function advanceTranscriptMutationAtInTransaction(
           transcript_updated_at: nextUpdatedAt,
           ...(options.rowTranscript
             ? {
-                row_transcript_json: JSON.stringify(options.rowTranscript),
+                row_transcript_json: serializeSessionRowTranscriptProjection(options.rowTranscript),
                 row_transcript_updated_at: nextUpdatedAt,
               }
             : {}),

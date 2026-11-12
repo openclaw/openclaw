@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
-import { readStoredSessionRowTranscriptProjection } from "../gateway/session-row-transcript-preview.js";
+import {
+  readStoredSessionRowTranscriptProjection,
+  serializeSessionRowTranscriptProjection,
+} from "../gateway/session-row-transcript-preview.js";
 import { attachSessionTranscriptRunId } from "./transcript-events.js";
 import { readSessionTranscriptTerminalModel } from "./transcript-terminal-model.js";
 
@@ -30,7 +33,7 @@ it("rebuilds cached terminal facts that attributed a command to an inference mod
   };
   expect(
     readStoredSessionRowTranscriptProjection({
-      json: JSON.stringify(projection),
+      json: serializeSessionRowTranscriptProjection(projection),
       updatedAt: 2,
       transcriptUpdatedAt: 2,
       indexedSeq: 2,
