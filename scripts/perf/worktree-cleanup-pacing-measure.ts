@@ -20,14 +20,29 @@
  * worktrees, not transcript bodies. The fixture has 5,000 real session metadata rows.
  * Checkouts hardlink immutable synthetic files to limit disk use;
  * the one edited file is unlinked before writing. Source setup is excluded from timing.
+ *
+ * Reclaim-starvation mode: --scratch-clones 806 --observe-ms 30000 --psi-trace.
+ * Uses real timers and a fixed observation window; clone-shaped expired scratch splits
+ * the source's file count across candidates. Linux-only --psi-trace injects 1–5% full
+ * pressure with 30% spikes into the production probe's /proc input; btrfs commit counters
+ * stay real. kernelSamples retain uninjected host PSI. Run on btrfs with a separate
+ * synthetic background IO workload to measure deletion impact; trace admission alone
+ * is not a physical pressure experiment. Acceptance: baseline near-zero scratch progress,
+ * candidate positive progress, no commit/loop latency regression beyond A/A spread.
+ * Seed a large isolated DB once with --seed-transcript-gib 48, close the process, then
+ * reuse its reported agentDatabasePath with --agent-db-fixture for every measured arm.
+ * The transcript owner compresses synthetic content; report physical DB bytes, not
+ * the requested logical size. COPYFILE_EXCL refuses replacing an already opened DB.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
@@ -46,6 +61,11 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "18432" },
     worktrees: { type: "string", default: "3" },
     profile: { type: "boolean", default: false },
+    "scratch-clones": { type: "string", default: "0" },
+    "observe-ms": { type: "string", default: "0" },
+    "psi-trace": { type: "boolean", default: false },
+    "agent-db-fixture": { type: "string" },
+    "seed-transcript-gib": { type: "string", default: "0" },
   },
 });
 assert(values.source, "--source is required");
@@ -94,7 +114,13 @@ if (values.prepare) {
 assert(values.output && global.gc, "--output and --expose-gc are required");
 const output = path.resolve(values.output);
 const worktrees = Number(values.worktrees);
+const scratchClones = Number(values["scratch-clones"]);
+const observeMs = Number(values["observe-ms"]);
+const transcriptGiB = Number(values["seed-transcript-gib"]);
 assert(Number.isSafeInteger(worktrees) && worktrees >= 2);
+assert(Number.isSafeInteger(scratchClones) && scratchClones >= 0);
+assert(Number.isSafeInteger(observeMs) && observeMs >= 0);
+assert(Number.isSafeInteger(transcriptGiB) && transcriptGiB >= 0 && transcriptGiB <= 64);
 fs.mkdirSync(output);
 for (const directory of ["home", "tmp", "state"]) {
   fs.mkdirSync(path.join(output, directory));
@@ -104,6 +130,8 @@ if (baseline) {
   await import("./worker-retained-heap-preload.js");
 }
 const configPath = path.join(output, "openclaw.json");
+// os.tmpdir also consults the native environment, before the isolated JS env below.
+process.env.TMPDIR = path.join(output, "tmp");
 process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
   startupTrace: false,
   caseEnv: {
@@ -125,8 +153,11 @@ const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snap
 setRuntimeConfigSnapshot(config, config);
 const { managedWorktrees } = await import("../../src/agents/worktrees/service.js");
 const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
-const { runOpenClawAgentWriteTransaction, openOpenClawAgentDatabase } =
-  await import("../../src/state/openclaw-agent-db.js");
+const {
+  runOpenClawAgentWriteTransaction,
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} = await import("../../src/state/openclaw-agent-db.js");
 const { writeSessionEntry } =
   await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
 const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
@@ -189,7 +220,43 @@ for (let index = 0; index < worktrees; index++) {
   records.push(record);
   console.error(JSON.stringify({ prepared: records.length, worktrees, files: fixture.files }));
 }
+// Put scratch last so the old owner must traverse the ordinary removal backlog first.
+const scratchRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+const expired = new Date(Date.now() - 25 * 60 * 60_000);
+for (let index = 0; index < scratchClones; index++) {
+  const clone = path.join(scratchRoot, `clone-${index}`);
+  fs.mkdirSync(path.join(clone, ".git/objects"), { recursive: true });
+  fs.writeFileSync(path.join(clone, ".git/HEAD"), "ref: refs/heads/main\n");
+  fs.utimesSync(path.join(clone, ".git/HEAD"), expired, expired);
+  for (let entry = index; entry < fixture.paths.length; entry += scratchClones) {
+    const file = path.join(clone, `${entry}.ts`);
+    fs.copyFileSync(path.join(source, fixture.paths[entry]!), file, fs.constants.COPYFILE_FICLONE);
+    fs.utimesSync(file, expired, expired);
+  }
+  fs.utimesSync(path.join(clone, ".git/objects"), expired, expired);
+}
 const sessions = 5_000;
+if (values["agent-db-fixture"]) {
+  const destination = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(
+    values["agent-db-fixture"],
+    destination,
+    fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
+  );
+}
+if (transcriptGiB) {
+  const { seedTeamShapeSessions } = await import("./team-shape-sessions.js");
+  await seedTeamShapeSessions({
+    stateDir: process.env.OPENCLAW_STATE_DIR!,
+    sessions,
+    sessionKeys: Array.from({ length: sessions }, (_, index) => `agent:main:synthetic-${index}`),
+    retainedRuns: 0,
+    seed: 2437,
+    now: Date.now(),
+    transcriptBytes: transcriptGiB * 1024 ** 3,
+  });
+}
 for (let offset = 0; offset < sessions; offset += 100) {
   runOpenClawAgentWriteTransaction(
     (database) => {
@@ -219,6 +286,10 @@ const scheduler = new GatewayScheduler({
     now,
     monotonicNow: () => performance.now() + skippedWaitMs,
     arm: (run, delayMs) => {
+      if (observeMs) {
+        const timer = setTimeout(() => void run(), delayMs);
+        return () => clearTimeout(timer);
+      }
       // Park the unrelated hourly recurrence; only cleanup continuation timers advance.
       if (delayMs > 10 * 60_000) {
         return () => {};
@@ -255,7 +326,46 @@ managedWorktrees.remove = async (input) => {
   }
 };
 const inspector = new Session();
+const kernelSamples: Array<{ atMs: number; psi: string; commits: string[] }> = [];
+const pressureFile = path.join(output, "synthetic-psi");
+const open = fsPromises.open;
+let pressureProbeReads = 0;
+if (values["psi-trace"]) {
+  assert.equal(process.platform, "linux", "PSI trace requires Linux; no platform spoofing");
+  fsPromises.open = (file, flags, mode) => {
+    if (file === "/proc/pressure/io") {
+      pressureProbeReads++;
+      return open(pressureFile, flags, mode);
+    }
+    return open(file, flags, mode);
+  };
+}
+const sampleKernel = () => {
+  const tick = kernelSamples.length;
+  if (values["psi-trace"]) {
+    const full = tick % 7 === 6 ? 30 : (tick % 5) + 1;
+    fs.writeFileSync(
+      pressureFile,
+      `some avg10=${full + 10} avg60=20 total=0\nfull avg10=${full} avg60=3 total=0\n`,
+    );
+  }
+  kernelSamples.push({
+    atMs: performance.now(),
+    psi: fs.existsSync("/proc/pressure/io") ? fs.readFileSync("/proc/pressure/io", "utf8") : "",
+    commits: fs.existsSync("/sys/fs/btrfs")
+      ? fs.readdirSync("/sys/fs/btrfs").flatMap((id) => {
+          const file = `/sys/fs/btrfs/${id}/commit_stats`;
+          return fs.existsSync(file) ? [fs.readFileSync(file, "utf8")] : [];
+        })
+      : [],
+  });
+};
+sampleKernel();
+const kernelTimer = setInterval(sampleKernel, 1_000);
+const loop = monitorEventLoopDelay({ resolution: 10 });
+loop.enable();
 let owner: ReturnType<typeof startWorktreeMaintenance> | undefined;
+let observationTimer: ReturnType<typeof setTimeout> | undefined;
 try {
   global.gc();
   if (values.profile) {
@@ -276,7 +386,13 @@ try {
       onComplete: resolve,
       onError: (message) => reject(new Error(message)),
     });
-    owner.request();
+    const receipt = owner.request();
+    if (observeMs) {
+      observationTimer = setTimeout(
+        () => resolve(owner!.request({ jobId: receipt.jobId })),
+        observeMs,
+      );
+    }
   });
   const wallMs = performance.now() - started;
   const processCpu = process.cpuUsage(cpuBefore);
@@ -289,12 +405,14 @@ try {
     );
     inspector.disconnect();
   }
-  assert.equal(removals.length, worktrees);
+  if (!observeMs) {
+    assert.equal(removals.length, worktrees);
+  }
   const archived = new Map(
     (await managedWorktrees.listRegistryRecords()).map((record) => [record.id, record]),
   );
   const trees: string[] = [];
-  for (const record of records) {
+  for (const record of observeMs ? [] : records) {
     const current = archived.get(record.id);
     assert(current?.removedAt !== undefined && current.snapshotRef);
     assert(!fs.existsSync(record.path));
@@ -308,7 +426,9 @@ try {
     );
     trees.push(git(repo, "rev-parse", `${current.snapshotRef}^{tree}`));
   }
-  assert.equal(new Set(trees).size, 1);
+  if (!observeMs) {
+    assert.equal(new Set(trees).size, 1);
+  }
   const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
   const digest = createHash("sha256");
   for (const relative of [
@@ -317,6 +437,7 @@ try {
     "src/agents/worktrees/registry-read.kernel.ts",
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
+    "src/infra/host-io-pressure.ts",
   ]) {
     const original = baseline && path.join(baseline, relative);
     digest.update(
@@ -336,6 +457,15 @@ try {
     worktrees,
     sessions,
     agentDatabaseBytes,
+    agentDatabasePath: agentDatabase.path,
+    scratchClones,
+    scratchRemaining:
+      scratchClones && fs.existsSync(scratchRoot) ? fs.readdirSync(scratchRoot).length : 0,
+    injectedPsiTrace: values["psi-trace"],
+    pressureProbeReads,
+    kernelSamples,
+    eventLoopP99Ms: loop.percentile(99) / 1e6,
+    eventLoopMaxMs: loop.max / 1e6,
     wallMs,
     logicalElapsedMs: wallMs + skippedWaitMs,
     skippedWaitMs,
@@ -356,6 +486,10 @@ try {
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {
+  clearTimeout(observationTimer);
+  clearInterval(kernelTimer);
+  loop.disable();
+  fsPromises.open = open;
   await owner?.stop();
   await scheduler.stop();
   await drainGlobalSingletonLifecycleState();

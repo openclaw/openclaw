@@ -55,7 +55,7 @@ function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
 
-it("expires disposable scratch on the existing maintenance pass and records the outcome", async () => {
+it("reclaims scratch before a held worktree backlog and records the outcome", async () => {
   const dirs = createTrackedTempDirs();
   try {
     const root = await fs.realpath(await dirs.make("worktree-maintenance-scratch-"));
@@ -67,12 +67,13 @@ it("expires disposable scratch on the existing maintenance pass and records the 
       targets: [{ root, kind: "checkout", isLive: () => false }],
       release: () => {},
     });
-    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
     await using fixture = maintenanceFixture();
     fixture.clock.setTime(1_800_000_000_000);
-    const owner = fixture.start();
-    const receipt = owner.request();
-    await fixture.run();
+    const { owner, receipt, release, running } = await fixture.runHeld();
+    await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(owner.request({ jobId: receipt.jobId }).state).toBe("running");
+    release.resolve(completedResult());
+    await running;
     expect(owner.request({ jobId: receipt.jobId })).toMatchObject({
       state: "completed",
       scratch: { entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] },
@@ -134,6 +135,24 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
     },
   };
 }
+
+it.each(["custody unavailable", "host IO pressure"])(
+  "still collects worktrees under %s",
+  async (reason) => {
+    if (reason === "host IO pressure") {
+      vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => true);
+    } else {
+      vi.mocked(prepareScratchMaintenanceTargets).mockRejectedValueOnce(new Error(reason));
+    }
+    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
+    await using fixture = maintenanceFixture();
+    const owner = fixture.start();
+    const receipt = owner.request();
+    await fixture.run();
+    expect(owner.request({ jobId: receipt.jobId }).state).toBe("completed");
+    expect(fixture.onError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(reason));
+  },
+);
 
 function holdGc(repeat = false, onRun = () => {}) {
   const entered = createDeferred<NonNullable<Parameters<typeof managedWorktrees.gc>[0]>>();
@@ -426,7 +445,7 @@ it.each([
   ["template", "stop"],
   ["template", "configuration"],
 ])("pauses %s removal under host pressure and handles %s", async (kind, outcome) => {
-  const probe = vi.fn().mockResolvedValue(true);
+  const probe = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
   vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
   const config: OpenClawConfig = {};
   await using fixture = maintenanceFixture(config);
@@ -443,7 +462,7 @@ it.each([
   const owner = fixture.start();
   owner.request();
   void fixture.run();
-  await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
   await fixture.clock.advanceBy(299_999);
   expect(removed).not.toHaveBeenCalled();
   if (outcome === "stop") {
