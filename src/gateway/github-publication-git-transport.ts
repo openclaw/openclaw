@@ -160,6 +160,7 @@ export async function requireGitHubPublicationCommit(
   failure: string,
   options: { contents?: boolean; commitPresent?: boolean; baseBranch?: string } = {},
 ) {
+  const promisor = `remote.${githubRepositoryUrl(repository, host)}.promisor`;
   const fetch = async (missing?: string[], tips = [sha]) => {
     const command = async (directory: string, argv: string[], gitEnv = env, input?: string) => {
       const result = await run(argv, { cwd: directory, env: gitEnv, input });
@@ -186,6 +187,7 @@ export async function requireGitHubPublicationCommit(
           "-c",
           "core.fsmonitor=false",
           ...(directory === cwd ? [] : ["-c", "core.alternateRefsCommand=true"]),
+          ...(missing ? ["-c", "fetch.negotiationAlgorithm=noop"] : []),
           "fetch",
           "--no-auto-maintenance",
           "--no-tags",
@@ -195,10 +197,10 @@ export async function requireGitHubPublicationCommit(
           ...tips.map((tip) => `--negotiation-tip=${tip}`),
           // Explicit blob wants still hydrate; retain promisor packs for both fetch paths.
           "--filter=blob:none",
-          ...(missing ? ["--refetch", "--stdin"] : []),
+          ...(missing ? ["--quiet", "--stdin"] : []),
           "--",
           githubRepositoryUrl(repository, host),
-          ...(missing ? [] : [sha]),
+          ...(missing ? [] : [`${sha}:refs/openclaw/fetched/${sha}`]),
         ],
         gitEnv,
         missing ? `${missing.join("\n")}\n` : undefined,
@@ -206,20 +208,16 @@ export async function requireGitHubPublicationCommit(
     // Git must register a new URL's promisor in the source repository before
     // temporary metadata can borrow its object store without losing lazy hydration.
     const registered =
-      !missing && tips.length > 0
-        ? await command(cwd, [
-            "git",
-            "config",
-            "--type=bool",
-            "--default=false",
-            "--get",
-            `remote.${githubRepositoryUrl(repository, host)}.promisor`,
-          ])
+      tips.length > 0
+        ? await command(cwd, ["git", "config", "--type=bool", "--default=false", "--get", promisor])
         : "false";
     // Without a cached base, retain Git's ordinary discovery of common history.
-    if (registered !== "true") {
+    if (registered !== "true" && !missing) {
       await acquire(cwd, env);
     } else {
+      if (missing && registered !== "true") {
+        await command(cwd, ["git", "config", promisor, "true"]);
+      }
       const isolatedEnv = {
         ...env,
         GIT_DIR: undefined,
@@ -232,6 +230,10 @@ export async function requireGitHubPublicationCommit(
         (directory, objects) =>
           acquire(directory, { ...isolatedEnv, GIT_OBJECT_DIRECTORY: objects }),
       );
+    }
+    if (!missing && registered === "true") {
+      // Temporary transport metadata is discarded; retain successful acquisition in the owner.
+      await command(cwd, ["git", "update-ref", `refs/openclaw/fetched/${sha}`, sha]);
     }
   };
   if (!options.commitPresent) {

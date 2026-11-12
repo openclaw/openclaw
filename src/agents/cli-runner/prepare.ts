@@ -803,12 +803,13 @@ async function prepareCliRunContextWithinReadFence(
           ...(mcpToolAuth ? { authProfileStore: mcpToolAuth.store } : {}),
           ...(mcpToolAuth?.agentDir ? { authProfileStoreAgentDir: mcpToolAuth.agentDir } : {}),
         },
+        forGrant: turnAudience.forGrant,
         resolvePolicyTools: resolveMcpLoopbackPolicyTools,
         resolveScopedTools: resolveMcpLoopbackScopedTools,
       })
-    : { params, tools: [] };
+    : { params, tools: [], grantAudience: undefined };
   params = await retainPolicyAllowedManagedNativeTools(
-    mcpProjection.params,
+    mcpProjection,
     managedNativeTools,
     backendResolved,
     resolveNativeMcpCapabilityProfile,
@@ -947,7 +948,7 @@ async function prepareCliRunContextWithinReadFence(
             ...(skillLibraryAuthoring ? { skillLibraryAuthoring } : {}),
             ...(loopbackBundleMcp ? { bundledTools: loopbackBundleMcp.tools } : {}),
             ...(mcpToolAuth ? { toolAuth: mcpToolAuth } : {}),
-            turnAudience: turnAudience.forGrant(mcpGrant.context.sessionKey),
+            turnAudience: mcpProjection.grantAudience,
           })
         : undefined;
     const mcpClientGrant = mcpClient?.grant;
