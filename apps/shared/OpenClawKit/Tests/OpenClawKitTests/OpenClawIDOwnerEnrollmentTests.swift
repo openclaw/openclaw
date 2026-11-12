@@ -137,7 +137,7 @@ struct OpenClawIDOwnerEnrollmentTests {
         // The TypeScript proof verifies over the bytes this port signs, and so does this port's.
         let ts = try vectors.value(["peer_key_proof", "ts"]).number()
         let account = try vectors.text("peer_key_proof", "account_id")
-        let input = try Data("openclaw/peer-key-proof/v1\0".utf8) + OpenClawIDCanonicalJSON.object([
+        let input = Data("openclaw/peer-key-proof/v1\0".utf8) + OpenClawIDCanonicalJSON.object([
             "account_id": .string(account), "device_pub": .string(keys.device.signingKey),
             "peer_key": .string(keys.peer.peerKey), "ts": .integer(ts),
         ]).encoded
@@ -168,7 +168,7 @@ struct OpenClawIDOwnerEnrollmentTests {
         #expect(throws: OpenClawIDOwnerEnrollmentError.handoffInvalid) {
             try OpenClawIDOwnerEnrollmentClient.verifyHandoff(handoff, claw: elsewhere, keys: keys)
         }
-        let stranger = try OpenClawIDOwnerDeviceKeys(device: keys.peer, peer: keys.device, node: nil)
+        let stranger = OpenClawIDOwnerDeviceKeys(device: keys.peer, peer: keys.device, node: nil)
         #expect(throws: OpenClawIDOwnerEnrollmentError.handoffInvalid) {
             try OpenClawIDOwnerEnrollmentClient.verifyHandoff(handoff, claw: vectors.claw, keys: stranger)
         }
@@ -254,7 +254,7 @@ struct OpenClawIDOwnerEnrollmentTests {
         await discovery.onEnrollment { step, data, requestID, discovery in
             switch step {
             case "start":
-                try await discovery.mail(Self.enrollment(requestID, "accept", [
+                await discovery.mail(Self.enrollment(requestID, "accept", [
                     "eph_pub": .string(OpenClawIDNodeIdentity.hex(ephemeralE.publicKey.rawRepresentation)),
                     "device_pub": .string(approver.signingKey),
                 ]))
@@ -287,7 +287,7 @@ struct OpenClawIDOwnerEnrollmentTests {
                 ])
                 let box = try AES.GCM.seal(handoff.encoded, using: key)
                 try await discovery.publish(seq: 3, listed: true)
-                try await discovery.mail(Self.enrollment(requestID, "sealed", [
+                await discovery.mail(Self.enrollment(requestID, "sealed", [
                     "nonce": .string(OpenClawIDNodeIdentity.hex(box.nonce)),
                     "ciphertext": .string(OpenClawIDNodeIdentity.hex(box.ciphertext + box.tag)),
                 ]))
@@ -313,7 +313,7 @@ struct OpenClawIDOwnerEnrollmentTests {
             nodeStore: nil, http: discovery, now: { (try? vectors.now) ?? 0 }, sleep: { _ in })
         await discovery.onEnrollment { step, _, requestID, discovery in
             if step == "start" {
-                try await discovery.mail(Self.enrollment(requestID, "abort", ["reason": .string("sas_mismatch")]))
+                await discovery.mail(Self.enrollment(requestID, "abort", ["reason": .string("sas_mismatch")]))
             }
         }
         await #expect(throws: OpenClawIDOwnerEnrollmentError.denied) {

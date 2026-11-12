@@ -26,13 +26,15 @@ struct OnboardingOpenClawIDSignInEnvironment {
 /// to the headless node path unchanged.
 @MainActor
 final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
-    let unavailableReason: String? = nil
+    /// Sign-in-first enrollment and node invitations both need the packaged native transport.
+    var unavailableReason: String? {
+        self.nodeInvitations.unavailableReason
+    }
+
     var accountUnavailableReason: String? {
-        guard self.configuration != nil else {
-            return "OpenClaw ID sign-in isn’t set up in this build. You can use a node invitation instead."
-        }
-        return OpenClawIDNodeNativeEndpoint.isPackaged ? nil :
-            "OpenClaw ID isn’t available in this build because the native transport isn’t packaged."
+        if let unavailableReason { return unavailableReason }
+        return self.configuration == nil
+            ? "OpenClaw ID sign-in isn’t set up in this build. You can use a node invitation instead." : nil
     }
 
     private let configuration: MacOpenClawIDConfiguration?
@@ -103,10 +105,11 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             guard claw.online else { return .problem(.clawOffline(claw: claw.hostname)) }
             guard claw.relationship == "owner" else { return .problem(.memberNeedsInvite(claw: claw.hostname)) }
             return .chooseApproval(claw: claw.hostname, device: self.environment.deviceName())
-        case .approveFromDevice, .retry where self.claw?.online == true:
+        case .approveFromDevice:
             return try await self.approveFromDevice()
         case .retry:
-            return try await self.refreshClaws()
+            // From an expired request, ask for a new code; from an offline claw, look again.
+            return self.claw?.online == true ? try await self.approveFromDevice() : try await self.refreshClaws()
         case .checkApproval:
             return try await self.awaitApproval()
         case .useRecoveryKit:
