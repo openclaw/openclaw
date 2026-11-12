@@ -11,6 +11,7 @@ import {
   type SignedStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { registerIdCli } from "./id-cli.js";
 
@@ -20,10 +21,11 @@ vi.mock(import("./gateway-rpc.js"), async (importOriginal) => ({
 }));
 vi.mock(import("@openclaw/media-core/read-byte-stream-with-limit"), async (importOriginal) => ({
   ...(await importOriginal()),
-  readByteStreamWithLimit: () => Promise.resolve(Buffer.from(kitText)),
+  readByteStreamWithLimit: () => Promise.resolve(Buffer.from(activeKit)),
 }));
 
 let kitText: string;
+let activeKit: string;
 let preparation: RebindPreparation;
 let bindingSeq: number;
 let readFailure: Error | undefined;
@@ -56,6 +58,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  activeKit = kitText;
   bindingSeq = 1;
   readFailure = undefined;
   commitFailure = undefined;
@@ -131,18 +134,25 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function run(command: "status" | "rebind", json = true) {
+async function runWith(args: string[]) {
   const program = new Command().exitOverride();
   registerIdCli(program);
-  await program.parseAsync(
-    [
-      "id",
-      command,
-      ...(json ? ["--json"] : []),
-      ...(command === "rebind" ? ["--kit-stdin", "--yes", "--code", "test-link-code"] : []),
-    ],
-    { from: "user" },
-  );
+  await program.parseAsync(args, { from: "user" });
+}
+
+async function run(command: "status" | "rebind", json = true) {
+  await runWith([
+    "id",
+    command,
+    ...(json ? ["--json"] : []),
+    ...(command === "rebind" ? ["--kit-stdin", "--yes", "--code", "test-link-code"] : []),
+  ]);
+}
+
+async function expectExpectedCliError(args: string[], remedy: string) {
+  const failure = await runWith(args).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(ExpectedCliError);
+  expect(failure).toHaveProperty("message", expect.stringContaining(remedy));
 }
 
 describe("registered id commands", () => {
@@ -225,5 +235,45 @@ describe("registered id commands", () => {
     expect(new Set(commits.map((binding) => binding.body.k_srv)).size).toBe(2);
     expect(new Set(commits.map((binding) => binding.body.k_gw)).size).toBe(2);
     expect(JSON.parse(output)).toMatchObject({ moved: true, bindingSeq: 3 });
+  });
+
+  it.each([
+    {
+      label: "--yes without --kit-stdin",
+      args: ["id", "rebind", "--yes"],
+      remedy: "--yes needs --kit-stdin",
+    },
+    {
+      label: "--kit-stdin without --code",
+      args: ["id", "rebind", "--kit-stdin", "--yes"],
+      remedy: "--kit-stdin needs --code",
+    },
+    {
+      label: "a non-positive --binding-seq",
+      args: [
+        "id",
+        "rebind",
+        "--kit-stdin",
+        "--yes",
+        "--code",
+        "test-link-code",
+        "--binding-seq",
+        "0",
+      ],
+      remedy: "--binding-seq must be a positive whole number.",
+    },
+  ])(
+    "shows the remedy for $label as an ExpectedCliError, not a generic failure",
+    async ({ args, remedy }) => {
+      await expectExpectedCliError(args, remedy);
+    },
+  );
+
+  it("shows a kit from another claw as an ExpectedCliError", async () => {
+    activeKit = await encodeKit(generateKitSecret());
+    await expectExpectedCliError(
+      ["id", "rebind", "--kit-stdin", "--yes", "--code", "test-link-code"],
+      "This recovery kit is for another claw",
+    );
   });
 });
