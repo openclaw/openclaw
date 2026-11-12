@@ -45,7 +45,6 @@ function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
 type PreparedNpmInstallSpec = {
   installSpec: string;
   installCwd: string | null;
-  packDir: string | null;
   steps: UpdateStepResult[];
   failedStep: UpdateStepResult | null;
 };
@@ -55,6 +54,7 @@ export async function prepareNpmGitSourceInstallSpec(params: {
   installSpec: string;
   packageName: string;
   runStep: PackageUpdateStepRunner;
+  onPackDir: (packDir: string) => void;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
@@ -62,7 +62,6 @@ export async function prepareNpmGitSourceInstallSpec(params: {
   const result: PreparedNpmInstallSpec = {
     installSpec: params.installSpec,
     installCwd: params.installCwd ?? null,
-    packDir: null,
     steps: [],
     failedStep: null,
   };
@@ -74,7 +73,7 @@ export async function prepareNpmGitSourceInstallSpec(params: {
   }
 
   const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pack-"));
-  result.packDir = packDir;
+  params.onPackDir(packDir);
   const packStep = await params.runStep({
     name: "package-pack",
     argv: [

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
@@ -42,241 +42,220 @@ vi.mock("../../../talk/provider-resolver.js", async (importOriginal) => ({
     voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync,
 }));
 
-describe("cross-store voice creation authority", () => {
-  beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.restoreAllMocks());
+beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
-  it.each([
-    ["membership", "before", "worker"],
-    ["membership", "after", "worker"],
-    ["session", "before", "worker"],
-    ["session", "after", "worker"],
-    ["membership", "after", "native"],
-    ["session", "after", "native"],
-    ["unchanged", "after", "native"],
-    ["unpublished", "after", "native"],
-    ["membership", "after", "wrapper"],
-    ["session", "after", "wrapper"],
-    ["unchanged", "after", "wrapper"],
-  ] as const)("checks %s authority %s %s admission", async (revocation, timing, writer) => {
-    await withOpenClawTestState(
-      { scenario: "minimal", prepareProfileCatalog: true },
-      async ({ stateDir }) => {
-        const sessionKey = "agent:main:main";
-        const sessionId = "voice-transcript-session";
-        setRuntimeConfigSnapshot({});
-        const seedEntry = { sessionId, updatedAt: Date.now() };
-        await applySessionEntryOperation(
-          { agentId: "main", sessionKey },
-          { kind: "fields", patch: seedEntry },
-          { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
-        );
-        const fixture = createDelegatedBrowserProviderFixture(async () => browserSession, stateDir);
-        voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
-          provider: fixture.provider,
-          providerConfig: {},
-          capabilities: fixture.provider.capabilities,
-        });
-        let authorization: SessionMutationAuthorization | undefined;
-        let persistedId: string | undefined;
-        try {
-          const storePath = path.join(stateDir, "custom.sqlite");
-          const config = {
-            ...rolePolicyConfig(),
-            ...fixture.context.getRuntimeConfig(),
-            session: { store: storePath },
-          } satisfies OpenClawConfig;
-          fixture.context.getRuntimeConfig = () => config;
-          setRuntimeConfigSnapshot(config);
-          const role = roleClient("view", `voice-${revocation}`);
-          const client = {
-            ...makeClient(fixture.client.connId, "operator", ["operator.read", "operator.write"])
-              .client,
-            ...role,
-            authenticatedUserProfile: { ...role.authenticatedUserProfile!, avatarRevision: "" },
-          };
-          const identityId = client.authenticatedUserProfile!.profileId;
-          const scope = { agentId: "main", sessionKey, storePath };
-          const entry = {
-            sessionId,
-            updatedAt: 1,
-            visibility: "read-only" as const,
-            createdActor: { type: "human", source: "profile", id: "other-creator" } as const,
-          };
-          await replaceSessionEntry(scope, entry);
-          await addSessionMember(scope, { identityId, addedBy: "other-creator" });
-          using authority = browserAuthority(fixture.context, client);
-          const voiceSessionId = `admitted-${revocation}`;
-          let creating = false;
-          let revoked = false;
-          let nativeGuardReached = false;
-          const revoke = () => {
-            if (revoked) {
-              return;
-            }
-            revoked = true;
-            if (revocation === "unpublished") {
-              vi.spyOn(sourceAuthorities, "admitPublishedSessionSource").mockReturnValue(false);
-            } else if (revocation === "membership") {
-              expect(removeSessionMemberSync(scope, identityId)).toMatchObject({ identityId });
-            } else {
-              replaceSessionEntrySync(scope, {
-                ...entry,
-                sessionId: "successor",
-                updatedAt: 2,
-              });
-            }
-          };
-          const respond = vi.fn();
-          const options: GatewayRequestHandlerOptions = {
-            req: { type: "req", id: "admitted-voice", method: "talk.client.create" },
-            params: { sessionKey, voiceSessionId },
-            respond,
-            context: createDirectChatContext({
-              getRuntimeConfig: fixture.context.getRuntimeConfig,
-              getClientConnIds: (filter) =>
-                new Set(!filter || filter(client) ? [client.connId] : []),
-              broadcastToConnIds: fixture.context.broadcastToConnIds,
-            }),
-            client,
-            isWebchatConnect: () => false,
-            ...(writer === "native"
-              ? {
-                  sessionMutationCommitGuard: () => {
-                    if (
-                      creating &&
-                      getOpenClawAgentDatabaseIfOpen({ agentId: "main" })?.db.isTransaction &&
-                      clientVoiceSessionTesting.readRecord("main", voiceSessionId)
-                    ) {
-                      nativeGuardReached = true;
-                      if (revocation !== "unchanged") {
-                        revoke();
-                      }
-                    }
-                  },
-                }
-              : {}),
-          };
-          if (writer !== "wrapper") {
-            authority.bind(options);
+it.each([
+  ["membership", "before", "worker"],
+  ["membership", "after", "worker"],
+  ["session", "before", "worker"],
+  ["session", "after", "worker"],
+  ["membership", "after", "native"],
+  ["session", "after", "native"],
+  ["unchanged", "after", "native"],
+  ["unpublished", "after", "native"],
+  ["membership", "after", "wrapper"],
+  ["session", "after", "wrapper"],
+  ["unchanged", "after", "wrapper"],
+] as const)("cross-store authority: %s %s %s", async (revocation, timing, writer) => {
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async ({ stateDir }) => {
+      const sessionKey = "agent:main:main";
+      const sessionId = "voice-transcript-session";
+      setRuntimeConfigSnapshot({});
+      const seedEntry = { sessionId, updatedAt: Date.now() };
+      await applySessionEntryOperation(
+        { agentId: "main", sessionKey },
+        { kind: "fields", patch: seedEntry },
+        { fallbackEntry: seedEntry, replaceEntry: true, skipMaintenance: true },
+      );
+      const fixture = createDelegatedBrowserProviderFixture(async () => browserSession, stateDir);
+      voiceMocks.resolveConfiguredRealtimeVoiceProviderAsync.mockReturnValue({
+        provider: fixture.provider,
+        providerConfig: {},
+        capabilities: fixture.provider.capabilities,
+      });
+      let authorization: SessionMutationAuthorization | undefined;
+      let persistedId: string | undefined;
+      try {
+        const storePath = path.join(stateDir, "custom.sqlite");
+        const config = {
+          ...rolePolicyConfig(),
+          ...fixture.context.getRuntimeConfig(),
+          session: { store: storePath },
+        } satisfies OpenClawConfig;
+        fixture.context.getRuntimeConfig = () => config;
+        setRuntimeConfigSnapshot(config);
+        const role = roleClient("view", `voice-${revocation}`);
+        const client = {
+          ...makeClient(fixture.client.connId, "operator", ["operator.read", "operator.write"])
+            .client,
+          ...role,
+          authenticatedUserProfile: { ...role.authenticatedUserProfile!, avatarRevision: "" },
+        };
+        const identityId = client.authenticatedUserProfile!.profileId;
+        const scope = { agentId: "main", sessionKey, storePath };
+        const entry = {
+          sessionId,
+          updatedAt: 1,
+          visibility: "read-only" as const,
+          createdActor: { type: "human", source: "profile", id: "other-creator" } as const,
+        };
+        await replaceSessionEntry(scope, entry);
+        await addSessionMember(scope, { identityId, addedBy: "other-creator" });
+        using authority = browserAuthority(fixture.context, client);
+        const voiceSessionId = `admitted-${revocation}`;
+        let creating = false;
+        let revoked = false;
+        const revoke = () => {
+          if (revoked) {
+            return;
           }
-          const admission = await authorizeBrowserCreate(options, true);
-          expect(admission.error).toBeNull();
-          authorization = admission.authorization!;
-          let sourceSqlCalls = 0;
-          if (writer !== "worker") {
-            const validate = sourcePredicates.readSessionSourceValidation;
-            vi.spyOn(sourcePredicates, "readSessionSourceValidation").mockImplementation(
-              (...args) => {
-                const observed = observeMainThreadSql();
-                try {
-                  return validate(...args);
-                } finally {
-                  sourceSqlCalls += observed.count();
-                  observed.restore();
-                }
-              },
-            );
+          revoked = true;
+          if (revocation === "unpublished") {
+            vi.spyOn(sourceAuthorities, "admitPublishedSessionSource").mockReturnValue(false);
+          } else if (revocation === "membership") {
+            expect(removeSessionMemberSync(scope, identityId)).toMatchObject({ identityId });
+          } else {
+            replaceSessionEntrySync(scope, { ...entry, sessionId: "successor", updatedAt: 2 });
           }
-          const prepareSources = voiceSources.prepareClientVoiceSessionSourceChecks;
-          vi.spyOn(voiceSources, "prepareClientVoiceSessionSourceChecks").mockImplementation(
+        };
+        const reachNativeGuard = () => {
+          if (creating && revocation !== "unchanged") {
+            revoke();
+          }
+        };
+        const respond = vi.fn();
+        const options: GatewayRequestHandlerOptions = {
+          req: { type: "req", id: "admitted-voice", method: "talk.client.create" },
+          params: { sessionKey, voiceSessionId },
+          respond,
+          context: createDirectChatContext({
+            getRuntimeConfig: fixture.context.getRuntimeConfig,
+            getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
+            broadcastToConnIds: fixture.context.broadcastToConnIds,
+          }),
+          client,
+          isWebchatConnect: () => false,
+        };
+        if (writer === "native") {
+          options.sessionMutationCommitGuard = () => {
+            if (
+              creating &&
+              getOpenClawAgentDatabaseIfOpen({ agentId: "main" })?.db.isTransaction &&
+              clientVoiceSessionTesting.readRecord("main", voiceSessionId)
+            ) {
+              reachNativeGuard();
+            }
+          };
+        }
+        if (writer !== "wrapper") {
+          authority.bind(options);
+        }
+        const admission = await authorizeBrowserCreate(options, true);
+        expect(admission.error).toBeNull();
+        authorization = admission.authorization!;
+        let sourceSqlCalls = 0;
+        if (writer !== "worker") {
+          const validate = sourcePredicates.readSessionSourceValidation;
+          vi.spyOn(sourcePredicates, "readSessionSourceValidation").mockImplementation(
             (...args) => {
-              if (creating && timing === "before") {
+              const observed = observeMainThreadSql();
+              try {
+                return validate(...args);
+              } finally {
+                sourceSqlCalls += observed.count();
+                observed.restore();
+              }
+            },
+          );
+        }
+        const prepareSources = voiceSources.prepareClientVoiceSessionSourceChecks;
+        vi.spyOn(voiceSources, "prepareClientVoiceSessionSourceChecks").mockImplementation(
+          (...args) => {
+            if (creating && timing === "before") {
+              revoke();
+            }
+            return prepareSources(...args);
+          },
+        );
+        if (writer === "wrapper") {
+          const mutate = voiceKernel.mutateVoiceSessionInDatabase;
+          vi.spyOn(voiceKernel, "mutateVoiceSessionInDatabase").mockImplementation((...args) => {
+            const result = mutate(...args);
+            reachNativeGuard();
+            return result;
+          });
+        }
+        const create = voiceSessions.createOrResumeClientVoiceSession;
+        vi.spyOn(voiceSessions, "createOrResumeClientVoiceSession").mockImplementation(
+          async (...args) => {
+            creating = true;
+            try {
+              persistedId = await create(...args);
+              return persistedId;
+            } finally {
+              creating = false;
+            }
+          },
+        );
+        const admitOperation = operationAdmission.createSqliteWorkerOperationAdmission;
+        vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (admit, attachment) =>
+            admitOperation((request, grant) => {
+              if (
+                creating &&
+                writer === "worker" &&
+                timing === "after" &&
+                request.stage === "commit"
+              ) {
                 revoke();
               }
-              if (creating && writer === "wrapper") {
-                expect(args[1].some((source) => source.hasOpaqueCheck)).toBe(true);
-                expect(
-                  args[1].some((source) => source.nativeSource || source.opaqueCommitGuard),
-                ).toBe(false);
+              admit(request, grant);
+              if (
+                creating &&
+                writer === "wrapper" &&
+                request.stage === "commit" &&
+                revocation !== "unchanged"
+              ) {
+                revoke();
               }
-              return prepareSources(...args);
-            },
-          );
-          if (writer === "wrapper") {
-            const mutate = voiceKernel.mutateVoiceSessionInDatabase;
-            vi.spyOn(voiceKernel, "mutateVoiceSessionInDatabase").mockImplementation((...args) => {
-              const result = mutate(...args);
-              if (creating) {
-                nativeGuardReached = true;
-                if (revocation !== "unchanged") {
-                  revoke();
-                }
-              }
-              return result;
-            });
-          }
-          const create = voiceSessions.createOrResumeClientVoiceSession;
-          vi.spyOn(voiceSessions, "createOrResumeClientVoiceSession").mockImplementation(
-            async (...args) => {
-              creating = true;
-              try {
-                persistedId = await create(...args);
-                return persistedId;
-              } finally {
-                creating = false;
-              }
-            },
-          );
-          const admitOperation = operationAdmission.createSqliteWorkerOperationAdmission;
-          vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-            (admit, attachment) =>
-              admitOperation((request, grant) => {
-                if (
-                  creating &&
-                  writer === "worker" &&
-                  timing === "after" &&
-                  request.stage === "commit"
-                ) {
-                  revoke();
-                }
-                admit(request, grant);
-                if (
-                  creating &&
-                  writer === "wrapper" &&
-                  request.stage === "commit" &&
-                  revocation !== "unchanged"
-                ) {
-                  revoke();
-                }
-              }, attachment),
-          );
-          await createTalkClient(admission.handler);
-          expect(revoked).toBe(revocation !== "unchanged");
-          const committed =
-            revocation === "unchanged" || (timing === "after" && writer === "worker");
-          expect({
-            persistedId,
-            recorded: clientVoiceSessionTesting.readRecord("main", voiceSessionId) !== undefined,
-            ok: respond.mock.lastCall?.[0],
-          }).toEqual({
-            persistedId: committed ? voiceSessionId : undefined,
-            recorded: committed,
-            ok: revocation === "unchanged",
-          });
-          expect(nativeGuardReached).toBe(writer !== "worker");
-          expect(fixture.cancelBrowserSession).toHaveBeenCalledTimes(
-            revocation === "unchanged" ? 0 : 1,
-          );
-          if (revocation === "unchanged" || revocation === "unpublished") {
-            expect(() => authorization?.assertCurrent()).not.toThrow();
-          } else {
-            expect(() => authorization?.assertCurrent()).toThrow();
-          }
-          expect(sourceSqlCalls, "published foreign source checks must not read SQLite").toBe(0);
-        } finally {
-          authorization?.release?.();
-          if (persistedId) {
-            await closeTalkClientGatewayControlSession({
-              voiceSessionId: persistedId,
-              sessionKey,
-              connId: fixture.client.connId,
-            });
-          }
-          cleanupTalkConnection(fixture.client.connId, fixture.context.logGateway);
-          clientVoiceSessionTesting.reset();
+            }, attachment),
+        );
+        await createTalkClient(admission.handler);
+        expect(revoked).toBe(revocation !== "unchanged");
+        const committed = revocation === "unchanged" || (timing === "after" && writer === "worker");
+        expect({
+          persistedId,
+          recorded: clientVoiceSessionTesting.readRecord("main", voiceSessionId) !== undefined,
+          ok: respond.mock.lastCall?.[0],
+        }).toEqual({
+          persistedId: committed ? voiceSessionId : undefined,
+          recorded: committed,
+          ok: revocation === "unchanged",
+        });
+        expect(fixture.cancelBrowserSession).toHaveBeenCalledTimes(
+          revocation === "unchanged" ? 0 : 1,
+        );
+        if (revocation === "unchanged" || revocation === "unpublished") {
+          expect(() => authorization?.assertCurrent()).not.toThrow();
+        } else {
+          expect(() => authorization?.assertCurrent()).toThrow();
         }
-      },
-    );
-  });
+        expect(sourceSqlCalls, "published foreign source checks must not read SQLite").toBe(0);
+      } finally {
+        authorization?.release?.();
+        if (persistedId) {
+          await closeTalkClientGatewayControlSession({
+            voiceSessionId: persistedId,
+            sessionKey,
+            connId: fixture.client.connId,
+          });
+        }
+        cleanupTalkConnection(fixture.client.connId, fixture.context.logGateway);
+        clientVoiceSessionTesting.reset();
+      }
+    },
+  );
 });

@@ -2,6 +2,9 @@ import { readFile } from "node:fs/promises";
 import {
   GitHubDiffDataError,
   GitHubRateLimitError,
+  GitHubReadTimeoutError,
+  GitHubStatusFailurePublishedError,
+  GitHubStatusPublicationError,
   SECURITY_REVIEW_CHECK_INTERVAL_MS,
   createGitHubApi,
   parseApprovalCommands,
@@ -416,19 +419,45 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
     return null;
   }
   // Invalidate previous approval before any fallible file or authority reads.
-  await publishGuardStatus(guard, "failure", "Security review has not completed");
-  if (review.fileSnapshot) {
-    await assertGuardUnchanged(review);
-  } else {
-    // Both guards must evaluate the same complete file list for this attempt.
-    review.fileSnapshot = readGuardFileSnapshot(review);
-  }
-  const { pullRequest, files } = await review.fileSnapshot;
-  review.pullRequest = pullRequest;
-  guard.pullRequest = pullRequest;
-  guard.files = files;
+  await publishGuardStatus(guard, "pending", "Security review has not completed");
   review.guards?.push(guard);
-  return guard;
+  try {
+    if (review.fileSnapshot) {
+      await assertGuardUnchanged(review);
+    } else {
+      // Both guards must evaluate the same complete file list for this attempt.
+      review.fileSnapshot = readGuardFileSnapshot(review);
+    }
+    const { pullRequest, files } = await review.fileSnapshot;
+    review.pullRequest = pullRequest;
+    guard.pullRequest = pullRequest;
+    guard.files = files;
+    return guard;
+  } catch (error) {
+    if (!prepared) {
+      await failGuard(guard, error, { terminal: true });
+    }
+    throw error;
+  }
+}
+
+export async function failGuard(guard, error, { terminal = false } = {}) {
+  if (
+    error instanceof GitHubRateLimitError ||
+    (!terminal && error instanceof GitHubReadTimeoutError) ||
+    error instanceof GitHubStatusFailurePublishedError ||
+    error instanceof GitHubStatusPublicationError ||
+    error instanceof ObsoleteReviewError
+  ) {
+    return;
+  }
+  await publishGuardStatus(guard, "failure", "Security review failed; see workflow details").catch(
+    /** @param {unknown} publicationError */ (publicationError) => {
+      console.error(
+        publicationError instanceof Error ? publicationError.message : String(publicationError),
+      );
+    },
+  );
 }
 
 async function maintainerRole(guard, user) {
@@ -531,7 +560,7 @@ export async function finishGuard(guard, { description, requiresApproval = false
   const allowed = !requiresApproval || approval !== null;
   await publishGuardStatus(
     guard,
-    allowed ? "success" : "failure",
+    allowed ? "success" : "pending",
     allowed ? description : "A maintainer must approve the current PR revision",
   );
   guard.approval = approval;

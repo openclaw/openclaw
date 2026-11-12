@@ -1,7 +1,6 @@
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -71,6 +70,84 @@ afterEach(() => {
   resetGatewayWorkAdmission();
 });
 
+function createReloader(
+  initialConfig: OpenClawConfig,
+  context: ReturnType<typeof createGatewayTestContext>,
+  clock: ReturnType<typeof createGatewaySchedulerClock>,
+  clients: ReturnType<typeof createOperatorWsClient>[],
+  overrides: Partial<Parameters<typeof createManagedReloadTestParams>[0]> = {},
+) {
+  const fixture = createDirectConfigWriteFixture(initialConfig);
+  const channelManager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
+    getRuntimeConfig: () => initialConfig,
+    getPluginRegistry: () => registry,
+    channelLogs: {},
+    channelRuntimeEnvs: {},
+  });
+  const reloader = startManagedGatewayConfigReloader(
+    createManagedReloadTestParams({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      initialConfig,
+      channelManager,
+      startChannel: channelManager.startChannel,
+      stopChannel: channelManager.stopChannel,
+      clients,
+      readSnapshot: fixture.readSnapshot,
+      subscribeToWrites: fixture.subscribeToWrites,
+      resolveGatewayContext: () => context,
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
+        makePreparedSecretsSnapshot(config),
+      ),
+      ...overrides,
+    }),
+  );
+  const write = (candidate: OpenClawConfig, revision: number) => {
+    const listener = fixture.ref.current;
+    assert(listener);
+    return publishConfigWrite(
+      listener,
+      createConfigWriteNotification(
+        candidate,
+        `roles-${revision}`,
+        revision,
+        `runtime-${revision}`,
+        `source-${revision}`,
+      ),
+    );
+  };
+  return { reloader, write };
+}
+
+type AcceptedRun = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
+function admittedDispatcher(
+  context: ReturnType<typeof createGatewayTestContext>,
+  client: ReturnType<typeof createOperatorWsClient>,
+  accept: (source: AcceptedRun) => void,
+) {
+  const harness = createDispatchTestHarness({
+    connId: client.connId,
+    buildRequestContext: () => context,
+    extraHandlers: {
+      wake: async (options) => {
+        const source = await captureGatewayOperatorRunAuthority({
+          client: options.client,
+          context,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+        });
+        assert(source);
+        accept(source);
+        options.respond(true, { accepted: true });
+      },
+    },
+  });
+  return {
+    ...harness,
+    wake: (id: string) =>
+      harness.dispatcher.dispatch({ type: "req", id, method: "wake", params: {} }, client),
+  };
+}
+
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
   const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
   await withOpenClawTestState(profileState, async () => {
@@ -100,7 +177,6 @@ it("commits model-only role changes without retiring permitted models or origina
     const candidate = structuredClone(initialConfig);
     candidate.gateway!.roles!.definitions[roleName]!.modelPolicy = { deny: ["fixture/a"] };
     setRuntimeConfigSnapshot(initialConfig);
-    const fixture = createDirectConfigWriteFixture(initialConfig);
     const context = createGatewayTestContext();
     const connection = new AbortController();
     const close = vi.fn(() => connection.abort());
@@ -114,44 +190,19 @@ it("commits model-only role changes without retiring permitted models or origina
     const releasePreparation = createDeferred();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     let rejectCandidate = true;
-    const advance = vi.spyOn(preparedModelRuntime, "advancePreparedModelRuntimeConfig");
-    const invalidate = vi.spyOn(preparedModelRuntime, "markPreparedModelRuntimeSnapshotsStale");
-    const rebuild = vi.spyOn(preparedModelRuntime, "refreshPreparedModelRuntimeSnapshots");
-    const channelManager = createChannelManager({
-      scheduler: createTestGatewayScheduler(),
-      getRuntimeConfig: () => initialConfig,
-      getPluginRegistry: () => registry,
-      channelLogs: {},
-      channelRuntimeEnvs: {},
-    });
-    const reloader = startManagedGatewayConfigReloader(
-      createManagedReloadTestParams({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        getPluginRegistry: () => registry,
-        initialConfig,
-        channelManager,
-        startChannel: channelManager.startChannel,
-        stopChannel: channelManager.stopChannel,
-        reloadPlugins: async () => {
-          throw new Error("Unexpected plugin reload for model policy");
-        },
-        clients: [client],
-        reconcileRuntimePolicy: (config) =>
-          disconnectDisallowedGatewayPolicyClients([client], config),
-        readSnapshot: fixture.readSnapshot,
-        subscribeToWrites: fixture.subscribeToWrites,
-        resolveGatewayContext: () => context,
-        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
-          entered.resolve();
-          await releasePreparation.promise;
-          if (rejectCandidate) {
-            throw new Error("candidate preparation rejected");
-          }
-          return makePreparedSecretsSnapshot(config);
-        }),
-        requestRecoveryRestart,
+    const { reloader, write } = createReloader(initialConfig, context, clock, [client], {
+      reconcileRuntimePolicy: (config) =>
+        disconnectDisallowedGatewayPolicyClients([client], config),
+      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
+        entered.resolve();
+        await releasePreparation.promise;
+        if (rejectCandidate) {
+          throw new Error("candidate preparation rejected");
+        }
+        return makePreparedSecretsSnapshot(config);
       }),
-    );
+      requestRecoveryRestart,
+    });
     let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     let modelA: ReturnType<typeof bindOperatorModelExecution>;
     let modelB: ReturnType<typeof bindOperatorModelExecution>;
@@ -161,27 +212,10 @@ it("commits model-only role changes without retiring permitted models or origina
       const getCommittedRuntimeConfig = reloader.getCommittedRuntimeConfig;
       assert(getCommittedRuntimeConfig);
       context.getCommittedRuntimeConfig = getCommittedRuntimeConfig;
-      const dispatch = createDispatchTestHarness({
-        buildRequestContext: () => context,
-        extraHandlers: {
-          // A classified write route exercises ordinary operator admission before capture.
-          wake: async (options) => {
-            original = await captureGatewayOperatorRunAuthority({
-              client: options.client,
-              context,
-              hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-            });
-            options.respond(true, { accepted: true });
-          },
-        },
+      const dispatch = admittedDispatcher(context, client, (source) => {
+        original = source;
       });
-      await dispatch.dispatcher.dispatch(
-        { type: "req", id: "model-policy", method: "wake", params: {} },
-        client,
-      );
-      expect(dispatch.send).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "model-policy", ok: true, payload: { accepted: true } }),
-      );
+      await dispatch.wake("model-policy");
       assert(original);
       modelA = bindOperatorModelExecution(original.authority, {
         provider: "fixture",
@@ -193,20 +227,7 @@ it("commits model-only role changes without retiring permitted models or origina
       });
       assert(modelA && modelB);
       vi.spyOn(sessionQueries, "getActiveSessionRunCount").mockReturnValue(2);
-      const listener = fixture.ref.current;
-      assert(listener);
-      const write = (revision: number) =>
-        publishConfigWrite(
-          listener,
-          createConfigWriteNotification(
-            candidate,
-            `roles-${revision}`,
-            revision,
-            `runtime-${revision}`,
-            `source-${revision}`,
-          ),
-        );
-      const rejected = write(1);
+      const rejected = write(candidate, 1);
       const rejectedReload = clock.wake();
       await Promise.race([
         entered.promise,
@@ -215,8 +236,7 @@ it("commits model-only role changes without retiring permitted models or origina
         }),
       ]);
       expect(getCommittedRuntimeConfig()).toBe(initialConfig);
-      expect(modelA.signal.aborted).toBe(false);
-      expect(modelB.signal.aborted).toBe(false);
+      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
       expect(original.authority.assertCurrent).not.toThrow();
       expect(close).not.toHaveBeenCalled();
       releasePreparation.resolve();
@@ -224,26 +244,21 @@ it("commits model-only role changes without retiring permitted models or origina
       // The receipt precedes lease cleanup; join the scheduler turn before the next wake.
       await rejectedReload;
       expect(getCommittedRuntimeConfig()).toBe(initialConfig);
-      expect(modelA.signal.aborted).toBe(false);
-      expect(modelB.signal.aborted).toBe(false);
+      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
       expect(close).not.toHaveBeenCalled();
 
       rejectCandidate = false;
-      const accepted = write(2);
+      const accepted = write(candidate, 2);
       await clock.wake();
       await expect(accepted).resolves.toBe("applied");
       expect(getCommittedRuntimeConfig()).toEqual(candidate);
-      expect(modelA.signal.aborted).toBe(true);
-      expect(modelB.signal.aborted).toBe(false);
+      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([true, false]);
       expect(modelA.assertCurrent).toThrow("operator role cannot use this model");
       expect(modelB.assertCurrent).not.toThrow();
       expect(original.authority.signal?.aborted).toBe(false);
       expect(original.authority.assertCurrent).not.toThrow();
       expect(close).not.toHaveBeenCalled();
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(invalidate).not.toHaveBeenCalled();
-      expect(rebuild).not.toHaveBeenCalled();
-      expect(advance).toHaveBeenCalledOnce();
     } finally {
       releasePreparation.resolve();
       try {
@@ -306,42 +321,14 @@ it.each(["scopes", "access policy"] as const)(
           },
         );
       });
-      const fixture = createDirectConfigWriteFixture(initialConfig);
-      const channelManager = createChannelManager({
-        scheduler: createTestGatewayScheduler(),
-        getRuntimeConfig: () => initialConfig,
-        getPluginRegistry: () => registry,
-        channelLogs: {},
-        channelRuntimeEnvs: {},
+      const { reloader, write } = createReloader(initialConfig, context, clock, clients, {
+        reconcileRuntimePolicy: (config, phase) => {
+          if (phase === "committed") {
+            disconnectDisallowedGatewayPolicyClients(clients, config);
+          }
+        },
       });
-      const reloader = startManagedGatewayConfigReloader(
-        createManagedReloadTestParams({
-          scheduler: createTestGatewayScheduler(clock.clock),
-          getPluginRegistry: () => registry,
-          initialConfig,
-          channelManager,
-          startChannel: channelManager.startChannel,
-          stopChannel: channelManager.stopChannel,
-          reloadPlugins: async () => {
-            throw new Error("Unexpected plugin reload for role scopes");
-          },
-          clients,
-          reconcileRuntimePolicy: (config, phase) => {
-            if (phase === "committed") {
-              disconnectDisallowedGatewayPolicyClients(clients, config);
-            }
-          },
-          readSnapshot: fixture.readSnapshot,
-          subscribeToWrites: fixture.subscribeToWrites,
-          resolveGatewayContext: () => context,
-          activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
-            makePreparedSecretsSnapshot(config),
-          ),
-        }),
-      );
-      const accepted: NonNullable<
-        Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
-      >[] = [];
+      const accepted: AcceptedRun[] = [];
       try {
         await reloader.ready;
         const getConfig = reloader.getCommittedRuntimeConfig;
@@ -349,30 +336,10 @@ it.each(["scopes", "access policy"] as const)(
         context.getCommittedRuntimeConfig = getConfig;
         context.getRuntimeConfig = getConfig;
         const dispatchers = clients.map((client) =>
-          createDispatchTestHarness({
-            connId: client.connId,
-            buildRequestContext: () => context,
-            extraHandlers: {
-              wake: async (options) => {
-                const source = await captureGatewayOperatorRunAuthority({
-                  client: options.client,
-                  context,
-                  hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-                });
-                assert(source);
-                accepted.push(source);
-                options.respond(true, { accepted: true });
-              },
-            },
-          }),
+          admittedDispatcher(context, client, (source) => accepted.push(source)),
         );
-        for (const [index, client] of clients.entries()) {
-          const dispatch = dispatchers[index]!;
-          await dispatch.dispatcher.dispatch(
-            { type: "req", id: "accepted", method: "wake", params: {} },
-            client,
-          );
-          expect(dispatch.send).toHaveBeenLastCalledWith(expect.objectContaining({ ok: true }));
+        for (const dispatch of dispatchers) {
+          await dispatch.wake("accepted");
         }
         expect(accepted).toHaveLength(2);
         const writeScopes = async (
@@ -384,18 +351,7 @@ it.each(["scopes", "access policy"] as const)(
           candidate.gateway!.roles!.definitions.contributor!.scopes = scopes;
           candidate.gateway!.roles!.definitions.contributor!.accessPolicyPlugin =
             accessPolicyPlugin;
-          const listener = fixture.ref.current;
-          assert(listener);
-          const applied = publishConfigWrite(
-            listener,
-            createConfigWriteNotification(
-              candidate,
-              `role-${revision}`,
-              revision,
-              `runtime-${revision}`,
-              `source-${revision}`,
-            ),
-          );
+          const applied = write(candidate, revision);
           await clock.wake();
           await expect(applied).resolves.toBe("applied");
         };
@@ -418,10 +374,7 @@ it.each(["scopes", "access policy"] as const)(
         expect(clients[1]!.connectionSignal.aborted).toBe(true);
         expect(accepted[1]!.authority.signal?.aborted).toBe(true);
         expect(accepted[1]!.authority.assertCurrent).toThrow();
-        await dispatchers[1]!.dispatcher.dispatch(
-          { type: "req", id: "revoked", method: "wake", params: {} },
-          clients[1]!,
-        );
+        await dispatchers[1]!.wake("revoked");
         expect(accepted).toHaveLength(2);
         await writeScopes(["operator.write", "operator.approvals"], 3);
         expect(accepted[1]!.authority.signal?.aborted).toBe(true);

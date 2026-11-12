@@ -2,14 +2,19 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import {
   historyLane,
   targetDiscoveryLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
+import * as sqliteAdmission from "../../infra/sqlite-database-admission.js";
+import { snapshotSqliteReaderMetrics } from "../../infra/sqlite-reader-metrics.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
@@ -28,6 +33,144 @@ import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
 function makeTarget(state: OpenClawTestState, sessionId: string) {
   return sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId);
+}
+
+it("preserves deferred and interleaved hydration callers through real worker reads", () =>
+  withOpenClawTestState({ label: "hydration-callers" }, async (state) => {
+    const target = makeTarget(state, "attribution");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    await source.appendMessageAsync(makeUserMessage("synthetic attribution", 1));
+    const counts = () =>
+      new Map(snapshotSqliteReaderMetrics().map(({ operation, count }) => [operation, count]));
+    const before = counts();
+    const callers: Array<string | undefined> = [];
+    const spies = [historyLane, targetDiscoveryLane].map(({ pool }) => {
+      const run = pool.run.bind(pool);
+      return vi.spyOn(pool, "run").mockImplementation((input, options) =>
+        run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          if (request.kind === "transcript-hydration") {
+            callers.push(request.caller);
+          }
+          return request;
+        }, options),
+      );
+    });
+    try {
+      const preview = withSessionTranscriptHydrationCaller("preview", () =>
+        prepareSessionTranscriptHydration(target),
+      );
+      const exported = withSessionTranscriptHydrationCaller("export", () =>
+        prepareSessionTranscriptHydration(target),
+      );
+      const reads = await withSessionTranscriptHydrationCaller("correction", () =>
+        Promise.all([preview.read(), exported.read()]),
+      );
+      for (const read of reads) {
+        expect(read.snapshot.events).toEqual(source.getPersistedEntries());
+      }
+      await source.reloadPersistedTranscriptAsync();
+      await SessionManager.openAsync(target);
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
+    expect(callers.toSorted((left, right) => String(left).localeCompare(String(right)))).toEqual([
+      "export",
+      "model-reload",
+      "preview",
+      "session-manager",
+    ]);
+    // Physical reader counters are available only through Linux procfs.
+    if (process.platform === "linux") {
+      await expect
+        .poll(() => {
+          const after = counts();
+          return ["preview", "export", "model-reload", "session-manager", "correction"].map(
+            (caller) => {
+              const operation = `sessions.transcript-hydration.${caller}`;
+              return (after.get(operation) ?? 0) - (before.get(operation) ?? 0);
+            },
+          );
+        })
+        .toEqual([1, 1, 1, 1, 0]);
+    }
+  }));
+
+for (const cancelled of ["leader", "follower"] as const) {
+  it(`cancels a joined bounded hydration ${cancelled} without cancelling its peer`, ({ signal }) =>
+    withOpenClawTestState({ label: `hydration-cancel-${cancelled}` }, async (state) => {
+      const target = makeTarget(state, "joined-hydration");
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const source = await SessionManager.openAsync(target);
+      await source.appendMessageAsync(makeUserMessage("shared bounded context", 1));
+      const entered = createDeferredCore();
+      const joined = createDeferredCore();
+      const release = createDeferredCore();
+      const controllers = [new AbortController(), new AbortController()];
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      let dispatches = 0;
+      const transport = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) =>
+        run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          if (request.kind === "transcript-hydration" && ++dispatches === 1) {
+            entered.resolve();
+            await release.promise;
+          }
+          return request;
+        }, options),
+      );
+      const read = (index: number) =>
+        prepareSessionTranscriptHydration(
+          target,
+          { maxBytes: 8192, maxEvents: 20 },
+          controllers[index]!.signal,
+        ).read();
+      const leader = read(0);
+      const pending = [leader];
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, leader, "Hydration missed transport gate"),
+          signal,
+        );
+        const revision = sqliteAdmission.readSqliteDatabaseScopedWriteTokenForPath;
+        const observer = vi
+          .spyOn(sqliteAdmission, "readSqliteDatabaseScopedWriteTokenForPath")
+          .mockImplementation((location, scopes) => {
+            const token = revision(location, scopes);
+            const last = Array.isArray(scopes) ? scopes.at(-1) : undefined;
+            if (isRecord(last) && last.sessionId === target.sessionId) {
+              joined.resolve();
+            }
+            return token;
+          });
+        try {
+          const follower = read(1);
+          pending.push(follower);
+          await withinTest(
+            awaitGateBeforeSettlement(joined.promise, follower, "Follower missed revision join"),
+            signal,
+          );
+          const index = cancelled === "leader" ? 0 : 1;
+          const reason = new Error(`cancelled ${cancelled}`);
+          expect(dispatches).toBe(1);
+          const refused = expect(pending[index]).rejects.toBe(reason);
+          controllers[index]!.abort(reason);
+          // Cancellation must settle while the shared transport remains held.
+          await withinTest(refused, signal);
+          release.resolve();
+          const survivor = await withinTest(pending[1 - index]!, signal);
+          expect(survivor.snapshot.events).toEqual(source.getPersistedEntries());
+          expect(dispatches).toBe(cancelled === "leader" ? 2 : 1);
+        } finally {
+          observer.mockRestore();
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled(pending);
+        transport.mockRestore();
+      }
+    }));
 }
 
 function retainedManager(timestamp: number) {
@@ -102,12 +245,11 @@ function holdFirstChunk() {
     restore: () => spy.mockRestore(),
     observed,
     wait: (pending: Promise<unknown>) =>
-      Promise.race([
+      awaitGateBeforeSettlement(
         entered.promise,
-        pending.then(() => {
-          throw new Error("Hydration finished without transferring a transcript chunk");
-        }),
-      ]),
+        pending,
+        "Hydration finished without transferring a transcript chunk",
+      ),
   };
 }
 

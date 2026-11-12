@@ -1,5 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Base64Url } from "../../infra/crypto-digest.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+  memoizeFrozenPlainDataProjection,
+} from "../../shared/immutable-data.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 
@@ -55,17 +60,13 @@ export function getToolResultProjectionKeys(
     const sourceIdentity =
       typeof messageId === "string" && messageId.length > 0
         ? `id:${messageId}`
-        : `text:${hashToolResultText(getToolResultTextBlocks(message))}`;
+        : `text:${hashToolResultText(message)}`;
     const fallbackBase = `fallback:${baseKey ?? "tool"}:${sourceIdentity}`;
     const occurrence = occurrences.get(fallbackBase) ?? 0;
     occurrences.set(fallbackBase, occurrence + 1);
     const key = `${fallbackBase}:${occurrence}`;
     const previousSource = baseKey ? projectionState.sourceHashByKey.get(baseKey) : undefined;
-    if (
-      baseKey &&
-      previousSource &&
-      previousSource === hashToolResultText(getToolResultTextBlocks(message))
-    ) {
+    if (baseKey && previousSource && previousSource === hashToolResultText(message)) {
       // A later duplicate must move the original projection, not make its sent bytes disappear.
       const replacement = projectionState.replacements.get(baseKey);
       if (replacement) {
@@ -82,6 +83,14 @@ export function getToolResultProjectionKeys(
   });
 }
 
+// Unambiguous keys depend only on the message and survive attempt-state recreation.
+// Ambiguous keys retain their branch owner's separate weak slot.
+const canonicalProjectionKeyScope = {};
+const boundProjectionKeys = new WeakMap<
+  AgentMessage,
+  WeakMap<object, { key: string; message: AgentMessage }>
+>();
+
 /** Keep canonical transcript identity when provider replay rewrites tool-call ids. */
 export function bindToolResultPromptProjectionKeys(
   messages: AgentMessage[],
@@ -90,7 +99,28 @@ export function bindToolResultPromptProjectionKeys(
   const keys = getToolResultProjectionKeys(messages, projectionState);
   return messages.map((message, index) => {
     const key = keys[index];
-    return key ? Object.assign({}, message, { [TOOL_RESULT_PROJECTION_KEY]: key }) : message;
+    if (!key) {
+      return message;
+    }
+    const scope =
+      key === getToolResultProjectionBaseKey(message)
+        ? canonicalProjectionKeyScope
+        : projectionState;
+    let bound = boundProjectionKeys.get(message);
+    const cached = bound?.get(scope);
+    if (cached?.key === key) {
+      return cached.message;
+    }
+    const projected = Object.assign({}, message, { [TOOL_RESULT_PROJECTION_KEY]: key });
+    if (isDeeplyFrozenPlainData(message)) {
+      freezeJsonSnapshot(projected);
+      if (!bound) {
+        bound = new WeakMap();
+        boundProjectionKeys.set(message, bound);
+      }
+      bound.set(scope, { key, message: projected });
+    }
+    return projected;
   });
 }
 
@@ -108,7 +138,9 @@ export function getToolResultTextBlocks(message: AgentMessage): string[] {
     : [];
 }
 
-export function hashToolResultText(texts: string[]): string {
-  // JSON framing preserves block boundaries and lone surrogates, including persisted fallback keys.
-  return sha256Base64Url(JSON.stringify(texts));
-}
+// Frozen transcript identities survive attempt recreation; mutable SDK messages must be rehashed.
+export const hashToolResultText = memoizeFrozenPlainDataProjection(
+  (message: AgentMessage): string =>
+    // JSON framing preserves block boundaries and lone surrogates, including persisted fallback keys.
+    sha256Base64Url(JSON.stringify(getToolResultTextBlocks(message))),
+);

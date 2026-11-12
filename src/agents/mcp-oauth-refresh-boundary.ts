@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { FetchLike, OAuthTokens } from "@modelcontextprotocol/client";
+import { isProvenDeliveryNotSentError } from "../infra/delivery-recovery.shared.js";
 import { readResponseWithLimit } from "../infra/http-response-body.js";
 import {
   createOAuthRefreshError,
@@ -95,10 +96,7 @@ export function createMcpOAuthRefreshBoundary(
           signal.throwIfAborted();
           dispatched = true;
           const response = await fetchFn(url, { ...init, signal });
-          const bytes = await readResponseWithLimit(response, 262_144, {
-            signal,
-            timeoutMs: 30_000,
-          });
+          const bytes = await readResponseWithLimit(response, 262_144, { signal });
           const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
           const payload: unknown = JSON.parse(text);
           if (!response.ok || readOAuthRefreshErrorReason(payload)) {
@@ -115,6 +113,12 @@ export function createMcpOAuthRefreshBoundary(
             headers: response.headers,
           });
         } catch (error) {
+          // A DNS or connect failure proves the final hop never sent the grant. An earlier
+          // same-origin redirect hop may have received it; replaying the grant after that rare
+          // redirect at worst ends in the same sign-in that this fence would require.
+          if (dispatched && isProvenDeliveryNotSentError(error)) {
+            dispatched = false;
+          }
           failure = dispatched
             ? (responseFailure ?? unknown(error))
             : createOAuthRefreshError(

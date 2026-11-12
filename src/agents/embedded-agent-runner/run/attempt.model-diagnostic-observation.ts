@@ -37,6 +37,7 @@ type ModelCallObservationState = {
   terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   timeToFirstByteMs?: number;
   providerProcessingMs?: number;
+  responseModel?: string;
   reasoningSuppressed?: boolean;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
@@ -51,7 +52,7 @@ type ModelCallObservationState = {
 
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
-type PromptStringLengths = WeakMap<object, Map<string, { text: string; chars: number }>>;
+type PromptStringLengths = Map<string, WeakMap<object, { text: string; chars: number }>>;
 type PromptStringLengthPass = {
   previous: PromptStringLengths;
   current: PromptStringLengths;
@@ -85,7 +86,7 @@ function jsonLength(
       if (typeof part !== "string" || part.length < 4096) {
         return part;
       }
-      const cached = !utf8 ? promptStringLengths?.previous.get(this)?.get(key) : undefined;
+      const cached = !utf8 ? promptStringLengths?.previous.get(key)?.get(this) : undefined;
       // Keep large strings out of the combined JSON allocation. Native encoding
       // still owns escaping, surrogate handling, toJSON, and container semantics.
       let chars = cached?.text === part ? cached.chars : undefined;
@@ -94,9 +95,9 @@ function jsonLength(
         chars = (utf8 ? Buffer.byteLength(encoded, "utf8") : encoded.length) - 2;
       }
       if (!utf8 && promptStringLengths) {
-        const fields = promptStringLengths.current.get(this) ?? new Map();
-        fields.set(key, cached?.text === part ? cached : { text: part, chars });
-        promptStringLengths.current.set(this, fields);
+        const holders = promptStringLengths.current.get(key) ?? new WeakMap();
+        holders.set(this, cached?.text === part ? cached : { text: part, chars });
+        promptStringLengths.current.set(key, holders);
       }
       omittedChars += chars;
       return "";
@@ -155,12 +156,12 @@ function streamContextModelContentFields(
 }
 
 export function createModelPromptStats() {
-  // The attempt owns this cache; each field's exact text is its revision. Keep
-  // walking containers so compaction and in-place hook edits retain JSON semantics.
-  let previous: PromptStringLengths = new WeakMap();
+  // Share each field's weak holder index across messages within this attempt.
+  // Exact text is its revision; walk containers to observe compaction and hook edits.
+  let previous: PromptStringLengths = new Map();
   const owned = new WeakMap<object, number>();
   return (streamContext: ModelCallRequestContext) => {
-    const current: PromptStringLengths = new WeakMap();
+    const current: PromptStringLengths = new Map();
     const stats = streamContextModelPromptStats(streamContext, { previous, current, owned });
     // Drop deleted fields and compacted history even if their holders remain alive.
     previous = current;
@@ -200,6 +201,10 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    const responseModel = value.responseModel;
+    if (typeof responseModel === "string" && responseModel.trim()) {
+      state.responseModel = responseModel.trim();
+    }
     state.reasoningSuppressed ||=
       value.role === "assistant" &&
       Array.isArray(value.diagnostics) &&
@@ -406,8 +411,11 @@ export function createModelObserver(params: {
           }
         : undefined;
     },
-    usageField() {
-      return state.usage ? { usage: state.usage } : {};
+    terminalFields() {
+      return {
+        ...(state.usage ? { usage: state.usage } : {}),
+        ...(state.responseModel ? { responseModel: state.responseModel } : {}),
+      };
     },
   };
 }

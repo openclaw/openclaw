@@ -66,12 +66,13 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         guard let routingContract = try? await self.sessionRoutingContract(ifCurrentRoute: route)
         else { return .unavailable(reason: nil) }
         return .available(OpenClawChatTransportRouteLease(
-            sendTargetedMessageWithSettings: { key, agent, settings, text, thinking, id, attachments in
+            sendTargetedMessage: { key, target, text, thinking, id, attachments in
                 try await self.sendMessage(
                     sessionKey: key,
-                    agentID: agent,
+                    agentID: target.agentID,
                     expectedSessionRoutingContract: routingContract,
-                    expectedSessionSettings: settings,
+                    expectedSessionSettings: target.expectedSessionSettings,
+                    queueMode: target.queueMode,
                     message: text,
                     thinking: thinking,
                     idempotencyKey: id,
@@ -445,6 +446,16 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        guard let route = await self.gateway.currentRoute() else { throw CancellationError() }
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: target.sessionKey, agentID: target.agentID, cursor: cursor, maxBytes: 256 * 1024)
+        let data = try await self.gateway.request(request, ifCurrentRoute: route)
+        guard await self.gateway.currentRoute() == route else { throw CancellationError() }
+        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let route = await currentSessionMutationRoute() else { return nil }
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
@@ -646,7 +657,12 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
-        let res = try await gateway.request(OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs))
+        // Health probes must not spend their request budget waiting for a reconnect.
+        // The session owns reconnects; a later probe can use its new live route.
+        guard let route = await gateway.currentRoute() else { throw CancellationError() }
+        let res = try await gateway.request(
+            OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs),
+            ifCurrentRoute: route)
         return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: res))?.ok ?? true
     }
 

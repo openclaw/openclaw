@@ -1,4 +1,5 @@
 // Local media access tests cover workspace path authorization.
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
@@ -43,6 +44,71 @@ describe("assertLocalMediaAllowed", () => {
     hoistedRoots.length = 0;
   });
 
+  it("joins excluded-root preparation before reporting an allowed-root failure", async () => {
+    const directory = tempDirs.make("ocl-local-media-drain-");
+    const file = path.join(directory, "image.png");
+    const excluded = path.join(directory, "excluded");
+    await write(file);
+    const roots = Promise.withResolvers<readonly string[]>();
+    const excludedRoot = Promise.withResolvers<string>();
+    // Containment canonicalizes through native realpath(3); hold only the excluded root.
+    const originalRealpath = nodeFs.realpath.native;
+    let pendingRealpaths = 0;
+    type RealpathCallback = (error: NodeJS.ErrnoException | null, resolved: string) => void;
+    const realpath = vi.spyOn(nodeFs.realpath, "native").mockImplementation(((
+      value: string,
+      callback: RealpathCallback,
+    ) => {
+      if (value === excluded) {
+        void excludedRoot.promise.then((resolved) => callback(null, resolved));
+        return;
+      }
+      pendingRealpaths++;
+      originalRealpath(value, (error, resolved) => {
+        pendingRealpaths--;
+        callback(error, resolved);
+      });
+    }) as unknown as typeof nodeFs.realpath.native);
+    const opened = vi.spyOn(fs, "open");
+    const resolveRoots = vi.fn(() => roots.promise);
+    let settled = false;
+    const reading = readLocalMediaFile(file, [directory], {
+      maxBytes: 1024,
+      resolveRoots,
+      excludedRoots: [excluded],
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (error: unknown) => {
+        settled = true;
+        return error;
+      },
+    );
+    const failure = new Error("allowed roots retired");
+    try {
+      await vi.waitFor(() => expect(realpath).toHaveBeenCalledWith(excluded, expect.any(Function)));
+      await vi.waitFor(() => expect(resolveRoots).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(pendingRealpaths).toBe(0));
+      roots.reject(failure);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      expect(opened).not.toHaveBeenCalled();
+      excludedRoot.resolve(excluded);
+      expect(await reading).toBe(failure);
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
+      roots.resolve([directory]);
+      excludedRoot.resolve(excluded);
+      await reading;
+      realpath.mockRestore();
+      opened.mockRestore();
+    }
+  });
+
   it("allows managed inbound media paths before explicit root checks", async () => {
     const stateDir = resolveStateDir();
     const id = `managed-local-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
@@ -64,7 +130,7 @@ describe("assertLocalMediaAllowed", () => {
     try {
       await denied(
         assertLocalMediaAllowed(filePath, []),
-        `Local media path is not under an allowed directory: ${filePath}`,
+        `Local media path is not under an allowed directory: ${filePath}. Use a file inside the agent workspace or another allowed media folder.`,
       );
     } finally {
       await fs.rm(path.dirname(filePath), { recursive: true, force: true });
@@ -266,3 +332,99 @@ describe("assertLocalMediaAllowed", () => {
     });
   });
 });
+
+describe.runIf(process.platform !== "win32")(
+  "missing descendants under symlinked roots (#194406)",
+  () => {
+    type Verdict = "ok" | "not-found" | "path-not-allowed";
+    type Short = "ok" | "missing" | "deny";
+    const full = { ok: "ok", missing: "not-found", deny: "path-not-allowed" } as const;
+    // [name, raw target (P = prefix, B = base; never path.join, which folds ".."), assert, read]
+    const cases: [string, string, Short, Short][] = [
+      ["inside / file exists", "P/workspace/exists.png", "ok", "ok"],
+      ["inside / parent exists", "P/workspace/dir/missing.png", "ok", "missing"],
+      ["inside / only an ancestor exists", "P/workspace/tmp-view/deep/p-1.png", "ok", "missing"],
+      ["inside / under a missing root", "P/missing-root/a/p-1.png", "ok", "missing"],
+      ["inside / .. through an existing folder", "P/workspace/dir/../exists.png", "ok", "ok"],
+      ["outside / file exists", "B/outside/secret.png", "deny", "deny"],
+      ["outside / parent exists", "B/outside/missing.png", "deny", "deny"],
+      ["outside / nothing exists", "B/nowhere/deep/p-1.png", "deny", "deny"],
+      [".. escape after missing", "P/workspace/gone/../../../outside/secret.png", "deny", "deny"],
+      [".. after missing, lexically inside", "P/workspace/gone/../exists.png", "deny", "deny"],
+      ["outward symlink / file exists", "P/workspace/out-link/secret.png", "deny", "deny"],
+      ["outward symlink / missing below", "P/workspace/out-link/gone/p.png", "deny", "deny"],
+      ["dangling outward symlink", "P/workspace/dangling/p-1.png", "deny", "deny"],
+      ["outward symlink then ..", "P/workspace/out-link/../exists.png", "deny", "deny"],
+      ["dangling in-root folder link", "P/workspace/dangling-in/p.png", "ok", "missing"],
+    ];
+
+    async function layout() {
+      const base = await fs.realpath(tempDirs.make("ocl-local-media-matrix-"));
+      const real = path.join(base, "state");
+      const alias = path.join(base, "state-alias");
+      await write(path.join(real, "workspace", "exists.png"));
+      await fs.mkdir(path.join(real, "workspace", "dir"));
+      await write(path.join(base, "outside", "secret.png"), "outside-secret");
+      await fs.symlink(path.join(base, "outside"), path.join(real, "workspace", "out-link"));
+      await fs.symlink(
+        path.join(base, "outside", "gone"),
+        path.join(real, "workspace", "dangling"),
+      );
+      await fs.symlink(
+        path.join(real, "workspace", "gone-dir"),
+        path.join(real, "workspace", "dangling-in"),
+      );
+      await fs.symlink(real, alias);
+      return { base, real, alias };
+    }
+
+    async function verdict(operation: Promise<unknown>): Promise<Verdict> {
+      try {
+        await operation;
+        return "ok";
+      } catch (error) {
+        expect(error).toBeInstanceOf(Error);
+        const code = (error as { code?: unknown }).code;
+        if (code === "not-found" || code === "path-not-allowed") {
+          return code;
+        }
+        throw error;
+      }
+    }
+
+    for (const spelling of ["plain", "symlinked"] as const) {
+      it.each(cases)(`${spelling} prefix: %s`, async (_name, raw, assertVerdict, readVerdict) => {
+        const { base, real, alias } = await layout();
+        const prefix = spelling === "plain" ? real : alias;
+        const roots = [path.join(prefix, "workspace"), path.join(prefix, "missing-root")];
+        const target = raw.replace(/^P/, prefix).replace(/^B/, base);
+        expect(await verdict(assertLocalMediaAllowed(target, roots))).toBe(full[assertVerdict]);
+        expect(await verdict(read(target, roots))).toBe(full[readVerdict]);
+      });
+    }
+
+    it("names an in-root broken link when the read finds nothing", async () => {
+      const { alias } = await layout();
+      const target = `${alias}/workspace/dangling-in/p.png`;
+      await expect(read(target, [path.join(alias, "workspace")])).rejects.toThrow(
+        `${alias}/workspace/dangling-in is a symbolic link to a target that does not exist`,
+      );
+    });
+
+    it("does not reveal whether an outside path exists", async () => {
+      const { base, alias } = await layout();
+      const roots = [path.join(alias, "workspace")];
+      const existing = await assertLocalMediaAllowed(`${base}/outside/secret.png`, roots).catch(
+        (error: unknown) => error,
+      );
+      const missing = await assertLocalMediaAllowed(`${base}/outside/missing.png`, roots).catch(
+        (error: unknown) => error,
+      );
+      expect(existing).toMatchObject({ code: "path-not-allowed" });
+      expect(missing).toMatchObject({ code: "path-not-allowed" });
+      expect((missing as Error).message).toBe(
+        (existing as Error).message.replace("secret.png", "missing.png"),
+      );
+    });
+  },
+);

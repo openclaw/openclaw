@@ -3,11 +3,11 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
-  ControlUiHost,
   ControlUiReplacement,
   ControlUiSurface,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -51,14 +51,7 @@ function createPluginChat(
 ) {
   installTranscriptDomMocks();
   const lifetime = new AbortController();
-  const pluginHost = {
-    signal: lifetime.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
+  const pluginHost = createInertViewHost(lifetime.signal);
   const reportError = vi.fn();
   const registration = replacement && {
     key: `questions/${replacement.id}`,
@@ -278,8 +271,8 @@ it.each(["native", "delegated"] as const)(
     render(initial);
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")?.textContent).toContain(
-        "Couldn’t finish this reply",
+      expect(provider.querySelector(".chat-error.app-toast")?.textContent).toContain(
+        "Couldn't finish this reply.",
       );
     });
     const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -287,10 +280,11 @@ it.each(["native", "delegated"] as const)(
     provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
 
+    const notice = provider.querySelector(".chat-error.app-toast");
     render({ ...initial, mobileComposer: false });
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
-      expect(provider.querySelector(".chat-error--mobile")).toBeNull();
+      expect(provider.querySelector(".chat-error.app-toast")).toBe(notice);
       expect(provider.querySelector(".chat-error")?.textContent).toContain(
         "Couldn't finish this reply. Check the conversation before trying again.",
       );

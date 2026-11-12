@@ -483,6 +483,7 @@ describe("worker placement move destination", () => {
           forceDestroyEnvironment: vi.fn(),
           move: vi.fn(),
           reclaim: vi.fn(),
+          subscribeOrphanWorkspaceChanges: () => () => {},
           reconcile: vi.fn(),
           reconcileActive: vi.fn(),
         });

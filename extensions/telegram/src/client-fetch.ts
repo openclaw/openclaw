@@ -83,10 +83,11 @@ export function createTelegramClientFetch(params: {
       assertTelegramRequestAuthority(assertCurrent);
       const controller = new AbortController();
       let requestTimeout: ReturnType<typeof setTimeout> | undefined;
-      let requestTimedOut = false;
       const timeoutError =
         requestTimeoutMs !== undefined
-          ? new Error(`Telegram ${method} timed out after ${requestTimeoutMs}ms`)
+          ? Object.assign(new Error(`Telegram ${method} timed out after ${requestTimeoutMs}ms`), {
+              code: "ETIMEDOUT",
+            })
           : undefined;
 
       const abortListeners = [shutdownSignal, requestSignal].flatMap((signal) => {
@@ -103,7 +104,6 @@ export function createTelegramClientFetch(params: {
       });
       if (requestTimeoutMs && timeoutError) {
         requestTimeout = setTimeout(() => {
-          requestTimedOut = true;
           controller.abort(timeoutError);
         }, requestTimeoutMs);
         requestTimeout.unref?.();
@@ -145,7 +145,13 @@ export function createTelegramClientFetch(params: {
         return responseWithRelease(response, releaseRequest);
       } catch (err) {
         await releaseRequest();
-        if (requestTimedOut && timeoutError) {
+        // Only our winning deadline owns timeout classification; an earlier
+        // cancellation or a dispatch-authority refusal must keep its meaning.
+        if (
+          timeoutError &&
+          controller.signal.reason === timeoutError &&
+          !findTelegramRequestAuthorityError(err)
+        ) {
           throw timeoutError;
         }
         throw err;

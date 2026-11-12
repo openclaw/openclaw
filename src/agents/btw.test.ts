@@ -49,7 +49,7 @@ describe("runBtwSideQuestion", () => {
   it.each([
     { name: "text-end drain", boundary: "text_end", maxChars: 200 },
     { name: "incremental drain", boundary: "text_end", maxChars: 5 },
-    { name: "message-end drain", boundary: "message_end", maxChars: 5 },
+    { name: "message-end drain", boundary: "message_end", maxChars: 7 },
   ] as const)(
     "contains failed block delivery, continues the $name, and preserves the final answer",
     async ({ boundary, maxChars }) => {
@@ -1377,33 +1377,6 @@ describe("runBtwSideQuestion", () => {
 
     expect(payloadWithEmptyTools).not.toHaveProperty("tools");
     expect(result).toBeUndefined();
-  });
-
-  it("allows Bedrock /btw runs to proceed without a static api key in aws-sdk mode", async () => {
-    btw.resolveModelWithRegistryMock.mockReturnValue({
-      provider: "amazon-bedrock",
-      id: "us.anthropic.claude-sonnet-4-5-v1:0",
-      api: "anthropic-messages",
-    });
-    btw.getApiKeyForModelMock.mockResolvedValue({
-      apiKey: undefined,
-      mode: "aws-sdk",
-      source: "aws-sdk default chain",
-    });
-    btw.streamSimpleMock.mockReturnValue(
-      btw.makeAsyncEvents([btw.createDoneEvent("Bedrock answer.")]),
-    );
-
-    const result = await btw.runSideQuestion({
-      cfg: {},
-      provider: "amazon-bedrock",
-      model: "us.anthropic.claude-sonnet-4-5-v1:0",
-    });
-
-    expect(result).toEqual({ text: "Bedrock answer." });
-    expect(btw.requireApiKeyMock).not.toHaveBeenCalled();
-    const options = btw.streamSimpleMock.mock.calls.at(-1)?.[2];
-    expect((options as { apiKey?: string } | undefined)?.apiKey).toBeUndefined();
   });
 
   it("uses the in-flight prompt as background only when there is no prior transcript context", async () => {

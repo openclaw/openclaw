@@ -1,3 +1,5 @@
+import { createSignal } from "@solidjs/signals";
+
 const TRAITS = [
   ["pluginEmbed", "content--plugin-embed"],
   ["hubHeader", "content--hub-header"],
@@ -10,6 +12,7 @@ const TRAITS = [
   ["logsPage", "content--logs-page"],
   ["activityPage", "content--activity-page"],
   ["terminalPage", "content--terminal-page"],
+  ["portalsPage", "content--portals-page"],
 ] as const;
 
 export type ShellLayoutTraits = Partial<Record<(typeof TRAITS)[number][0], boolean>>;
@@ -26,6 +29,9 @@ export class ShellLayoutOwner {
   private readonly reporters = new Map<object, { host: Element; traits: ShellLayoutTraits }>();
   private readonly footerControls = new Set<HTMLElement>();
   private content?: Element;
+  private readonly headerActions = createSignal<HTMLElement | undefined>(undefined, {
+    ownedWrite: true,
+  });
 
   readonly contentRef = (content: Element | undefined) => {
     if (content === this.content) {
@@ -63,6 +69,14 @@ export class ShellLayoutOwner {
       this.apply();
     }
   }
+
+  /** The floating header's slot for page buttons; absent wherever the header does not float. */
+  readonly headerActionsSlot = (): HTMLElement | undefined => this.headerActions[0]();
+
+  readonly registerHeaderActions = (slot: HTMLElement): (() => void) => {
+    this.headerActions[1](() => slot);
+    return () => this.headerActions[1](() => undefined);
+  };
 
   registerFooterControlSurface(element: HTMLElement): () => void {
     this.footerControls.add(element);

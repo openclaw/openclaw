@@ -27,6 +27,7 @@ const unavailableMentionsCapability = {
 
 const emptySidebarAttentionStore = {
   entries: [],
+  refreshOpenClawId: () => undefined,
   activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,
   subscribe: () => () => undefined,
@@ -77,7 +78,7 @@ export function createApplicationGateway(
   return {
     gateway,
     publishEvent: (event: GatewayEventFrame) =>
-      eventListeners.forEach((listener) => listener(event)),
+      Array.from(eventListeners).forEach((listener) => listener(event)),
     publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
       listeners.forEach((listener) => listener(snapshot));

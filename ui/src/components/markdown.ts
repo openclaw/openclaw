@@ -29,46 +29,26 @@ import {
   normalizeDocsRootHref,
   isControlUiRoutePath,
 } from "./markdown-sanitizer.ts";
-import {
-  hasStreamingMarkdownHtml,
-  repairStreamingMarkdownTail,
-  splitStableStreamingMarkdown,
-  streamingMarkdownStableHtml,
-  streamingMarkdownState,
-} from "./markdown-streaming.ts";
+import { streamingMarkdownStableHtml } from "./markdown-streaming-state.ts";
 import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
-import { renderMarkdownTokens } from "./markdown-tokens.ts";
 
-const MARKDOWN_CHAR_LIMIT = 140_000;
-// Covers several message-heavy sessions during rapid switching. Only inputs
-// up to 50k characters enter this 500-entry LRU, keeping memory bounded.
-const MARKDOWN_CACHE_LIMIT = 500;
+export const MARKDOWN_CHAR_LIMIT = 140_000;
+// HTML can cover a long transcript; fragments remain limited independently.
+// Count keys and HTML so a few large messages cannot fill the heap.
+const MARKDOWN_CACHE_LIMIT = 2048;
+const MARKDOWN_CACHE_TOTAL_CHARS = 8_000_000;
 const MARKDOWN_CACHE_MAX_CHARS = 50_000;
-const markdownCache = new Map<string, { html: string; highlighting?: boolean }>();
-const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
+type MarkdownCacheEntry = { html: string; highlighting?: boolean };
+const markdownCache = new Map<string, MarkdownCacheEntry>();
+let markdownCacheChars = 0;
+// Only speculative preparation retains pristine trees until their next mount.
+const preparedFragments = new Map<MarkdownCacheEntry, DocumentFragment>();
+// Keep nearby windows hot; skipped rows retain sanitized HTML, not pristine DOM.
+const PREPARED_FRAGMENT_LIMIT = 32;
+export type MarkdownPrewarmMode = "html" | "idle-html" | "cold-fragment" | "fragment";
+export const HIGHLIGHTABLE_CODE_RE = /<pre><code(?! class="markdown-block-art")/u;
 
-function normalizeStreamingMarkdownInput(markdownLocal: string, streamKey?: string): string {
-  const source = stripUnsupportedCitationControlMarkers(markdownLocal);
-  const state = streamingMarkdownState(streamKey);
-  const cached = state?.input;
-  let normalized: string;
-  if (cached && source.startsWith(cached.source)) {
-    const appended = source.slice(cached.source.length);
-    const normalizedAppend = normalizeMarkdownLineBreaks(appended);
-    normalized =
-      cached.source.endsWith("\r") && appended.startsWith("\n")
-        ? `${cached.normalized.slice(0, -1)}${normalizedAppend}`
-        : `${cached.normalized}${normalizedAppend}`;
-  } else {
-    normalized = normalizeMarkdownLineBreaks(source);
-  }
-  if (state) {
-    state.input = source.length <= MARKDOWN_CHAR_LIMIT ? { source, normalized } : undefined;
-  }
-  return normalized;
-}
-
-function appendMarkdownTruncationNotice(truncated: {
+export function appendMarkdownTruncationNotice(truncated: {
   text: string;
   truncated: boolean;
   total: number;
@@ -168,13 +148,27 @@ const markdownParser = createMarkdownParser();
 // Uncached render core shared by the static and streaming paths. The streaming
 // tail changes on every delta, so routing it through here (instead of the cached
 // wrapper) keeps per-message churn out of the LRU cache.
-function renderSanitizedMarkdown(
+// The live entry supplies token rendering so settled history does not load it.
+export function renderSanitizedMarkdown(
   renderInput: string,
   renderOptions: MarkdownRenderEnv,
   blockArt?: boolean,
-  direct = false,
+  renderTokens?: typeof import("./markdown-tokens.ts").renderMarkdownTokens,
+  returnFragment = false,
 ): MarkdownContent {
-  const sanitizer = markdownSanitizer(decorateMarkdownAnchor, renderOptions.progressBars);
+  const sanitizer = markdownSanitizer(
+    decorateMarkdownAnchor,
+    renderOptions.progressBars,
+    returnFragment,
+  );
+  const sanitize = (input: string | Node): MarkdownContent => {
+    if (!returnFragment) {
+      return sanitizer.sanitize(input);
+    }
+    const template = document.createElement("template");
+    template.content.append(sanitizer.sanitize(input, { RETURN_DOM_FRAGMENT: true }));
+    return { html: template.innerHTML, fragment: template.content };
+  };
   const documentMode = renderOptions.mode === "document";
   const truncated = documentMode
     ? { text: renderInput, truncated: false, total: renderInput.length }
@@ -183,26 +177,19 @@ function renderSanitizedMarkdown(
     ? stripProgressCardRawContentBlocks(appendMarkdownTruncationNotice(truncated))
     : appendMarkdownTruncationNotice(truncated);
   if (blockArt ?? isMarkdownBlockArtText(truncated.text)) {
-    return sanitizer.sanitize(
-      renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }),
-    );
+    return sanitize(renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }));
   }
   if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    return sanitizer.sanitize(toPlainTextElement(input, renderOptions));
+    return sanitize(toPlainTextElement(input, renderOptions));
   }
   let rendered: string | HTMLDivElement;
   try {
-    if (direct) {
+    if (renderTokens) {
       const tokens = markdownParser.parse(input, renderOptions);
-      const fragment = renderMarkdownTokens(
-        tokens,
-        renderOptions,
-        sanitizer,
-        decorateMarkdownAnchor,
-      );
+      const fragment = renderTokens(tokens, renderOptions, sanitizer, decorateMarkdownAnchor);
       if (fragment) {
         const template = document.createElement("template");
         template.content.append(fragment);
@@ -217,7 +204,7 @@ function renderSanitizedMarkdown(
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
     rendered = toPlainTextElement(input, renderOptions);
   }
-  return sanitizer.sanitize(rendered);
+  return sanitize(rendered);
 }
 
 // Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.
@@ -238,6 +225,45 @@ export function toSanitizedMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
+  return markdownContentHtml(prepareSanitizedMarkdown(markdownLocal, options, false));
+}
+
+/** Chat can mount a fresh fragment or consume one prepared during idle time. */
+export function toSanitizedMarkdownContent(
+  markdownLocal: string,
+  options: MarkdownRenderOptions = {},
+): MarkdownContent {
+  return prepareSanitizedMarkdown(markdownLocal, options, true);
+}
+
+/** Warm HTML once, optionally retaining or restoring a fragment for the next mount. */
+export function prewarmSanitizedMarkdown(
+  markdownLocal: string,
+  options: MarkdownRenderOptions,
+  mode: MarkdownPrewarmMode = "cold-fragment",
+): boolean {
+  return prepareSanitizedMarkdown(markdownLocal, options, false, true, mode);
+}
+
+function prepareSanitizedMarkdown(
+  markdownLocal: string,
+  options: MarkdownRenderOptions,
+  returnFragment: boolean,
+): MarkdownContent;
+function prepareSanitizedMarkdown(
+  markdownLocal: string,
+  options: MarkdownRenderOptions,
+  returnFragment: boolean,
+  prewarm: true,
+  mode?: MarkdownPrewarmMode,
+): boolean;
+function prepareSanitizedMarkdown(
+  markdownLocal: string,
+  options: MarkdownRenderOptions,
+  returnFragment: boolean,
+  prewarm = false,
+  mode: MarkdownPrewarmMode = "cold-fragment",
+): MarkdownContent | boolean {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const prepared =
     renderOptions.mode === "document" || markdownLocal.length <= MARKDOWN_PARSE_LIMIT
@@ -252,31 +278,102 @@ export function toSanitizedMarkdownHtml(
     stripUnsupportedCitationControlMarkers(prepared.source),
   );
   if (!renderInput.trim()) {
-    return "";
+    return prewarm ? false : "";
   }
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
-    return markdownContentHtml(renderSanitizedMarkdown(renderInput, renderOptions));
+    if (prewarm) {
+      return false;
+    }
+    return renderSanitizedMarkdown(
+      renderInput,
+      renderOptions,
+      undefined,
+      undefined,
+      returnFragment,
+    );
   }
   const cacheKey = `${markdownRenderKey(renderOptions)}\0${renderInput}`;
   let cached = markdownCache.get(cacheKey);
+  const previousChars = cached ? cacheKey.length + cached.html.length : 0;
+  const idle = prewarm && mode === "idle-html";
+  let content: MarkdownContent | undefined;
   // Only highlightable code changes when the optional highlighter loads.
   if (
     !cached ||
     (cached.highlighting !== undefined && cached.highlighting !== markdownHighlightingReady())
   ) {
-    cached = { html: markdownContentHtml(renderSanitizedMarkdown(renderInput, renderOptions)) };
+    // Distant idle work must never evict the reader's nearby preparation.
+    if (
+      idle &&
+      ((!cached && markdownCache.size >= MARKDOWN_CACHE_LIMIT) ||
+        markdownCacheChars - previousChars + cacheKey.length >= MARKDOWN_CACHE_TOTAL_CHARS)
+    ) {
+      return false;
+    }
+    if (cached) {
+      preparedFragments.delete(cached);
+    }
+    content = renderSanitizedMarkdown(
+      renderInput,
+      renderOptions,
+      undefined,
+      undefined,
+      prewarm && mode !== "html" && mode !== "idle-html",
+    );
+    cached = { html: markdownContentHtml(content) };
+    if (
+      idle &&
+      markdownCacheChars - previousChars + cacheKey.length + cached.html.length >
+        MARKDOWN_CACHE_TOTAL_CHARS
+    ) {
+      // Rendering still spent this slice even when its result cannot be retained.
+      return true;
+    }
     if (HIGHLIGHTABLE_CODE_RE.test(cached.html)) {
       cached.highlighting = markdownHighlightingReady();
     }
+    if (prewarm && mode !== "html" && mode !== "idle-html" && typeof content !== "string") {
+      preparedFragments.set(cached, content.fragment);
+      pruneMapToMaxSize(preparedFragments, PREPARED_FRAGMENT_LIMIT);
+    }
+  } else if (prewarm) {
+    if (mode !== "fragment" || preparedFragments.has(cached)) {
+      return false;
+    }
+    // The cache owns sanitized HTML. Rebuild its evicted DOM ahead of a return
+    // scroll, without reparsing Markdown or rerunning the sanitizer.
+    const template = document.createElement("template");
+    template.innerHTML = cached.html;
+    preparedFragments.set(cached, template.content);
+    pruneMapToMaxSize(preparedFragments, PREPARED_FRAGMENT_LIMIT);
+  } else if (returnFragment) {
+    const fragment = preparedFragments.get(cached);
+    if (fragment) {
+      content = { html: cached.html, fragment };
+      preparedFragments.delete(cached);
+    }
   }
-  markdownCache.delete(cacheKey);
+  const previous = markdownCache.get(cacheKey);
+  if (previous) {
+    markdownCacheChars -= cacheKey.length + previous.html.length;
+    markdownCache.delete(cacheKey);
+  }
   markdownCache.set(cacheKey, cached);
-  pruneMapToMaxSize(markdownCache, MARKDOWN_CACHE_LIMIT);
-  return cached.html;
+  markdownCacheChars += cacheKey.length + cached.html.length;
+  while (
+    markdownCache.size > MARKDOWN_CACHE_LIMIT ||
+    markdownCacheChars > MARKDOWN_CACHE_TOTAL_CHARS
+  ) {
+    const [key, entry] = markdownCache.entries().next().value!;
+    markdownCacheChars -= key.length + entry.html.length;
+    markdownCache.delete(key);
+    preparedFragments.delete(entry);
+  }
+  return prewarm ? true : (content ?? cached.html);
 }
 
-function markdownRenderKey(options: MarkdownRenderEnv): string {
-  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
+export function markdownRenderKey(options: MarkdownRenderEnv): string {
+  return `${i18n.getLocale()}\0${options.assistantTranscriptRoleHeaders}\0${options.codeBlockChrome}\0${options.codeBlockInteraction}\0${options.fileLinks}\0${options.documentFileLinks}\0${options.interactiveImages}\0${options.linkFavicons}\0${options.progressBars}\0${options.mode}\0${options.remoteImages}\0${options.sessionLinks}\0${options.tableInteractions}\0${JSON.stringify(options.humanMentionTokens ?? [])}`;
 }
 
 function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivElement {
@@ -294,96 +391,4 @@ export function partitionMarkdownHtml(html: string, streamKey?: string): [string
   const previous = streamingMarkdownStableHtml(streamKey);
   const stable = html.startsWith(previous) ? previous : "";
   return [stable, html.slice(stable.length)];
-}
-
-export function toStreamingMarkdownDomParts(
-  markdownLocal: string,
-  options: MarkdownRenderOptions = {},
-  streamKey?: string,
-): [MarkdownContent, MarkdownContent] {
-  const renderOptions = normalizeMarkdownRenderOptions(options);
-  // Explicit selections are complete user input, not incremental assistant text.
-  if (renderOptions.humanMentions.length) {
-    return partitionMarkdownHtml(toSanitizedMarkdownHtml(markdownLocal, options), streamKey);
-  }
-  const rawInput = normalizeStreamingMarkdownInput(markdownLocal, streamKey);
-  if (isMarkdownBlockArtText(rawInput)) {
-    return ["", renderSanitizedMarkdown(rawInput, renderOptions)];
-  }
-
-  if (!rawInput.trim()) {
-    return ["", ""];
-  }
-  const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
-  const input = appendMarkdownTruncationNotice(truncated);
-
-  const { boundary: candidateBoundary, tailRepairStart } = splitStableStreamingMarkdown(
-    input,
-    streamKey,
-    truncated.text.length,
-  );
-  let boundary = candidateBoundary;
-  const stableMarkdown = input.slice(0, boundary);
-  let streamingTail = input.slice(boundary);
-  const state = streamingMarkdownState(streamKey);
-  const previous = state?.rendered;
-  const renderKey = markdownRenderKey(renderOptions);
-  const append = previous && stableMarkdown.startsWith(previous.markdown);
-  // Literal code cannot acquire HTML ownership after its block is complete.
-  const hasHtml = append
-    ? previous.hasHtml || hasStreamingMarkdownHtml(stableMarkdown.slice(previous.markdown.length))
-    : hasStreamingMarkdownHtml(stableMarkdown);
-  // Containers and block-art classification can outlive a completed boundary.
-  // The message parse guard also keeps applying to the complete prefix.
-  const incremental =
-    previous?.options === renderKey &&
-    append &&
-    (previous.markdown === stableMarkdown ||
-      (previous.markdown.endsWith("\n") &&
-        !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
-        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
-        !hasHtml &&
-        !isMarkdownBlockArtText(stableMarkdown) &&
-        !previous.html.includes('class="markdown-block-art"') &&
-        (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
-  let stableHtml = incremental ? previous.html : "";
-  const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
-  if (stableAppend) {
-    const appendedHtml = markdownContentHtml(
-      renderSanitizedMarkdown(stableAppend, { ...renderOptions }),
-    );
-    // File-label collisions and standalone block art depend on the whole prefix.
-    stableHtml =
-      (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
-      (renderOptions.fileLinks &&
-        stableHtml.includes('class="markdown-file-link"') &&
-        appendedHtml.includes('class="markdown-file-link"'))
-        ? markdownContentHtml(renderSanitizedMarkdown(stableMarkdown, { ...renderOptions }))
-        : stableHtml + appendedHtml;
-  }
-  if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {
-    // Keep provisional code in the mutable tail so highlighting can arrive
-    // before its DOM is promoted to stable content, preserving reader controls.
-    const retained = previous?.options === renderKey && append ? previous : undefined;
-    boundary = retained?.markdown.length ?? 0;
-    stableHtml = retained?.html ?? "";
-    streamingTail = input.slice(boundary);
-  } else if (state) {
-    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
-  }
-  if (!streamingTail.trim()) {
-    return [stableHtml, ""];
-  }
-  // Only the live tail uses direct construction; settled messages and the
-  // completed prefix retain the bulk HTML + DOMPurify path.
-  // The whole input was classified above; an isolated tail is not block art.
-  const tailHtml = renderSanitizedMarkdown(
-    tailRepairStart === null
-      ? streamingTail
-      : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-    tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
-    false,
-    true,
-  );
-  return [stableHtml, tailHtml];
 }

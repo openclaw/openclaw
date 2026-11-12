@@ -317,3 +317,63 @@ export function registerCommandCliAdmissionTests({
     expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
   });
 }
+
+export const CLI_BINDING_SETTLEMENT_OUTCOMES = [
+  "rejected",
+  "rejected-clear",
+  "outer-fallback",
+  "preserved-state",
+  "preserved-same-native",
+] as const;
+
+export function createCliBindingSettlementCase(
+  outcome: (typeof CLI_BINDING_SETTLEMENT_OUTCOMES)[number],
+  localSessionId: string,
+) {
+  const sameNative = outcome === "preserved-same-native";
+  const suppression: "preserved-state" | undefined =
+    outcome === "preserved-state" || sameNative ? "preserved-state" : undefined;
+  const outerFallback = outcome === "outer-fallback" || suppression !== undefined;
+  const accepted = outerFallback;
+  const previousBinding = {
+    sessionId: "previous-native-session",
+    ...(sameNative
+      ? {
+          resumeCheckpointId: "original-checkpoint",
+          extraSystemPromptHash: "original-prompt",
+          authEpoch: "original-account",
+          transcriptCursor: {
+            localSessionId,
+            entryId: "prior-transcript",
+            runId: "prior-run",
+          },
+        }
+      : {}),
+  };
+  const transcriptCursor = {
+    localSessionId,
+    entryId: "handoff-tail",
+    runId: "binding-parent",
+    userEntryId: "completion-input",
+  };
+  const binding = {
+    sessionId: sameNative ? previousBinding.sessionId : "settled-native-session",
+    authProfileId: "anthropic:claude-cli",
+    transcriptCursor,
+    ...(sameNative
+      ? {
+          resumeCheckpointId: "completion-checkpoint",
+          extraSystemPromptHash: "completion-prompt",
+          authEpoch: "completion-account",
+        }
+      : {}),
+  };
+  const expectedBinding = sameNative
+    ? { ...previousBinding, transcriptCursor }
+    : suppression
+      ? previousBinding
+      : accepted
+        ? binding
+        : undefined;
+  return { suppression, outerFallback, accepted, previousBinding, binding, expectedBinding };
+}

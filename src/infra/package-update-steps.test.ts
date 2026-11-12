@@ -4,6 +4,7 @@ import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
@@ -201,6 +202,61 @@ describe("runGlobalPackageUpdateSteps", () => {
         throw new Error("expected npm pack directory");
       }
       await expectPathMissing(packDir);
+    },
+  );
+
+  it("reports an interrupted step as the interruption, not a package failure", async () => {
+    const { globalRoot } = await npmPackage(base);
+    const interruption = new Error('Could not record update step "x": interrupted', {
+      cause: Object.assign(new Error("interrupted"), { code: "interrupted" }),
+    });
+    await expect(
+      runGlobalPackageUpdateSteps({
+        ...createNpmUpdateOptions(globalRoot, "openclaw@github:openclaw/openclaw#main"),
+        runStep: async () => {
+          throw interruption;
+        },
+      }),
+    ).rejects.toBe(interruption);
+  });
+
+  it.each([false, true])(
+    "cleans a throwing npm pack unless cleanup is uncertain (%s)",
+    async (uncertain) => {
+      const { globalRoot } = await npmPackage(base);
+      const failure = new Error("pack step threw", {
+        cause: uncertain ? new CommandProcessCleanupError() : undefined,
+      });
+      let packDir: string | undefined;
+      try {
+        const update = runGlobalPackageUpdateSteps({
+          ...createNpmUpdateOptions(globalRoot, "openclaw@github:openclaw/openclaw#main"),
+          runStep: async ({ argv }) => {
+            packDir = argv[argv.indexOf("--pack-destination") + 1];
+            throw failure;
+          },
+        });
+        if (uncertain) {
+          await expect(update).rejects.toBe(failure);
+        } else {
+          expect((await update).failedStep).toMatchObject({
+            name: "package-update",
+            stderrTail: "pack step threw",
+          });
+        }
+        if (!packDir) {
+          throw new Error("expected npm pack directory");
+        }
+        if (uncertain) {
+          await expect(fs.access(packDir)).resolves.toBeUndefined();
+        } else {
+          await expectPathMissing(packDir);
+        }
+      } finally {
+        if (packDir) {
+          await fs.rm(packDir, { recursive: true, force: true });
+        }
+      }
     },
   );
 

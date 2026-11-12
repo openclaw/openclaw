@@ -174,10 +174,12 @@ struct DashboardSandboxNavigationTests {
         }
     }
 
-    @Test func `same URL sign in retains commands until the current document installs its shell`() async throws {
+    @Test(arguments: ["browser", "token", "password", "unauthenticated"])
+    func completedDocumentsRetainCommandsUntilTheirShellListens(mode: String) async throws {
         let server = try await DashboardHTTPFixture.start(
             html: """
             <!doctype html><html><head></head><body>Sign in<script>
+            window.__OPENCLAW_NATIVE_COMMANDS_READY__ = false;
             window.commands = [];
             window.mountShell = () => {
               window.addEventListener('openclaw:native-new-session', () => window.commands.push('new'));
@@ -191,7 +193,12 @@ struct DashboardSandboxNavigationTests {
             """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
         defer { server.stop() }
         let url = server.url()
-        let auth = DashboardWindowAuth.browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
+        let auth: DashboardWindowAuth = switch mode {
+        case "browser": .browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
+        case "token": .nativeDevice(gatewayUrl: server.websocketURL().absoluteString, token: "fixture", password: nil)
+        case "password": .nativeDevice(gatewayUrl: server.websocketURL().absoluteString, token: nil, password: "fixture")
+        default: .unauthenticated
+        }
         let controller = DashboardWindowController(
             url: url,
             auth: auth,
@@ -199,26 +206,71 @@ struct DashboardSandboxNavigationTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.show(url: url, auth: auth)
-        try await self.waitForDocument(controller, url: url)
+        // The menu/manager admits these before opening a dashboard, without a load waiter.
         controller.dispatchNativeCommand(.newSession)
         controller.dispatchNativeCommand(.commandPalette)
-        #expect(controller._testPendingNativeCommands == [.newSession, .commandPalette])
+        controller.dispatchNativeCommand(.commandPalette)
+        controller.show(url: url, auth: auth)
+        try await self.waitForDocument(controller, url: url)
+        #expect(try await controller.webView.evaluateJavaScript("window.commands.length") as? Int == 0)
+        try #require(controller._testPendingNativeCommands == [.newSession, .commandPalette, .commandPalette])
 
         _ = try await controller.webView.evaluateJavaScript("window.mountShell(); null")
-        try await self.waitForDocument(controller, url: url, ready: "window.commands.join(',') === 'new,search'")
+        try await self.waitForDocument(controller, url: url, ready: "window.commands.join(',') === 'new,search,search'")
+        try await controller.waitForDocumentLoad()
+        // Repeated readiness notifications must not replay the drained queue.
+        _ = try await controller.webView.evaluateJavaScript(
+            "window.dispatchEvent(new Event('openclaw:native-commands-state')); null")
+        controller.dispatchNativeCommand(.newSession)
+        controller.dispatchNativeCommand(.commandPalette)
+        try await self.waitForDocument(
+            controller, url: url, ready: "window.commands.join(',') === 'new,search,search,new,search'")
         controller.webView.reload()
         try await self.waitForDocument(
-            controller, url: url, ready: "window.__OPENCLAW_NATIVE_COMMANDS_READY__ === undefined")
+            controller, url: url, ready: "window.__OPENCLAW_NATIVE_COMMANDS_READY__ === false")
         controller.dispatchNativeCommand(.newSession)
-        // A queued notification from the previous same-URL shell is only a wakeup;
-        // the new sign-in document still has no listener-owned readiness fact.
+        // A previous same-URL document's queued notification is only a wakeup.
         _ = try await controller.webView.evaluateJavaScript(
             "window.webkit.messageHandlers.openclawCommands.postMessage({type: 'commands-state'}); null")
-        #expect(controller._testPendingNativeCommands == [.newSession])
         #expect(try await controller.webView.evaluateJavaScript("window.commands.length") as? Int == 0)
+        #expect(controller._testPendingNativeCommands == [.newSession])
         _ = try await controller.webView.evaluateJavaScript("window.mountShell(); null")
         try await self.waitForDocument(controller, url: url, ready: "window.commands.join(',') === 'new'")
+    }
+
+    @Test(arguments: [false, true])
+    func signalLessBundlesKeepLegacyDeliveryOnlyWithoutBrowserIdentity(browserIdentity: Bool) async throws {
+        let server = try await DashboardHTTPFixture.start(
+            html: """
+            <!doctype html><html><body><script>
+            window.commands = [];
+            window.addEventListener('openclaw:native-new-session', () => window.commands.push('new'));
+            window.addEventListener('openclaw:native-open-search', () => window.commands.push('search'));
+            </script></body></html>
+            """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'")
+        defer { server.stop() }
+        let url = server.url()
+        let auth: DashboardWindowAuth = browserIdentity
+            ? .browserIdentity(gatewayUrl: server.websocketURL().absoluteString)
+            : .nativeDevice(gatewayUrl: server.websocketURL().absoluteString, token: "fixture", password: nil)
+        let controller = DashboardWindowController(
+            url: url, auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
+            requestBrowserProfileImportOffer: { _ in false })
+        defer { controller.closeDashboard() }
+        controller.dispatchNativeCommand(.newSession)
+        controller.dispatchNativeCommand(.commandPalette)
+        controller.dispatchNativeCommand(.commandPalette)
+        controller.show(url: url, auth: auth)
+        try await self.waitForDocument(controller, url: url)
+        if browserIdentity {
+            #expect(try await controller.webView.evaluateJavaScript("window.commands.length") as? Int == 0)
+            #expect(controller._testPendingNativeCommands == [.newSession, .commandPalette, .commandPalette])
+        } else {
+            // The legacy document completes the waiter, not a timeout delivery fallback.
+            try await controller.waitForDocumentLoad()
+            try await self.waitForDocument(controller, url: url, ready: "window.commands.join(',') === 'new,search,search'")
+            #expect(controller._testPendingNativeCommands.isEmpty)
+        }
     }
 
     @Test func `blob documents cannot inherit the root dashboard native credentials`() async throws {

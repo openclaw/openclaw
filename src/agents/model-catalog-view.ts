@@ -53,6 +53,13 @@ export function selectModelCatalogRuntimeEntry(params: {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const key = keyOf(params.entry);
   const observed = params.routeVariants.filter((variant) => keyOf(variant) === key);
+  return selectRuntimeEntry(params, observed);
+}
+
+function selectRuntimeEntry(
+  params: Omit<Parameters<typeof selectModelCatalogRuntimeEntry>[0], "routeVariants">,
+  observed: readonly ModelCatalogEntry[],
+): ReturnType<typeof selectModelCatalogRuntimeEntry> {
   const variants = (observed.length ? observed : [params.entry])
     .filter((variant) =>
       variant.nativeRuntime
@@ -109,6 +116,9 @@ export function createModelCatalogView(params: {
   return {
     logicalEntries: dedupeByKey(params.catalog, keyOf),
     variantsOf,
+    selectRuntimeEntry(selection: Parameters<typeof selectRuntimeEntry>[0]) {
+      return selectRuntimeEntry(selection, variantsOf(selection.entry) ?? []);
+    },
     readProjection(
       entry: ModelCatalogEntry,
       projection: ModelCatalogRouteProjection,
@@ -226,12 +236,22 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           id: params.retainedModel.model,
         })
       : undefined;
+    // Accepted account discovery replaces fallback membership for its provider.
+    let discovered: Set<string> | undefined;
+    if (params.view === "default" && params.snapshot.acceptedDiscoveryOrigins) {
+      for (const { provider } of params.snapshot.acceptedDiscoveryOrigins) {
+        (discovered ??= new Set<string>()).add(normalizeProviderId(provider));
+      }
+    }
     for (const entry of params.snapshot.staticEntries) {
       const key = keyOf(entry);
+      const explicit = policy.configuredKeys.has(key) || key === retainedKey;
       const include =
         params.view === "configured"
-          ? policy.configuredKeys.has(key) || key === retainedKey
-          : policy.allows({ provider: entry.provider, model: entry.id });
+          ? explicit
+          : explicit ||
+            (!discovered?.has(normalizeProviderId(entry.provider)) &&
+              policy.allows({ provider: entry.provider, model: entry.id }));
       if (!seen.has(key) && include) {
         seen.add(key);
         catalog.push(entry);

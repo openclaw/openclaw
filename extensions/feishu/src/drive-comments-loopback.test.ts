@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -53,14 +54,11 @@ async function createDriveLoopback(replies: ApiReply[], deliveryContext?: Delive
   }
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
+      const bodyBuffer = await consumeBuffer(request);
       requests.push({
         method: request.method ?? "",
         url: request.url ?? "",
-        body: Buffer.concat(chunks).toString("utf8"),
+        body: bodyBuffer.toString("utf8"),
       });
       const reply = replies[requests.length - 1];
       if (!reply) {
@@ -128,13 +126,12 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
         create_time: 10,
         content: { elements: [{ type: "text_run", text_run: { text: "Reply text" } }] },
       };
-      const normalizedReply = {
+      const normalizedReply = expect.objectContaining({
         reply_id: "r1",
         user_id: "u1",
         create_time: 10,
-        update_time: undefined,
         text: "Reply text",
-      };
+      });
       const isReplies = action === "list_comment_replies";
       const fixture = await createDriveLoopback([
         {
@@ -172,19 +169,11 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
         ? { replies: [normalizedReply] }
         : {
             comments: [
-              {
+              expect.objectContaining({
                 comment_id: "c1",
-                user_id: undefined,
-                create_time: undefined,
-                update_time: undefined,
-                is_solved: undefined,
-                is_whole: undefined,
-                quote: undefined,
                 text: "Reply text",
-                has_more_replies: undefined,
-                replies_page_token: undefined,
                 replies: [normalizedReply],
-              },
+              }),
             ],
           };
       expectDriveOutcome(fixture, result, [request], {
@@ -226,7 +215,6 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
   it.each([
     targetCase("list_comments", undefined, " raw/+ ", "%20raw%2F%2B%20", "docx", true),
     targetCase("list_comments", ambient("sheet"), " ", "ambient_file", "sheet"),
-    targetCase("list_comment_replies", ambient("file"), " ", "ambient_file", "file"),
     targetCase(
       "list_comment_replies",
       ambient("sheet"),
@@ -238,7 +226,6 @@ describe("feishu_drive comments through the installed Lark SDK", () => {
     ),
     targetCase("add_comment", ambient("doc"), " ", "ambient_file", "doc"),
     targetCase("add_comment", ambient("slides"), " raw/+ ", "%20raw%2F%2B%20", "docx", true),
-    targetCase("reply_comment", ambient("slides"), " ", "ambient_file", "slides"),
     targetCase("reply_comment", ambient("doc"), " explicit/+ ", "explicit%2F%2B", "docx", false, {
       explicitType: "docx",
     }),

@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { BrowserProfileConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
@@ -159,6 +160,11 @@ function createDeletionFixture(profile: BrowserProfileConfig = WORK_PROFILE, nam
   return fixture;
 }
 
+function expectNoDeletion() {
+  expect(writeConfigFile).not.toHaveBeenCalled();
+  expect(movePathToTrash).not.toHaveBeenCalled();
+}
+
 describe("BrowserProfilesService", () => {
   beforeEach(() => {
     getChromeMcpModule.clear();
@@ -172,9 +178,9 @@ describe("BrowserProfilesService", () => {
       writeConfigFile.mockClear();
       vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
       const { state, service } = createCtx();
-      const result = await service.createProfile({ name: profileName });
-
-      expect(result.profile).toBe(profileName);
+      await expect(service.createProfile({ name: profileName })).resolves.toMatchObject({
+        profile: profileName,
+      });
       expect(Object.hasOwn(state.resolved.profiles, profileName)).toBe(true);
       const createdProfiles = writtenProfiles();
       expect(Object.hasOwn(createdProfiles, profileName)).toBe(true);
@@ -208,16 +214,21 @@ describe("BrowserProfilesService", () => {
     expect(writtenBrowserConfig().defaultProfile).toBe("imported");
   });
 
-  it("allocates local ports from a gateway port changed during config rebase", async () => {
-    const { state, service } = createCtx();
-    vi.mocked(getRuntimeConfig)
-      .mockReturnValueOnce({ browser: { profiles: {} } })
-      .mockReturnValue({ gateway: { port: 30000 }, browser: { profiles: {} } });
-    const result = await service.createProfile({ name: "work" });
-
-    expect(result.cdpPort).toBe(30012);
-    expect(state.resolved.profiles.work?.cdpPort).toBe(30012);
-    expect(writtenProfiles().work?.cdpPort).toBe(30012);
+  it("rebases the local range and skips a port already used by another listener", async () => {
+    await withServer(
+      (_request, response) => response.end(),
+      async (baseUrl) => {
+        const occupiedPort = Number(new URL(baseUrl).port);
+        const { state, service } = createCtx();
+        vi.mocked(getRuntimeConfig)
+          .mockReturnValueOnce({ browser: { profiles: {} } })
+          .mockReturnValue({ gateway: { port: occupiedPort - 12 }, browser: { profiles: {} } });
+        const result = await service.createProfile({ name: "work" });
+        expect(result.cdpPort).toBeGreaterThan(occupiedPort);
+        expect(state.resolved.profiles.work?.cdpPort).toBe(result.cdpPort);
+        expect(writtenProfiles().work?.cdpPort).toBe(result.cdpPort);
+      },
+    );
   });
 
   it("redacts CDP credentials from create responses while preserving profile auth", async () => {
@@ -281,9 +292,7 @@ describe("BrowserProfilesService", () => {
       { ...WORK_PROFILE, driver: "existing-session", attachOnly: true },
       "chrome-live",
     );
-    const result = await service.deleteProfile("chrome-live");
-
-    expect(result.deleted).toBe(false);
+    await expect(service.deleteProfile("chrome-live")).resolves.toMatchObject({ deleted: false });
     expect(ctx.forProfile).not.toHaveBeenCalled();
     expect(resolveOpenClawUserDataDir).not.toHaveBeenCalled();
     expect(movePathToTrash).not.toHaveBeenCalled();
@@ -299,11 +308,10 @@ describe("BrowserProfilesService", () => {
       'cannot delete the default profile "work"',
     );
 
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expectNoDeletion();
     expect(state.resolved.profiles).toHaveProperty("work");
     expect(state.profiles.has("work")).toBe(true);
     expect(ctx.forProfile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
   });
 
   it("preserves profile config and data when a live browser cannot be safely stopped", async () => {
@@ -315,8 +323,7 @@ describe("BrowserProfilesService", () => {
 
     await expect(service.deleteProfile("work")).rejects.toThrow("managed process identity changed");
 
-    expect(writeConfigFile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
+    expectNoDeletion();
     expect(state.resolved.profiles).toHaveProperty("work");
 
     await expect(service.deleteProfile("work")).resolves.toMatchObject({ ok: true });
@@ -328,9 +335,7 @@ describe("BrowserProfilesService", () => {
     const userDataDir = localUserDataDir("openclaw-trash-failure-", false);
     vi.mocked(movePathToTrash).mockRejectedValueOnce(new Error("Trash unavailable"));
 
-    const result = await service.deleteProfile("work");
-
-    expect(result.deleted).toBe(false);
+    await expect(service.deleteProfile("work")).resolves.toMatchObject({ deleted: false });
     expect(state.resolved.profiles).not.toHaveProperty("work");
     expect(state.profiles.has("work")).toBe(false);
     expect(fs.existsSync(path.dirname(userDataDir))).toBe(true);
@@ -394,18 +399,12 @@ describe("BrowserProfilesService", () => {
     release.resolve();
 
     await Promise.all([rejected, deleteExpectation]);
-    expect(writeConfigFile).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
+    expectNoDeletion();
     expect(state.profiles.get("work")).toBe(runtime);
     expect(getProfileLifecycle(runtime).terminal).toBeNull();
     expect(getProfileLifecycle(runtime).blockedReason).toBeNull();
     await expect(
-      enqueueProfileStart({
-        state,
-        runtime,
-        key: "after-drift",
-        run: async () => {},
-      }),
+      enqueueProfileStart({ state, runtime, key: "after-drift", run: async () => {} }),
     ).resolves.toBeUndefined();
   });
 });

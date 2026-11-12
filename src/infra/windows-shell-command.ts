@@ -133,12 +133,12 @@ function stripWindowsShellWrapperOnce(command: string): string {
   return command;
 }
 
-export function analyzeWindowsShellCommand(params: {
+export async function analyzeWindowsShellCommand(params: {
   command: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;
-}): ExecCommandAnalysis {
+}): Promise<ExecCommandAnalysis> {
   const effective = stripWindowsShellWrapper(params.command.trim());
   const unsupported = findWindowsUnsupportedToken(effective);
   if (unsupported) {
@@ -158,7 +158,7 @@ export function analyzeWindowsShellCommand(params: {
       {
         raw: params.command,
         argv,
-        resolution: resolveCommandResolutionFromArgv(
+        resolution: await resolveCommandResolutionFromArgv(
           argv,
           params.cwd,
           params.env,
@@ -174,19 +174,17 @@ export function isWindowsPlatform(platform?: string | null): boolean {
   return normalized.startsWith("win");
 }
 
-const WINDOWS_UNSAFE_CMD_META = /[%`]|\$(?=[A-Za-z_{(?$])/;
-
 export function windowsEscapeArg(value: string): { ok: true; escaped: string } | { ok: false } {
   if (value === "") {
     return { ok: true, escaped: '""' };
   }
-  if (WINDOWS_UNSAFE_CMD_META.test(value)) {
+  const escaped = value.replace(/"/g, '""');
+  if (findWindowsUnsupportedToken(`"${escaped}"`)) {
     return { ok: false };
   }
   if (/^[a-zA-Z0-9_./:~\\=-]+$/.test(value)) {
     return { ok: true, escaped: value };
   }
-  const escaped = value.replace(/"/g, '""');
   return { ok: true, escaped: `"${escaped}"` };
 }
 

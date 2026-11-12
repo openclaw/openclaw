@@ -30,6 +30,7 @@ import {
   collectConfiguredMemoryEmbeddingProviderIds,
   collectConfiguredVoiceProviderIds,
   collectConfiguredWebSearchProviderIds,
+  isWebSearchProviderAutoSelected,
 } from "./gateway-startup-plugin-providers.js";
 import { collectConfiguredSpeechProviderIds } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
@@ -105,6 +106,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const explicitlyDisabledChannelIds = new Set(
     listExplicitlyDisabledChannelIdsForConfig(params.config),
   );
+  const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const startupParams = {
     config: params.config,
     pluginsConfig,
@@ -113,8 +115,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     requiredAgentHarnessRuntimes: new Set(
       collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
     ),
-    configuredSpeechProviderIds: collectConfiguredSpeechProviderIds(activationSourceConfig),
+    configuredSpeechProviderIds,
+    autoSelectSpeechProvider: configuredSpeechProviderIds.size === 0,
     configuredWebSearchProviderIds: collectConfiguredWebSearchProviderIds(activationSourceConfig),
+    autoSelectWebSearchProvider: isWebSearchProviderAutoSelected(activationSourceConfig),
     configuredModelProviderIds: collectConfiguredAgentModelProviderIds(
       activationSourceConfig,
       params.manifestRegistry,

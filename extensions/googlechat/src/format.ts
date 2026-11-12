@@ -1,4 +1,5 @@
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
+import { formatTextWithAttachmentLinks } from "openclaw/plugin-sdk/reply-payload";
 import {
   FormatCapabilityProfile,
   markdownToIR,
@@ -42,6 +43,35 @@ export function sanitizeGoogleChatText(text: string): string {
   });
 }
 
+export function formatGoogleChatMediaText(
+  text: string | undefined,
+  mediaUrls: readonly string[],
+): string {
+  const remoteUrls = mediaUrls.filter((value) => {
+    // Controls are ASCII; check code units before URL parsing strips them.
+    if (
+      value.split("").some((character) => character <= " " || character === "\u007f") ||
+      !/^https?:\/\//iu.test(value)
+    ) {
+      return false;
+    }
+    try {
+      return Boolean(new URL(value).hostname);
+    } catch {
+      return false;
+    }
+  });
+  if (remoteUrls.length !== mediaUrls.length) {
+    throw new Error("Google Chat outbound attachments require remote HTTP(S) URLs.");
+  }
+  // Preserve Markdown indentation; the shared plain-text formatter trims captions.
+  return [text, formatTextWithAttachmentLinks(undefined, remoteUrls)].filter(Boolean).join("\n\n");
+}
+
+function isSelfLabeledLink(label: string, href: string): boolean {
+  return label === href || `mailto:${label}` === href;
+}
+
 /** Renders CommonMark into byte-bounded Google Chat app-message chunks. */
 export function formatGoogleChatTextChunks(
   text: string,
@@ -83,11 +113,7 @@ export function formatGoogleChatTextChunks(
     const characters = ir.links.length > 0 ? ir.text.split("") : [];
     let changed = false;
     for (const link of ir.links) {
-      const label = ir.text.slice(link.start, link.end);
-      const comparableHref = link.href.startsWith("mailto:")
-        ? link.href.slice("mailto:".length)
-        : link.href;
-      if (label === link.href || label === comparableHref) {
+      if (isSelfLabeledLink(ir.text.slice(link.start, link.end), link.href)) {
         continue;
       }
       for (let index = link.start; index < link.end; index += 1) {
@@ -235,9 +261,13 @@ export function formatGoogleChatTextChunks(
             const labelHasStyles = chunkIr.styles.some(
               (span) => span.start < link.end && span.end > link.start,
             );
-            return /[<>|]/u.test(href) || /[<>|*_~`]/u.test(label) || labelHasStyles
-              ? { start: link.end, end: link.end, open: "", close: ` (${href})` }
-              : { start: link.start, end: link.end, open: `<${href}|`, close: ">" };
+            if (!/[<>|]/u.test(href) && !/[<>|*_~`]/u.test(label) && !labelHasStyles) {
+              return { start: link.start, end: link.end, open: `<${href}|`, close: ">" };
+            }
+            // Without <href|label> markup the label stays visible; a URL or address label is the link already.
+            return isSelfLabeledLink(label, href)
+              ? null
+              : { start: link.end, end: link.end, open: "", close: ` (${href})` };
           },
         },
         GOOGLE_CHAT_FORMAT_PROFILE,

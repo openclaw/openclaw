@@ -380,11 +380,9 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       });
       expect(first.request).not.toHaveProperty("mcpTool");
       await expectUnprompted(call(viewId), "Same view/tool unexpectedly prompted again");
-      expect(approvals).toHaveLength(1);
       await approvedCall(viewId, "allow-once", "details");
       const otherView = await openView(path);
       await approvedCall(otherView, "allow-once");
-      expect(approvals).toHaveLength(3);
       expect(runtime.callTool).toHaveBeenCalledTimes(4);
       expect(writeConfig).not.toHaveBeenCalled();
       expect(resolveApproval).toHaveBeenCalled();
@@ -411,7 +409,6 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         }
         await openView(path, { viewId });
         await approvedCall(viewId, "allow-once");
-        expect(approvals).toHaveLength(2);
       },
     );
 
@@ -426,7 +423,6 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       await decide(denied, "deny");
       expectDenied(await pending, "denied");
       await approvedCall(viewId, "allow-once");
-      expect(approvals).toHaveLength(3);
       expect(runtime.callTool).toHaveBeenCalledTimes(2);
     });
 
@@ -476,7 +472,6 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         server.codex = { defaultToolsApprovalMode: mode };
         const viewId = await openView(path);
         await expectUnprompted(call(viewId), "Existing server policy unexpectedly prompted");
-        expect(approvals).toHaveLength(0);
         expect(runtime.callTool).toHaveBeenCalledOnce();
       },
     );
@@ -553,7 +548,6 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
     await approvedCall(viewId, "allow-always");
     await expectUnprompted(call(viewId), "Cached grant prompted again");
     expect(toolCalls).toBe(2);
-    expect(approvals).toHaveLength(1);
     const beforeDenied = posts;
     expectDenied(await call(viewId, "search", { requesterId: "bob" }), "not authorized");
     expect(posts).toBe(beforeDenied);

@@ -7,7 +7,7 @@ import { readDatabase } from "./observations.mjs";
 
 const NOW = "2026-07-29T00:00:00.000Z";
 const WORKSHOP_ROOT = "agents/main/agent/workshop-skills";
-const EXPORT_ROOT = `${WORKSHOP_ROOT}/.archive/.retired-proposals`;
+const EXPORT_ROOT = `${WORKSHOP_ROOT}/.drafts`;
 const PROPOSALS_DIR = "skill-workshop/proposals";
 export const RETIRED_WORKSHOP_TABLES = [
   "skill_workshop_collection_reviews",

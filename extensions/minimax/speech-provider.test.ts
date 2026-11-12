@@ -213,36 +213,49 @@ describe("MiniMax auth and synthesis", () => {
     expect(firstFetchBody()).toMatchObject(expected);
   });
 
-  it.each([false, true])("uses portal profile=%s ahead of environment fallback", async (portal) => {
-    vi.stubEnv(
-      portal ? "MINIMAX_API_KEY" : "MINIMAX_CODING_API_KEY",
-      portal ? "sk-env" : "sk-cp-env",
-    );
-    if (portal) {
-      seedMinimaxPortalProfile(agentDir);
-    }
-    mockAudioResponse();
-    await synthesize({
-      cfg: portal
-        ? {
-            models: {
-              providers: {
-                "minimax-portal": { baseUrl: "https://api.minimaxi.com/anthropic", models: [] },
+  it.each([
+    ["configured key", "  sk-config  ", true, "sk-cp-env", "Bearer sk-config", 0],
+    ["blank configured key", " \t ", true, "sk-cp-env", "Bearer portal-token", 1],
+    ["portal profile", undefined, true, "sk-cp-env", "Bearer portal-token", 1],
+    ["token-plan environment", undefined, false, "sk-cp-env", "Bearer sk-cp-env", 1],
+    ["API-key environment", undefined, false, undefined, "Bearer sk-env", 1],
+  ] as const)(
+    "selects %s with only required profile resolution",
+    async (_name, apiKey, portal, tokenPlanKey, authorization, profileLookups) => {
+      const profileLookup = vi.spyOn(
+        await import("openclaw/plugin-sdk/provider-auth"),
+        "resolveProviderAuthProfileApiKey",
+      );
+      vi.stubEnv("MINIMAX_API_KEY", "sk-env");
+      vi.stubEnv("MINIMAX_CODING_API_KEY", tokenPlanKey);
+      if (portal) {
+        seedMinimaxPortalProfile(agentDir);
+      }
+      mockAudioResponse();
+      const result = await synthesize({
+        cfg: portal
+          ? {
+              models: {
+                providers: {
+                  "minimax-portal": { baseUrl: "https://api.minimaxi.com/anthropic", models: [] },
+                },
               },
-            },
-          }
-        : {},
-      providerConfig: {},
-    });
+            }
+          : {},
+        providerConfig: { apiKey },
+      });
 
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
-      portal ? "https://api.minimaxi.com/v1/t2a_v2" : "https://api.minimax.io/v1/t2a_v2",
-    );
-    expect(firstFetchInit()?.headers).toEqual({
-      Authorization: portal ? "Bearer portal-token" : "Bearer sk-cp-env",
-      "Content-Type": "application/json",
-    });
-  });
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(
+        portal ? "https://api.minimaxi.com/v1/t2a_v2" : "https://api.minimax.io/v1/t2a_v2",
+      );
+      expect(firstFetchInit()?.headers).toEqual({
+        Authorization: authorization,
+        "Content-Type": "application/json",
+      });
+      expect(result.audioBuffer).toEqual(Buffer.from("audio"));
+      expect(profileLookup).toHaveBeenCalledTimes(profileLookups);
+    },
+  );
 
   it("does not send a request for a blank environment API key", async () => {
     process.env.MINIMAX_API_KEY = "   ";

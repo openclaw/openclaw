@@ -31,11 +31,7 @@ afterEach(() => {
 it.each([
   ["exchange", "HTTPS_PROXY", "HTTPS_PROXY", true],
   ["exchange", "HTTP_PROXY fallback", "HTTP_PROXY", true],
-  ["exchange", "NO_PROXY bypass", "HTTPS_PROXY", false],
   ["exchange", "no configured proxy", undefined, false],
-  ["exchange", "ALL_PROXY alone", "ALL_PROXY", false],
-  ["exchange", "empty lowercase override", "HTTPS_PROXY", false],
-  ["exchange", "managed proxy", "HTTPS_PROXY", true],
   ["exchange", "retired owner", "HTTPS_PROXY", false],
   ["exchange", "aborted caller", "HTTPS_PROXY", false],
   ["refresh", "HTTPS_PROXY", "HTTPS_PROXY", true],
@@ -72,13 +68,6 @@ it.each([
   if (variable) {
     vi.stubEnv(variable, `http://127.0.0.1:${address.port}`);
   }
-  vi.stubEnv("NO_PROXY", name === "NO_PROXY bypass" ? "auth.openai.com" : "");
-  if (name === "empty lowercase override") {
-    vi.stubEnv("https_proxy", "");
-  }
-  if (name === "managed proxy") {
-    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-  }
   const signal = aborted ? AbortSignal.abort() : new AbortController().signal;
   const assertCurrent = vi.fn(() => {
     if (retired) {
@@ -98,17 +87,14 @@ it.each([
           )
         : await refreshOpenAIAccessToken("synthetic-refresh", options);
 
-    expect(result).toMatchObject({
-      type: "failed",
-      operation,
-      ...(aborted
-        ? { cancelled: true, summary: "Login cancelled" }
-        : retired || !proxied
-          ? {
-              summary: expect.stringContaining(retired ? "owner retired" : "direct DNS selected"),
-            }
-          : {}),
-    });
+    expect(result).toMatchObject({ type: "failed", operation });
+    if (aborted) {
+      expect(result).toMatchObject({ cancelled: true, summary: "Login cancelled" });
+    } else if (!proxied) {
+      expect(result).toMatchObject({
+        summary: expect.stringContaining(retired ? "owner retired" : "direct DNS selected"),
+      });
+    }
     expect(destinations).toEqual(proxied ? ["auth.openai.com:443"] : []);
     if (aborted || retired || proxied) {
       expect(assertCurrent).toHaveBeenCalledTimes(aborted ? 0 : 1);

@@ -6,7 +6,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export {
   getRuntimeExecutionProfile,
-  resolveRuntimeExecutionProfile,
   type RuntimeExecutionProfile,
 } from "../../standalone-runtime-profile.mjs";
 export type RuntimeDynamicExecutionFeature = "plugins" | "code-mode" | "qa";

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
 import {
   eventGateway,
@@ -29,11 +30,7 @@ function gatewayFixture(liveCatalog = false) {
       const { sessionId } = params as { sessionId: string };
       return { ...terminalOpenResult(sessionId), buffer: "live owner", seq: 10 };
     }
-    return method === "terminal.list"
-      ? {
-          sessions: liveCatalog ? opened : [],
-        }
-      : { ok: true };
+    return method === "terminal.list" ? { sessions: liveCatalog ? opened : [] } : { ok: true };
   });
 }
 
@@ -51,6 +48,11 @@ function dockButton(panel: HTMLElement) {
   return button!;
 }
 
+const composerInput = (panel: HTMLElement) =>
+  panel.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!;
+const waitForLiveTabs = (panel: Awaited<ReturnType<typeof mount>>) =>
+  vi.waitFor(() => expect(panel.hostedTabs.every((tab) => tab.className === "is-live")).toBe(true));
+
 it("keeps a destination's live PTY beside its detached diagnostic view", async () => {
   const gateway = gatewayFixture();
   const source = await mount(gateway.client);
@@ -65,9 +67,7 @@ it("keeps a destination's live PTY beside its detached diagnostic view", async (
   const target = await mount(gateway.client, false);
   togglePanel(target, { open: true, terminalSessionId: "session-1" });
   await vi.waitFor(() => expect(target.hostedTabs).toHaveLength(2));
-  await vi.waitFor(() =>
-    expect(target.hostedTabs.every((tab) => tab.className === "is-live")).toBe(true),
-  );
+  await waitForLiveTabs(target);
   const live = terminals[2]!;
   const liveId = target.activeHostedTabId;
   const liveHost = createTerminal.mock.calls[2]![0].parent;
@@ -130,7 +130,7 @@ it("retains unsent text and uploaded attachments across tabs and a native dockin
   const first = source.activeHostedTabId!;
   source.selectHostedTab(first);
   await source.updateComplete;
-  const input = source.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!;
+  const input = composerInput(source);
   input.value = "cat";
   input.dispatchEvent(new Event("input", { bubbles: true }));
   const file = new File(["test"], "synthetic-file.txt");
@@ -145,41 +145,23 @@ it("retains unsent text and uploaded attachments across tabs and a native dockin
   );
   expect(terminals[0]!.terminal.paste).not.toHaveBeenCalled();
   expect(terminals[0]!.terminal.input).not.toHaveBeenCalled();
-  source.handleToggleRequest(
-    new CustomEvent("openclaw:terminal-toggle", { detail: { open: true, newSession: true } }),
-  );
+  togglePanel(source, { open: true, newSession: true });
   await vi.waitFor(() => expect(source.hostedTabs).toHaveLength(2));
-  await vi.waitFor(() =>
-    expect(
-      source.hostedTabs.every((tab) => tab.className === "is-live"),
-      "source tabs ready",
-    ).toBe(true),
-  );
+  await waitForLiveTabs(source);
   await source.updateComplete;
-  expect(source.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!.value).toBe("");
+  expect(composerInput(source).value).toBe("");
   source.selectHostedTab(first);
   await source.updateComplete;
-  expect(source.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!.value).toBe(
-    "cat",
-  );
+  expect(composerInput(source).value).toBe("cat");
   const target = await mount(gateway.client, false, 2);
   source.activateTerminalHost();
   await source.updateComplete;
   dockButton(source).click();
   await vi.waitFor(() => expect(target.hostedTabs).toHaveLength(2));
-  await vi.waitFor(() =>
-    expect(
-      target.hostedTabs.every((tab) => tab.className === "is-live"),
-      "target tabs ready",
-    ).toBe(true),
-  );
+  await waitForLiveTabs(target);
   target.embedded = true;
   await target.updateComplete;
-  await vi.waitFor(() =>
-    expect(target.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')?.value).toBe(
-      "cat",
-    ),
-  );
+  await vi.waitFor(() => expect(composerInput(target)?.value).toBe("cat"));
   expect(target.querySelector(".tp-attachment")?.textContent).toContain("synthetic-file.txt");
   expect(
     terminals.every((terminal) => terminal.terminal.paste.mock.calls.length === 0),
@@ -192,6 +174,106 @@ it("retains unsent text and uploaded attachments across tabs and a native dockin
   const submitted = terminals.find((terminal) => terminal.terminal.paste.mock.calls.length > 0)!;
   expect(submitted.terminal.paste).toHaveBeenCalledExactlyOnceWith("cat /tmp/synthetic-file.txt");
   expect(submitted.terminal.input).toHaveBeenCalledExactlyOnceWith("\r", true);
-  expect(target.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!.value).toBe("");
+  expect(composerInput(target).value).toBe("");
   expect(target.querySelector(".tp-attachment")).toBeNull();
+});
+
+describe("terminal panel readiness", () => {
+  it("keeps an already closed panel closed for an explicit close request", () => {
+    const panel = mountFixture({}, false);
+    togglePanel(panel, { open: false });
+    expect(panel.terminalPanelOpen).toBe(false);
+  });
+
+  it.each([
+    { siblingReady: "after timeout", siblingExit: "none" },
+    { siblingReady: "before timeout", siblingExit: "error" },
+    { siblingReady: "before timeout", siblingExit: "no error" },
+  ] as const)(
+    "keeps the matching retry with sibling readiness $siblingReady and exit $siblingExit",
+    async ({ siblingReady, siblingExit }) => {
+      const siblingOpen = createDeferred<ReturnType<typeof terminalOpenResult>>();
+      const { client, calls, emit } = eventGateway((method, params) => {
+        if (method === "terminal.open" && !(params as { catalog?: unknown }).catalog) {
+          return siblingOpen.promise;
+        }
+        return method === "terminal.open"
+          ? { ...terminalOpenResult("catalog-terminal-1"), title: "claude --resume 1234…" }
+          : { ok: true };
+      });
+      const catalog = { catalogId: "anthropic", hostId: "node:mac", threadId: "thread" };
+      const panel = mountFixture(
+        {
+          client,
+          agentId: "research",
+          page: true,
+          fullscreen: true,
+          embedded: true,
+          routeTarget: { catalog },
+        },
+        false,
+      );
+      await panel.updateComplete;
+      await vi.dynamicImportSettled();
+
+      await vi.waitFor(() => {
+        expect(panelButton(panel)?.disabled).toBe(false);
+        expect(calls("terminal.open")).toHaveLength(1);
+      });
+      panel.agentId = "other";
+      panelButton(panel)!.click();
+      await vi.waitFor(() => expect(calls("terminal.open")).toHaveLength(2));
+      const resolveSibling = async () => {
+        siblingOpen.resolve(terminalOpenResult("sibling-terminal"));
+        await vi.waitFor(() => expect(panel.querySelector(".is-live")).not.toBeNull());
+      };
+      const expectTimeout = () =>
+        expect(panel.querySelector(".tp-error")?.textContent).toContain(
+          "Session did not connect within 30 seconds",
+        );
+      if (siblingReady === "before timeout") {
+        await resolveSibling();
+      }
+      await vi.advanceTimersByTimeAsync(30_000);
+      await panel.updateComplete;
+      expectTimeout();
+      if (siblingReady === "after timeout") {
+        await resolveSibling();
+      }
+      await vi.waitFor(expectTimeout);
+      expect(panel.querySelectorAll(".tabstrip-tab")).toHaveLength(1);
+      expect(calls("terminal.close")).toEqual([{ sessionId: "catalog-terminal-1" }]);
+      const retry = panelButton(panel, ".tp-error button");
+      expect(retry?.textContent?.trim()).toBe("Retry");
+
+      if (siblingExit !== "none") {
+        const exitError = "The sibling terminal stopped unexpectedly.";
+        emit("terminal.exit", {
+          sessionId: "sibling-terminal",
+          reason: "process_exit",
+          exitCode: 1,
+          ...(siblingExit === "error" ? { error: exitError } : {}),
+        });
+        if (siblingExit === "error") {
+          retry?.click();
+        }
+        await panel.updateComplete;
+        expect(panel.querySelector(".tabstrip-tab__status")?.textContent).toBe("exited (1)");
+        if (siblingExit === "error") {
+          expect(panel.querySelector(".tp-error")?.textContent).toContain(exitError);
+          expect(panel.querySelector(".tp-error button")).toBeNull();
+          expect(calls("terminal.open")).toHaveLength(2);
+          return;
+        }
+        expectTimeout();
+        expect(panel.querySelector(".tp-error button")?.textContent?.trim()).toBe("Retry");
+      }
+
+      retry?.click();
+      await vi.waitFor(() => expect(calls("terminal.open")).toHaveLength(3));
+      expect(calls("terminal.open").at(-1)).toEqual(
+        expect.objectContaining({ catalog, agentId: "research" }),
+      );
+    },
+  );
 });

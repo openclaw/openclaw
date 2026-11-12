@@ -15,11 +15,19 @@ type ChatPositionMarker = {
 export type ChatPositionIndex = Readonly<{
   markers: readonly Readonly<ChatPositionMarker>[];
   markerIdsByMessageId: ReadonlyMap<string, string>;
-  /** Current tail previews over the immutable marker membership. */
-  liveMarkers?: readonly Readonly<ChatPositionMarker>[];
+  /** A mounted preview reads current text without invalidating marker membership. */
+  resolveLiveMessage?: (message: unknown) => unknown;
 }>;
 
 type RenderItem = SystemEventRenderItem;
+
+export function isVisibleChatStream(part: Parameters<typeof prepareChatStreamRender>[0]): boolean {
+  const prepared = prepareChatStreamRender(part);
+  return (
+    resolveMessageVisibleContent(prepared.message, prepared.normalizedMessage) === "non-text" ||
+    Boolean(prepared.displayMarkdown.trim())
+  );
+}
 
 export function projectChatPositions(
   items: Iterable<RenderItem>,
@@ -43,7 +51,9 @@ export function projectChatPositions(
       markers.set(id, { id, role, anchorId: messageId, message });
     }
     markerIdsByMessageId.set(messageId, id);
-    messageRowKeysById.set(messageId, rowKey);
+    if (!messageRowKeysById.has(messageId)) {
+      messageRowKeysById.set(messageId, rowKey);
+    }
   };
   const group = (item: MessageGroup, rowKey: string) => {
     if (
@@ -93,14 +103,16 @@ export function projectChatPositions(
         if (part.kind !== "stream") {
           continue;
         }
-        const { message, normalizedMessage, displayMarkdown } = prepareChatStreamRender(part);
-        if (
-          resolveMessageVisibleContent(message, normalizedMessage) !== "non-text" &&
-          !displayMarkdown.trim()
-        ) {
+        if (!isVisibleChatStream(part)) {
           continue;
         }
-        add(item.runId ? `run:${item.runId}` : item.key, "assistant", part.key, message, rowKey);
+        add(
+          item.runId ? `run:${item.runId}` : item.key,
+          "assistant",
+          part.key,
+          prepareChatStreamRender(part).message,
+          rowKey,
+        );
       }
     }
   };

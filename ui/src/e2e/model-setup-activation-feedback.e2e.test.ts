@@ -78,16 +78,17 @@ suite.define(() => {
         });
         await initialContext.dispose();
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
         await button(page.locator(".model-setup-discovery"), "Close").click();
         await page.getByRole("button", { name: "Back to app" }).click();
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.waitForRequest("models.authStatus");
         await page.getByText(ready, { exact: true }).waitFor();
 
         // Revisit before the old reply: the abandoned loader must not own the new request.
         await page.goBack();
         await page.locator("[data-models-login-discover]").click();
-        await page.getByRole("heading", { name: "On this Gateway", exact: true }).waitFor();
+        await page.locator('.oc-dialog__header h2:text-is("Available models")').waitFor();
         await gateway.waitForRequest(rpc.detect, { after: 1 });
         await gateway.resolveDeferred(rpc.detect);
         await page

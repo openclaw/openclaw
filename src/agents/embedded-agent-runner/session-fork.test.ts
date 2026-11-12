@@ -4,23 +4,23 @@ import {
   createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "@openclaw/ai/transports";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
+import { streamSimpleGoogle } from "../../../packages/ai/src/providers/google.js";
 import { streamSimpleOpenAICodexResponses } from "../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import * as undiciRuntime from "../../infra/net/undici-runtime.js";
-import "../ai-transport-runtime-host.js";
 import type { Context, Message, Model } from "../../llm/types.js";
-import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import "../ai-transport-runtime-host.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectText } from "../../test-utils/text-assertions.js";
 import { providerResponse, type WireApi } from "../embedded-agent-runner.wire.test-support.js";
 import { attachModelProviderRequestTransport } from "../provider-request-config.js";
 import { closeProviderTransportDispatcherPool } from "../provider-transport-dispatcher-pool.js";
 import type { StreamFn } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
-import { ZERO_USAGE_FIXTURE } from "../test-helpers/usage-fixtures.js";
 import { runEmbeddedSessionFork } from "./session-fork.js";
 
 const context: Context = {
@@ -91,7 +91,7 @@ function fork(
   streamFn: StreamFn,
   requestModel: Model = model,
   requestContext = context,
-  assertCurrent = () => {},
+  overrides: Partial<Parameters<typeof runEmbeddedSessionFork>[0]> = {},
 ) {
   return runEmbeddedSessionFork({
     context: requestContext,
@@ -100,17 +100,11 @@ function fork(
     apiKey: "synthetic-key",
     options: { transport: "sse" },
     question: "Review only",
-    assertCurrent,
+    assertCurrent() {},
+    ...overrides,
   });
 }
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const part of included) {
-    expect(text).toContain(part);
-  }
-  for (const part of excluded) {
-    expect(text).not.toContain(part);
-  }
-}
+
 function wireResponse(api: WireApi = "openai-responses"): Response {
   return providerResponse({
     api,
@@ -138,10 +132,7 @@ function guardedTransport(beforeDns?: () => void, api: WireApi = "openai-respons
   );
   return {
     physicalFetch,
-    request: (index = -1) => {
-      const [url, init] = physicalFetch.mock.calls.at(index)!;
-      return new Request(url, init);
-    },
+    request: () => new Request(...physicalFetch.mock.calls.at(-1)!),
     streamFn:
       api === "anthropic-messages"
         ? createAnthropicMessagesTransportStreamFn()
@@ -156,69 +147,6 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   await closeProviderTransportDispatcherPool();
 });
-
-it.each(["openai-responses", "openai-completions"] as const)(
-  "rebuilds an identical %s wire prefix from history without a captured parent",
-  async (api) => {
-    const { streamFn, request } = guardedTransport(undefined, api);
-    const requestModel = apiModel(api);
-    const prepared: Context = {
-      ...history(
-        assistant([toolCall("lookup_1", "lookup")], requestModel),
-        toolResult("lookup_1", "lookup", "Known answer 🦞"),
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Inspect this image" },
-            {
-              type: "image",
-              mimeType: "image/png",
-              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
-            },
-          ],
-          timestamp: 4,
-        },
-      ),
-      tools: [
-        { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
-      ],
-    };
-    expect((await complete(streamFn, requestModel, prepared)).stopReason).toBe("stop");
-    const original = await request().json();
-    cleanupSessionResources();
-    await expect(fork(streamFn, requestModel, prepared)).resolves.toBe("Answer");
-    const replay = await request().json();
-    const key = api === "openai-responses" ? "input" : "messages";
-    expect(JSON.stringify(replay[key].slice(0, original[key].length))).toBe(
-      JSON.stringify(original[key]),
-    );
-    expect(replay.tools).toEqual(original.tools);
-    expect(replay.instructions).toEqual(original.instructions);
-    expect(replay.tool_choice).toBe("none");
-    expect(replay.previous_response_id).toBeUndefined();
-    expectText(JSON.stringify(replay[key]), [
-      "Known answer 🦞",
-      "Review only",
-      "Inspect this image",
-    ]);
-    expect(prepared.messages).toHaveLength(4);
-  },
-);
-
-it.each(["bigint", "cycle"])(
-  "does not traverse transport-irrelevant %s tool metadata",
-  async (kind) => {
-    const { streamFn, request } = guardedTransport();
-    const cyclic: { self?: unknown } = {};
-    cyclic.self = cyclic;
-    const prepared = history(
-      assistant([toolCall("lookup", "lookup")]),
-      toolResult("lookup", "lookup", "Known answer", kind === "bigint" ? { value: 1n } : cyclic),
-    );
-    await expect(fork(streamFn, model, prepared)).resolves.toBe("Answer");
-    expect(await request().text()).toContain("Known answer");
-  },
-);
 
 it.each([
   ["openai-responses", false],
@@ -238,10 +166,12 @@ it.each([
     );
     Object.freeze(prepared.messages);
     await expect(fork(streamFn, requestModel, prepared)).resolves.toBe("Answer");
+    // Only the parent's cached input keeps a cache checkpoint, never the fork's own suffix.
+    const parent = api === "anthropic-messages" ? '"Parent question","cache_control"' : "Parent";
     expectText(
       await request().text(),
-      ["pending_call", "still running", "result is not available yet"],
-      ["aborted", '"is_error":true'],
+      ["pending_call", "still running", "result is not available yet", parent],
+      ["aborted", '"is_error":true', 'yet.","cache_control"', '"Review only","cache_control"'],
     );
     expect(prepared.messages).toHaveLength(2);
     await expect(
@@ -272,15 +202,29 @@ it.each([
       api === "openai-responses"
         ? requestModel
         : { ...requestModel, provider: "prior-provider", id: "prior-model" };
+    const details: { value: bigint; self?: unknown } = { value: 1n };
+    details.self = details;
     const prepared: Context = {
       ...history(
         assistant([toolCall(sourceId, "lookup", {}, true)], callModel),
-        toolResult(sourceId, "lookup", "LATE_RESULT_1119"),
+        toolResult(sourceId, "lookup", "LATE_RESULT_1119", details),
       ),
       tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
     };
+    // The full-run reconstruction suite covers Responses byte identity; keep
+    // Chat Completions' exact prefix check at this completed-tool replay boundary.
+    let originalMessages: unknown[] | undefined;
+    if (api === "openai-completions") {
+      await complete(streamFn, requestModel, prepared);
+      originalMessages = (await request().json()).messages;
+    }
     await expect(fork(streamFn, requestModel, prepared)).resolves.toBe("Answer");
     const replay = await request().json();
+    if (originalMessages) {
+      expect(JSON.stringify(replay.messages.slice(0, originalMessages.length))).toBe(
+        JSON.stringify(originalMessages),
+      );
+    }
     const results =
       api === "openai-responses"
         ? replay.input
@@ -299,20 +243,31 @@ it.each([
   },
 );
 
-it("blocks the physical send when access is withdrawn during guarded DNS preparation", async () => {
-  let revoked = false;
-  const { streamFn, physicalFetch } = guardedTransport(() => {
-    revoked = true;
-  });
-  await expect(
-    fork(streamFn, model, context, () => {
-      if (revoked) {
-        throw new Error("Session access withdrawn");
-      }
-    }),
-  ).rejects.toThrow("Session access withdrawn");
-  expect(physicalFetch).not.toHaveBeenCalled();
-});
+const googleSdk: StreamFn = (activeModel, requestContext, options) =>
+  streamSimpleGoogle(
+    { ...activeModel, api: "google-generative-ai", compat: undefined },
+    requestContext,
+    options,
+  );
+it.each([{ api: "openai-responses" }, { api: "google-generative-ai", sdk: googleSdk }])(
+  "blocks the $api send when access is withdrawn during guarded DNS preparation",
+  async ({ api, sdk }) => {
+    let revoked = false;
+    const { streamFn, physicalFetch } = guardedTransport(() => {
+      revoked = true;
+    });
+    await expect(
+      fork(sdk ?? streamFn, { ...model, api }, context, {
+        assertCurrent() {
+          if (revoked) {
+            throw new Error("Session access withdrawn");
+          }
+        },
+      }),
+    ).rejects.toThrow("Session access withdrawn");
+    expect(physicalFetch).not.toHaveBeenCalled();
+  },
+);
 
 it("rechecks native SSE fork authority before replaying a redirect body", async () => {
   const responseBody = await wireResponse().text();
@@ -349,14 +304,9 @@ it("rechecks native SSE fork authority before replaying a redirect body", async 
           requestContext,
           options,
         );
-      const result = runEmbeddedSessionFork({
-        context,
-        streamFn,
-        model: requestModel,
+      const result = fork(streamFn, requestModel, context, {
         apiKey,
-        options: { transport: "sse" },
-        question: "Review only",
-        assertCurrent: () => {
+        assertCurrent() {
           if (revoked) {
             throw new Error("Session access withdrawn");
           }
@@ -397,33 +347,39 @@ it("uses the current prepared proxy and TLS transport policy", async () => {
   );
 });
 
-it("denies Anthropic hosted search while retaining prepared tools and system", async () => {
-  const { streamFn, request } = guardedTransport(undefined, "anthropic-messages");
-  const requestModel = apiModel("anthropic-messages");
-  const hostedTool = { type: "web_search_20250305", name: "web_search" };
-  const withHostedTool: StreamFn = (activeModel, requestContext, options) =>
-    streamFn(activeModel, requestContext, {
-      ...options,
-      onPayload: (payload, payloadModel) => {
-        if (!isRecord(payload)) {
-          throw new Error("Expected provider request");
-        }
-        const prepared = { ...payload, tools: [hostedTool] };
-        return options?.onPayload?.(prepared, payloadModel) ?? prepared;
-      },
-    });
-  await complete(withHostedTool, requestModel);
-  const original = await request().json();
-  await expect(fork(withHostedTool, requestModel)).resolves.toBe("Answer");
-  const replay = await request().json();
-  expect(replay).toEqual(
-    expect.objectContaining({
-      tool_choice: { type: "none" },
-      tools: [hostedTool],
-      system: original.system,
-    }),
-  );
-  expectText(JSON.stringify(replay.messages), ["Parent question", "Review only"]);
+it("replays the parent's prepared request before the fork's rebuilt suffix", async () => {
+  const { streamFn, request } = guardedTransport();
+  const note: Message = { role: "user", content: "Runtime note", timestamp: 2 };
+  const call = (id: string) => [assistant([toolCall(id, "lookup")]), toolResult(id, "lookup", "1")];
+  await complete(streamFn, model, history(note, ...call("call_sent")));
+  const parent = await request().json();
+  // Rebuilt history orders the note first and keeps the ID the parent's stream rewrote.
+  const rebuilt = { ...context, messages: [note, ...context.messages, ...call("call_raw")] };
+  await fork(streamFn, model, rebuilt, { preparedRequest: parent });
+  const { input } = await request().json();
+  expect(input.slice(0, -1)).toEqual(parent.input);
+  expect(JSON.stringify(input.at(-1))).toContain("Review only");
+});
+
+const answerAfterPayload = (payload: object) =>
+  vi.fn<StreamFn>(async (activeModel, _, options) => {
+    await options?.onPayload?.(payload, activeModel);
+    const stream = createAssistantMessageEventStream();
+    const message = makeAgentAssistantMessage({ content: [{ type: "text", text: "Answer" }] });
+    stream.push({ type: "done", reason: "stop", message });
+    return stream;
+  });
+
+it("replays parent request data but keeps the fork's own transport handles", async () => {
+  const signal = new AbortController().signal;
+  const contents = [{ role: "model", parts: [{ functionCall: { args: { value: null } } }] }];
+  const payload = { contents: [...contents], config: { abortSignal: signal } };
+  const preparedRequest = { contents, config: { abortSignal: AbortSignal.abort(), top_k: 4 } };
+  await fork(answerAfterPayload(payload), { ...model, api: "google-generative-ai" }, context, {
+    preparedRequest,
+  });
+  expect(payload).toEqual({ contents, config: { abortSignal: signal, top_k: 4 } });
+  expect(payload.config.abortSignal).toBe(signal);
 });
 
 it("rebuilds full history independently when the parent uses HTTP continuation", async () => {
@@ -436,69 +392,24 @@ it("rebuilds full history independently when the parent uses HTTP continuation",
   const continuation = await request().json();
   expect(continuation.previous_response_id).toBe("resp_fork");
   expect(JSON.stringify(continuation.input)).not.toContain("Parent question");
-  await expect(
-    runEmbeddedSessionFork({
-      context: prepared,
-      streamFn,
-      model: requestModel,
-      apiKey: "synthetic-key",
-      options,
-      question: "Review only",
-      assertCurrent() {},
-    }),
-  ).resolves.toBe("Answer");
+  await fork(streamFn, requestModel, prepared, { options, preparedRequest: continuation });
   const replay = await request().json();
   expect(replay.previous_response_id).toBeUndefined();
   expectText(JSON.stringify(replay.input), ["Parent question", "Continue parent", "Review only"]);
 });
 
-it("returns provider-reported usage and denies requested tools before answering", async () => {
-  const requests: Context[] = [];
-  const onUsage = vi.fn();
-  const streamFn: StreamFn = async (requestModel, requestContext, options) => {
-    requests.push({ ...requestContext, messages: [...requestContext.messages] });
-    const payload = await options?.onPayload?.(
-      { input: requestContext.messages, tools: [{ type: "web_search" }] },
-      requestModel,
-    );
-    expect(payload).toMatchObject({ tool_choice: "none" });
-    const stream = createAssistantMessageEventStream();
-    stream.end(
-      makeAgentAssistantMessage({
-        api: requestModel.api,
-        provider: requestModel.provider,
-        model: requestModel.id,
-        stopReason: requests.length === 1 ? "toolUse" : "stop",
-        content:
-          requests.length === 1 ? [toolCall("denied", "exec")] : [{ type: "text", text: "Answer" }],
-        // This proves usage forwarding from a mock provider, not live cache effectiveness.
-        usage: { ...ZERO_USAGE_FIXTURE, input: 10, output: 1, cacheRead: 9, totalTokens: 20 },
-      }),
-    );
-    return stream;
-  };
-  await expect(
-    runEmbeddedSessionFork({
-      context,
-      streamFn,
-      model,
-      question: "Review only",
-      assertCurrent() {},
-      onUsage,
-    }),
-  ).resolves.toBe("Answer");
-  expect(requests).toHaveLength(2);
-  expectText(JSON.stringify(requests[1]?.messages), ["Tool execution denied", "denied"]);
-  expect(onUsage).toHaveBeenLastCalledWith(
-    expect.objectContaining({ input: 20, output: 2, cacheRead: 18 }),
-  );
-  expect(context.messages).toHaveLength(1);
-});
-
-it("rejects unsupported APIs before dispatch", async () => {
-  const streamFn = vi.fn<StreamFn>();
-  await expect(fork(streamFn, { ...model, api: "bedrock-converse-stream" })).rejects.toThrow(
-    "Session forks do not support provider API bedrock-converse-stream",
-  );
-  expect(streamFn).not.toHaveBeenCalled();
+it.each([
+  ["ollama", { type: "function", name: "exec" }, "Answer"],
+  ["ollama", { type: "google_search" }, "cannot disable provider-hosted tools"],
+  ["anthropic-messages", { type: "web_search_20250305", name: "web_search" }, "Answer"],
+  ["bedrock-converse-stream", {}, "cannot enforce live fork authority"],
+])("forks %s requests with %j tools by their tool surface", async (api, tool, outcome) => {
+  const payload = { tools: [tool], tool_choice: "auto" };
+  const streamFn = answerAfterPayload(payload);
+  const result = fork(streamFn, { ...model, api });
+  await (outcome === "Answer"
+    ? expect(result).resolves.toBe(outcome)
+    : expect(result).rejects.toThrow(outcome));
+  expect(payload.tool_choice).toEqual(api === "anthropic-messages" ? { type: "none" } : "auto");
+  expect(streamFn).toHaveBeenCalledTimes(api === "bedrock-converse-stream" ? 0 : 1);
 });

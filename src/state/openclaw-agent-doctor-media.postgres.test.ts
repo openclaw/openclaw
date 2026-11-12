@@ -3,13 +3,14 @@ import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { getEnvironmentData, Worker } from "node:worker_threads";
+import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { createConformanceWorker } from "../infra/database-engine/conformance.test-support.js";
 import {
   getDatabaseEngineSelection,
   installDatabaseEngineSelection,
@@ -19,7 +20,6 @@ import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-fact
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
-import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import { captureSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import type { inspectPostgresMediaPersistence } from "../infra/state-migrations.media-persistence-inspection.js";
@@ -122,15 +122,16 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
         "./openclaw-agent-doctor-media.postgres.test-support.ts",
         import.meta.url,
       );
-      await using worker = new Worker(url, {
-        execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-        workerData: {
+      await using worker = createConformanceWorker(
+        url,
+        {
           env,
           target: { agentId, path: pathname },
           selection: getDatabaseEngineSelection(),
           admissions: captureSqliteDatabaseAdmissions(undefined, { location: pathname }),
         },
-      });
+        getDatabaseEngineSelection()?.postgres,
+      );
       const response: { reply?: { result: MediaInspection } | { error: string } } = {};
       worker.on("message", (reply: typeof response.reply) => {
         response.reply = reply;

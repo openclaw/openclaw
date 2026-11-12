@@ -9,7 +9,6 @@ export async function appendHistoryMessage(
   params: Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0],
 ) {
   const appended = await appendExactAssistantMessageToSessionTranscript(params);
-  expect(appended.ok).toBe(true);
   if (!appended.ok) {
     throw new Error(appended.reason);
   }
@@ -30,7 +29,7 @@ export async function fetchSessionHistory(
   );
 }
 
-export type SessionHistoryMessage = {
+type SessionHistoryMessage = {
   role?: string;
   timestamp?: number;
   content?: Array<{ text?: string }>;
@@ -89,12 +88,8 @@ export class SessionHistorySseStream {
 export const historyStream = (response: Response) => new SessionHistorySseStream(response);
 
 export async function openHistoryStream(port: number, sessionKey: string, query?: string) {
-  return historyStream(
-    await fetchSessionHistory(port, sessionKey, {
-      query,
-      headers: { Accept: "text/event-stream" },
-    }),
-  );
+  const headers = { Accept: "text/event-stream" };
+  return historyStream(await fetchSessionHistory(port, sessionKey, { query, headers }));
 }
 
 export async function readSessionHistoryBody(

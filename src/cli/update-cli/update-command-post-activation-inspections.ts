@@ -153,6 +153,8 @@ export async function runPostActivationInspections(params: {
     if (report.checksRun !== new Set(checkIds).size) {
       return incomplete("the target lint did not run every deferred inspection");
     }
+    // An empty pending set proves every deferred check ran, including advisory findings.
+    step.deferredInspectionCheckIds = [];
     const warnings = report.doctorLintFindings
       .filter((finding) => finding.severity !== "info")
       .map((finding) => `${finding.checkId}: ${finding.message}`);

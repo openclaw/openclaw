@@ -44,7 +44,6 @@ import {
   type AgentHarnessIsolatedCompletionParams,
 } from "./isolated-completion-model-authority.js";
 import {
-  hasCliSideEffectEvidence,
   IsolatedCompletionError,
   isRetryableIsolatedQuotaFailure,
   requireIsolatedAssistantText,
@@ -73,9 +72,9 @@ import {
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
   preparedAgentRuntimeProfileAttemptHasCandidate,
-  type PreparedAgentRuntimeAuthAttempt,
 } from "./runtime-plan/prepare-auth.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt } from "./runtime-plan/types.js";
 import { prepareSimpleCompletionModel } from "./simple-completion-runtime.js";
 export type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 
@@ -361,7 +360,16 @@ async function runIsolatedCompletionOwned(
               const result = await (diagnostics
                 ? diagnostics.dispatch("cli", dispatch)
                 : dispatch());
-              if (hasCliSideEffectEvidence(result)) {
+              if (
+                result.didSendViaMessagingTool ||
+                result.didDeliverSourceReplyViaMessageTool ||
+                result.messagingToolSentTexts?.length ||
+                result.messagingToolSentMediaUrls?.length ||
+                result.messagingToolSentTargets?.length ||
+                result.messagingToolSourceReplyPayloads?.length ||
+                result.acceptedSessionSpawns?.length ||
+                result.successfulCronAdds
+              ) {
                 throw new IsolatedCompletionError(
                   "output-rejected",
                   "Isolated CLI completion returned side-effect evidence; result rejected.",
@@ -615,7 +623,8 @@ async function runIsolatedCompletionOwned(
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
             assertCurrent();
-            const execution = modelAuthority.bind(modelForAuthorization);
+            const execution = modelAuthority.bind(modelForAuthorization, authorization);
+            execution.assertCurrent();
             const dispatch = () =>
               observeIsolatedCompletionUsage<AgentHarnessIsolatedCompletionResult>(
                 { ...usageOwner, runtimeKind: "harness" },
@@ -624,11 +633,13 @@ async function runIsolatedCompletionOwned(
                     ...commonParams,
                     ...execution,
                     onResult,
+                    assertCurrent: execution.assertCurrent,
                     timeoutMs: remainingTimeoutMs(),
                     authorization:
                       authorization.owner === "host"
                         ? prepareIsolatedHostAuthorization(harness, authorization)
                         : authorization,
+                    ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}),
                     streamParams: resolveIsolatedStreamParams(request, completionModel),
                   }),
                 (completion) => completion.assistant,
@@ -636,7 +647,7 @@ async function runIsolatedCompletionOwned(
             const pending = diagnostics ? diagnostics.dispatch("harness", dispatch) : dispatch();
             priorProfileAttempted ||= attempt?.kind === "profile";
             const candidate = await pending;
-            execution.assertCurrent?.();
+            execution.assertCurrent();
             assertCurrent();
             if (isRetryableIsolatedQuotaFailure(candidate.assistant)) {
               // Returned quota failures must enter the same core-owned profile loop as throws.
@@ -692,17 +703,19 @@ async function runIsolatedCompletionOwned(
         usage: result.assistant.usage,
       };
     };
-    return await withPluginRuntimeGenerationScope(lease.snapshot, async () => {
-      const result = await run();
-      assertCurrent();
-      if (!result.text && input.outputTextPolicy !== "strict-visible") {
-        throw new IsolatedCompletionError(
-          "output-rejected",
-          "Isolated completion returned empty output.",
-        );
-      }
-      return result;
-    });
+    return await lease.run(() =>
+      withPluginRuntimeGenerationScope(lease.snapshot, async () => {
+        const result = await run();
+        assertCurrent();
+        if (!result.text && input.outputTextPolicy !== "strict-visible") {
+          throw new IsolatedCompletionError(
+            "output-rejected",
+            "Isolated completion returned empty output.",
+          );
+        }
+        return result;
+      }),
+    );
   } finally {
     closed = true;
   }

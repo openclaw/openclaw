@@ -144,6 +144,12 @@ export type PluginSessionActionContext = {
      * scope distinguishes the owner. Re-evaluated on every call.
      */
     isSharedGateway?: () => boolean;
+    /**
+     * Live check: throws once this caller's request authority has ended, for
+     * example when the connection closes or its grant is revoked. Pass it as
+     * the config writer's `writeOptions.assertCurrent` before persisting.
+     */
+    assertCurrent?: () => void;
   };
 };
 
@@ -340,12 +346,6 @@ export function buildPluginAgentTurnPrepareContext(params: {
   const prepend: string[] = [];
   const append: string[] = [];
   params.queuedInjections.forEach((entry) => {
-    if (
-      (entry.placement !== "prepend_context" && entry.placement !== "append_context") ||
-      typeof entry.text !== "string"
-    ) {
-      return;
-    }
     const text = entry.text.trim();
     if (text) {
       (entry.placement === "prepend_context" ? prepend : append).push(text);

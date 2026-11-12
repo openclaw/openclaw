@@ -518,3 +518,41 @@ it("refuses cross-origin pagination before forwarding credentials", async () => 
   expect(result.status.warnings.length).toBe(1);
   expect(fetchImpl).toHaveBeenCalledTimes(1);
 });
+
+it.each(["headers", "body"] as const)(
+  "reports the guarded fetch deadline while waiting for %s",
+  async (stage) => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const { api } = source((_url, init) => {
+      requestSignal = init?.signal ?? undefined;
+      if (stage === "headers") {
+        return new Promise<Response>((_resolve, reject) => {
+          requestSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Timed out", "TimeoutError")),
+            { once: true },
+          );
+        });
+      }
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            requestSignal?.addEventListener(
+              "abort",
+              () => controller.error(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          },
+        }),
+      );
+    });
+    const loading = api.loadRoster(config);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const { status } = await loading;
+    expect(requestSignal?.aborted).toBe(true);
+    expect(status.ok).toBe(false);
+    expect(status.warnings).toEqual([expect.stringContaining("API request timed out")]);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);

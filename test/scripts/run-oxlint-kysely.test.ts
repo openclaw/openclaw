@@ -32,6 +32,7 @@ function createLintFixture() {
     "package.json": '{"type":"module"}',
     "tsconfig.json": '{"compilerOptions":{"strict":true,"types":[],"module":"nodenext"}}',
     [coreConfig]: '{"extends":"../../tsconfig.json"}',
+    "test/tsconfig/tsconfig.test.root.json": '{"extends":"../../tsconfig.json"}',
     ".oxlintrc.json":
       '{"plugins":["typescript"],"categories":{"correctness":"off"},"rules":{"typescript/no-redundant-type-constituents":"error"}}',
     "src/state/openclaw-state-schema.sql": schema,
@@ -42,6 +43,12 @@ function createLintFixture() {
   })) {
     write(name, contents);
   }
+  for (const name of ["tooling", "scripts", "other", "e2e"]) {
+    write(
+      `test/tsconfig/tsconfig.test.root.${name}.json`,
+      '{"extends":"./tsconfig.test.root.json"}',
+    );
+  }
   return {
     write,
     exists: (name: string) => fs.existsSync(file(name)),
@@ -51,6 +58,8 @@ function createLintFixture() {
         encoding: "utf8",
         env: {
           ...process.env,
+          CI: "false",
+          OPENCLAW_LINT_TOOL: "oxlint",
           GITHUB_ACTIONS: "false",
           OPENCLAW_CI_STATIC_EVIDENCE: "0",
           OPENCLAW_OXLINT_SKIP_PREPARE: "0",
@@ -74,11 +83,29 @@ const striped = [
 ];
 
 describe("typed lint Kysely prerequisites", () => {
+  it("names the recovery step when plugin boundary preparation fails", () => {
+    const fixture = createLintFixture();
+    fixture.write("scripts/prepare-extension-package-boundary-artifacts.mts", "process.exit(3);");
+    const result = fixture.run(["scripts/run-oxlint.mjs", consumer]);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toMatch(/failed.*3/u);
+    expect(result.stderr).toContain("If deps changed, run pnpm install");
+  });
+
   it.each([
     { name: "striped", args: striped },
     { name: "direct", args: direct },
     { name: "invalid direct", args: direct, invalid: true },
     { name: "invalid striped", args: striped, invalid: true },
+    ...["tooling", "scripts", "other", "e2e"].map((name) => ({
+      name: `root ${name}`,
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        `test/tsconfig/tsconfig.test.root.${name}.json`,
+        consumer,
+      ],
+    })),
   ])(
     "requires valid prepared declarations for $name core lint without plugin artifacts",
     ({ args, invalid = false }) => {

@@ -41,6 +41,7 @@ it("distinguishes live Solid owners, disposed owners, and detached native DOM no
     strings,
   });
   expect(summary).toEqual({
+    caches: {},
     detachedNodes: 1,
     detachedBytes: 112,
     detached: { HTMLDivElement: { count: 1, bytes: 112 } },

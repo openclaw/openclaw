@@ -2,10 +2,11 @@ import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   buildSessionContext,
-  cloneSessionModelContextEntries,
+  projectSessionModelContextEntries,
   isIndexedSessionEntry,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
@@ -207,16 +208,18 @@ describe("model context projection isolation", () => {
     (_name, message, expected) => {
       const entry = messageEntry(message);
       const before = JSON.stringify(entry);
-      Object.freeze(entry);
-      Object.freeze(message);
-      expect(cloneSessionModelContextEntries(null, [entry])).toEqual([
-        { ...entry, message: expected },
-      ]);
+      freezeJsonSnapshot(entry);
+      const projected = projectSessionModelContextEntries([entry]);
+      expect(projected).toEqual([{ ...entry, message: expected }]);
+      const projectedEntry = projected[0];
+      assert(projectedEntry?.type === "message");
+      expect(Reflect.set(projectedEntry, "timestamp", "changed")).toBe(false);
+      expect(Reflect.set(projectedEntry.message, "content", [])).toBe(false);
       expect(JSON.stringify(entry)).toBe(before);
     },
   );
 
-  it("detaches surviving nested tool arguments in both directions", () => {
+  it("isolates mutable inputs and freezes projected nested tool arguments", () => {
     const argumentsValue = { nested: { path: "original.txt" } };
     const metadata = { upstreamUserText: "private", retained: { nested: "kept" } };
     const message = Object.assign(
@@ -226,7 +229,7 @@ describe("model context projection isolation", () => {
       { __openclaw: metadata },
     );
     const entry = messageEntry(message);
-    const projected = cloneSessionModelContextEntries(null, [entry]);
+    const projected = projectSessionModelContextEntries([entry]);
     expect(metadata.upstreamUserText).toBe("private");
     argumentsValue.nested.path = "caller-change.txt";
     metadata.retained.nested = "caller-change";
@@ -246,14 +249,34 @@ describe("model context projection isolation", () => {
     const call = projectedEntry.message.content.find((item) => item.type === "toolCall");
     const nested = asOptionalRecord(call?.arguments.nested);
     assert(nested, "Missing nested tool arguments");
-    nested.path = "context-change.txt";
+    expect(() => {
+      nested.path = "context-change.txt";
+    }).toThrow(TypeError);
     const projectedMetadata = asOptionalRecord(Reflect.get(projectedEntry.message, "__openclaw"));
     expect(projectedMetadata).not.toHaveProperty("upstreamUserText");
     const retained = asOptionalRecord(projectedMetadata?.retained);
     assert(retained, "Missing retained metadata");
-    retained.nested = "context-change";
+    expect(() => {
+      retained.nested = "context-change";
+    }).toThrow(TypeError);
     expect(argumentsValue.nested.path).toBe("caller-change.txt");
     expect(metadata.retained.nested).toBe("caller-change");
+  });
+
+  it("shares frozen nested arguments in the projected view", () => {
+    const message = makeAgentAssistantMessage({
+      content: [
+        { type: "toolCall", id: "call", name: "read", arguments: { path: "original.txt" } },
+      ],
+    });
+    freezeJsonSnapshot(message.content);
+    const projected = projectSessionModelContextEntries([messageEntry(message)])[0];
+    assert(projected?.type === "message" && projected.message.role === "assistant");
+    const call = projected.message.content[0];
+    assert(call?.type === "toolCall");
+    expect(Reflect.set(call.arguments, "path", "changed.txt")).toBe(false);
+    expect(Reflect.set(projected.message.content, "length", 0)).toBe(false);
+    expect(message.content).toMatchObject([{ arguments: { path: "original.txt" } }]);
   });
 });
 

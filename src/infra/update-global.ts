@@ -21,7 +21,10 @@ import { realpathOrResolve } from "./path-existence.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
-import type { GlobalInstallManager } from "./update-global-env.js";
+import {
+  applyNonInteractivePackageManagerEnv,
+  type GlobalInstallManager,
+} from "./update-global-env.js";
 import {
   resolvePnpmGlobalDirFromGlobalRoot,
   resolvePnpmCommand,
@@ -61,8 +64,6 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
-/** npm-compatible spec used when the user asks to install the moving main branch. */
-const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
 const BUN_OPENCLAW_TRUST_FLAG = "--trust";
@@ -131,7 +132,7 @@ function normalizePackageVersionForComparison(value: string | null | undefined):
   return trimmed.replace(/^[vV](?=\d)/, "");
 }
 
-function isMainPackageTarget(value: string): boolean {
+export function isMainPackageTarget(value: string | null): boolean {
   return normalizeLowercaseStringOrEmpty(value) === "main";
 }
 
@@ -448,11 +449,10 @@ async function collectInstalledPathErrors(params: {
 
 /**
  * Returns true when a target can be resolved through npm registry metadata.
- * Explicit tarball, URL, git, and main-branch specs bypass registry lookup.
+ * Explicit tarball, URL, and git specs bypass registry lookup.
  */
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
-  const trimmed = stripPrimaryPackageAlias(value);
-  return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
+  return !isExplicitPackageInstallSpec(stripPrimaryPackageAlias(value));
 }
 
 /** Same-version registry targets are no-ops; explicit artifacts still require validation/install. */
@@ -480,9 +480,6 @@ export function resolveGlobalInstallSpec(params: {
     return override;
   }
   const target = params.tag.trim();
-  if (isMainPackageTarget(target)) {
-    return OPENCLAW_MAIN_PACKAGE_SPEC;
-  }
   if (isExplicitPackageInstallSpec(target)) {
     return target;
   }
@@ -490,13 +487,6 @@ export function resolveGlobalInstallSpec(params: {
 }
 
 export { createGlobalInstallEnv } from "./update-global-env.js";
-
-function resolveBunGlobalRoot(): string {
-  return (
-    resolveBunGlobalInstallOwner()?.globalRoot ??
-    path.join(os.homedir(), ".bun", "install", "global", "node_modules")
-  );
-}
 
 function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   return (
@@ -867,9 +857,17 @@ async function resolveGlobalRoot(
   pkgRoot?: string | null,
 ): Promise<string | null> {
   if (resolved.manager === "bun") {
-    return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalRoot();
+    return inferBunGlobalRootFromPackageRoot(pkgRoot) ?? resolveBunGlobalInstallOwner().globalRoot;
   }
-  const res = await runCommand([resolved.command, "root", "-g"], { timeoutMs }).catch(() => null);
+  // Discovery runs while the updater owns the terminal pane: a Corepack shim must not prompt,
+  // and the probe must never wait for input that the pane cannot answer.
+  const probeEnv: NodeJS.ProcessEnv = { ...process.env };
+  applyNonInteractivePackageManagerEnv(probeEnv);
+  const res = await runCommand([resolved.command, "root", "-g"], {
+    timeoutMs,
+    env: probeEnv,
+    input: "",
+  }).catch(() => null);
   if (!res || res.code !== 0) {
     return null;
   }
@@ -1110,7 +1108,7 @@ export async function detectGlobalInstallManagerByPresence(
     }
   }
 
-  const bunRoot = resolveBunGlobalRoot();
+  const bunRoot = resolveBunGlobalInstallOwner().globalRoot;
   if (await pathExists(path.join(bunRoot, PRIMARY_PACKAGE_NAME))) {
     return "bun";
   }

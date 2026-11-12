@@ -1,12 +1,28 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sessionActorReplicaTargetKey } from "../config/sessions/session-actor-replica-index.js";
+import type {
+  SessionTranscriptMaintenanceFacts,
+  SessionTranscriptMaintenanceCheckpoint,
+} from "../config/sessions/session-transcript-hydration.types.js";
 import { sameSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptActor,
+} from "../config/sessions/transcript-write-context.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerOpenClawAgentDatabaseSyncResource } from "../state/openclaw-agent-db-resources.js";
 import { stringifyCodeModeJsonSafe } from "./code-mode-json.js";
+import {
+  CODE_MODE_STORE_CUSTOM_TYPE as CUSTOM_TYPE,
+  collectCodeModeStoreWrites,
+  readCodeModeStoreKey as readKey,
+  type CodeModeStoreWrites,
+} from "./code-mode-session-store-replay.js";
 import type { PendingBridgeRequest } from "./code-mode-worker-types.js";
 import type { SessionManager } from "./sessions/session-manager.js";
 import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
 
-const CUSTOM_TYPE = "openclaw.code-mode-store";
 const MAX_VALUE_BYTES = 256 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024;
 type StoredValue = { json: string; bytes: number; networkContent: boolean };
@@ -24,6 +40,109 @@ type SessionStore = {
 
 // The catalog owns the projection, while the transcript alone owns durable state.
 const stores = new WeakMap<ToolSearchCatalogRef, SessionStore>();
+
+type ReplaySnapshot = {
+  checkpoint: SessionTranscriptMaintenanceCheckpoint;
+  projection: Projection;
+  sessionKey: string;
+  bytes: number;
+  unregister: () => void;
+};
+const replaySnapshots = resolveGlobalSingleton<{
+  entries: Map<string, ReplaySnapshot>;
+  unsubscribe: (() => void) | undefined;
+}>(
+  Symbol.for("openclaw.codeModeReplaySnapshots"),
+  () => ({
+    entries: new Map<string, ReplaySnapshot>(),
+    unsubscribe: undefined,
+  }),
+  (cache) => {
+    cache.unsubscribe?.();
+    cache.unsubscribe = undefined;
+    for (const snapshot of cache.entries.values()) {
+      snapshot.unregister();
+    }
+    cache.entries.clear();
+  },
+);
+
+function discardReplaySnapshot(key: string) {
+  replaySnapshots.entries.get(key)?.unregister();
+  replaySnapshots.entries.delete(key);
+}
+
+function replayKey(target: Parameters<typeof getOwnedSessionTranscriptActor>[0]): string {
+  const binding = getOwnedSessionTranscriptActor(target);
+  return JSON.stringify([
+    binding && sessionActorReplicaTargetKey(binding.actor.target),
+    target.sessionId,
+  ]);
+}
+
+function replayAdmitted(
+  result: SessionTranscriptMaintenanceFacts,
+  leafEntryId: string | null,
+  target: Parameters<typeof getOwnedSessionTranscriptActor>[0],
+  cached: ReplaySnapshot | undefined,
+): Projection {
+  const projection = applyReplayWrites(
+    result.store!.writes,
+    result.store!.incremental ? cached?.projection : undefined,
+  );
+  const binding = getOwnedSessionTranscriptActor(target);
+  const version = result.version;
+  if (!binding || !version?.generation || version.rawSeq === null) {
+    return projection;
+  }
+  const key = replayKey(target);
+  discardReplaySnapshot(key);
+  if (projection.size > 1024) {
+    return projection;
+  }
+  let bytes = key.length * 2 + 256;
+  for (const [name, value] of projection) {
+    bytes += (name.length + value.json.length) * 2 + 128;
+  }
+  const maxBytes = 8 * 1024 * 1024;
+  if (bytes > maxBytes) {
+    return projection;
+  }
+  replaySnapshots.unsubscribe ??= sessionChanges.subscribeFacts((change) => {
+    if ("all" in change || change.facts?.kind === "removed") {
+      for (const [scope, snapshot] of replaySnapshots.entries) {
+        if ("all" in change || snapshot.sessionKey === change.sessionKey) {
+          discardReplaySnapshot(scope);
+        }
+      }
+    }
+  });
+  const unregister = registerOpenClawAgentDatabaseSyncResource({
+    agentId: binding.database.agentId,
+    path: binding.database.path,
+    revoke: () => discardReplaySnapshot(key),
+    close: () => discardReplaySnapshot(key),
+  });
+  replaySnapshots.entries.set(key, {
+    checkpoint: { generation: version.generation, rawSeq: version.rawSeq, leafEntryId },
+    projection,
+    sessionKey: binding.actor.target.sessionKey,
+    bytes,
+    unregister,
+  });
+  let retainedBytes = 0;
+  for (const snapshot of replaySnapshots.entries.values()) {
+    retainedBytes += snapshot.bytes;
+  }
+  for (const [scope, snapshot] of replaySnapshots.entries) {
+    if (replaySnapshots.entries.size <= 16 && retainedBytes <= maxBytes) {
+      break;
+    }
+    retainedBytes -= snapshot.bytes;
+    discardReplaySnapshot(scope);
+  }
+  return projection;
+}
 
 export function disposeCodeModeSessionStore(owner: ToolSearchCatalogRef): void {
   const store = stores.get(owner);
@@ -58,25 +177,21 @@ export function bindCodeModeSessionStore(
   });
 }
 
-function readKey(key: unknown): string {
-  if (typeof key !== "string" || key.length === 0 || key.length > 256) {
-    throw new TypeError(
-      "Code Mode store key must be a non-empty string of at most 256 characters.",
-    );
-  }
-  return key;
-}
-
 function encode(value: unknown, networkContent: boolean): StoredValue {
   const json = stringifyCodeModeJsonSafe(value);
   const bytes = Buffer.byteLength(json, "utf8");
   if (bytes > MAX_VALUE_BYTES) {
-    throw new RangeError("Code Mode store value exceeds 256 KiB of serialized JSON.");
+    throw new RangeError(
+      `Code Mode store value exceeds 256 KiB of serialized JSON (${bytes} bytes). Store unchanged; catch RangeError and save a summary or smaller value. Use results.save(value) for larger data needed only in this reply.`,
+    );
   }
   return { json, bytes, networkContent };
 }
 
 function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredValue | null>) {
+  if (writes.size === 0) {
+    return projection;
+  }
   const next = new Map(projection);
   for (const [key, value] of writes) {
     if (value === null) {
@@ -91,45 +206,28 @@ function applyWrites(projection: Projection, writes: ReadonlyMap<string, StoredV
   }
   if (bytes > MAX_TOTAL_BYTES) {
     throw new RangeError(
-      "Code Mode store exceeds 1 MiB of serialized JSON; delete keys or store less data.",
+      "Code Mode store exceeds 1 MiB of serialized JSON. Store unchanged; catch RangeError and delete unneeded keys or save a summary before retrying the write.",
     );
   }
   return next;
 }
 
 function replay(entries: readonly unknown[]): Projection {
-  let projection: Projection = new Map();
-  for (const entry of entries) {
-    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== CUSTOM_TYPE) {
-      continue;
-    }
-    const data = entry.data;
-    if (
-      !isRecord(data) ||
-      !isRecord(data.set) ||
-      !Array.isArray(data.delete) ||
-      !isRecord(data.networkContent)
-    ) {
-      throw new Error(
-        "Code Mode session store contains an invalid transcript entry; repair the session before using store/load.",
-      );
-    }
-    const writes = new Map<string, StoredValue | null>();
-    for (const [key, value] of Object.entries(data.set)) {
-      const networkContent = data.networkContent[key];
-      if (typeof networkContent !== "boolean") {
-        throw new Error(
-          "Code Mode session store contains invalid content provenance; repair the session before using store/load.",
-        );
-      }
-      writes.set(readKey(key), encode(value, networkContent));
-    }
-    for (const key of data.delete) {
-      writes.set(readKey(key), null);
-    }
-    projection = applyWrites(projection, writes);
-  }
-  return projection;
+  return applyReplayWrites(collectCodeModeStoreWrites(entries));
+}
+
+function applyReplayWrites(writes: CodeModeStoreWrites, initial?: Projection): Projection {
+  // Commit admission checks historical budgets. Encode only surviving writes;
+  // applyWrites checks the final budget and leaves earlier readers' maps intact.
+  return applyWrites(
+    initial ?? new Map(),
+    new Map(
+      [...writes].map(([key, entry]) => [
+        key,
+        entry === null ? null : encode(entry.value, entry.networkContent),
+      ]),
+    ),
+  );
 }
 
 export type CodeModeSessionStoreAccess = ReturnType<typeof createCodeModeSessionStoreAccess>;
@@ -215,21 +313,24 @@ export function createCodeModeSessionStoreAccess(ctx: ToolSearchToolContext, sig
           const reader = prepareSessionManagerHydration(target, { signal: replaySignal, manager });
           const assertOwned = captureOwnedTranscriptWriteAssertion(reader.target);
           assertOwned();
-          const { events } = await reader
+          const cached = replaySnapshots.entries.get(replayKey(reader.target));
+          const result = await reader
             .readMaintenance({
-              operation: "custom-branch",
+              operation: "code-mode-store",
               leafEntryId: leaf,
-              customType: CUSTOM_TYPE,
+              checkpoint: cached?.checkpoint,
             })
             .finally(assertOwned);
           reader.assertCurrent();
           assertOwner();
-          if (manager.getLeafId() !== leaf || !events) {
+          if (manager.getLeafId() !== leaf || !result.store) {
             throw new Error(
               "Code Mode session store could not match the active transcript branch; retry in a new reply.",
             );
           }
-          return replay(events);
+          return runWithMainThreadTask("sessions.transcript-maintenance:apply", () =>
+            replayAdmitted(result, leaf, reader.target, cached),
+          );
         });
       }
       return replay(manager.getBranch());

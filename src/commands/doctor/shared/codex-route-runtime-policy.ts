@@ -143,13 +143,6 @@ export function agentIdFromAgentPath(agentPath: string): string | undefined {
   return undefined;
 }
 
-type PreRepairRuntimePin = {
-  runtimeId: string;
-  // Resolver source "model" covers agent model maps and provider catalog entries;
-  // only provider-owned policy needs an eager canonical policy write.
-  source: "model" | "provider" | "provider-model";
-};
-
 function modelIdMatchesProviderModelEntry(params: {
   entryId: unknown;
   provider: string;
@@ -245,7 +238,7 @@ function preRepairLegacyModelPolicyExplicitNonDefaultRuntimePin(params: {
   cfg: OpenClawConfig;
   legacyModelRef?: string;
   agentId?: string;
-}): PreRepairRuntimePin | undefined {
+}) {
   if (!params.legacyModelRef || !isOpenAICodexModelRef(params.legacyModelRef)) {
     return undefined;
   }
@@ -263,6 +256,8 @@ function preRepairLegacyModelPolicyExplicitNonDefaultRuntimePin(params: {
   if (!runtimeId || runtimeId === "auto" || runtimeId === "default" || runtimeId === "codex") {
     return undefined;
   }
+  // Resolver source "model" covers agent model maps and provider catalog entries;
+  // only provider-owned policy needs an eager canonical policy write.
   if (resolved.source === "model") {
     const providerModelRuntimeId = providerModelExplicitNonDefaultRuntimeId({
       cfg: params.cfg,
@@ -271,10 +266,10 @@ function preRepairLegacyModelPolicyExplicitNonDefaultRuntimePin(params: {
     });
     const agentModelRuntimeId = agentModelMapExactRuntimeId({ ...params, ...parsed });
     if (providerModelRuntimeId === runtimeId && !agentModelRuntimeId) {
-      return { runtimeId, source: "provider-model" };
+      return { runtimeId, source: "provider-model" as const };
     }
   }
-  return { runtimeId, source: resolved.source ?? "model" };
+  return { runtimeId, source: resolved.source ?? ("model" as const) };
 }
 
 export function ensureCodexRuntimePolicy(params: {

@@ -16,8 +16,7 @@ import {
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
-import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   requireNativeSqliteDatabase,
@@ -25,7 +24,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import {
+  seedMemoryForgetTombstones,
+  verifyMemoryDatabaseCorruptionForTest,
+} from "../test-helpers.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -36,6 +38,7 @@ import {
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
 import { memoryPublicationFaultEntrypoint } from "./manager-publication-fault-entrypoint.test-support.js";
+import { reservePublishedWriter } from "./manager-publication-observer.test-support.js";
 import { MemoryIndexManager } from "./manager.js";
 
 const memoryIndex = await import("./index.js");
@@ -146,7 +149,7 @@ describe("memory manager agent database lifecycle", () => {
 
   it("rejects shared integrity failure before exposing a manager", async () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     {
       using damaged = new DatabaseSync(shared.path);
       damaged.exec(`
@@ -155,15 +158,11 @@ describe("memory manager agent database lifecycle", () => {
         CREATE TABLE fixture_child (parent_id INTEGER REFERENCES fixture_parent(id));
         INSERT INTO fixture_child VALUES (1);
       `);
+      expect(damaged.prepare("PRAGMA foreign_key_check").all()).toEqual([
+        { table: "fixture_child", rowid: 1, parent: "fixture_parent", fkid: 0 },
+      ]);
     }
-    // Replaced files cannot reuse the original connection's clean integrity receipt.
-    const replacementPath = `${shared.path}.replacement`;
-    await fs.copyFile(shared.path, replacementPath);
-    await fs.rename(replacementPath, shared.path);
-
-    expect(() => sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" })).toThrow(
-      /foreign_key_check/,
-    );
+    await verifyMemoryDatabaseCorruptionForTest(shared.path);
     const result = await memoryIndex.getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createConfig(),
@@ -255,24 +254,8 @@ describe("memory manager agent database lifecycle", () => {
     const cfg = createConfig();
     const source = await fixture.getFreshManager(cfg, "cli");
     const sourcePath = source.status().dbPath;
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:maintenance-admission",
-      sessionId: "maintenance-admission",
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-    });
-    const entered = createDeferred<void>();
-    const released = createDeferred<void>();
     const queued = createDeferred<void>();
-    const writer = withSessionTranscriptWriteLock(target, async () => {
-      entered.resolve();
-      await released.promise;
-      closeOpenClawAgentDatabasesForTest();
-    });
-    await entered.promise;
+    const writer = await reservePublishedWriter(() => closeOpenClawAgentDatabasesForTest());
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
@@ -297,7 +280,7 @@ describe("memory manager agent database lifecycle", () => {
     void creating.catch(() => undefined);
     try {
       await Promise.race([queued.promise, creating]);
-      released.resolve();
+      writer.release();
       await expect(creating).rejects.toThrow(/^Agent database execution admission is closed$/);
       expect(
         prepare.mock.contexts.filter(
@@ -308,8 +291,8 @@ describe("memory manager agent database lifecycle", () => {
         ),
       ).toEqual([]);
     } finally {
-      released.resolve();
-      await Promise.allSettled([writer, creating]);
+      writer.release();
+      await Promise.allSettled([writer.done, creating]);
     }
   });
 

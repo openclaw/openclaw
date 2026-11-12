@@ -6,13 +6,8 @@ import {
   projectAgentActivityItem,
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
-import { isProcessPollResultDetails } from "../agents/bash-tools.process-schema.js";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
-import {
-  inferToolMetaFromArgsCore,
-  isCommandBearingToolCall,
-  resolveToolDisplay,
-} from "../agents/tool-display.js";
+import { isCommandBearingToolCall, resolveToolDisplay } from "../agents/tool-display.js";
 import { isToolResultError } from "../agents/tool-result-error.js";
 import type { ToolCallIdentity } from "../chat/tool-call-grouping.js";
 import {
@@ -95,8 +90,9 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
     unwrapped === input && tool.presentationName
       ? { name: tool.presentationName, args: tool.args }
       : unwrapped;
-  const meta = tool.meta ?? inferToolMetaFromArgsCore(call.name, call.args);
-  const label = resolveToolDisplay(call).label;
+  const display = resolveToolDisplay(call);
+  const meta = display.progress ? display.progress.detail : (tool.meta ?? display.detail);
+  const label = display.progress?.label ?? display.label;
   const details = asOptionalRecord(asOptionalRecord(tool.result)?.details);
   const approval =
     tool.phase === "result" &&
@@ -124,10 +120,8 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
       name: tool.name,
       kind: "tool",
       phase: tool.phase === "result" ? "end" : tool.phase,
-      title: meta ? `${label} ${meta}` : label,
-      ...(status
-        ? { status }
-        : { summary: "Outcome unknown", title: `${label} — outcome unknown` }),
+      title: label,
+      ...(status ? { status } : { summary: "Outcome unknown" }),
       ...(approval
         ? {
             approvalId: normalizeOptionalString(details?.approvalId),
@@ -147,6 +141,20 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   );
   // Outcome and visibility still belong to the original execution facts.
   return { ...activity, name: call.name };
+}
+
+/** Poll is the only process action that returns an aggregate for one session. */
+function isProcessPollResultDetails(value: unknown): boolean {
+  const details = asOptionalRecord(value);
+  return Boolean(
+    details &&
+    typeof details.sessionId === "string" &&
+    (details.status === "running" || details.status === "completed") &&
+    (typeof details.aggregated === "string" ||
+      (details.persistedDetailsTruncated === true &&
+        Array.isArray(details.originalDetailKeys) &&
+        details.originalDetailKeys.includes("aggregated"))),
+  );
 }
 
 export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem[] };
@@ -270,6 +278,7 @@ export function projectAgentHistoryActivity(
       if (isToolCallContentType(block.type)) {
         const name =
           normalizeOptionalString(block.name) ?? normalizeOptionalString(block.toolName) ?? "Tool";
+        const args = executedArgs ?? block.arguments ?? block.args ?? block.input;
         // A transcript call is not live authority. Its result may be absent or
         // outside this page; only live events can establish running activity.
         facts.set(key, {
@@ -280,10 +289,10 @@ export function projectAgentHistoryActivity(
           name,
           presentationName: unwrapToolCallForDisplay({
             name,
-            args: executedArgs ?? block.arguments ?? block.args ?? block.input,
+            args,
           }).name,
           phase: "result",
-          args: executedArgs,
+          args,
         });
       }
     }
@@ -346,6 +355,7 @@ export function projectAgentHistoryActivity(
     });
     if (fact.result === undefined) {
       activity.unpairedCall = true;
+      delete activity.summary;
     }
     return {
       key,

@@ -201,6 +201,7 @@ describe("full release child evidence producer", () => {
   it("composes retried workloads with retained jobs and excludes publishers", () => {
     const data = fixture();
     data.run.run_attempt = 2;
+    data.run.status = "queued";
     data.run.triggering_actor.login = "release-maintainer";
     data.jobs[2]!.status = "completed";
     data.jobs[2]!.conclusion = "failure";
@@ -238,6 +239,19 @@ describe("full release child evidence producer", () => {
       "stale run attempt",
       (data) => void (data.run.run_attempt = 2),
       "current active workflow attempt",
+    ],
+    [
+      "completed aggregate with an active publisher",
+      (data) => void (data.run.status = "completed"),
+      "current active workflow attempt",
+    ],
+    [
+      "queued aggregate with an inactive publisher",
+      (data) => {
+        data.run.status = "queued";
+        data.jobs[2]!.status = "queued";
+      },
+      "publisher job identity",
     ],
     [
       "foreign child repository",

@@ -141,17 +141,6 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
           })
         : await prepareBundledDiscoveryMode(captured.env);
     activateDiscovery();
-    const preparedCurrent = resolveReusableGatewayPluginMetadataSnapshot(captured);
-    if (preparedCurrent) {
-      return preparedCurrent;
-    }
-    const { key } = resolveConfigWideMetadataSelection(captured);
-    const existing = readPluginMetadataSnapshotCache(key);
-    if (existing) {
-      activateDiscovery();
-      return existing;
-    }
-    activateDiscovery();
     // Parsing, recovery, trust checks and persisted/derived selection retain one owner.
     return resolveConfigWidePluginMetadataSnapshot(captured);
   });

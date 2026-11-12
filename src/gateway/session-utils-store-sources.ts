@@ -56,7 +56,7 @@ type SourceMemo = {
   dirty?: boolean;
   refreshing?: boolean;
   pathsCurrent?: () => boolean;
-  observedThisTurn?: boolean;
+  pathsNeedValidation?: boolean;
   prepared: Promise<GatewaySessionStoreSourceRequest | undefined>;
 };
 const sourcePreparations = new Map<string, SourceMemo>();
@@ -97,8 +97,12 @@ function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>
     if (!memo.observations.has(observationKey)) {
       memo.observations.set(
         observationKey,
-        observeOwnedDirectory(directory, (filename) => {
-          if (!memo.current || memo.observedThisTurn) {
+        observeOwnedDirectory(directory, (filename, event) => {
+          // Content writes do not replace the prepared source identities.
+          if (event === "change" && filename !== undefined) {
+            return;
+          }
+          if (!memo.current) {
             return;
           }
           if (
@@ -107,19 +111,9 @@ function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>
               ? filename.toLowerCase() === name.toLowerCase()
               : filename === name)
           ) {
-            // One fallback sweep can notify every ancestor of the same source.
-            memo.observedThisTurn = true;
-            queueMicrotask(() => {
-              memo.observedThisTurn = false;
-            });
-            // The next read refreshes facts without retiring shared watches.
-            try {
-              if (memo.pathsCurrent && !memo.pathsCurrent()) {
-                memo.dirty = true;
-              }
-            } catch {
-              memo.dirty = true;
-            }
+            // Notifications can arrive in bursts across turns. Validate once on the
+            // next read, not synchronously for every ancestor/recovery notification.
+            memo.pathsNeedValidation = true;
           }
         }),
       );
@@ -150,6 +144,16 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       prepared: Promise.resolve(undefined),
     };
     sourcePreparations.set(key, memo);
+  }
+  if (!memo.refreshing && memo.pathsNeedValidation) {
+    memo.pathsNeedValidation = false;
+    try {
+      if (memo.pathsCurrent && !memo.pathsCurrent()) {
+        memo.dirty = true;
+      }
+    } catch {
+      memo.dirty = true;
+    }
   }
   // One refresh owns the used-watch set; publications during it share its outcome.
   if (!memo.refreshing && (memo.dirty || memo.registry !== registry)) {
@@ -205,8 +209,6 @@ async function prepareSourceRequest(
 ): Promise<GatewaySessionStoreSourceRequest | undefined> {
   const paths = createOpenClawAgentDatabasePathMatcher();
   memo.pathsCurrent = () => paths.isCurrent();
-  paths(params.registryPath, params.registryPath);
-  observe(params.registryPath);
   const inventory = prepareSessionStoreTargetInventory(
     sessionStoreRoutingConfig(routing),
     routing.agentIds,

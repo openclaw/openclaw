@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -166,6 +167,7 @@ async function setup(kind: "channel" | "direct" = "channel") {
     logDebugMessage: vi.fn(),
     core: {
       channel: {
+        inbound: { buildContext: buildChannelInboundEventContext },
         routing: { resolveAgentRoute: () => route },
         activity: { record: vi.fn() },
         commands: { shouldHandleTextCommands: () => false, isControlCommandMessage: () => false },
@@ -233,27 +235,31 @@ it("filters concurrent later history from the older turn without losing it", asy
   expect(requests).toHaveLength(1);
 });
 
-it("preserves fetched history for an older turn that coalesces behind a newer trigger", async () => {
-  const f = await setup("channel");
-  const newer = { ...posts[2]!, id: "newer-trigger", create_at: 50 };
-  posts.push({ ...posts[1]!, id: "middle", create_at: 40 }, newer);
-  const { entered, release } = holdResponse();
-  const first = receive(f.handler, newer);
-  await entered.promise;
-  const olderReady = createDeferred<void>();
-  vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
-    olderReady.resolve();
-  });
-  const older = receive(f.handler, posts[2]!);
-  await olderReady.promise;
-  release.resolve();
-  await Promise.all([first, older]);
-  const context = dispatch.mock.calls.find(
-    (call) => call[1].ctxPayload.MessageSid === "current",
-  )?.[1].ctxPayload;
-  expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
-  expect(requests).toHaveLength(1);
-});
+it.each(["channel", "direct"] as const)(
+  "recovers chronological %s history for an older coalesced turn",
+  async (kind) => {
+    const f = await setup(kind);
+    const newer = { ...posts[2]!, id: "newer-trigger", create_at: 50 };
+    posts.push({ ...posts[1]!, id: "middle", create_at: 40 }, newer);
+    const { entered, release } = holdResponse();
+    const first = receive(f.handler, newer);
+    await entered.promise;
+    const olderReady = createDeferred<void>();
+    vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
+      olderReady.resolve();
+    });
+    const older = receive(f.handler, posts[2]!);
+    await olderReady.promise;
+    release.resolve();
+    await Promise.all([first, older]);
+    const context = dispatch.mock.calls.find(
+      (call) => call[1].ctxPayload.MessageSid === "current",
+    )?.[1].ctxPayload;
+    expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
+    expect(context.Body).toContain("Next year France");
+    expect(requests).toHaveLength(1);
+  },
+);
 
 it("does not adopt a completed missing-session success across an unobserved reset", async () => {
   const f = await setup("channel");
@@ -381,12 +387,12 @@ it("excludes later, foreign-thread and system posts even when returned by the se
     { ...posts[1]!, id: "foreign", channel_id: "different-room" },
     { ...posts[1]!, id: "different-thread", root_id: "elsewhere" },
     { ...posts[1]!, id: "system", type: "system_join_channel" },
+    { ...makePost("attachment", "preview", 25), type: "slack_attachment" },
   );
   await f.recover(f.turn);
-  expect(historyIds(f.histories.get(f.sessionKey))).toEqual(["root", "reply"]);
+  expect(historyIds(f.histories.get(f.sessionKey))).toEqual(["root", "reply", "attachment"]);
   const query = new URL(requests[0]!, baseUrl).searchParams;
-  expect(query.get("fromPost")).toBe("current");
-  expect(query.get("fromCreateAt")).toBe("30");
+  expect([query.get("fromPost"), query.get("fromCreateAt")]).toEqual(["current", "30"]);
   expect(Number(query.get("perPage"))).toBeLessThanOrEqual(200);
 });
 
@@ -399,13 +405,4 @@ it("store-reader failure cannot admit recovered DM history even with a configure
   };
   await f.recover(f.turn);
   expect(f.histories.size).toBe(0);
-});
-
-it("recovers cold direct thread context in chronological order, excluding the trigger", async () => {
-  const { handler } = await setup("direct");
-  await receive(handler, posts[2]!);
-  const context = dispatch.mock.calls[0]?.[1].ctxPayload;
-  expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
-  expect(context.Body).toContain("Next year France");
-  expect(requests.filter((url) => url.includes("/thread"))).toHaveLength(1);
 });

@@ -39,6 +39,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
@@ -147,10 +148,7 @@ async function packageFixture(
   const writeInstall = async (packageRoot: string, version: string) => {
     await writePackageRoot(packageRoot, version);
     if (buildId) {
-      await fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ buildId }),
-      );
+      await writeFixtureJson(path.join(packageRoot, "dist/build-info.json"), { buildId });
       await writePackageDistInventory(packageRoot);
     }
   };
@@ -195,6 +193,33 @@ async function packageFixture(
   };
   return { params, root, launcher, installedPrefixes, expectOriginal };
 }
+
+it.each([
+  [undefined, "global-install-failed"],
+  ["EACCES", "global-install-permission-denied"],
+] as const)("classifies a package-update catch (%s) as %s", async (code, reason) => {
+  const { params, expectOriginal } = await packageFixture(base, "2.0.0");
+  const result = await runPackageInstallUpdate({
+    ...params,
+    validateCandidate: async () => {
+      throw Object.assign(new Error("Candidate validation failed"), { code });
+    },
+  });
+  expect(result).toMatchObject({
+    status: "error",
+    reason,
+    failedStep: {
+      name: "package-update",
+      exitCode: 1,
+      failureFacts: expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringContaining("Candidate validation failed"),
+        }),
+      ]),
+    },
+  });
+  await expectOriginal();
+});
 
 it.each(["guidance", "staging"])(
   "carries the owner's permission retry outcome through %s",
@@ -612,7 +637,14 @@ it.each([
     expect(result).toMatchObject({ status: "ok", root, after: { version: "2026.5.14" } });
     expect(commands.mock.calls.filter(([argv]) => argv[2] === "doctor")).toHaveLength(1);
     for (const [argv, options] of commands.mock.calls) {
-      expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeout });
+      if (argv[2] === "doctor" && expectedTimeout !== undefined) {
+        assert(typeof options !== "number");
+        // Preparation spends the same allowance before the Doctor command is admitted.
+        expect(options.timeoutMs).toBeGreaterThan(0);
+        expect(options.timeoutMs).toBeLessThanOrEqual(expectedTimeout);
+      } else {
+        expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeout });
+      }
     }
   },
 );
@@ -758,7 +790,12 @@ it.each([
     let resultPath: string | undefined;
     mockDoctor(async (_argv, options) => {
       assert(typeof options === "object");
-      expect(options).toMatchObject({ timeoutMs: expectedDoctorTimeoutMs });
+      if (expectedDoctorTimeoutMs === undefined) {
+        expect(options.timeoutMs).toBeUndefined();
+      } else {
+        expect(options.timeoutMs).toBeGreaterThan(0);
+        expect(options.timeoutMs).toBeLessThanOrEqual(expectedDoctorTimeoutMs);
+      }
       resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
       assert(resultPath);
       await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });

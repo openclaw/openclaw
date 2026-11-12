@@ -1,26 +1,130 @@
+import { worktreeRegistryPublication } from "../../agents/worktrees/registry-publication.js";
 import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../../sessions/session-row-changes.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import type {
   PlacementRecoveryDeps,
   WorkerPlacementRecoveryAdmission,
 } from "./placement-recovery-contract.js";
+import { WorkerPlacementWorkspaceUnavailableError } from "./placement-workspace-unavailable.js";
 import {
   cleanupWorkerWorkspaceResultRef,
   deleteWorkerWorkspaceResultCleanupRefs,
 } from "./workspace-result-staging.js";
 
+type UnavailableTarget = WorkerPlacementWorkspaceUnavailableError["target"];
+
+/** Shared by the retry queue and unresolved set; notification scans reuse the record. */
+type PendingWorkspaceLookup = {
+  placement: WorkerSessionPlacementIdentity;
+  target: UnavailableTarget | undefined;
+  /** Publications during resolution leave the item eligible for the next sweep. */
+  dirty: boolean;
+};
+
 /** One startup pass of orphan-ref cleanup: workspace roots resolved once, completed roots remembered. */
 export type PendingWorkspaceResultOrphanCleanup = {
-  placements: WorkerSessionPlacementIdentity[];
+  placements: PendingWorkspaceLookup[];
   initialDiscoveryPending: boolean;
+  unresolved: Set<PendingWorkspaceLookup>;
   /** sessionId → workspace root, or null when the placement has no local root to clean. */
   rootsBySession: Map<string, string | null>;
   completedRoots: Set<string>;
 };
+
+export function subscribeWorkspaceResultOrphanChanges(
+  getPass: () => PendingWorkspaceResultOrphanCleanup | undefined,
+): () => void {
+  const wake = (
+    pass: PendingWorkspaceResultOrphanCleanup,
+    matches: (target?: UnavailableTarget) => boolean,
+  ) => {
+    for (const lookup of pass.unresolved) {
+      if (matches(lookup.target)) {
+        lookup.dirty = true;
+        if (lookup.target) {
+          lookup.target = undefined;
+          pass.placements.push(lookup);
+        }
+      }
+    }
+  };
+  const stopSessions = sessionChanges.subscribeFacts((change) => {
+    const pass = getPass();
+    if (
+      !pass?.unresolved.size ||
+      (!sessionChangeScopeAffectsStoredRows(change) &&
+        !("all" in change && change.scope === "config"))
+    ) {
+      return;
+    }
+    if (
+      "sessionKey" in change &&
+      (change.scope === "transcript" ||
+        change.factsInvalidated === "category" ||
+        (!change.factsInvalidated &&
+          change.facts &&
+          !["entry", "replacement", "removed"].includes(change.facts.kind)))
+    ) {
+      return;
+    }
+    const scope =
+      "sessionKey" in change ? change : typeof change.scope === "object" ? change.scope : {};
+    // A resolving item has not captured its physical store/canonical key yet.
+    // Keyed publications carry the logical agent, which may share another agent's store.
+    wake(
+      pass,
+      (target) =>
+        !target ||
+        ((!("sessionKey" in change) || change.sessionKey === target.sessionKey) &&
+          ("sessionKey" in change || !scope.agentId || scope.agentId === target.agentId) &&
+          (!scope.storePath || scope.storePath === target.storePath)),
+    );
+  });
+  const stopWorktrees = worktreeRegistryPublication.subscribeFacts((change) => {
+    const pass = getPass();
+    // A bare settlement may be a rollback; committed/unknown facts precede it.
+    if (!pass?.unresolved.size || (change.kind !== "committed" && change.kind !== "unknown")) {
+      return;
+    }
+    wake(pass, (target) => {
+      if (target && !target.worktreeId) {
+        return false;
+      }
+      if (change.kind === "unknown") {
+        return true;
+      }
+      for (const [key, fact] of change.receipt.facts) {
+        if (fact.kind === "postimage" && "id" in fact.value) {
+          if (
+            !target ||
+            fact.value.id === target.worktreeId ||
+            (fact.value.owner_kind === "session" && fact.value.owner_id === target.sessionKey)
+          ) {
+            return true;
+          }
+        } else if (
+          key.startsWith('["worktrees",') &&
+          (!target || key === JSON.stringify(["worktrees", target.worktreeId]))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
+  });
+  return () => {
+    stopSessions();
+    stopWorktrees();
+  };
+}
 
 export async function cleanupPendingWorkspaceResultOrphans(
   deps: PlacementRecoveryDeps,
@@ -41,16 +145,23 @@ export async function cleanupPendingWorkspaceResultOrphans(
     if (deps.isShuttingDown?.()) {
       return false;
     }
-    const placement = pass.placements.shift()!;
+    const lookup = pass.placements.shift()!;
+    const { placement } = lookup;
+    lookup.dirty = false;
     try {
       const workspace = await deps.resolveWorkspace(placement);
       rootsBySession.set(placement.sessionId, workspace.kind === "local" ? workspace.path : null);
-    } catch {
-      pass.placements.push(placement);
+      pass.unresolved.delete(lookup);
+    } catch (error) {
+      if (error instanceof WorkerPlacementWorkspaceUnavailableError && !lookup.dirty) {
+        lookup.target = error.target;
+      } else {
+        pass.placements.push(lookup);
+      }
     }
   }
   pass.initialDiscoveryPending = false;
-  let complete = pass.placements.length === 0;
+  let complete = pass.unresolved.size === 0;
   const workspaceSessions = new Map<string, string[]>();
   // Admission includes previously resolved siblings, even if only one root was found this sweep.
   for (const [sessionId, root] of rootsBySession) {

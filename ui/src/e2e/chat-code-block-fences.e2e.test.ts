@@ -1,13 +1,12 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { polledAttribute } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI fenced code blocks",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 const desktop = {
   locale: "en-US",
@@ -77,14 +76,15 @@ suite.define(() => {
             expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(
               true,
             );
-            const scrolled = viewport.evaluate(
-              (element) =>
-                new Promise<void>((resolve) => {
-                  element.addEventListener("scrollend", () => resolve(), { once: true });
-                }),
-            );
+            // A locator resolves asynchronously; arm the listener before sending the key.
+            const scrolled = await viewport.evaluateHandle((element) => ({
+              finished: new Promise<void>((resolve) => {
+                element.addEventListener("scrollend", () => resolve(), { once: true });
+              }),
+            }));
             await page.keyboard.press("ArrowRight");
-            await scrolled;
+            await scrolled.evaluate((state) => state.finished);
+            await scrolled.dispose();
             before = await viewport.evaluate((element) => element.scrollLeft);
             expect(before).toBeGreaterThan(0);
             await page.keyboard.press("Tab");
@@ -230,14 +230,14 @@ suite.define(() => {
         await shortBubble.scrollIntoViewIfNeeded();
         await expect.poll(() => shortWrap.isVisible()).toBe(false);
 
-        // Virtualization must initialize replacement DOM in an otherwise quiet transcript.
+        // Virtualization must restore working controls in an otherwise quiet transcript.
         const thread = page.locator(".chat-thread");
         // Focused rows stay mounted offscreen; move focus out of the wrap control first.
         await page.locator(".agent-chat__composer-combobox textarea").click();
         await thread.hover();
         await page.mouse.wheel(0, -100_000);
         await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
-        await expect.poll(() => wideBubble.count()).toBe(0);
+        await expect.poll(() => wideBubble.isVisible()).toBe(false);
         await page.mouse.wheel(0, 100_000);
         await wideBubble.waitFor({ state: "visible" });
         await expect.poll(() => wideWrapper.locator(".code-block-wrap").isVisible()).toBe(true);

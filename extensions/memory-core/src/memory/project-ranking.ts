@@ -26,32 +26,26 @@ export function projectScoreMultiplier(
   return stored.every((key) => activeProjectKeys.has(key)) ? 1.15 : 0.9;
 }
 
+/** Chunks with a malformed project annotation never reach retrieval results. */
+export function hasValidProjectAnnotation(entry: { projectKey?: string }): boolean {
+  return !entry.projectKey
+    ?.split(";")
+    .map((key) => key.trim())
+    .includes(INVALID_PROJECT_ANNOTATION_KEY);
+}
+
 export function applyRetrievalRanking<T extends ProjectRankable>(
   results: readonly T[],
   activeProjectKeys?: ReadonlySet<string>,
 ): T[] {
-  const weighted = results.map((entry) => {
+  return results.filter(hasValidProjectAnnotation).map((entry) => {
     const importance = entry.importance;
     const multiplier =
       importance === null || importance === undefined
         ? 1
         : 0.75 + Math.max(1, Math.min(10, Math.floor(importance))) * 0.05;
-    return { ...entry, score: entry.score * multiplier };
+    return Object.assign({}, entry, {
+      score: entry.score * multiplier * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
+    });
   });
-  const eligible = weighted.filter(
-    (entry) =>
-      !entry.projectKey
-        ?.split(";")
-        .map((key) => key.trim())
-        .includes(INVALID_PROJECT_ANNOTATION_KEY),
-  );
-  if (!activeProjectKeys || activeProjectKeys.size === 0) {
-    return eligible;
-  }
-  // Retrieval owners sort after score adjustment, preserving their exact-match tiers.
-  return eligible.map((entry) =>
-    Object.assign({}, entry, {
-      score: entry.score * projectScoreMultiplier(entry.projectKey, activeProjectKeys),
-    }),
-  );
 }

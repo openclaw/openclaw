@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -47,18 +49,16 @@ function saveOptions(
     canDispatch: () => true,
     isCurrent: () => true,
     onSaved: vi.fn(),
+    onRetry: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   };
 }
 
 describe("agent identity actions", () => {
   it("keeps an accepted generated avatar when an older upload finishes", async () => {
     const state = host();
-    let resolveUpload!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveUpload = resolve;
-      }),
-    );
+    const { promise: pendingAvatar, resolve: resolveUpload } =
+      createDeferred<avatarImage.AvatarDataUrlResult>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(pendingAvatar);
     selectIdentityAvatar(state, new File(["image"], "avatar.png", { type: "image/png" }));
     setIdentityAvatar(state, "data:image/webp;base64,YXZhdGFy");
     resolveUpload({ ok: true, dataUrl: "data:image/png;base64,b2xk" });
@@ -88,12 +88,9 @@ describe("agent identity actions", () => {
     expect((await state.identityOutcome)?.error).toBe(uploadsDisabledMessage());
 
     config.current.uploadsEnabled = true;
-    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveAvatar = resolve;
-      }),
-    );
+    const { promise: pendingAvatar, resolve: resolveAvatar } =
+      createDeferred<avatarImage.AvatarDataUrlResult>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(pendingAvatar);
     selectIdentityAvatar(state, {} as File, config);
     config.current.uploadsEnabled = false;
     resolveAvatar({ ok: true, dataUrl: "data:image/png;base64,aA==" });
@@ -130,12 +127,9 @@ describe("agent identity actions", () => {
   });
 
   it("drops an avatar decode that completes after the selected agent resets", async () => {
-    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveAvatar = resolve;
-      }),
-    );
+    const { promise: pendingAvatar, resolve: resolveAvatar } =
+      createDeferred<avatarImage.AvatarDataUrlResult>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(pendingAvatar);
     const state = host();
 
     selectIdentityAvatar(state, {} as File);
@@ -147,8 +141,8 @@ describe("agent identity actions", () => {
   });
 
   it.each([
-    ["unusable", "That image can't be used. Pick an image file up to 2 MB."],
-    ["too-detailed", "That image is too detailed to store as an avatar"],
+    ["unusable", "Couldn’t use that image. Choose an image file up to 2 MB."],
+    ["too-detailed", "Couldn’t save that avatar. Try a simpler image."],
   ] as const)("explains a %s avatar rejection", async (reason, message) => {
     fileToAvatarDataUrlMock.mockResolvedValueOnce({ ok: false, reason });
     const state = host();
@@ -169,14 +163,7 @@ describe("agent identity actions", () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "config.get") {
         order.push(method);
-        return {
-          config,
-          sourceConfig: config,
-          raw: JSON.stringify(config),
-          hash,
-          valid: true,
-          issues: [],
-        };
+        return sourceConfigSnapshot(config, hash);
       }
       if (method === "config.set") {
         order.push(method);
@@ -269,7 +256,9 @@ describe("agent identity actions", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect((await state.identityOutcome)?.error).toContain(
-      `${changed} changed before the agent identity update started.`,
+      changed === "Connection"
+        ? "Couldn’t save the agent identity. Reconnect and try again."
+        : "Access changed before the agent identity update started.",
     );
   });
 
@@ -304,10 +293,7 @@ describe("agent identity actions", () => {
   it("preserves edits made while an autosave is in flight", async () => {
     const state = host();
     state.identityDraft.name = "First name";
-    let release!: () => void;
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: pending, resolve: release } = createDeferred();
     const runExternalMutation = vi.fn(async () => {
       await pending;
       return { ok: true as const, value: {}, refresh: { ok: true as const } };

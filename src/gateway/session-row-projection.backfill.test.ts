@@ -45,6 +45,7 @@ import {
   appendProjectionMessages as appendTranscript,
   seedProjectionRow as seedTranscriptRow,
 } from "./session-row-projection.test-support.js";
+import { terminalAssistantMessage } from "./session-row-terminal-message.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -781,14 +782,7 @@ it("backfills terminal fallback models and clears previews when the newest messa
         activeModel: "unit-test/fallback",
       },
     });
-    await appendTranscript(target, {
-      role: "assistant",
-      content: "Finished",
-      provider: "unit-test",
-      model: "fallback",
-      stopReason: "stop",
-      __openclaw: { runId: "terminal-run" },
-    });
+    await appendTranscript(target, terminalAssistantMessage("Finished", "fallback"));
     const initial = observeSessionRowBackfill([target.sessionKey]);
     const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
     using projection = await createTestProjection({ cfg });

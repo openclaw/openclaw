@@ -19,3 +19,15 @@ export function createActiveSessionPlacement(
     ...overrides,
   };
 }
+
+export function createStandardCloudProfile(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "aws",
+    providerId: "crabbox",
+    machines: [
+      { id: "standard", label: "Standard", default: true },
+      { id: "fast", label: "Fast" },
+    ],
+    ...overrides,
+  };
+}

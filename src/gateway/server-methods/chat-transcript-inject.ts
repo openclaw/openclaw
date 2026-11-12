@@ -19,13 +19,14 @@ import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
-/** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
-type GatewayInjectedAbortMeta = {
-  aborted: true;
-  origin: ChatAbortOrigin;
-  runId: string;
-  /** The registered native producer has finished its canonical transcript writes. */
-  producerSettled?: true;
+/** Host-only transcript row, never passed to an inference provider as a model message. */
+type GatewaySystemNoticeMessage = {
+  role: "system";
+  content: Array<Record<string, unknown>>;
+  timestamp: number;
+  provenance: { kind: "internal_system"; sourceTool: string };
+  excludeFromContext: true;
+  idempotencyKey?: string;
 };
 
 export type GatewayInjectedTranscriptAppendResult = {
@@ -79,11 +80,20 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   stopReason?: "stop" | "aborted";
-  abortMeta?: GatewayInjectedAbortMeta;
+  /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
+  abortMeta?: {
+    aborted: true;
+    origin: ChatAbortOrigin;
+    runId: string;
+    /** The registered native producer has finished its canonical transcript writes. */
+    producerSettled?: true;
+  };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   contextFreeCommand?: true;
   /** Trusted Gateway selections bound to UTF-16 offsets in `message`; never client input. */
   humanMentions?: readonly HumanMention[];
+  /** A host notice has no assistant/model attribution and is never provider context. */
+  systemNotice?: { sourceTool: string };
   /** Host-authored text kept as written; model-output delivery directives are not parsed. */
   literal?: true;
   /** Caller authority rechecked at the durable transcript commit. */
@@ -121,42 +131,52 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       ? { humanMentions: params.humanMentions.map((mention) => ({ ...mention })) }
       : {}),
   };
-  const messageBody: AppendMessageArg & Record<string, unknown> = {
-    role: "assistant",
-    content: retainAssistantModelContent(displayContent),
-    [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
-    timestamp: now,
-    // Runtime projections retain their terminal state; host-authored partials
-    // keep their replayable default and carry cancellation in openclawAbort.
-    stopReason: params.stopReason ?? "stop",
-    usage: {
-      ...makeZeroUsageSnapshot(),
-      ...(params.abortMeta
-        ? {
-            usageReport: { state: "unavailable" } as const,
-            contextUsage: { state: "unavailable" } as const,
-          }
-        : {}),
-    },
-    // Make these explicit so downstream tooling never treats this as model output.
-    api: "openai-responses",
-    provider: "openclaw",
-    model: "gateway-injected",
-    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
-    ...(params.contextFreeCommand === true ? { excludeFromContext: true } : {}),
-    ...(Object.keys(openclawMeta).length ? { __openclaw: openclawMeta } : {}),
-    ...(params.abortMeta
+  const messageBody: (AppendMessageArg & Record<string, unknown>) | GatewaySystemNoticeMessage =
+    params.systemNotice
       ? {
-          openclawAbort: {
-            aborted: true,
-            origin: params.abortMeta.origin,
-            runId: params.abortMeta.runId,
-          },
+          role: "system",
+          content: resolvedContent,
+          timestamp: now,
+          provenance: { kind: "internal_system", sourceTool: params.systemNotice.sourceTool },
+          excludeFromContext: true,
+          ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
         }
-      : {}),
-  };
-  if (displayMessage.openclawDelivery) {
+      : {
+          role: "assistant",
+          content: retainAssistantModelContent(displayContent),
+          [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
+          timestamp: now,
+          // Runtime projections retain their terminal state; host-authored partials
+          // keep their replayable default and carry cancellation in openclawAbort.
+          stopReason: params.stopReason ?? "stop",
+          usage: {
+            ...makeZeroUsageSnapshot(),
+            ...(params.abortMeta
+              ? {
+                  usageReport: { state: "unavailable" } as const,
+                  contextUsage: { state: "unavailable" } as const,
+                }
+              : {}),
+          },
+          // Make these explicit so downstream tooling never treats this as model output.
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-injected",
+          ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+          ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
+          ...(params.contextFreeCommand === true ? { excludeFromContext: true } : {}),
+          ...(Object.keys(openclawMeta).length ? { __openclaw: openclawMeta } : {}),
+          ...(params.abortMeta
+            ? {
+                openclawAbort: {
+                  aborted: true,
+                  origin: params.abortMeta.origin,
+                  runId: params.abortMeta.runId,
+                },
+              }
+            : {}),
+        };
+  if (messageBody.role === "assistant" && displayMessage.openclawDelivery) {
     messageBody.openclawDelivery = displayMessage.openclawDelivery;
   }
 
@@ -200,7 +220,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       messages: [
         {
           message: messageBody,
-          idempotencyLookup: "scan-assistant",
+          idempotencyLookup: params.systemNotice ? "scan" : "scan-assistant",
           ...(params.abortMeta
             ? {
                 predicate: {

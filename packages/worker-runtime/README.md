@@ -95,6 +95,10 @@ capture, worker accounting, the live-pool registry, and shared compute capacity.
 The package controls when those operations run and holds admission until their
 required settlement receipts arrive.
 
+Pools can set their own worker heap limits through `workerOptions.resourceLimits`.
+The Control UI asset reader uses a 16 MiB young generation to reduce committed
+nursery space between read bursts while keeping its workers warm.
+
 Each synchronous pool or rotation pass captures its native workers and asks the
 host to service them. OpenClaw's host binds a pool to one native source, so one
 service call advances that shared source. Nested calls capture a fresh pass;
@@ -153,11 +157,21 @@ cleanup. Failed retirement retains custody for a later retry. Neither a rejected
 result nor a cancellation request alone proves that execution or resources have
 settled.
 
+Workers without retained native resources use one supervisor receipt for execution
+and cleanup completion. The host still emits execution exit before final exit.
+Resource-owning workers retain separate receipts so execution capacity can be
+released while resource cleanup is pending or has failed.
+
 When queued work competes with a task waiting for a host response, `yieldSignal`
 requests a cooperative checkpoint. The host operation retains its own lifetime;
 queue pressure does not grant permission to cancel its underlying work. A
 checkpoint releases the task's execution slot through the ordinary settlement
 path, and continuation work rejoins admission.
+
+Task deadlines include queueing by default. Internal retained owners can select
+`timeoutFrom: "dispatch"` when preceding work has an owner-controlled lifetime;
+the budget then starts at slot assignment and still covers input preparation,
+execution, and host exchanges. The scheduler owns both deadline modes.
 
 The caller's execution deadline also bounds host exchanges. Responses may
 shorten that deadline, never renew it. Code Mode explicitly uses
@@ -244,6 +258,11 @@ capacity waiters. A generic `drain` notification would add no useful producer
 control to those paths. Add one only for a caller that can pause before buffering
 or allocating its next input, and observe actual admission release, including
 retained ownership, rather than task-result completion.
+
+Admission errors identify the exhausted pool or shared-compute task/byte budget,
+its current count and limit, and the rejected input's reported bytes. Host-classified
+worker/operation labels provide context without exposing task input or private paths.
+The error code remains `overloaded`; diagnostics do not change admission or retry behavior.
 
 Memory-driven recycling needs evidence of growth after garbage collection and
 must weigh recovered heap and external memory against worker startup cost.

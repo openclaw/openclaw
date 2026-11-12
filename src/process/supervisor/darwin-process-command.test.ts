@@ -1,7 +1,16 @@
+import path from "node:path";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { readCommand, dead } = vi.hoisted(() => ({ readCommand: vi.fn(), dead: vi.fn() }));
+const { readCommand, dead, spawn } = vi.hoisted(() => ({
+  readCommand: vi.fn(),
+  dead: vi.fn(),
+  spawn: vi.fn(),
+}));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawnSync: spawn,
+}));
 vi.mock("@openclaw/proc-safe/inspect", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/proc-safe/inspect")>()),
   readProcessCommand: readCommand,
@@ -24,6 +33,7 @@ afterEach(() => {
 
 beforeEach(() => {
   dead.mockReset().mockReturnValue(false);
+  spawn.mockReset().mockReturnValue({ status: 1, stdout: "" });
   readCommand.mockReset().mockImplementation(() => {
     throw new ProcSafeError("access-denied", "Process arguments denied");
   });
@@ -49,18 +59,29 @@ it.each([
   });
 });
 
-it("reads exact argv without the environment a marker-free caller does not use", () => {
-  // Some macOS argument images end without the separator that bounds envp.
-  readCommand.mockImplementation((_pid: number, options: { environmentKeys?: string[] }) => {
-    if (options.environmentKeys?.length) {
-      throw new ProcSafeError("incomplete", "unterminated Darwin environment");
+it.each([
+  { executable: "/bin/zsh", argv: ["/bin/zsh", "-c", "sleep 30"], unknown: false },
+  { executable: "/opt/homebrew/bin/node", argv: ["node", "/app/dist/index.js"], unknown: true },
+  { executable: "/usr/local/bin/bun", argv: ["bun", "run", "start"], unknown: true },
+  { executable: "/bin/sleep", argv: ["/Users/me/.local/bin/tsx", "app.ts"], unknown: true },
+])("reads $executable argv when Darwin omits its environment", ({ executable, argv, unknown }) => {
+  // macOS 27 ends hardened executables' argument images right after argv.
+  const incomplete = new ProcSafeError("incomplete", "unterminated Darwin environment");
+  readCommand.mockImplementation((_pid: number, options?: { environmentKeys?: string[] }) => {
+    if (options?.environmentKeys?.length) {
+      throw incomplete;
     }
-    return { executable: "/bin/sleep", argv: Object.freeze(["/bin/sleep", "30"]), environment: {} };
+    return { executable, argv: Object.freeze(argv), environment: {} };
   });
-  expect(() => readDarwinProcessCommand(12, "same")).toThrow("unterminated Darwin environment");
+  // A JS runtime keeps its argv; only the marker decision stays unknown.
+  expect(readDarwinProcessCommand(12, "same")).toEqual({
+    argv,
+    executable,
+    ...(unknown ? { serviceMarkerUnavailable: true } : {}),
+  });
   expect(readDarwinProcessCommand(12, "same", { serviceMarker: false })).toEqual({
-    argv: ["/bin/sleep", "30"],
-    executable: "/bin/sleep",
+    argv,
+    executable,
   });
 });
 
@@ -96,6 +117,61 @@ it.each(["layout-mismatch", "incomplete", "helper-unavailable"] as const)(
     });
     dead.mockReturnValue(true);
     expect(() => readDarwinProcessCommand(12, "different")).toThrow(error);
+  },
+);
+
+const mdworker =
+  "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker";
+
+it.each([
+  { code: "layout-mismatch", image: mdworker, entitled: true, owner: "same", redacted: true },
+  { code: "incomplete", image: mdworker, entitled: true, owner: undefined, redacted: true },
+  { code: "layout-mismatch", image: mdworker, entitled: false, owner: "same", redacted: false },
+  // Non-UTF-8 argv also fails alignment; an unentitled shell may hold a runtime.
+  { code: "layout-mismatch", image: "/bin/sh", entitled: true, owner: "same", redacted: false },
+  { code: "layout-mismatch", image: "", entitled: true, owner: "same", redacted: false },
+  // A process that maps the entitled binary below its own image is still itself.
+  {
+    code: "layout-mismatch",
+    image: mdworker,
+    ucomm: "node",
+    entitled: true,
+    owner: "same",
+    redacted: false,
+  },
+] as const)(
+  "trusts a $code argument image only for an entitled system image ($image)",
+  ({ code, image, entitled, owner, redacted, ...row }) => {
+    const error = new ProcSafeError(code, "invalid Darwin argument alignment");
+    readCommand.mockImplementation(() => {
+      throw error;
+    });
+    const ucomm = "ucomm" in row ? row.ucomm : path.basename(image);
+    spawn.mockImplementation((command: string) =>
+      command === "/bin/ps"
+        ? { status: 0, stdout: `${ucomm}\n` }
+        : command === "/usr/sbin/lsof"
+          ? {
+              status: image ? 0 : 1,
+              stdout: image ? `p992\nftxt\nn${image}\nftxt\nn/usr/lib/dyld\n` : "",
+            }
+          : {
+              status: 0,
+              stdout: entitled
+                ? "[Dict]\n\t[Key] com.apple.private.no-read-procargs\n\t[Value]\n\t\t[Bool] true\n"
+                : "[Dict]\n",
+            },
+    );
+    const inspect = () => readDarwinProcessCommand(992, owner);
+    if (redacted) {
+      expect(inspect()).toEqual({
+        argvUnavailable: true,
+        executable: image,
+        ...(owner ? { owner } : {}),
+      });
+    } else {
+      expect(inspect).toThrow(error);
+    }
   },
 );
 

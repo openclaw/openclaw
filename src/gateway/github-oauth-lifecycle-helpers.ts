@@ -9,12 +9,12 @@ import {
   inspectGitHubOAuthRecord,
   parseGitHubOAuthRecord,
   writeGitHubOAuthRecord,
-  listGitHubDeviceAuthorizationRecords,
-  listGitHubOAuthRecords,
+  listGitHubAuthorizationRecords,
   type GitHubDeviceAuthorizationRecord,
   type GitHubIdentityScope,
   type GitHubOAuthRecord,
 } from "../agents/github-oauth-records.js";
+import { refreshNativeGitHubConfiguration } from "../agents/github-read-identity.js";
 import type { GitHubToolAccount } from "../agents/github-tool-account.js";
 import {
   GitHubAccountMismatchError,
@@ -35,10 +35,7 @@ export const REFRESH_SKEW_MS = 10 * 60_000;
 export const MAINTENANCE_INTERVAL_MS = 60_000;
 export const SHUTDOWN_DRAIN_TIMEOUT_MS = 31_000;
 
-type GitHubOAuthInventory = {
-  deviceRecords: Awaited<ReturnType<typeof listGitHubDeviceAuthorizationRecords>>;
-  oauthRecords: Awaited<ReturnType<typeof listGitHubOAuthRecords>>;
-};
+type GitHubOAuthInventory = Awaited<ReturnType<typeof listGitHubAuthorizationRecords>>;
 
 export function createGitHubOAuthInventoryReader(onChange: () => void) {
   let dirty = true;
@@ -74,9 +71,7 @@ export function createGitHubOAuthInventoryReader(onChange: () => void) {
       databasePath = path;
       dirty = false;
       try {
-        const deviceRecords = await listGitHubDeviceAuthorizationRecords();
-        const oauthRecords = await listGitHubOAuthRecords();
-        snapshot = { deviceRecords, oauthRecords };
+        snapshot = await listGitHubAuthorizationRecords();
         return snapshot;
       } catch (error) {
         dirty = true;
@@ -167,6 +162,25 @@ export function configuredOAuthIdentities(config: OpenClawConfig): ConfiguredOAu
     }
     return identities;
   });
+}
+
+/** No native process discovery is needed when every agent selects a managed identity. */
+export async function maintainNativeGitHubConfig(
+  config: OpenClawConfig,
+  nextMaintenanceAtMs: number,
+): Promise<number> {
+  if (
+    config.tools?.github ||
+    !withAgentRosterFactsBatch(config, () =>
+      listAgentIds(config).some(
+        (agentId) => !resolveConfiguredGitHubToolIdentity({ config, agentId, scope: "agent" }),
+      ),
+    )
+  ) {
+    return nextMaintenanceAtMs;
+  }
+  await refreshNativeGitHubConfiguration();
+  return Math.min(nextMaintenanceAtMs, Date.now() + MAINTENANCE_INTERVAL_MS);
 }
 
 export function nextGitHubOAuthMaintenanceAtMs(

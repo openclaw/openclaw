@@ -16,7 +16,8 @@ import {
   type GuardAdapter,
   type ReplayStore,
 } from "../protocol/index.js";
-import { getReefAuditOperationState } from "./audit-state.js";
+import type { ReefAuditAppendEvent } from "./audit-state-operation.js";
+import { getReefAuditOperationState, type ReefAuditStore } from "./audit-state.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import { autonomyBudget } from "./config-schema.js";
 import { matchesReefPeerIdentity, type ReefPeerIdentity } from "./friend-types.js";
@@ -119,7 +120,7 @@ export class ReefMessageFlow {
       keys: ReefKeys;
       transport: ReefTransportClient;
       guard: GuardAdapter;
-      audit: AuditStore;
+      audit: AuditStore & Pick<ReefAuditStore, "appendEvents">;
       replay: ReplayStore;
       reviews: ReviewApprovalStore;
       delivered: ReefDeliveredStore;
@@ -310,12 +311,18 @@ export class ReefMessageFlow {
     // A parked entry is re-polled every reconcile interval; one durable read
     // observation per park keeps the audit chain from filling with retries.
     const unreadIds = entries.map((entry) => entry.id).filter((id) => !this.parkedEntries.has(id));
-    if (unreadIds.length > 0) {
-      await this.options.audit.appendEvent("read", { ids: unreadIds });
-    }
+    let read: ReefAuditAppendEvent | undefined =
+      unreadIds.length > 0
+        ? { type: "read", payload: { ids: unreadIds }, ts: Math.floor(Date.now() / 1_000) }
+        : undefined;
     for (const entry of entries) {
+      if (read && (entry.kind !== "receipt" || !entry.receipt)) {
+        await this.options.audit.appendEvents([read]);
+        read = undefined;
+      }
       if (entry.kind === "receipt") {
-        const rejection = await this.processReceipt(entry);
+        const rejection = await this.processReceipt(entry, read);
+        read = undefined;
         if (rejection) {
           rejections.push(rejection);
         }
@@ -336,15 +343,41 @@ export class ReefMessageFlow {
     return rejections;
   }
 
-  private async processReceipt(entry: InboxEntry): Promise<ReefDeliveryRejection | undefined> {
+  private async processReceipt(
+    entry: InboxEntry,
+    read?: ReefAuditAppendEvent,
+  ): Promise<ReefDeliveryRejection | undefined> {
     const { peer, id } = entry;
     const receipt = entry.receipt ? { ...entry.receipt } : undefined;
     if (!receipt) {
       return undefined;
     }
-    const settlement = await this.options.trust.readOutboundDelivery(peer, id);
+    let settlement: Awaited<ReturnType<ReefTrustStore["readOutboundDelivery"]>>;
+    try {
+      settlement = await this.options.trust.readOutboundDelivery(peer, id);
+    } catch (error) {
+      if (read) {
+        try {
+          await this.options.audit.appendEvents([read]);
+        } catch (auditError) {
+          throw new AggregateError(
+            [error, auditError],
+            "Reef receipt lookup and read audit failed",
+            {
+              cause: auditError,
+            },
+          );
+        }
+      }
+      throw error;
+    }
     if (!settlement) {
-      return this.quarantineReceipt({ peer, id });
+      // No delivery effects precede quarantine. A failed group leaves the cursor
+      // unadvanced so the next attempt records both observations together.
+      return this.quarantineReceipt({ peer, id }, read);
+    }
+    if (read) {
+      await this.options.audit.appendEvents([read]);
     }
     const delivery = settlement.delivery;
     try {
@@ -400,13 +433,18 @@ export class ReefMessageFlow {
     }
   }
 
-  private async quarantineReceipt(entry: Pick<InboxEntry, "peer" | "id">): Promise<undefined> {
+  private async quarantineReceipt(
+    entry: Pick<InboxEntry, "peer" | "id">,
+    read?: ReefAuditAppendEvent,
+  ): Promise<undefined> {
     // A peer-protocol violation must not poison the relay cursor. Keep any
     // outbound binding intact so a later valid receipt can still complete it.
-    await this.options.audit.appendEvent("invalid_delivery_receipt", {
-      id: entry.id,
-      peer: entry.peer,
-    });
+    const invalid = {
+      type: "invalid_delivery_receipt",
+      payload: { id: entry.id, peer: entry.peer },
+      ts: Math.floor(Date.now() / 1_000),
+    };
+    await this.options.audit.appendEvents(read ? [read, invalid] : [invalid]);
     return undefined;
   }
 

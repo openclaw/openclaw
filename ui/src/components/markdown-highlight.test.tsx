@@ -9,10 +9,15 @@ import { LinkReaderMarkdown } from "./link-reader-markdown.tsx";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { parseMarkdownJson } from "./markdown-json.ts";
+import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import corpus from "./markdown-transcript-corpus.json" with { type: "json" };
 import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
-import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import {
+  prewarmSanitizedMarkdown,
+  toSanitizedMarkdownContent,
+  toSanitizedMarkdownHtml,
+} from "./markdown.ts";
 import { MarkdownHtml } from "./solid/markdown-html.tsx";
 import { SanitizedHtml } from "./solid/sanitized-html.tsx";
 
@@ -26,6 +31,11 @@ it("preserves readable code and node state across lazy highlighting", async () =
   expect(toSanitizedMarkdownHtml("Plain **text**")).toBe("<p>Plain <strong>text</strong></p>\n");
   const sample = corpus[0]!;
   const initial = "Intro\n\n```ts\n" + "const value = 1;\n".repeat(12);
+  expect(prewarmSanitizedMarkdown(initial + "```", { codeBlockInteraction: "interactive" })).toBe(
+    true,
+  );
+  const unmountedCode = "```ts\nconst idleBeforeHighlight = 1;\n```";
+  expect(prewarmSanitizedMarkdown(unmountedCode, {})).toBe(true);
   const [stream, setStream] = createSignal(initial);
   const [streaming, setStreaming] = createSignal(true);
   const proseRuns = { cached: 0, streaming: 0 };
@@ -38,7 +48,8 @@ it("preserves readable code and node state across lazy highlighting", async () =
         { role: "assistant", isStreaming: false },
         {},
       )
-        .parts.map(markdownContentHtml)
+        .parts()
+        .map(markdownContentHtml)
         .join("");
     });
     const streamed = createMemo(() => {
@@ -55,6 +66,7 @@ it("preserves readable code and node state across lazy highlighting", async () =
         props.history ? "lazy-history" : "lazy-stream",
         { role: "assistant", isStreaming: props.streaming },
         { codeBlockInteraction: "interactive" },
+        props.streaming ? toStreamingMarkdownDomParts : undefined,
       ),
     }));
     return <div class="retained-fixture" ref={ref} onClick={handleMarkdownCodeBlockClick} />;
@@ -114,6 +126,7 @@ it("preserves readable code and node state across lazy highlighting", async () =
   await waitForSolid(() =>
     expect(view.container.querySelectorAll(".hljs-keyword")).toHaveLength(27),
   );
+  expect(markdownContentHtml(toSanitizedMarkdownContent(unmountedCode))).toContain("hljs-keyword");
   for (const wrapper of wrappers) {
     expect(wrapper.isConnected).toBe(true);
     expect(wrapper.matches(".is-expanded.is-wrapped")).toBe(true);

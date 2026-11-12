@@ -2,18 +2,13 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { groupPluginRecords as groupRecords } from "../../../plugins/record-groups.js";
 import {
   hasInterSessionUserProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
 } from "../../../sessions/input-provenance.js";
 import { isTextContentBlock } from "../../content-blocks.js";
-import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { resolveTranscriptPolicy } from "../../transcript-policy.js";
-import type { TranscriptPolicy } from "../../transcript-policy.types.js";
 import type {
   CurrentUserTimestampMatch,
   UserTranscriptContext,
@@ -300,39 +295,4 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
     }
   }
   return -1;
-}
-
-type AttemptRuntimeModelContext = NonNullable<
-  Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0]
->;
-
-/**
- * Resolves the transcript policy for an embedded attempt. RuntimePlan owns the
- * policy when present; otherwise the older provider/config/env resolver remains
- * the compatibility path for callers that have not produced a runtime plan yet.
- */
-export function resolveAttemptTranscriptPolicy(params: {
-  runtimePlan?: AgentRuntimePlan;
-  runtimePlanModelContext: AttemptRuntimeModelContext;
-  provider: string;
-  modelId: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): TranscriptPolicy {
-  return (
-    params.runtimePlan?.transcript.resolvePolicy(params.runtimePlanModelContext) ??
-    resolveTranscriptPolicy({
-      modelApi: params.runtimePlanModelContext.modelApi,
-      directApiKey: params.runtimePlanModelContext.directApiKey,
-      provider: params.provider,
-      modelId: params.modelId,
-      config: params.config,
-      workspaceDir: params.runtimePlanModelContext.workspaceDir,
-      env: params.env ?? process.env,
-      model:
-        typeof params.runtimePlanModelContext.model?.id === "string"
-          ? (params.runtimePlanModelContext.model as ProviderRuntimeModel)
-          : undefined,
-    })
-  );
 }

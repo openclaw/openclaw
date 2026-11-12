@@ -12,11 +12,10 @@ import { purgeDeletedAgentSessionEntries } from "../../config/sessions/session-a
 import { createNativeBindingFixture } from "../../config/sessions/session-native-binding.test-support.js";
 import { assertPluginStatePublicationSettled } from "../../plugin-state/plugin-state-publication.js";
 import { markPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
-import {
-  assertNoOpenClawAgentDatabaseLeases,
-  readActiveOpenClawAgentDatabaseLeasesReadOnly,
-} from "../../state/openclaw-agent-db-lease.js";
+import { readActiveOpenClawAgentDatabaseLeasesInDatabase } from "../../state/openclaw-agent-db-lease-inspection.js";
+import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
+import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
@@ -89,7 +88,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
         expect(isPostgresSqlConnection(database.db)).toBe(agentEngine === "postgres");
         expect(isPostgresSqlConnection(shared.db)).toBe(stateEngine === "postgres");
         const expectLease = (pathname: string) =>
-          expect(readActiveOpenClawAgentDatabaseLeasesReadOnly(options)).toEqual(
+          expect(readActiveOpenClawAgentDatabaseLeasesInDatabase(shared.db)).toEqual(
             expect.arrayContaining([
               expect.objectContaining({ agent_id: "leased", path: pathname }),
             ]),
@@ -165,7 +164,10 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
       await upsertSessionEntryCore(scope, { sessionId: "retirement-before", updatedAt: 1 });
       const database = inAdmission(() => openOpenClawAgentDatabase(options));
       const shared = inAdmission(() => openOpenClawStateDatabase(options));
-      inAdmission(() => closeOpenClawAgentDatabaseByPath(database.path));
+      // Synchronous close revokes workers but does not join their native lease release.
+      await drainAgentDatabaseResources({ path: database.path }, async () =>
+        inAdmission(() => closeOpenClawAgentDatabaseByPath(database.path)),
+      );
       const target = { agentId: options.agentId, path: database.path };
       const cfg = {
         agents: { entries: { retiring: {}, kept: {} } },

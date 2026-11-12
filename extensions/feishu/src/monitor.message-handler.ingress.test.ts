@@ -330,17 +330,11 @@ it("admits controls during an active turn while ordinary messages retain FIFO or
 
 describe("Feishu durable ingress debounce lifecycle", () => {
   it("releases a claim acquired after ingress abandonment instead of enqueueing it", async () => {
-    const transport = createLifecycle();
-    const logicalClaim = createClaim("delayed-admission");
+    const { transport, logicalClaim, event, harness } = createTurn("delayed", { noClaim: true });
     const pending =
       createDeferred<Awaited<ReturnType<typeof dedup.claimUnprocessedFeishuMessage>>>();
-    const harness = createHarness({
-      lifecycles: new Map([["evt-delayed", transport.lifecycle]]),
-      claims: [],
-      adoptTurn: true,
-    });
     harness.claim.mockReturnValueOnce(pending.promise);
-    const handling = harness.handler(createTextEvent("evt-delayed", "om-delayed", "hello"));
+    const handling = harness.handler(event);
     transport.controller.abort();
     await transport.lifecycle.onAbandoned();
     pending.resolve({ kind: "claimed", handle: logicalClaim });
@@ -597,4 +591,64 @@ describe("Feishu durable ingress debounce lifecycle", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("admits mention-prefixed stop and btw without batching behind an active turn", async () => {
+  vi.useFakeTimers();
+  const active = createDeferred<void>();
+  const completed: string[] = [];
+  const pending: Promise<unknown>[] = [];
+  vi.spyOn(dedup, "claimUnprocessedFeishuMessage").mockImplementation(async () => ({
+    kind: "claimed",
+    handle: createClaim("mention-controls"),
+  }));
+  const handler = createFeishuMessageReceiveHandler({
+    cfg: {},
+    channelRuntime: createPluginRuntimeMock({
+      channel: {
+        commands: { isControlCommandMessage },
+        debounce: { resolveInboundDebounceMs: () => 1000, createInboundDebouncer },
+      },
+    }).channel,
+    accountId: "mention-controls",
+    runtime: createNonExitingRuntimeEnv(),
+    chatHistories: new Map(),
+    getBotOpenId: () => "ou-bot",
+    resolveSequentialKey: getFeishuSequentialKey,
+    resolveDebounceText: ({ event, botOpenId }) =>
+      parseFeishuMessageEvent(event, botOpenId).content,
+    hasProcessedMessage: async () => false,
+    handleMessage: async ({ event, turnAdoptionLifecycle }) => {
+      await turnAdoptionLifecycle?.onAdopted();
+      if (event.message.message_id === "om-active") {
+        await active.promise;
+      }
+      completed.push(event.message.message_id);
+    },
+  });
+  try {
+    pending.push(handler(createTextEvent("evt-active", "om-active", "ordinary turn")));
+    await vi.advanceTimersByTimeAsync(1000);
+    for (const [index, text] of ["@_bot/stop", "@_bot /btw progress?"].entries()) {
+      const event = createTextEvent(`evt-control-${index}`, `om-control-${index}`, text);
+      event.message.mentions = [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }];
+      pending.push(handler(event));
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    expect(completed).toEqual(expect.arrayContaining(["om-control-0", "om-control-1"]));
+    expect(completed).not.toContain("om-active");
+    pending.push(handler(createTextEvent("evt-queued", "om-queued", "next ordinary turn")));
+    active.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(pending);
+    expect(completed.filter((id) => ["om-active", "om-queued"].includes(id))).toEqual([
+      "om-active",
+      "om-queued",
+    ]);
+  } finally {
+    active.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(pending);
+    vi.useRealTimers();
+  }
 });

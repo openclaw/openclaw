@@ -1,10 +1,26 @@
+import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { hasErrnoCode } from "../infra/errno.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type { ExecResult } from "./exec-file.js";
 import { getServiceInspectionClock } from "./service-inspection-budget.js";
 import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import { formatServiceInspectionDetail } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
+
+/** Only an affirmative not-booted fact can relax a failed manager inspection. */
+export async function isSystemdNotBooted(): Promise<boolean> {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  try {
+    const entry = await fs.lstat("/run/systemd/system");
+    // A symlink may point at a booted manager's directory; lstat cannot attest it.
+    return !entry.isDirectory() && !entry.isSymbolicLink();
+  } catch (error) {
+    return hasErrnoCode(error, "ENOENT");
+  }
+}
 
 /** Failed user routes alone cannot distinguish a missing manager from a missing session bus. */
 export async function resolveUnavailableSystemdInspectionReason(

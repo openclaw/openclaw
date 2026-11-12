@@ -10,17 +10,11 @@ import {
   retainInstantThreadRestore,
   takeInstantThreadRestore,
 } from "./instant-thread-restore.ts";
+import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { renderSolid as Route } from "./new-session-page-entry.ts";
 import type { PageHost } from "./new-session-page-owner.ts";
 
-const routeData = (agentId = "main"): NewSessionRouteData => ({
-  agentId,
-  requestedAgentId: agentId,
-  catalogId: "",
-  catalogLabel: "",
-  startTerminal: false,
-});
 const pageHost = (container: Element) =>
   container.querySelector<PageHost>("openclaw-new-session-page");
 

@@ -47,22 +47,17 @@ import {
 } from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
-import type {
-  HookBlockedReason,
-  HookContext,
-  ToolOutcomeObservation,
-  ToolOutcomeObserver,
-} from "./agent-tools.before-tool-call.types.js";
+import type { HookBlockedReason, HookContext } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { getSkillInstructionFingerprint } from "./skill-instruction-result.js";
+import { resolveToolExecutionErrorKind } from "./tool-execution-error.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
+import type { ToolOutcomeObservation, ToolOutcomeObserver } from "./tool-outcome-observation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import {
-  resolveToolExecutionErrorKind,
-  resolveToolResultFailureKind,
-} from "./tool-result-error.js";
+import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { canonicalizePath } from "./utils/paths.js";
@@ -243,44 +238,24 @@ export function resolveToolErrorDiagnostic(
   };
 }
 
-type ResolvedToolTerminalDiagnostic =
-  | {
-      type: "tool.execution.blocked";
-      deniedReason: "tool_result_blocked";
-      reason: "tool_result_blocked";
-    }
-  | {
-      type: "tool.execution.completed";
-      durationMs: number;
-    }
-  | {
-      type: "tool.execution.error";
-      durationMs: number;
-      errorCategory: "tool_result_error";
-      terminalReason: DiagnosticToolTerminalReason;
-    };
-
-export function resolveToolResultTerminalDiagnostic(
-  result: unknown,
-  durationMs: number,
-): ResolvedToolTerminalDiagnostic {
+export function resolveToolResultTerminalDiagnostic(result: unknown, durationMs: number) {
   // Tool execution may resolve with a structured failure. Classify that here
   // so every diagnostic consumer sees one canonical terminal outcome.
   const failureKind = resolveToolResultFailureKind(result);
   if (!failureKind) {
-    return { type: "tool.execution.completed", durationMs };
+    return { type: "tool.execution.completed" as const, durationMs };
   }
   if (failureKind === "blocked") {
     return {
-      type: "tool.execution.blocked",
-      deniedReason: "tool_result_blocked",
-      reason: "tool_result_blocked",
+      type: "tool.execution.blocked" as const,
+      deniedReason: "tool_result_blocked" as const,
+      reason: "tool_result_blocked" as const,
     };
   }
   return {
-    type: "tool.execution.error",
+    type: "tool.execution.error" as const,
     durationMs,
-    errorCategory: "tool_result_error",
+    errorCategory: "tool_result_error" as const,
     terminalReason: failureKind,
   };
 }
@@ -318,7 +293,8 @@ function canonicalSkillFile(value: string | undefined): string | undefined {
     : undefined;
 }
 
-function resolvedSkillUsageMatch(params: {
+/** Builds the usage match for one resolved skill, keyed by its canonical SKILL.md file. */
+export function resolvedSkillUsageMatch(params: {
   activation: SkillUsageMatch["activation"];
   skill: Pick<Skill, "name" | "filePath"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
 }): SkillUsageMatch {
@@ -430,9 +406,10 @@ export function findSkillUsageMatch(params: {
     if (typeof name !== "string") {
       return undefined;
     }
+    const normalizedName = name.trim();
     const snapshot = params.ctx?.skillsSnapshot;
     const skill = (snapshot?.discoverySkills ?? snapshot?.resolvedSkills)?.find(
-      (entry) => entry.name === name.trim() && !entry.disableModelInvocation,
+      (entry) => entry.name === normalizedName && !entry.disableModelInvocation,
     );
     if (!skill) {
       return undefined;
@@ -481,7 +458,9 @@ export function recordSkillUsed(params: {
   match: SkillUsageMatch;
   toolName: string;
   toolCallId?: string;
+  result?: unknown;
 }): void {
+  const skillFingerprint = getSkillInstructionFingerprint(params.result);
   recordRunSkillUsage({
     runId: params.ctx?.runId,
     name: params.match.skillName,
@@ -505,6 +484,7 @@ export function recordSkillUsed(params: {
       skillName: params.match.skillName,
       skillSource: params.match.skillSource,
       activation: params.match.activation,
+      ...(skillFingerprint ? { skillFingerprint } : {}),
       toolName: params.toolName,
       ...(params.toolCallId && { toolCallId: params.toolCallId }),
     },

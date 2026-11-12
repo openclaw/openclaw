@@ -9,6 +9,7 @@ import JSZip from "jszip";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createClosedChunkStream } from "../../test-support/streaming-error-response.js";
 
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
@@ -488,16 +489,7 @@ describe("downloadVerifiedFile", () => {
     const payload = Buffer.concat(chunks);
     const release = vi.fn();
     mocks.fetchWithSsrFGuard.mockResolvedValue({
-      response: new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const chunk of chunks) {
-              controller.enqueue(chunk);
-            }
-            controller.close();
-          },
-        }),
-      ),
+      response: new Response(createClosedChunkStream(chunks)),
       release,
     });
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);

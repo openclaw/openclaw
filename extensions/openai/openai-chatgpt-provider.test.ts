@@ -118,19 +118,16 @@ describe("OpenAI provider Codex transport hooks", () => {
       expect.objectContaining({ signal: controller.signal }),
     );
 
-    expect(result?.profiles?.[0]).toMatchObject({
-      profileId: "openai:default",
-      credential: {
-        type: "oauth",
-        provider: "openai",
-        access: "access-token",
-        refresh: "refresh-token",
-      },
+    expect(result).toMatchObject({
+      profiles: [
+        {
+          profileId: "openai:default",
+          credential: { type: "oauth", provider: "openai", ...tokens },
+        },
+      ],
+      defaultModel: "openai/gpt-6-astra",
     });
-    expect(result?.defaultModel).toBe("openai/gpt-6-astra");
-    expect(result?.configPatch?.agents?.defaults?.models).toEqual({
-      "openai/gpt-6-astra": {},
-    });
+    expect(result?.configPatch?.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
   });
 
   it.each(["structured", "note"])(
@@ -160,7 +157,6 @@ describe("OpenAI provider Codex transport hooks", () => {
 
       expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
       if (surface === "note") {
-        expect(note).toHaveBeenCalledOnce();
         const [message] = note.mock.calls[0]!;
         expect(markdownToIR(message, { linkify: false }).links.map((link) => link.href)).toEqual([
           "https://auth.openai.com/codex/device",
@@ -256,14 +252,7 @@ describe("OpenAI provider Codex transport hooks", () => {
   ])("$name on registry-backed GPT-5.6 models", ({ thinkingLevelMap, expectedOff }) => {
     const model = resolveModel(
       "gpt-5.6-luna",
-      () =>
-        catalogModel("gpt-5.6-luna", {
-          name: "GPT-5.6 Luna",
-          input: ["text"],
-          cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-          contextWindow: 372_000,
-          ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
-        }),
+      () => catalogModel("gpt-5.6-luna", { input: ["text"], thinkingLevelMap }),
       { authProfileMode: "oauth" },
     );
 
@@ -288,25 +277,20 @@ describe("OpenAI provider Codex transport hooks", () => {
 
   it("refreshes ChatGPT OAuth credentials under the OpenAI provider", async () => {
     const provider = buildOpenAIProvider();
-    refreshOpenAICodexTokenMock.mockResolvedValueOnce({
-      access: "new-access",
-      refresh: "new-refresh",
-      expires: 1_700_000_000_000,
-    });
+    const refreshed = { ...tokens, access: "new-access", refresh: "new-refresh" };
+    refreshOpenAICodexTokenMock.mockResolvedValueOnce(refreshed);
 
     await expect(
       provider.refreshOAuth?.({
+        ...tokens,
         type: "oauth",
         provider: "openai",
-        access: "old-access",
-        refresh: "old-refresh",
         expires: Date.now() - 60_000,
       }),
     ).resolves.toMatchObject({
       type: "oauth",
       provider: "openai",
-      access: "new-access",
-      refresh: "new-refresh",
+      ...refreshed,
     });
   });
 });

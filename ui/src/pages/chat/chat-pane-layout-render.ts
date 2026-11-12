@@ -5,9 +5,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import "./components/chat-details.tsx";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { resolveChatPaneDesktopTarget } from "../../components/desktop/desktop-source.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
@@ -15,7 +16,6 @@ import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderLayout, type PaneDetailsActions } from "./chat-pane-header-layout.ts";
 import type { PaneLayoutData } from "./chat-pane-layout-view.tsx";
-import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
@@ -327,9 +327,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       panePresentation,
       conversationVisible,
     });
-    const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
+    const discussion = this.sessionDiscussionSource(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussion.snapshot.states.get(state.sessionKey.trim());
-    const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
     // Publish the mutable owner's current fields across the reactive property boundary.
@@ -337,8 +336,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       ...this.sessionCompanionThreads.view(companionSessionKey, currentAgentId),
     };
     const companionPresented = slotPresentation("companion");
-    // Capture the opening before the lazy rail can yield to newer input intent.
-    this.syncSessionCompanionPresentation(companionPresented.isPresented());
+    // Capture the opening before the lazy rail can yield to newer input intent. A sheet
+    // sliding out only keeps painting its content, so reopening it is a new opening.
+    this.syncSessionCompanionPresentation(companionPresented.isPresented() && !mobileHost?.exiting);
     // Another pane can own keyboard focus while this desktop remains visible.
     const desktopPresented = slotPresentation("desktop");
     const discoveredDesktopSource = this.activeSessionResources.desktopSource(
@@ -470,7 +470,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
           this.desktopFocus = { ...this.desktopFocus, href };
         }
       },
-      dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : null,
+      dashboard: !this.compact ? this.boardPanelSource(board, sidebarLayout) : null,
       workspace: headerWorkspace,
       workspacePresented: slotPresentation("workspace"),
       detail: {
@@ -513,7 +513,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       connected: state.connected,
       onClearCompanion: this.clearSessionCompanion,
       discussion,
-      discussionAvailable,
+      discussionAvailable: discussionState === "available" || discussionState === "open",
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
       pluginPanels: this.context.plugins.registrations("panels"),
@@ -637,7 +637,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       header: paneHeader,
       notice:
         !conversationVisible && chatProps.error
-          ? { error: chatProps.error, onDismissError: chatProps.onDismissError }
+          ? {
+              error: chatProps.error,
+              errorDetail: chatProps.errorDetail,
+              onDismissError: chatProps.onDismissError,
+            }
           : undefined,
       sessionKey: state.sessionKey,
       agentId: currentAgentId,
@@ -660,6 +664,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     const region = renderSidebarRegion({
       onPanelReady: () => this.flushPendingPanelToggles(),
       mobileScrollFades: this.mobileScrollFades,
+      visualPresentation: headerPresentation,
       onRegionElementRef: (element) => {
         this.sidebarRegionElement = element;
         const release = this.registerDetailsElement("pane", element);

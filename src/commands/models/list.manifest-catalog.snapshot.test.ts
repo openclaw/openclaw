@@ -61,9 +61,6 @@ function prepareFixture() {
       pluginId,
       providerId,
       manifest: {
-        channels: [],
-        channelConfigs: {},
-        providerAuthChoices: [],
         modelCatalog: {
           providers: {
             [providerId]: {

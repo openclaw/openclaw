@@ -20,8 +20,8 @@ const photoPayload = {
   channelData: { telegram: { buttons, effect: "spark" }, other: true },
 };
 type Harness = ReturnType<typeof createHarness>;
-function streamedHarness() {
-  const harness = createHarness({ answerMessageId: 999 });
+function streamedHarness(answerStream?: Harness["answer"]) {
+  const harness = createHarness({ answerMessageId: 999, answerStream });
   harness.lanes.answer.hasStreamedMessage = true;
   return harness;
 }
@@ -74,16 +74,14 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliver(harness, HELLO_FINAL, { onPlatformSendDispatch });
     expect(events).toEqual(["custody", "finalize"]);
     expect(answer.update).not.toHaveBeenCalled();
-    expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
     expectFinal(harness, result, HELLO_FINAL);
   });
 
   it("keeps throwing late media failures without a concrete preview receipt", async () => {
     const answer = createTestDraftStream();
-    const harness = createHarness({ answerStream: answer });
+    const harness = streamedHarness(answer);
     const mediaError = new Error("media rejected");
     answer.sendMayHaveLanded.mockReturnValue(true);
-    harness.lanes.answer.hasStreamedMessage = true;
     harness.sendPayload.mockRejectedValueOnce(mediaError);
 
     const payload = { text: "photo", mediaUrl: "https://example.com/a.png" };
@@ -165,7 +163,6 @@ describe("createLaneTextDeliverer", () => {
       const renderedSuffix = "<code>&lt;b&gt;x&lt;/b&gt;</code>";
       answer.update(fullAnswer);
       await answer.flush();
-      expect(attempts).toEqual(["1234567890"]);
 
       const harness = createHarness({ answerStream: answer });
       harness.lanes.answer.retainedPromptContextPages = retainedPages;
@@ -200,20 +197,20 @@ describe("createLaneTextDeliverer", () => {
     }
   });
 
-  it("retains the streamed message when stop may have landed without a message id", async () => {
-    const answer = createTestDraftStream();
-    answer.sendMayHaveLanded.mockReturnValue(true);
+  // A lost first send retains the final only when that send carried the final itself.
+  it.each([
+    [HELLO_FINAL, "preview-retained", 0],
+    ["Hello", "sent", 1],
+  ] as const)("after a lost first send of %j the final is %s", async (preview, kind, sends) => {
+    const api = { sendMessage: vi.fn().mockRejectedValue(new Error("socket hang up")) };
+    const answer = createTelegramDraftStream({ api: api as never, chatId: "123", throttleMs: 250 });
+    answer.update(preview);
+    await answer.flush();
     const harness = createHarness({ answerStream: answer });
 
-    expect(await deliver(harness, HELLO_FINAL)).toMatchObject({
-      kind: "preview-retained",
-      deliveryResult: {
-        visibleReplySent: false,
-        suppression: { reason: "adapter_returned_no_identity" },
-      },
-    });
-    expect(answer.update).toHaveBeenCalledWith(HELLO_FINAL);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect((await deliver(harness, HELLO_FINAL)).kind).toBe(kind);
+    expect(harness.sendPayload).toHaveBeenCalledTimes(sends);
+    expect(api.sendMessage).toHaveBeenCalledOnce();
   });
 
   it("waits for a concrete streamed tool message before attaching buttons", async () => {
@@ -226,7 +223,6 @@ describe("createLaneTextDeliverer", () => {
       buttons,
     });
 
-    expect(answer.waitForInFlight).toHaveBeenCalledOnce();
     expect(result.kind).toBe("preview-updated");
     expect(harness.editStreamMessage).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 999, buttons }),

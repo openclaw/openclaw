@@ -16,13 +16,17 @@ export function resolveRuntimeDependencyEntrypointUrl(
   const entry = runtimeProcessDependencyEntrypoints[name];
   const require = createRequire(moduleUrl);
   if (entry.kind === "standalone-package-manager") {
+    const standaloneNpm = resolveStandaloneNpmCliPath();
     return pathToFileURL(
-      resolveStandaloneNpmCliPath() ??
-        path.join(path.dirname(require.resolve(entry.packageJsonSpecifier)), entry.relativePath),
+      standaloneNpm
+        ? path.join(path.dirname(standaloneNpm), path.basename(entry.relativePath))
+        : path.join(path.dirname(require.resolve(entry.packageJsonSpecifier)), entry.relativePath),
     );
   }
   return pathToFileURL(require.resolve(entry.specifier));
 }
+
+export { resolveRuntimeDependencyEntrypointUrlFromDirectory } from "../../runtime-process-bootstrap.generated.mjs";
 
 type PluginAssetEntrypointName = {
   [

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import { assert, expect, it, vi } from "vitest";
+import { attachInternalToolResultAcknowledgement } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   loadSessionEntry,
@@ -13,9 +15,9 @@ import {
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
+import { runWithoutOwnedSessionTranscriptWrites as outsideWriter } from "../../../config/sessions/transcript-write-context-store.js";
 import {
   SessionTranscriptWriterClaimReboundError as WriterReboundError,
-  runWithoutOwnedSessionTranscriptWrites as outsideWriter,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
@@ -37,7 +39,6 @@ import {
 } from "../../admitted-run-context.js";
 import { isRecordedModelFallbackStop } from "../../model-fallback-stop.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
-import { attachInternalToolResultAcknowledgement } from "../../runtime/internal-hooks.js";
 import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import {
   createAssistant,
@@ -49,9 +50,14 @@ import { sessionManagerAppendInitialMetadata } from "../../sessions/session-mana
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { rewriteTranscriptEntriesInSessionManager } from "../transcript-rewrite.js";
+import {
+  cleanupEmbeddedAttemptSessionPhase,
+  createEmbeddedAttemptSessionSettleTracker,
+} from "./attempt-session-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import { preparePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { claimAgentSessionWriter, prepareInitialSessionWriter } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
@@ -108,7 +114,12 @@ type InitialWriterFixture = {
 
 async function withInitialWriter(
   run: (fixture: InitialWriterFixture) => Promise<void>,
-  options: { existing?: boolean; outsideTranscriptWrite?: boolean; incognito?: boolean } = {},
+  options: {
+    existing?: boolean;
+    outsideTranscriptWrite?: boolean;
+    incognito?: boolean;
+    assertSourceCurrent?: () => void;
+  } = {},
 ) {
   await withOpenClawTestState({ label: "initial-session-writer" }, async (state) => {
     const sessionId = randomUUID();
@@ -124,7 +135,13 @@ async function withInitialWriter(
         : path.join(state.agentDir(), "openclaw-agent.sqlite"),
     };
     const controller = new AbortController();
-    const admission = prepareSystemAgentRunAdmission({}, runId, "main", "initial-writer-test");
+    const admission = prepareSystemAgentRunAdmission(
+      {},
+      runId,
+      "main",
+      "initial-writer-test",
+      options.assertSourceCurrent,
+    );
     const admissions = [admission];
     let prepared: Transcript | undefined;
     try {
@@ -245,11 +262,17 @@ it.each([
   { existing: true, text: "Already streamed answer", closeAdmission: true },
   { existing: true, text: "Already streamed answer", incognito: true },
   { existing: true, text: "Already streamed answer", incognito: true, closeAdmission: true },
+  {
+    existing: true,
+    text: "Already streamed answer",
+    closeAdmission: true,
+    cleanupDuringAbort: true,
+  },
 ])(
-  "settles a restart-aborted stream (existing=$existing, text=$text, closed=$closeAdmission, incognito=$incognito)",
-  ({ existing, text, closeAdmission, incognito }) =>
+  "settles a restart-aborted stream (existing=$existing, text=$text, closed=$closeAdmission, incognito=$incognito, cleanup=$cleanupDuringAbort)",
+  ({ existing, text, closeAdmission, incognito, cleanupDuringAbort }) =>
     withInitialWriter(
-      async ({ manager, controller, target, transcript, admission }) =>
+      async ({ manager, controller, target, transcript, admission, runParams }) =>
         withOwnedSessionTranscriptWrites(transcript.ownedTranscriptWriteContext, async () => {
           const { session } = await createTestSession({
             sessionManager: manager,
@@ -257,19 +280,27 @@ it.each([
               transcript.transcriptLifecycle.withTranscriptWrite(write),
           });
           const reason = createAgentRunRestartAbortError();
+          const settleTracker = createEmbeddedAttemptSessionSettleTracker(session);
+          const providerAbort = createDeferredCore();
+          let cleanup: Promise<void> | undefined;
           session.agent.streamFn = (_model, _context, options) => {
             const stream = createAssistantMessageEventStream();
             const output = createAssistant(testModel, []);
             options?.signal?.addEventListener(
               "abort",
               () => {
-                Object.assign(output, {
-                  stopReason: "aborted",
-                  errorCode: "OPENCLAW_RESTART_ABORT",
-                  errorMessage: reason.message,
-                });
-                stream.push({ type: "error", reason: "aborted", error: output });
-                stream.end();
+                void (async () => {
+                  if (cleanupDuringAbort) {
+                    await providerAbort.promise;
+                  }
+                  Object.assign(output, {
+                    stopReason: "aborted",
+                    errorCode: "OPENCLAW_RESTART_ABORT",
+                    errorMessage: reason.message,
+                  });
+                  stream.push({ type: "error", reason: "aborted", error: output });
+                  stream.end();
+                })();
               },
               { once: true },
             );
@@ -294,6 +325,9 @@ it.each([
             });
             return stream;
           };
+          if (cleanupDuringAbort) {
+            session.agent.streamFn = streamWithIdleTimeout(session.agent.streamFn, 30_000);
+          }
           session.subscribe((event) => {
             if (
               ((text && event.type === "message_update") ||
@@ -304,14 +338,36 @@ it.each([
                 admission.close();
               }
               controller.abort(reason);
-              session.agent.abort(reason);
+              void settleTracker.abortActiveSession(reason).catch(() => {});
+              if (cleanupDuringAbort) {
+                cleanup = cleanupEmbeddedAttemptSessionPhase({
+                  attempt: runParams,
+                  session,
+                  sessionManager: manager,
+                  trajectoryRecorder: null,
+                  trajectoryEndRecorded: false,
+                  transcriptLifecycle: transcript.transcriptLifecycle,
+                  state: {
+                    terminal: { kind: "aborted", source: "external" },
+                    beforeAgentRunBlockedBy: undefined,
+                  },
+                  buildAbortSettlePromise: () => {
+                    providerAbort.resolve();
+                    return settleTracker.buildAbortSettlePromise();
+                  },
+                });
+                void cleanup.catch(() => {});
+              }
             }
           });
           try {
             // The canceled run may reject after its terminal row; storage is the contract here.
             await Promise.allSettled([
-              session.prompt("Keep my answer", { expandPromptTemplates: false }),
+              settleTracker.trackPromptSettlePromise(
+                session.prompt("Keep my answer", { expandPromptTemplates: false }),
+              ),
             ]);
+            await cleanup;
             const events = incognito
               ? await outsideWriter(() => loadTranscriptEvents(target))
               : readEvents(target);
@@ -335,6 +391,7 @@ it.each([
               ).rejects.toThrow();
             }
           } finally {
+            providerAbort.resolve();
             session.dispose();
           }
         }),
@@ -453,6 +510,31 @@ it("refuses an explicitly stale actor append without replay or persistence", () 
     { existing: true },
   ));
 
+it("checks a prepared transcript target's source once and retains its revocation", async () => {
+  const failure = new Error("operator source revoked");
+  let revoked = false;
+  const assertSourceCurrent = vi.fn(() => {
+    if (revoked) {
+      throw failure;
+    }
+  });
+  await withInitialWriter(
+    async ({ transcript }) => {
+      const assertCommitAllowed = transcript.ownedTranscriptWriteContext.assertCommitAllowed!;
+      assertSourceCurrent.mockClear();
+      assertCommitAllowed();
+      expect(assertSourceCurrent).toHaveBeenCalledOnce();
+      revoked = true;
+      expect(assertCommitAllowed).toThrow("admitted run authority is no longer active");
+      revoked = false;
+      assertSourceCurrent.mockClear();
+      expect(assertCommitAllowed).toThrow("admitted run authority is no longer active");
+      expect(assertSourceCurrent).not.toHaveBeenCalled();
+    },
+    { existing: true, assertSourceCurrent },
+  );
+});
+
 it("refuses a prepared target whose owner closes during lifecycle preparation", () =>
   withInitialWriter(
     async ({ admission, preparedSessionTarget, runParams }) => {
@@ -465,6 +547,24 @@ it("refuses a prepared target whose owner closes during lifecycle preparation", 
         ),
       ).rejects.toThrow("admitted run authority is no longer active");
       expect(arm).not.toHaveBeenCalled();
+    },
+    { existing: true },
+  ));
+
+it("prepares a warm transcript from its admitted database identity without resolving its path", () =>
+  withInitialWriter(
+    async ({ preparedSessionTarget, runParams }) => {
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      const prepared = await prepareTranscript({ ...runParams, preparedSessionTarget });
+      try {
+        expect(prepared.ownedTranscriptWriteContext.sessionActor?.actor.target).toMatchObject({
+          database: { kind: "file" },
+          sessionKey: runParams.sessionKey,
+        });
+        expect(realpath).not.toHaveBeenCalled();
+      } finally {
+        await prepared.transcriptLifecycle.dispose();
+      }
     },
     { existing: true },
   ));

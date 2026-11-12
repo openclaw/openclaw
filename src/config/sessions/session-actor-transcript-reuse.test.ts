@@ -7,6 +7,7 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -21,8 +22,9 @@ import { recordSessionParticipantInWorker } from "./session-sharing-store.async.
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
 // mock-isolation: this transport proof does not schedule unrelated maintenance.
@@ -76,12 +78,11 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
     await captureRuntimeConfigAsyncReader()();
     const fixture = createSessionCompoundWorkerFixture();
     const scope = { ...fixture.scope, env };
-    const answer = {
-      type: "message",
-      id: "answer",
-      parentId: "initial-runtime",
-      message: { role: "assistant", content: "Original answer", usage: { input: 200, output: 7 } },
-    };
+    const answer = messageEvent("answer", "initial-runtime", {
+      role: "assistant",
+      content: "Original answer",
+      usage: { input: 200, output: 7 },
+    });
     const events = [
       { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
       {
@@ -91,12 +92,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
         customType: "model-snapshot",
         data: { provider: "synthetic", modelApi: "test-api", modelId: "first-model", timestamp: 1 },
       },
-      {
-        type: "message",
-        id: "question",
-        parentId: "initial-model",
-        message: { role: "user", content: "Original question" },
-      },
+      messageEvent("question", "initial-model", { role: "user", content: "Original question" }),
       {
         type: "custom_message",
         id: "initial-runtime",
@@ -256,9 +252,9 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
             await readSessionTranscriptAccountingAsync(scope, {
               ...accountingOptions,
               includeByteSize: false,
-              usageEventLimit: 0,
+              includeUsage: false,
             }),
-          ).toEqual({ usage: undefined, turnTainted: false });
+          ).toEqual({ turnTainted: false });
           expect(historyReads).not.toHaveBeenCalled();
           const committed = vi.fn();
           const captured = await capturePersistedModelPromptProjection({
@@ -374,7 +370,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
           ]);
           expect(historyReads).not.toHaveBeenCalled();
 
-          const expectedState = buildRestartRecoveryExpectedState(
+          const expectedState = buildSessionTranscriptTurnExpectedState(
             actor.snapshot(authority)!.entry!,
           );
           const recordAndAdopt = async (contributionCount: number) => {
@@ -496,12 +492,12 @@ it("slides durable context within its bounds and reloads only when an admission 
     const header = { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" };
     const events = [
       header,
-      ...Array.from({ length: 5 }, (_, index) => ({
-        type: "message",
-        id: `old-${index}`,
-        parentId: index === 0 ? null : `old-${index - 1}`,
-        message: { role: index % 2 === 0 ? "assistant" : "user", content: `Old message ${index}` },
-      })),
+      ...Array.from({ length: 5 }, (_, index) =>
+        messageEvent(`old-${index}`, index === 0 ? null : `old-${index - 1}`, {
+          role: index % 2 === 0 ? "assistant" : "user",
+          content: `Old message ${index}`,
+        }),
+      ),
     ];
     await replaceTranscriptEvents(scope, events);
     const { actor, database } = await acquireActor(fixture, env);
@@ -626,6 +622,57 @@ it("slides durable context within its bounds and reloads only when an admission 
             activeLeafEntryId: "after-oversized",
           });
           expect(historyReads).toHaveBeenCalled();
+        },
+      );
+    } finally {
+      historyReads.mockRestore();
+      await actor.release();
+    }
+  }));
+
+it("rereads an admitted turn from resident context when the target names the session-store locator", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const fixture = createSessionCompoundWorkerFixture();
+    // CLI runs (and their model fallbacks) name the agent's sessions.json locator.
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main", env });
+    const scope = { ...fixture.scope, env, storePath };
+    const limits = { maxBytes: 1024 * 1024, maxEvents: 100 };
+    await replaceTranscriptEvents({ ...fixture.scope, env }, [
+      { type: "session", id: scope.sessionId, version: 3, cwd: "/synthetic" },
+      messageEvent("question", null, { role: "user", content: "Question" }),
+    ]);
+    const { actor, database } = await acquireActor(fixture, env);
+    const historyReads = vi.spyOn(historyLane.pool, "run");
+    try {
+      await actor.read(authority);
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: scope,
+          sessionActor: { actor, database },
+          withTranscriptWrite: async (write) => write(),
+        },
+        async () => {
+          const input = await appendMessage(
+            actor,
+            scope,
+            "input",
+            { role: "user", content: "Input" },
+            10,
+          );
+          assert(input.kind === "committed", "Expected a committed user append");
+          const anchor = input.receipt.transcript.appendedMessages[0]?.anchor;
+          assert(anchor, "User append omitted its committed anchor");
+          const admission = { ...anchor, logicalTurnId: "input", role: "user" as const };
+          const read = () =>
+            runWithSessionTranscriptReadFence(admission, () =>
+              prepareSessionTranscriptHydration(scope, limits).read(),
+            );
+          const cold = await read();
+          expect(historyReads).toHaveBeenCalled();
+          historyReads.mockClear();
+          // A fallback candidate rereads the same admitted turn from the resident replica.
+          expect((await read()).snapshot).toEqual(cold.snapshot);
+          expect(historyReads).not.toHaveBeenCalled();
         },
       );
     } finally {

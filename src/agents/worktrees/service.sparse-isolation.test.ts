@@ -42,8 +42,6 @@ it("preserves isolated source and guarded fallback across sparse checkout change
   const backend = createCopyWorktreeBackend();
   vi.mocked(detectWorktreeFilesystemBackend).mockReset().mockResolvedValue(backend);
   const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
-  // Sparse isolation must not depend on Btrfs checkout timing selection.
-  vi.spyOn(performance, "now").mockReturnValue(0);
   await fs.mkdir(path.join(repo, ".openclaw/worktree-profiles"), { recursive: true });
   await fs.mkdir(path.join(repo, "selected"), { recursive: true });
   await fs.mkdir(path.join(repo, "excluded"), { recursive: true });

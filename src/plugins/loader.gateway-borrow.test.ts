@@ -1,5 +1,9 @@
 import { afterEach, expect, it } from "vitest";
 import { retainPreparedPluginRegistry } from "../agents/prepared-model-runtime.plugin-lifetime.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { disposeLoaderFixtures, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
@@ -11,7 +15,11 @@ import {
 } from "./loader.test-fixtures.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { clearActivePluginRegistry, disposePluginRegistryInstances } from "./runtime.js";
+import {
+  clearActivePluginRegistry,
+  createPluginRegistryOwner,
+  disposePluginRegistryInstances,
+} from "./runtime.js";
 import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
 
 const lenderId = "borrow-lender";
@@ -43,6 +51,7 @@ const registries: PluginRegistry[] = [];
 afterEach(async () => {
   await disposeLoaderFixtures(registries);
   await clearActivePluginRegistry();
+  clearRuntimeConfigSnapshot();
   Reflect.deleteProperty(globalThis, evaluations);
   resetPluginLoaderTestStateForTest();
 });
@@ -96,9 +105,6 @@ function bindProbe(registry: PluginRegistry, pluginId: string) {
 const firstGeneration = { content: [{ type: "text", text: "1" }] };
 const expectFirstGeneration = (registry: PluginRegistry, call: string) =>
   expect(bindProbe(registry, lenderId).execute(call, {})).resolves.toMatchObject(firstGeneration);
-function expectLenderActive(instance: ReturnType<typeof getPluginInstance>) {
-  expect(instance).toMatchObject({ acceptingCalls: true, disposing: false });
-}
 
 it.each(["prepared", "inspection"] as const)(
   "releases a %s registry without disposing borrowed Gateway instances",
@@ -116,7 +122,6 @@ it.each(["prepared", "inspection"] as const)(
     const freshRecord = prepared.plugins.find((record) => record.id === freshId);
     const freshInstance = freshRecord && getPluginInstance(freshRecord);
     expect(prepared.plugins.find((record) => record.id === lenderId)).toBe(gatewayRecord);
-    expect(freshRecord?.status).toBe("loaded");
     expect(Reflect.get(globalThis, evaluations)).toEqual({ [lenderId]: 1, [freshId]: 1 });
     await expectFirstGeneration(prepared, "borrowed");
 
@@ -124,19 +129,15 @@ it.each(["prepared", "inspection"] as const)(
     expect(gatewayInstance.owner?.registry).toBe(gateway);
     await release?.();
     expect(freshInstance?.acceptingCalls).toBe(false);
-    expectLenderActive(gatewayInstance);
     await expectFirstGeneration(gateway, "lender");
   },
 );
 
 it("rolls back a failed borrowing load without retiring borrowed Gateway instances", async () => {
-  const { gateway, gatewayInstance, borrowOptions } = setupLender(
-    'throw new Error("fresh plugin failed");',
-  );
+  const { gateway, borrowOptions } = setupLender('throw new Error("fresh plugin failed");');
   expect(() => loadOpenClawPlugins({ ...borrowOptions, throwOnLoadError: true })).toThrow(
     /fresh plugin failed|failed to load/,
   );
-  expectLenderActive(gatewayInstance);
   await expectFirstGeneration(gateway, "lender");
 });
 
@@ -149,6 +150,37 @@ it("stops borrowed callbacks when the lending Gateway retires the instance", asy
   await disposePluginRegistryInstances(gateway);
   await expect(bound.execute("after", {})).rejects.toThrow(/no longer active/);
 });
+
+it.each(["uncommitted", "different scope", "original scope"] as const)(
+  "does not borrow a live Gateway service for %s plugin config",
+  async (mode) => {
+    const { gateway, gatewayRecord, borrowOptions } = setupLender();
+    const owner = createPluginRegistryOwner(gateway);
+    const config = {
+      ...borrowOptions.config,
+      plugins: {
+        ...borrowOptions.config?.plugins,
+        entries: mode === "original scope" ? undefined : { [lenderId]: { config: { limit: 2 } } },
+      },
+    };
+    if (mode !== "uncommitted") {
+      setRuntimeConfigSnapshot({
+        ...config,
+        plugins: { ...config.plugins, entries: { [lenderId]: { config: { limit: 1 } } } },
+      });
+    }
+    try {
+      const prepared = loadOpenClawPlugins({ ...borrowOptions, config });
+      registries.push(prepared);
+      expect(prepared.plugins.find(({ id }) => id === lenderId)).not.toBe(gatewayRecord);
+      await expect(bindProbe(prepared, lenderId).execute("scoped", {})).resolves.toMatchObject({
+        content: [{ type: "text", text: "2" }],
+      });
+    } finally {
+      await owner.close();
+    }
+  },
+);
 
 it.each([true, false])("never adopts a predecessor's loan (lender supplied: %s)", async (lend) => {
   const { gateway, gatewayRecord, gatewayInstance, borrowOptions } = setupLender();

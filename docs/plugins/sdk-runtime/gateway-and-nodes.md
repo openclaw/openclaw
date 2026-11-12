@@ -64,7 +64,9 @@ and finish admitted writes before returning. Scheduling creates no durable jobs
 and changes no stored config or state; an update requires no state migration.
 
 Config-only service restarts share plugin replacement's five-second startup
-observation budget. If startup exceeds it, the host reports a service health
+observation budget. Service startup and cleanup observation budgets measure elapsed
+time, so system-clock changes cannot shorten or extend them. If startup exceeds its
+budget, the host reports a service health
 failure and closes scheduling and managed capability admission. Raw startup
 remains owned until it settles, then the service's final stop runs exactly once.
 This does not forcibly terminate native plugin work: shutdown still waits for
@@ -207,6 +209,14 @@ owner and initialize it before accepting person access.
 Return a native `AbortSignal`. Registration preserves native cancellation and
 cleanup while keeping the assertion and callable abort-reason values bound to
 the plugin instance. Plugin retirement also ends captured access.
+
+The registration owner records a closed diagnostic `failureCause` before relaying
+an abort or failed assertion. This distinguishes grant revocation, plugin lifetime
+retirement, refused plugin invocation, and unclassified policy check failures
+without exposing plugin error text. It does not change authorization: live
+ingress still fails closed, including when ownership or availability is unknown.
+The durable recovery contract below separately distinguishes an unavailable
+observation from a definitively ended grant.
 
 The Gateway binds the returned authority to the original person and carries it
 through WebSocket and HTTP requests, and through commands admitted for a linked

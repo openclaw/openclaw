@@ -4,43 +4,34 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  resolveThreadBindingIdleTimeoutMs,
-  resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingMaxAgeMs,
-  resolveThreadBindingMaxAgeMsForChannel,
-  resolveThreadBindingSpawnPolicy,
-  supportsAutomaticThreadBindingSpawn,
+  resolveThreadBindingIdleTimeoutMs as idleMs,
+  resolveThreadBindingIdleTimeoutMsForChannel as channelIdleMs,
+  resolveThreadBindingMaxAgeMs as maxAgeMs,
+  resolveThreadBindingMaxAgeMsForChannel as channelMaxAgeMs,
+  resolveThreadBindingSpawnPolicy as spawnPolicy,
+  supportsAutomaticThreadBindingSpawn as automaticSpawn,
 } from "./thread-bindings-policy.js";
 
 beforeEach(() => {
-  setActivePluginRegistry(
-    createTestRegistry(
-      (["child", "current"] as const).map((placement) => ({
-        pluginId: `${placement}-chat`,
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: `${placement}-chat`, label: `${placement} chat` }),
-          conversationBindings: { defaultTopLevelPlacement: placement },
-        },
-      })),
-    ),
-  );
+  const plugins = (["child", "current"] as const).map((placement) => ({
+    pluginId: `${placement}-chat`,
+    source: "test",
+    plugin: {
+      ...createChannelTestPluginBase({ id: `${placement}-chat`, label: `${placement} chat` }),
+      conversationBindings: { defaultTopLevelPlacement: placement },
+    },
+  }));
+  setActivePluginRegistry(createTestRegistry(plugins));
 });
 
 it("treats child-placement channels as automatic child-thread spawn channels", () => {
-  expect(supportsAutomaticThreadBindingSpawn("child-chat")).toBe(true);
-  expect(supportsAutomaticThreadBindingSpawn("current-chat")).toBe(false);
-  expect(supportsAutomaticThreadBindingSpawn("unknown-chat")).toBe(false);
+  expect(automaticSpawn("child-chat")).toBe(true);
+  expect(automaticSpawn("current-chat")).toBe(false);
+  expect(automaticSpawn("unknown-chat")).toBe(false);
 });
 
 it("enables unified thread-bound session spawns by default", () => {
-  const policy = resolveThreadBindingSpawnPolicy({
-    cfg: {},
-    channel: "discord",
-    kind: "subagent",
-  });
-
-  expect(policy).toMatchObject({
+  expect(spawnPolicy({ cfg: {}, channel: "discord", kind: "subagent" })).toMatchObject({
     enabled: true,
     spawnEnabled: true,
     defaultSpawnContext: "fork",
@@ -48,14 +39,9 @@ it("enables unified thread-bound session spawns by default", () => {
 });
 
 it("preserves long lifecycle hour values while capping unsafe conversions", () => {
+  expect(idleMs({ channelIdleHoursRaw: 720, sessionIdleHoursRaw: undefined })).toBe(2_592_000_000);
   expect(
-    resolveThreadBindingIdleTimeoutMs({
-      channelIdleHoursRaw: 720,
-      sessionIdleHoursRaw: undefined,
-    }),
-  ).toBe(2_592_000_000);
-  expect(
-    resolveThreadBindingMaxAgeMs({
+    maxAgeMs({
       channelMaxAgeHoursRaw: undefined,
       sessionMaxAgeHoursRaw: Number.MAX_SAFE_INTEGER,
     }),
@@ -65,41 +51,28 @@ it("preserves long lifecycle hour values while capping unsafe conversions", () =
 it("uses spawnSessions for both subagent and ACP spawn policy", () => {
   const cfg = { channels: { discord: { threadBindings: { spawnSessions: false } } } };
   for (const kind of ["subagent", "acp"] as const) {
-    expect(resolveThreadBindingSpawnPolicy({ cfg, channel: "discord", kind }).spawnEnabled).toBe(
-      false,
-    );
+    expect(spawnPolicy({ cfg, channel: "discord", kind }).spawnEnabled).toBe(false);
   }
 });
 
-it.each(["work", "Work"])("lets account %s config override channel thread bindings", (key) => {
-  const cfg = {
-    channels: {
-      discord: {
-        threadBindings: {
-          spawnSessions: false,
-          defaultSpawnContext: "fork",
-          idleHours: 24,
-          maxAgeHours: 48,
-        },
-        accounts: {
-          [key]: {
-            threadBindings: {
-              spawnSessions: true,
-              defaultSpawnContext: "isolated",
-              idleHours: 1,
-              maxAgeHours: 2,
-            },
-          },
-        },
-      },
-    },
-  } as OpenClawConfig;
+it.each(["work", "Work"])("applies account %s overrides", (key) => {
+  const bindings = (spawn: boolean, context: "fork" | "isolated", hours: number) => ({
+    spawnSessions: spawn,
+    defaultSpawnContext: context,
+    idleHours: hours,
+    maxAgeHours: hours * 2,
+  });
+  const discord = {
+    threadBindings: bindings(false, "fork", 24),
+    accounts: { [key]: { threadBindings: bindings(true, "isolated", 1) } },
+  };
+  const cfg: OpenClawConfig = { channels: { discord } };
   const scope = { cfg, channel: "discord", accountId: "work" };
 
-  expect(resolveThreadBindingSpawnPolicy({ ...scope, kind: "subagent" })).toMatchObject({
+  expect(spawnPolicy({ ...scope, kind: "subagent" })).toMatchObject({
     spawnEnabled: true,
     defaultSpawnContext: "isolated",
   });
-  expect(resolveThreadBindingIdleTimeoutMsForChannel(scope)).toBe(60 * 60 * 1000);
-  expect(resolveThreadBindingMaxAgeMsForChannel(scope)).toBe(2 * 60 * 60 * 1000);
+  expect(channelIdleMs(scope)).toBe(60 * 60 * 1000);
+  expect(channelMaxAgeMs(scope)).toBe(2 * 60 * 60 * 1000);
 });

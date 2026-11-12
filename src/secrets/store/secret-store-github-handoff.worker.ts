@@ -24,7 +24,7 @@ export const githubSetupOperations = {
     { open }: WorkerWriteOperationContext,
   ) => readHiddenGitHubSecretInDatabase(open().db, name, now),
   "githubSecrets.list": (
-    { prefix, now }: { prefix: HiddenGitHubStorePrefix; now: number },
+    { prefix, now }: { prefix?: HiddenGitHubStorePrefix; now: number },
     { open }: WorkerWriteOperationContext,
   ) => listHiddenGitHubSecretsInDatabase(open().db, prefix, now),
   "githubSecrets.write": (

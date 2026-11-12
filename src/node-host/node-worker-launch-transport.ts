@@ -1,15 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
 import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { NODE_WORKER_INFERENCE_SETUP_ERROR } from "../infra/node-runner-inventory.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveRuntimeDeployEntrypointUrl } from "../infra/runtime-process-url.js";
-import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeArgs, resolveRuntimeWorkerEnv } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
   type AwaitedStdoutChildAdapter,
@@ -154,7 +155,7 @@ export async function prepareNodeWorkerLaunchTransport(
       ...(secretInput ? [WORKER_NATIVE_INFERENCE_STARTUP_ARG] : []),
     ];
     const workerOptions = {
-      env: workerEnv,
+      env: resolveRuntimeWorkerEnv(pathToFileURL(entry), workerEnv),
       secretInput,
       ownedWorker: true,
       stdinMode: "pipe-open",
@@ -180,13 +181,14 @@ export async function prepareNodeWorkerLaunchTransport(
         WORKER_LINEAGE_START_PROTOCOL_FEATURE,
       )
     ) {
+      const features = options.descriptor.admission.handshake.protocolFeatures;
+      const nativeProcessOwnerSupported =
+        features.includes(WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE) ||
+        (process.platform === "linux" &&
+          features.includes(WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE));
       const { adapter, ready } = await createServiceChildRelayAdapter({
         ...workerOptions,
-        ...(options.descriptor.admission.handshake.protocolFeatures.includes(
-          WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
-        )
-          ? { nativeProcessOwnerSupported: true as const }
-          : {}),
+        ...(nativeProcessOwnerSupported ? { nativeProcessOwnerSupported: true as const } : {}),
         cleanupBinding: await options.store.cleanupBinding({
           launchId: options.input.launchId,
           planHash: options.planHash,

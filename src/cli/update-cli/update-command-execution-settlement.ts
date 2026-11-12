@@ -6,7 +6,10 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { restoreFailedUpdateDatabases } from "./update-command-database-backup.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { recordMutableUpdateInterruption } from "./update-command-mutable-signals.js";
+import {
+  recordMutableUpdateInterruption,
+  runMutableUpdateRecovery,
+} from "./update-command-mutable-signals.js";
 import type { MutableUpdateExecutionResult } from "./update-command-result.js";
 
 export async function settleMutableUpdateResult(
@@ -19,6 +22,7 @@ export async function settleMutableUpdateResult(
     databaseCaptureStep?: UpdateStepResult;
     activationSteps: UpdateStepResult[];
     doctorEntered: boolean;
+    doctorDelegated: boolean;
     packageTransaction?: PackageUpdateTransaction;
     originalRun: MutableUpdateExecutionParams["opts"]["run"];
     env?: NodeJS.ProcessEnv;
@@ -47,19 +51,25 @@ export async function settleMutableUpdateResult(
     ];
   }
   const doctorSettled =
-    settlement.doctorEntered && !hasCommandProcessCleanupError(settlement.failure?.cause);
+    settlement.doctorEntered &&
+    settlement.doctorDelegated &&
+    !hasCommandProcessCleanupError(settlement.failure?.cause);
   if (databaseBackup && originalRun && result.status === "error" && doctorSettled) {
+    // A legacy Doctor has no attributable migration receipt. Leave compatible
+    // databases in place; the rollback owner checks schemas before restoring.
     // Execution has not entered finalization or admitted any candidate Gateway.
     // Restore before schema inspection can hand an incompatible ledger to the candidate.
-    await restoreFailedUpdateDatabases({
-      backup: databaseBackup,
-      result,
-      runId: originalRun.runId,
-      env: settlement.env ?? originalRun.env,
-      assertCurrent: settlement.assertCurrent,
-      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
-      progress: params.progress,
-    });
+    await runMutableUpdateRecovery(() =>
+      restoreFailedUpdateDatabases({
+        backup: databaseBackup,
+        result,
+        runId: originalRun.runId,
+        env: settlement.env ?? originalRun.env,
+        assertCurrent: settlement.assertCurrent,
+        assertRollbackSafe: packageTransaction?.assertRollbackSafe,
+        progress: params.progress,
+      }),
+    );
   }
   return result;
 }

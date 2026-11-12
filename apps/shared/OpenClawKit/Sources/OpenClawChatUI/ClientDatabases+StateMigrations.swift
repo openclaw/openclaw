@@ -169,4 +169,33 @@ extension OpenClawClientDatabases {
             """)
         }
     }
+
+    static func registerOutboxQueueModeMigration(_ migrator: inout DatabaseMigrator) {
+        // Older apps do not encode queue mode. Park their claims instead of
+        // silently replaying an explicit choice with the session default.
+        migrator.registerMigration("client-state-outbox-queue-mode-v10") { db in
+            try db.execute(sql: """
+            ALTER TABLE outbox_commands ADD COLUMN queue_mode TEXT
+                CHECK(queue_mode IS NULL OR queue_mode IN ('steer', 'followup'));
+            ALTER TABLE outbox_commands ADD COLUMN queue_mode_authorization INTEGER;
+            CREATE TRIGGER outbox_queue_mode_claim_guard
+            BEFORE UPDATE OF status ON outbox_commands
+            WHEN OLD.status = 'queued' AND NEW.status = 'sending' AND OLD.queue_mode IS NOT NULL
+                AND COALESCE(NEW.queue_mode_authorization, 0) = COALESCE(OLD.queue_mode_authorization, 0)
+            BEGIN
+                UPDATE outbox_commands
+                SET status = 'failed', last_error = 'queue_mode_client_upgrade_required'
+                WHERE gateway_id = OLD.gateway_id AND client_uuid = OLD.client_uuid AND status = 'queued';
+                SELECT RAISE(IGNORE);
+            END;
+            CREATE TRIGGER outbox_queue_mode_retry_guard
+            BEFORE UPDATE OF status ON outbox_commands
+            WHEN OLD.status = 'failed' AND NEW.status = 'queued' AND OLD.queue_mode IS NOT NULL
+                AND COALESCE(NEW.queue_mode_authorization, 0) = COALESCE(OLD.queue_mode_authorization, 0)
+            BEGIN
+                SELECT RAISE(ABORT, 'queue-mode outbox retry requires current client');
+            END;
+            """)
+        }
+    }
 }

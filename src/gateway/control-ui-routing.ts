@@ -1,3 +1,4 @@
+import { pluginCatalogIdFromRouteSuffix } from "../../packages/plugin-package-contract/src/catalog-route.js";
 import { resolvePluginDiscoveryIdentity } from "../plugins/catalog-discovery.js";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
@@ -72,20 +73,24 @@ export function classifyControlUiRequest(params: {
     ) {
       return { kind: "not-control-ui" };
     }
-    // Marketplace documents own the catalogue root and canonical generated catalog IDs.
+    // Marketplace documents own the catalogue root, owner/name paths, and generated IDs.
     // Other descendants and non-document requests remain plugin HTTP routes.
     if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
       const marketplaceDocument =
         pathname === "/plugins" ||
         pathname === "/plugins/" ||
-        resolvePluginDiscoveryIdentity(pathname.slice("/plugins/".length)) !== undefined;
+        resolvePluginDiscoveryIdentity(
+          pluginCatalogIdFromRouteSuffix(pathname.slice("/plugins/".length)) ?? "",
+        ) !== undefined;
       if (!marketplaceDocument || !isReadHttpMethod(method) || !spaFallback) {
         return { kind: "not-control-ui" };
       }
     }
-    // API and join namespaces, including disabled OpenAI endpoints, never serve the SPA.
+    // API, OAuth, and join namespaces retain their runtime owners, including browser GETs.
     if (
-      ["/api", "/j", "/v1"].some((root) => pathname === root || pathname.startsWith(`${root}/`))
+      ["/api", "/j", "/v1", "/oauth"].some(
+        (root) => pathname === root || pathname.startsWith(`${root}/`),
+      )
     ) {
       return { kind: "not-control-ui" };
     }

@@ -4,7 +4,8 @@ import { ChatAuthorAvatar } from "./chat-author-avatar-view.tsx";
 import type { ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
 import "./chat-mobile-people-grid.css";
 
-export type ChatMobilePeopleGridProps = {
+/** The mobile header supplies this slot outside its action capsule. */
+export function ChatMobilePeopleGrid(props: {
   people: ChatMobilePeople;
   label: string;
   morePeople: ChatMobilePeopleBodyProps["labels"]["morePeople"];
@@ -12,10 +13,7 @@ export type ChatMobilePeopleGridProps = {
   controls: string;
   onOpen: (source: HTMLButtonElement) => void;
   ref?: (element: HTMLButtonElement) => void;
-};
-
-/** The mobile header supplies this slot outside its action capsule. */
-export function ChatMobilePeopleGrid(props: ChatMobilePeopleGridProps) {
+}) {
   const count = () => props.people.header.length;
   const visible = () => props.people.header.slice(0, count() > 4 ? 3 : 4);
   return (

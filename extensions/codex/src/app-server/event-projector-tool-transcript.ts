@@ -49,10 +49,8 @@ import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexThreadItem,
   type JsonObject,
-  type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -161,14 +159,6 @@ export class CodexToolTranscriptProjection {
     return toolApprovalReviewOutcome(state);
   }
 
-  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
-    this.recordToolCall({
-      id: params.callId,
-      name: params.tool,
-      arguments: asCodexToolArguments(params.arguments),
-    });
-  }
-
   recordDynamicToolResult(
     params: {
       callId: string;
@@ -211,15 +201,20 @@ export class CodexToolTranscriptProjection {
     if (!item || this.resultIds.has(item.id)) {
       return;
     }
-    const call = this.nativeTranscriptCall(item);
-    if (!call) {
+    const name =
+      item.type === "collabAgentToolCall" || item.type === "subAgentActivity"
+        ? this.rawCallsById.get(item.id)?.name
+        : isProjectedNativeToolItem(item)
+          ? itemName(item)
+          : undefined;
+    if (!name) {
       return;
     }
     const status = itemStatus(item);
     const approvalTimeoutExplanation = this.progress.approvalTimeoutExplanation(item.id, status);
     this.recordToolResult({
       id: item.id,
-      name: call.name,
+      name,
       text:
         approvalTimeoutExplanation ??
         this.rawNativeToolOutputByCallId.get(item.id) ??
@@ -495,13 +490,16 @@ export class CodexToolTranscriptProjection {
       return;
     }
     this.trajectoryResultIds.add(params.item.id);
+    if (!this.options.trajectoryRecorder) {
+      return;
+    }
     const toolResult = itemToolResult(params.item);
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
       itemOutputText(params.item, this.progress.outputTextByItem);
     const status =
       params.status === "running" ? "running" : auditNativeToolTerminalStatus(params.item);
-    this.options.trajectoryRecorder?.recordEvent("tool.result", {
+    this.options.trajectoryRecorder.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
       itemId: params.item.id,

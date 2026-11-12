@@ -52,6 +52,7 @@ type CronCoreRunOptions = {
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
+  onConditionFired?: ExecuteJobCoreOptions["onConditionFired"];
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
 } & (
   | { runReceipt: CronRunReceiptHandle; runReceiptContext: OpenClawStateWorkerContext }
@@ -343,7 +344,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
     }
     const timeout = createDeferredCore<CronRunTimeout>();
 
-    // Ordinary turns retain queue admission separately from their execution deadline.
+    // Ordinary turns report admission separately for the shorter setup watchdog.
     const deferTimeoutUntilExecutionStart =
       job.payload.kind === "agentTurn" ||
       job.payload.kind === "systemEvent" ||
@@ -356,11 +357,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
             deferUntilRunner: deferTimeoutUntilExecutionStart,
             jobTimeoutMs,
             triggerTimeout: (reason) => {
-              if (!runAbortController.signal.aborted) {
-                const timeoutError = new Error(reason);
-                timeoutError.name = "TimeoutError";
-                runAbortController.abort(timeoutError);
-              }
+              const timeoutError = new Error(reason);
+              timeoutError.name = "TimeoutError";
+              runAbortController.abort(timeoutError);
               timeout.resolve({ timeoutMs: jobTimeoutMs, reason });
             },
           });
@@ -399,6 +398,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
       onExecutionPhase: trackExecution ? (watchdog?.notePhase ?? accumulateExecution) : undefined,
       onLaneWait: watchdog && deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
       assertRunCurrent,
+      onConditionFired: opts?.onConditionFired,
       executionIdentity: executionIdentity && {
         ...executionIdentity,
         onPostAdmission: (context) => {
@@ -442,14 +442,20 @@ async function executeJobCoreWithTimeoutUnfinalized(
     try {
       const first = await Promise.race([runPromise, timeout.promise, operatorCancellation.promise]);
       if (first === operatorCancellationMarker) {
-        return await createInterruptionOutcome(
-          "cancelled",
-          watchdog?.activeExecution() ?? untimedExecution,
-        );
+        return {
+          ...(await createInterruptionOutcome(
+            "cancelled",
+            watchdog?.activeExecution() ?? untimedExecution,
+          )),
+          executionSettlement: runPromise,
+        };
       }
       return "status" in first
         ? first
-        : await createInterruptionOutcome(first, watchdog?.activeExecution(), watchdog);
+        : {
+            ...(await createInterruptionOutcome(first, watchdog?.activeExecution(), watchdog)),
+            executionSettlement: runPromise,
+          };
     } finally {
       watchdog?.dispose();
     }

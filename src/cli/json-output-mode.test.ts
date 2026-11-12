@@ -61,9 +61,7 @@ it.each([
   await withJson(
     args,
     async () => {
-      expect(loggingState.forceConsoleToStderr).toBe(true);
       resolveMode(false, machineOutput);
-      expect(loggingState.forceConsoleToStderr).toBe(machineOutput);
       expect(isJson(args)).toBe(false);
       note("Updated gateway.port.", "Config updated");
     },

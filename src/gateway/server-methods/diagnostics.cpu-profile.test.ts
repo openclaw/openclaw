@@ -70,6 +70,12 @@ beforeEach(() => {
 });
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
+async function completedRequest(options?: Parameters<typeof request>[0]) {
+  const call = request(options);
+  await call.pending;
+  return call;
+}
+
 describe("diagnostics.cpuProfile dispatch", () => {
   it.each([
     { method: "diagnostics.cpuProfile", role: "operator", scopes: ["operator.write"] },
@@ -77,31 +83,58 @@ describe("diagnostics.cpuProfile dispatch", () => {
     { method: "diagnostics.heapProfile", role: "operator", scopes: ["operator.write"] },
     { method: "diagnostics.heapProfile", role: "node", scopes: ["operator.admin"] },
   ] as const)("rejects $role/$scopes for $method before native work", async (options) => {
-    const call = request({ ...options, scopes: [...options.scopes] });
-    await call.pending;
+    const call = await completedRequest({ ...options, scopes: [...options.scopes] });
     expect(capture).not.toHaveBeenCalled();
     expect(captureHeap).not.toHaveBeenCalled();
     expectProfileError(call, { code: options.role === "node" ? "INVALID_REQUEST" : "FORBIDDEN" });
   });
 
   it("preserves signed-origin profiles for admin requests with empty params", async () => {
-    const call = request({ params: {} });
-    await call.pending;
+    const call = await completedRequest({ params: {} });
     expect(capture).toHaveBeenCalledOnce();
     expect(call.respond).toHaveBeenCalledWith(true, result, undefined);
   });
 
-  it.each([null, { durationMs: 1 }])(
-    "rejects nonempty/nonobject params %j before capture",
-    async (params) => {
-      const call = request({ params });
-      await call.pending;
-      expect(capture).not.toHaveBeenCalled();
-      expectProfileError(call, { code: "INVALID_REQUEST" });
-    },
-  );
+  it("returns a batch artifact receipt through the existing admin capture owner", async () => {
+    const { profile: _profile, ...measurement } = result;
+    const artifact = {
+      ...measurement,
+      requestedDurationMs: 150_000,
+      path: "/synthetic/state/diagnostics/cpu-timestamp.cpuprofile",
+      sizeBytes: 2_000_000,
+      windowBoundariesMicros: Array.from({ length: 31 }, (_, index) => index * 5_000_000),
+      summary: { nodeCount: 20_000, sampleCount: 15_000 },
+    };
+    capture.mockResolvedValue({ status: "complete", result: artifact });
+    const call = await completedRequest({ params: { windows: 30, windowMs: 5_000 } });
+    expect(capture).toHaveBeenCalledExactlyOnceWith({
+      windows: 30,
+      windowMs: 5_000,
+      signal: expect.any(AbortSignal),
+      hasAuthority: expect.any(Function),
+    });
+    expect(call.respond).toHaveBeenCalledWith(true, artifact, undefined);
+  });
 
-  it.each(["connection", "gateway", "request"])(
+  it.each([
+    { method: "diagnostics.cpuProfile", params: null },
+    { method: "diagnostics.cpuProfile", params: { durationMs: 1 } },
+    { method: "diagnostics.cpuProfile", params: { windows: 0 } },
+    { method: "diagnostics.cpuProfile", params: { windows: 31 } },
+    { method: "diagnostics.cpuProfile", params: { windows: 1.5 } },
+    { method: "diagnostics.cpuProfile", params: { windows: "12" } },
+    { method: "diagnostics.cpuProfile", params: { windowMs: 99 } },
+    { method: "diagnostics.cpuProfile", params: { windowMs: 5_001 } },
+    { method: "diagnostics.cpuProfile", params: { windowMs: null } },
+    { method: "diagnostics.heapProfile", params: { filename: "profile" } },
+  ] as const)("rejects unsupported $method params $params before capture", async (options) => {
+    const call = await completedRequest(options);
+    expect(capture).not.toHaveBeenCalled();
+    expect(captureHeap).not.toHaveBeenCalled();
+    expectProfileError(call, { code: "INVALID_REQUEST" });
+  });
+
+  it.each(["connection", "gateway", "request"] as const)(
     "cancels through the existing %s lifetime and waits for cleanup",
     async (boundary) => {
       const connection = new AbortController();
@@ -122,15 +155,12 @@ describe("diagnostics.cpuProfile dispatch", () => {
         settled = true;
       });
       await entered.promise;
-      if (boundary === "connection") {
-        connection.abort();
-      }
-      if (boundary === "gateway") {
-        gateway.beginClose();
-      }
-      if (boundary === "request") {
-        controller.abort();
-      }
+      const cancel = {
+        connection: () => connection.abort(),
+        gateway: () => gateway.beginClose(),
+        request: () => controller.abort(),
+      };
+      cancel[boundary]();
       expect(captureSignal?.aborted).toBe(true);
       expect(settled).toBe(false);
       expect(call.respond).not.toHaveBeenCalled();
@@ -148,8 +178,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
       expect(hasAuthority()).toBe(false);
       return { status: "complete", result };
     });
-    const call = request({ hasAuthority: () => authority });
-    await call.pending;
+    const call = await completedRequest({ hasAuthority: () => authority });
     expect(call.respond).not.toHaveBeenCalled();
   });
 
@@ -159,8 +188,7 @@ describe("diagnostics.cpuProfile dispatch", () => {
       reason: "tracing-active",
       cleanupFailed: false,
     });
-    const call = request();
-    await call.pending;
+    const call = await completedRequest();
     expectProfileError(call, {
       code: "UNAVAILABLE",
       message:
@@ -183,8 +211,7 @@ describe("diagnostics.heapProfile dispatch", () => {
   ])(
     "serves allocation attribution through the registered admin RPC with params %j",
     async (params) => {
-      const call = request({ method: "diagnostics.heapProfile", params });
-      await call.pending;
+      const call = await completedRequest({ method: "diagnostics.heapProfile", params });
       expect(captureHeap).toHaveBeenCalledExactlyOnceWith({
         ...params,
         signal: expect.any(AbortSignal),
@@ -193,11 +220,4 @@ describe("diagnostics.heapProfile dispatch", () => {
       expect(call.respond).toHaveBeenCalledWith(true, heapResult, undefined);
     },
   );
-
-  it("rejects unsupported heap profile params before capture", async () => {
-    const call = request({ method: "diagnostics.heapProfile", params: { filename: "profile" } });
-    await call.pending;
-    expect(captureHeap).not.toHaveBeenCalled();
-    expectProfileError(call, { code: "INVALID_REQUEST" });
-  });
 });

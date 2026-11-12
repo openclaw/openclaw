@@ -26,13 +26,16 @@ const authHint = (overrides: Partial<Parameters<typeof resolveAuthHintKind>[0]>)
     hasPassword: false,
     ...overrides,
   });
+const unauthorized = "unauthorized";
+const pairingRequired = { kind: "pairing-required", requestId: null };
+const identityHeaderRequired = Codes.AUTH_IDENTITY_HEADER_REQUIRED;
 
 describe("resolveGatewayCredentialsForUrlEdit", () => {
-  it("preserves credentials for same normalized gateway endpoint edits", () => {
-    expect(editCredentials(endpoint, ` ${endpoint}/ `)).toEqual({
-      token: "abc123",
-      password: "secret",
-    });
+  it.each([
+    [endpoint, ` ${endpoint}/ `, { token: "abc123", password: "secret" }],
+    [`${endpoint}?tenant=first`, `${endpoint}?tenant=second`, { token: "abc123", password: "" }],
+  ] as const)("preserves only credentials scoped to %s -> %s", (from, to, expected) => {
+    expect(editCredentials(from, to)).toEqual(expected);
   });
 
   it("loads a scoped token and clears the password when the gateway endpoint changes", () => {
@@ -45,112 +48,53 @@ describe("resolveGatewayCredentialsForUrlEdit", () => {
     });
   });
 
-  it("preserves the token but clears the password when only the query scope changes", () => {
-    expect(editCredentials(`${endpoint}?tenant=first`, `${endpoint}?tenant=second`)).toEqual({
-      token: "abc123",
-      password: "",
-    });
-  });
-
   it("does not restore legacy durable tokens when the gateway endpoint changes", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     localStorage.setItem(
       "openclaw.control.settings.v1",
-      JSON.stringify({
-        gatewayUrl: otherEndpoint,
-        token: "gateway-token",
-      }),
+      JSON.stringify({ gatewayUrl: otherEndpoint, token: "gateway-token" }),
     );
 
     expect(editCredentials(endpoint, otherEndpoint)).toEqual({ token: "", password: "" });
   });
 });
 
-describe("resolvePairingHint", () => {
-  it.each([
-    ["case-insensitive close reason", "Pairing Required", undefined],
-    ["structured pairing code", "disconnected (4008): connect failed", Codes.PAIRING_REQUIRED],
-  ])("detects pairing required from %s", (_name, lastError, lastErrorCode) => {
-    expect(resolvePairingHint(lastError, lastErrorCode)).toEqual({
-      kind: "pairing-required",
-      requestId: null,
-    });
-  });
-
-  it.each([
-    ["missing errors", null],
-    ["unrelated errors", "disconnected (1006): no reason"],
-  ])("ignores %s", (_name, lastError) => {
-    expect(resolvePairingHint(lastError)).toBeNull();
-  });
-
-  it("detects scope-upgrade pending approval and keeps the request id", () => {
-    expect(
-      resolvePairingHint(
-        "scope upgrade pending approval (requestId: req-123)",
-        Codes.PAIRING_REQUIRED,
-      ),
-    ).toEqual({
-      kind: "scope-upgrade-pending",
-      requestId: "req-123",
-    });
-  });
+it.each([
+  ["Pairing Required", undefined, pairingRequired],
+  ["disconnected (4008): connect failed", Codes.PAIRING_REQUIRED, pairingRequired],
+  [null, undefined, null],
+  ["disconnected (1006): no reason", undefined, null],
+  [
+    "scope upgrade pending approval (requestId: req-123)",
+    Codes.PAIRING_REQUIRED,
+    { kind: "scope-upgrade-pending", requestId: "req-123" },
+  ],
+] as const)("resolves pairing hint for %s (%s)", (lastError, lastErrorCode, expected) => {
+  expect(resolvePairingHint(lastError, lastErrorCode)).toEqual(expected);
 });
 
 describe("resolveAuthHintKind", () => {
   it.each([
-    [Codes.AUTH_TOKEN_MISSING, false, "required"],
-    [Codes.AUTH_DEVICE_TOKEN_MISMATCH, false, "required"],
-    [Codes.AUTH_TOKEN_MISMATCH, true, "failed"],
-    [Codes.AUTH_BOOTSTRAP_TOKEN_INVALID, false, "failed"],
-    [Codes.AUTH_DEVICE_TOKEN_MISMATCH, true, "failed"],
-  ] as const)(
-    "classifies %s with a supplied token=%s as %s",
-    (lastErrorCode, hasToken, expected) => {
-      expect(authHint({ lastErrorCode, hasToken })).toBe(expected);
-    },
-  );
-
-  it.each([
-    ["empty credentials", false, false, "unauthorized"],
-    ["both credentials", true, true, "connect failed"],
-  ])("uses the identity-header code with %s", (_name, hasToken, hasPassword, lastError) => {
-    expect(
-      authHint({
-        lastError,
-        lastErrorCode: Codes.AUTH_IDENTITY_HEADER_REQUIRED,
-        hasToken,
-        hasPassword,
-      }),
-    ).toBe("trusted-proxy");
+    [Codes.AUTH_TOKEN_MISSING, {}, "required"],
+    [Codes.AUTH_DEVICE_TOKEN_MISMATCH, {}, "required"],
+    [Codes.AUTH_TOKEN_MISMATCH, { hasToken: true }, "failed"],
+    [Codes.AUTH_BOOTSTRAP_TOKEN_INVALID, {}, "failed"],
+    [Codes.AUTH_DEVICE_TOKEN_MISMATCH, { hasToken: true }, "failed"],
+    [identityHeaderRequired, { lastError: unauthorized }, "trusted-proxy"],
+    [
+      identityHeaderRequired,
+      { lastError: "connect failed", hasToken: true, hasPassword: true },
+      "trusted-proxy",
+    ],
+    [identityHeaderRequired, { connected: true, lastError: unauthorized }, null],
+    [identityHeaderRequired, { lastError: null }, null],
+    [Codes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED, { lastError: unauthorized, hasToken: true }, null],
+    ["UNKNOWN_CONNECT_ERROR", { lastError: unauthorized, hasToken: true }, null],
+    [null, { lastError: "disconnected (4008): unauthorized", hasToken: true }, "failed"],
+  ] as const)("classifies %s with %j as %s", (lastErrorCode, overrides, expected) => {
+    expect(authHint({ lastErrorCode, ...overrides })).toBe(expected);
   });
-
-  it.each([
-    ["connected clients", true, "unauthorized"],
-    ["missing errors", false, null],
-  ])("ignores the identity-header code for %s", (_name, connected, lastError) => {
-    expect(
-      authHint({
-        connected,
-        lastError,
-        lastErrorCode: Codes.AUTH_IDENTITY_HEADER_REQUIRED,
-      }),
-    ).toBeNull();
-  });
-
-  it.each([Codes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED, "UNKNOWN_CONNECT_ERROR"])(
-    "does not infer auth from unauthorized when the structured code is %s",
-    (lastErrorCode) => {
-      expect(
-        authHint({
-          lastError: "unauthorized",
-          lastErrorCode,
-          hasToken: true,
-        }),
-      ).toBeNull();
-    },
-  );
 
   it.each([
     "trusted_proxy_no_request",
@@ -166,7 +110,7 @@ describe("resolveAuthHintKind", () => {
   ])("classifies the structured proxy denial %s without token advice", (lastErrorAuthReason) => {
     expect(
       authHint({
-        lastError: "unauthorized",
+        lastError: unauthorized,
         lastErrorCode: Codes.AUTH_UNAUTHORIZED,
         lastErrorAuthReason,
         hasToken: true,
@@ -187,34 +131,11 @@ describe("resolveAuthHintKind", () => {
       ).toBe("failed");
     },
   );
-
-  it("falls back to unauthorized string matching without structured codes", () => {
-    expect(
-      authHint({
-        lastError: "disconnected (4008): unauthorized",
-        lastErrorCode: null,
-        hasToken: true,
-      }),
-    ).toBe("failed");
-  });
 });
 
-describe("shouldShowInsecureContextHint", () => {
-  it("returns true for browser WebSocket security errors", () => {
-    expect(
-      shouldShowInsecureContextHint(
-        "Browser refused the Gateway WebSocket for security reasons.",
-        "BROWSER_WEBSOCKET_SECURITY_ERROR",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat generic WebSocket constructor errors as insecure context", () => {
-    expect(
-      shouldShowInsecureContextHint(
-        "Could not create the Gateway WebSocket: constructor failed",
-        "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR",
-      ),
-    ).toBe(false);
-  });
+it.each([
+  ["BROWSER_WEBSOCKET_SECURITY_ERROR", true],
+  ["BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR", false],
+] as const)("shows an insecure-context hint for %s: %s", (code, expected) => {
+  expect(shouldShowInsecureContextHint("connect failed", code)).toBe(expected);
 });

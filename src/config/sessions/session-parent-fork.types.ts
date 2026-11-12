@@ -12,6 +12,8 @@ import type { SessionEntry } from "./types.js";
 
 /** Data-only patches applied to the current child row by its writer. */
 export type ParentForkEntryPatch = {
+  /** Finish fresh child creation without replacing its current audience. */
+  preserveVisibility?: boolean;
   skipExisting?: boolean;
   skipped?: Partial<SessionEntry>;
   forked?: Partial<SessionEntry>;

@@ -39,6 +39,10 @@ export async function clickBoardWidgetControl(page: Page, control: Locator): Pro
     for (let frame = await target.ownerFrame(); frame?.parentFrame(); frame = frame.parentFrame()) {
       elements.push(await frame.frameElement());
     }
+    // Offscreen child frames can suspend rAF, including Playwright's stability wait.
+    for (const element of elements.toReversed()) {
+      await element.scrollIntoViewIfNeeded({ timeout: Math.max(1, deadline - Date.now()) });
+    }
     const layout = () =>
       Promise.all(
         elements.map((element) =>

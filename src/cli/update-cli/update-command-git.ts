@@ -4,6 +4,7 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -27,6 +28,7 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { resolveNativePackageProjectRoot } from "../../infra/update-native-package-owner.js";
 import {
   DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   UPDATE_RUNNER_TIMEOUT_MS,
@@ -62,6 +64,7 @@ import { readPackageUpdateIdentity } from "./update-command-package-identity.js"
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
+import { assessSnapshotCapacityOfferingCleanup } from "./update-snapshot-space-cleanup.js";
 
 export async function retireStandaloneGitWrapper(params: {
   previousRoot: string;
@@ -438,11 +441,23 @@ export async function updateGitInstall(params: {
     await params.progress.onStepStart?.(info);
     assertCurrent?.();
     const { config, env } = await params.getSnapshotSource();
-    const snapshot = await assessInitialUpdateSnapshotCapacity({
-      config,
-      stateDir: resolveStateDir(env),
-      env,
-    });
+    const backupProject =
+      installTarget && resolveNativePackageProjectRoot(installTarget, installEnv);
+    // An interactive update was offered cleanup before it started; here it is only named.
+    const snapshot = await assessSnapshotCapacityOfferingCleanup(
+      () =>
+        assessInitialUpdateSnapshotCapacity({
+          config,
+          stateDir: resolveStateDir(env),
+          env,
+          backupDirectory: params.switchToGit
+            ? backupProject
+              ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
+              : (installTarget?.globalRoot ?? path.dirname(params.root))
+            : path.join(params.root, ".artifacts"),
+        }),
+      { prompt: false, env, print: () => {} },
+    );
     await reportUpdateStepCompletion(params.progress, { ...snapshot, index: 0, total: 0 });
     assertCurrent?.();
     if (snapshot.exitCode !== 0) {
@@ -548,6 +563,7 @@ export async function updateGitInstall(params: {
     const checkout = params.switchToGit
       ? await ensureGitCheckout({
           dir: updateRoot,
+          assertCurrent: params.assertCurrent,
           env: installEnv,
           timeoutMs: effectiveTimeout,
           progress: params.progress,

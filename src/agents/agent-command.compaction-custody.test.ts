@@ -5,7 +5,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/restart-recovery-state.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
 import { recoverPendingDeliveries } from "../infra/outbound/delivery-queue-recovery.js";
 import {
@@ -39,30 +38,25 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(
-  ([false, true] as const).flatMap((recovery) =>
-    (
-      [
-        "ordinary",
-        "embedded",
-        "preflight",
-        "postrun",
-        "twice",
-        "rebind",
-        "source",
-        "route",
-        "revoked",
-      ] as const
-    ).map((mode) => ({ recovery, mode })),
-  ),
-)(
-  "retains exact original final custody across accepted compaction ($recovery, $mode)",
-  async ({ recovery, mode }) => {
+it.each([
+  "ordinary",
+  "embedded",
+  "preflight",
+  "postrun",
+  "twice",
+  "rebind",
+  "revoked",
+  "writer-replaced",
+  "lifecycle-replaced",
+] as const)(
+  "retains final transport custody only for the admitted writer and accepted compaction (%s)",
+  async (mode) => {
     const {
       acceptCompactionSuccessor,
       loadSessionEntry,
       replaceSessionEntry,
       patchSessionEntryCore,
+      claimAgentSessionWriter,
     } = compactionTestRuntime;
     const sessionId = "original-session";
     const sessionKey = "agent:main:dashboard:compaction-custody";
@@ -74,13 +68,6 @@ it.each(
     await replaceSessionEntry(target, {
       sessionId,
       updatedAt: 1,
-      ...(recovery
-        ? {
-            restartRecoveryDeliveryRunId: "run",
-            restartRecoveryDeliverySourceRunId: "source",
-            restartRecoveryDeliveryContext: context,
-          }
-        : {}),
     });
     let revoked = false;
     const assertCurrent = () => {
@@ -122,7 +109,28 @@ it.each(
       });
     }
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      if (mode !== "ordinary" && mode !== "preflight" && mode !== "postrun") {
+      if (mode !== "postrun") {
+        const claimed = await claimAgentSessionWriter({
+          ...params,
+          agentId: params.sessionAgentId,
+          config: params.cfg,
+          prompt: params.body,
+        });
+        if (!claimed) {
+          throw new Error("missing persisted writer claim");
+        }
+        params.onCompactionAccounting?.({
+          kind: "durable",
+          count: 0,
+          target: {
+            ...target,
+            sessionId: claimed.entry.sessionId,
+            lifecycleRevision: claimed.entry.lifecycleRevision,
+            activeWriterRunId: claimed.entry.activeWriterRunId,
+          },
+        });
+      }
+      if (["embedded", "twice", "rebind", "revoked"].includes(mode)) {
         let accepted = await accept("successor");
         if (mode === "twice") {
           accepted = await accept("second-successor");
@@ -143,15 +151,11 @@ it.each(
       if (mode === "rebind") {
         await patchSessionEntryCore(target, () => ({ sessionId: "unauthorized" }));
       }
-      if (mode === "source") {
-        await patchSessionEntryCore(target, () => ({
-          restartRecoveryDeliverySourceRunId: "other-source",
-        }));
+      if (mode === "writer-replaced") {
+        await patchSessionEntryCore(target, () => ({ activeWriterRunId: "replacement-writer" }));
       }
-      if (mode === "route") {
-        await patchSessionEntryCore(target, () => ({
-          restartRecoveryDeliveryContext: { channel: "discord", to: "discord:dm:456" },
-        }));
+      if (mode === "lifecycle-replaced") {
+        await patchSessionEntryCore(target, () => ({ lifecycleRevision: "replacement-revision" }));
       }
       if (mode === "revoked") {
         revoked = true;
@@ -195,13 +199,11 @@ it.each(
       expect(completion).toMatchObject({
         sessionId:
           mode === "ordinary" ? sessionId : mode === "twice" ? "second-successor" : "successor",
-        ...(recovery ? { recoveryRunId: "run" } : {}),
       });
       if (!completion) {
         throw new Error("missing accepted final custody");
       }
       expect(loadSessionEntry(target)?.pendingFinalDelivery).toMatchObject({
-        ...(recovery ? { sourceRunId: "source" } : {}),
         context,
       });
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
@@ -236,17 +238,7 @@ it.each(
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     }
     const stored = loadSessionEntry(target);
-    if (safe && recovery) {
-      expect(getRestartRecoveryTerminalDeliveryEvidence(stored, "source")).toMatchObject({
-        durableFinalReceipt: { platformMessageId: "final-message" },
-      });
-    }
     if (!safe) {
-      const evidence = getRestartRecoveryTerminalDeliveryEvidence(stored, "source");
-      // Capturing a visible result is not a receipt/acknowledgement. Existing cleanup
-      // may retain that fact even when the original route or live source is revoked.
-      expect(evidence?.durableFinalReceipt).toBeUndefined();
-      expect(evidence?.deliveryStatus?.status).not.toBe("sent");
       expect(stored?.pendingFinalDelivery).toBeUndefined();
     }
     const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");

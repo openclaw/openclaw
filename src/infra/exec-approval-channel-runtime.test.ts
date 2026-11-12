@@ -1,9 +1,13 @@
-// Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
+// Covers gateway-backed approval channel runtime behavior.
+import {
+  createExecRequest,
+  createSystemAgentChangeRequest,
+} from "./approval-handler.test-helpers.js";
 import type { ApprovalRequestInput } from "./approval-types.js";
 import type { ExecApprovalChannelRuntimeAdapterAsync } from "./exec-approval-channel-runtime.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
@@ -69,14 +73,7 @@ function emitPluginApprovalRequested(clientParams = lastGatewayEventClientParams
 }
 
 function createExecReplayRequest(id = "abc"): ExecApprovalRequest {
-  return {
-    id,
-    request: {
-      command: "echo abc",
-    },
-    createdAtMs: 1000,
-    expiresAtMs: 2000,
-  };
+  return createExecRequest(id, "echo abc", 1000, 2000);
 }
 
 function createPluginReplayRequest(id = "plugin:abc"): PluginApprovalRequest {
@@ -115,6 +112,7 @@ function expectStartGatewayClientCall(preauthHandshakeTimeoutMs?: number) {
   expect(typeof (client as { start?: unknown } | undefined)?.start).toBe("function");
   expect(options).toEqual({
     clientOptions: { preauthHandshakeTimeoutMs },
+    signal: expect.any(AbortSignal),
   });
 }
 
@@ -259,22 +257,8 @@ describe("createExecApprovalChannelRuntime", () => {
       finalizeExpired: finalizedExpired,
     });
 
-    await runtime.handleRequested({
-      id: "abc",
-      request: {
-        command: "echo abc",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
-    await runtime.handleRequested({
-      id: "xyz",
-      request: {
-        command: "echo xyz",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
+    await runtime.handleRequested(createExecRequest("abc", "echo abc", 1000, 2000));
+    await runtime.handleRequested(createExecRequest("xyz", "echo xyz", 1000, 2000));
 
     await runtime.handleExpired("abc");
 
@@ -303,15 +287,7 @@ describe("createExecApprovalChannelRuntime", () => {
       finalizeResolved,
     });
 
-    const requestPromise = runtime.handleRequested({
-      id: "plugin:abc",
-      request: {
-        title: "Plugin approval",
-        description: "Let plugin proceed",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
+    const requestPromise = runtime.handleRequested(createPluginReplayRequest("plugin:abc"));
     await runtime.handleResolved({
       id: "plugin:abc",
       decision: "allow-once",
@@ -340,14 +316,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.handleRequested({
       id: "system-agent:expired",
-      request: {
-        title: "OpenClaw change",
-        description: "restart the Gateway",
-        command: "restart the Gateway",
-        proposalHash: "a".repeat(64),
-        allowedDecisions: ["allow-once", "deny"],
-        sessionId: "session-1",
-      },
+      request: createSystemAgentChangeRequest("session-1"),
       createdAtMs: 1000,
       expiresAtMs: 2000,
     });
@@ -558,6 +527,70 @@ describe("createExecApprovalChannelRuntime", () => {
       "gateway client not connected",
     );
   });
+
+  it.each(["readiness", "hello"] as const)(
+    "cancels startup during %s and permits a later restart",
+    async (phase) => {
+      vi.useFakeTimers();
+      const readiness = await vi.importActual<
+        typeof import("../../packages/gateway-client/src/readiness.js")
+      >("../../packages/gateway-client/src/readiness.js");
+      const readinessEntered = createDeferred();
+      mockStartGatewayClientWhenEventLoopReady.mockImplementation((client, options) => {
+        const waiting = readiness.startGatewayClientWhenEventLoopReady(client, options);
+        readinessEntered.resolve();
+        return waiting;
+      });
+      let releaseHello = () => {};
+      mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async (params) => {
+        let connecting = false;
+        releaseHello = () => params.onHelloOk?.({ type: "hello-ok" });
+        return {
+          start: () => {
+            connecting = true;
+            mockGatewayClientStarts();
+          },
+          stop: () => {
+            mockGatewayClientStops();
+            if (connecting) {
+              params.onConnectError?.(new Error("gateway client stopped"));
+            }
+          },
+          request: mockGatewayClientRequests,
+        };
+      });
+      const runtime = createRuntime();
+      const starting = runtime.start();
+      await readinessEntered.promise;
+      if (phase === "hello") {
+        await vi.advanceTimersByTimeAsync(2);
+        expect(mockGatewayClientStarts).toHaveBeenCalledOnce();
+      }
+      let stopped = false;
+      const stopping = runtime.stop().then(() => {
+        stopped = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(2);
+        if (phase === "readiness") {
+          expect(mockGatewayClientStarts).not.toHaveBeenCalled();
+        }
+        expect(stopped).toBe(true);
+        await starting;
+        expect(mockGatewayClientRequests).not.toHaveBeenCalled();
+      } finally {
+        releaseHello();
+        await vi.runAllTimersAsync();
+        await Promise.allSettled([starting, stopping]);
+      }
+      const restarting = runtime.start();
+      await vi.runAllTimersAsync();
+      await restarting;
+      expect(mockGatewayClientStarts).toHaveBeenCalledTimes(phase === "readiness" ? 1 : 2);
+      expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
+      await runtime.stop();
+    },
+  );
 
   it("logs async request handling failures from gateway events", async () => {
     const runtime = createRuntime<PluginApprovalRequest, PluginApprovalResolved>({

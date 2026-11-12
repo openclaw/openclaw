@@ -30,6 +30,18 @@ async function seedMain(sessionId: string, entry: Partial<SessionEntry>, primary
 const resetMain = () =>
   directSessionReq<{ entry: SessionEntry }>("sessions.reset", { key: "main" });
 
+test("sessions.reset preserves a person-linked model account", async () => {
+  const selection = {
+    authProfileOverride: "openai:linked-person",
+    authProfileOverrideSource: "user-link",
+  } satisfies Partial<SessionEntry>;
+  const read = await seedMain("linked-account", selection);
+  const reset = await resetMain();
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry).toMatchObject(selection);
+  expect(read()).toMatchObject(selection);
+});
+
 test("sessions.reset stamps the creator's required sandbox only when materializing a new row", async () => {
   const { storePath } = await createSessionStoreDir();
   const profile = ensureProfileForEmail("sandboxed-reset-creator@example.test");
@@ -141,6 +153,8 @@ const ownedChildMetadata = {
   claudeCliSessionId: "cli-session-123",
   label: "owned child",
   autoLabel: "Device",
+  icon: "bot",
+  color: "blue",
 } satisfies Partial<SessionEntry>;
 
 test("sessions.reset rejects a model-locked session without replacing native state", async () => {
@@ -183,10 +197,8 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
     "openai/gpt-test-a",
   );
   const reset = await resetMain();
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.entry.sessionId).toBe("sess-stale-skills");
+  expect(reset).toMatchObject({ ok: true, payload: { entry: { sessionId: "sess-stale-skills" } } });
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
-
   expect(read()?.skillsSnapshot).toBeUndefined();
 });
 

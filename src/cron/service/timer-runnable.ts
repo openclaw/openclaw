@@ -89,7 +89,11 @@ export function isRunnableJob(params: {
   if (params.forced) {
     return true;
   }
-  if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
+  if (
+    !isJobEnabled(job) ||
+    !isTimeScheduledJob(job) ||
+    nowMs < (job.state.admissionDeferred?.retryAtMs ?? 0)
+  ) {
     return false;
   }
   const next = job.state.nextRunAtMs;

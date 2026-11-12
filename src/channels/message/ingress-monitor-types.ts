@@ -100,7 +100,12 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     | Promise<ChannelIngressMonitorDeliveryResult | void>
     | ChannelIngressMonitorDeliveryResult
     | void;
-  /** Recovery sweep interval (minimum one minute); admissions and retries wake directly. */
+  /**
+   * Recovery sweep interval (minimum five minutes); admissions and retries wake directly.
+   * External queue writes, including CLI resubmission, do not wake this monitor.
+   * Eligible rows wait up to the effective interval; an unrefreshed live-process claim first
+   * expires its lease (30 minutes by default). Startup recovery runs immediately.
+   */
   pollIntervalMs: number;
   retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];

@@ -113,71 +113,62 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     vi.useRealTimers();
   });
 
-  it("settles cancellation with active media metadata", async () => {
+  it.each(["cancel", "deadline"])("settles active media at %s", async (completion) => {
+    if (completion === "deadline") {
+      vi.useFakeTimers();
+    }
     resetGeneratedMediaTaskActivityForTests();
-    const sessionKey = "agent:main:cron:settle:run:cancel";
+    const sessionKey = `agent:main:cron:settle:run:${completion}`;
     const task = createMediaGenerationOperation({
-      taskId: "stream-cancel",
-      runId: "stream-cancel",
-      task: "Stream cancellation proof",
+      taskId: `stream-${completion}`,
+      runId: `stream-${completion}`,
       requesterSessionKey: sessionKey,
       taskKind: "image_generation",
       status: "running",
     });
     const controller = new AbortController();
-    const input = createSettleFixture({
-      runAbortSignal: controller.signal,
-      attempt: { sessionKey },
-      subscription: {
-        toolMetas: [{ toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId }],
-      },
-    });
-    const settlement = settleEmbeddedAttemptStream(input);
-    try {
-      controller.abort();
-      const result = await settlement;
-      expect(result).toMatchObject({ promptError: null, sessionIdUsed: "sess-settle-1" });
-      expect(findMediaGenerationOperation(task.runId!)).toMatchObject({ status: "running" });
-    } finally {
-      await Promise.allSettled([settlement]);
-      resetGeneratedMediaTaskActivityForTests();
-    }
-  });
-
-  it("uses the updated media deadline while preserving the settlement margin", async () => {
-    vi.useFakeTimers();
-    resetGeneratedMediaTaskActivityForTests();
-    const sessionKey = "agent:main:cron:settle:run:deadline";
-    const task = createMediaGenerationOperation({
-      taskId: "stream-deadline",
-      runId: "stream-deadline",
-      requesterSessionKey: sessionKey,
-      taskKind: "image_generation",
-      status: "running",
-    });
     const deadlineChanges = createChangeListeners();
     let deadlineAtMs = Date.now() + 1_500;
     let settled = false;
     const settlement = settleEmbeddedAttemptStream(
       createSettleFixture({
         attempt: { sessionKey },
-        getRunAbortDeadlineAtMs: () => deadlineAtMs,
-        onRunAbortDeadlineChanged: deadlineChanges.subscribe,
+        ...(completion === "deadline"
+          ? {
+              getRunAbortDeadlineAtMs: () => deadlineAtMs,
+              onRunAbortDeadlineChanged: deadlineChanges.subscribe,
+            }
+          : {
+              runAbortSignal: controller.signal,
+              subscription: {
+                toolMetas: [
+                  { toolName: "image_generate", asyncStarted: true, asyncTaskRunId: task.runId },
+                ],
+              },
+            }),
       }),
     ).then((result) => {
       settled = true;
       return result;
     });
     try {
-      await vi.advanceTimersByTimeAsync(250);
-      deadlineAtMs = Date.now() + 2_000;
-      deadlineChanges.publish();
-      await vi.advanceTimersByTimeAsync(1_499);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect((await settlement).promptError).toEqual(
-        new Error(`Timed out waiting for async task completion: ${task.runId}`),
-      );
+      if (completion === "deadline") {
+        await vi.advanceTimersByTimeAsync(250);
+        deadlineAtMs = Date.now() + 2_000;
+        deadlineChanges.publish();
+        await vi.advanceTimersByTimeAsync(1_499);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect((await settlement).promptError).toEqual(
+          new Error(`Timed out waiting for async task completion: ${task.runId}`),
+        );
+      } else {
+        controller.abort();
+        expect(await settlement).toMatchObject({
+          promptError: null,
+          sessionIdUsed: "sess-settle-1",
+        });
+      }
       expect(findMediaGenerationOperation(task.taskId)?.status).toBe("running");
     } finally {
       await Promise.allSettled([settlement]);

@@ -9,7 +9,7 @@ import {
 import type { WorkboardCard } from "../../lib/workboard/types.ts";
 import { waitForFast } from "../../test/wait-for.ts";
 import type { WorkboardProps } from "./view-helpers.tsx";
-import { buttonByLabel, createWorkboardView } from "./view.test-support.ts";
+import { buttonByLabel, createWorkboardView, openCardMenu } from "./view.test-support.ts";
 
 const provisional = "subagent:workboard-default-card-1";
 const canonical = "agent:writer:existing";
@@ -113,4 +113,33 @@ it.each(["start", "stop"] as const)("rejects stale %s after a link change", asyn
   expect(client.request).not.toHaveBeenCalled();
   expect(state.cards).toEqual([successor]);
   expect(state.busyCardIds.size).toBe(0);
+});
+
+it("updates and clears a card session target when only its resolution changes", () => {
+  const card = createWorkboardCard({ sessionKey: provisional });
+  const onOpenSession = vi.fn();
+  const view = createWorkboardView({ canWrite: true, onOpenSession });
+  view.state.cards = [card];
+  const targets = [
+    { sessionKey: "agent:writer:first", agentId: "writer" },
+    { sessionKey: "agent:writer:first", agentId: "reviewer" },
+    { sessionKey: "agent:reviewer:replacement", agentId: "reviewer" },
+  ];
+  for (const target of targets) {
+    view.renderView({
+      sessionResolution: {
+        key: provisional,
+        status: "resolved",
+        session: createGatewaySession({ key: target.sessionKey, agentId: target.agentId }),
+      },
+    });
+    const row = expectDefined(view.container.querySelector(".workboard-card"), "card row");
+    const menu = openCardMenu(row);
+    expectDefined(buttonByLabel(menu, "Open session"), "resolved session action").click();
+    expect(onOpenSession).toHaveBeenLastCalledWith(target);
+  }
+  view.renderView({ sessionResolution: { key: provisional, status: "ambiguous" } });
+  const row = expectDefined(view.container.querySelector(".workboard-card"), "card row");
+  expect(buttonByLabel(openCardMenu(row), "Open session")).toBeNull();
+  expect(view.state.cards[0]).toBe(card);
 });

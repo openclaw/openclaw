@@ -20,7 +20,11 @@ export type SubagentLifecycleOptions = {
   subagentAnnounceTimeoutMs: number;
   getRuntimeConfig(): OpenClawConfig;
   clearPendingLifecycleError(runId: string): void;
-  countPendingDescendantRuns(rootSessionKey: string, assertCurrent: () => void): Promise<number>;
+  countPendingDescendantRuns(
+    rootSessionKey: string,
+    assertCurrent: () => void,
+    options?: { excludeSuspendedDelivery?: boolean },
+  ): Promise<number>;
   getLatestRunForChildSession(
     childSessionKey: string,
     matches?: (entry: SubagentRunRecord) => boolean,
@@ -128,6 +132,8 @@ export type CleanupBookkeepingParams = {
   preserveTranscript?: boolean;
   provisionalKill?: boolean;
   skipRequesterSettleWake?: boolean;
+  /** Keep the settled row until its session and attachment cleanup succeeds. */
+  retainForCleanup?: boolean;
   isCurrent?: () => boolean;
   finalizeDelivery?: (draft: SubagentRunRecord) => void;
 };

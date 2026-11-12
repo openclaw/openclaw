@@ -48,3 +48,15 @@ export function expectObjectFields(
   }
   return record;
 }
+
+export function expectNoCalls(...mocks: unknown[]): void {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+export function expectCallCount(count: number, ...mocks: unknown[]): void {
+  for (const mock of mocks) {
+    expect(mock).toHaveBeenCalledTimes(count);
+  }
+}

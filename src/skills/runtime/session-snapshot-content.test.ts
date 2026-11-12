@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { completePassiveScan } from "./discovery.test-support.js";
 import { getSkillsSnapshotVersion, registerSkillsChangeListener } from "./refresh-state.js";
 import { closeSkillsWatchers, refreshSkillsDiscovery } from "./refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot as resolveSnapshot } from "./session-snapshot.js";
@@ -55,24 +55,6 @@ function expectUnchanged(result: SnapshotResult, previous: SnapshotResult) {
   expect(result.shouldRefresh).toBe(false);
 }
 
-async function completePassiveScan() {
-  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
-  try {
-    let settledTasks = 0;
-    for (let elapsed = 0; elapsed < 30 * 60_000 + 50; elapsed += 60_000) {
-      await vi.advanceTimersByTimeAsync(Math.min(60_000, 30 * 60_000 + 50 - elapsed));
-      // Native events during a scan can start another pass before publication.
-      while (settledTasks < tasks.mock.results.length) {
-        const pending = tasks.mock.results.slice(settledTasks);
-        settledTasks += pending.length;
-        await Promise.all(pending.map((result) => result.value));
-      }
-    }
-  } finally {
-    tasks.mockRestore();
-  }
-}
-
 it("honors a per-call passive refresh opt-out without disabling another observer", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "state"));
   const read = (existingSnapshot?: SnapshotParams["existingSnapshot"], watch = false) =>
@@ -84,8 +66,6 @@ it("honors a per-call passive refresh opt-out without disabling another observer
   const unobserved = await read(original.snapshot);
   expect(unobserved.snapshot).toBe(original.snapshot);
 
-  await read(undefined, true);
-  await read();
   const published = new Promise<void>((resolve) => {
     const unregister = registerSkillsChangeListener((event) => {
       if (event.workspaceDir === workspaceDir && event.reason === "watch") {
@@ -94,6 +74,8 @@ it("honors a per-call passive refresh opt-out without disabling another observer
       }
     });
   });
+  await read(undefined, true);
+  await read();
   await completePassiveScan();
   await published;
   const observed = await read(original.snapshot);
@@ -237,6 +219,7 @@ it("shares immutable catalog skills across interleaved agent selections and unch
   const second = await read("reader");
   await refreshSkillsDiscovery({ workspaceDir });
   const third = await read("writer");
+  expect((await read("writer")).snapshot).toBe(third.snapshot);
   const shared = first.snapshot.resolvedSkills![0]!;
   expect(first.snapshot.skills.map((skill) => skill.name)).toEqual(["demo"]);
   expect(second.snapshot.skills.map((skill) => skill.name)).toEqual(["demo", "other"]);

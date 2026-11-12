@@ -53,8 +53,7 @@ export function startTrackedBrowserTabCleanupTimer(params: {
     } catch (err) {
       params.onWarn(`failed to resolve browser tab cleanup config: ${String(err)}`);
     }
-    timer = setTimeout(run, Math.max(MIN_SWEEP_INTERVAL_MS, minutesToMs(sweepMinutes)));
-    timer.unref?.();
+    timer = setTimeout(run, Math.max(MIN_SWEEP_INTERVAL_MS, minutesToMs(sweepMinutes))).unref();
   };
 
   const run = () => {

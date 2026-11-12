@@ -41,10 +41,11 @@ async function uploadFixture(content: string | Buffer) {
 }
 
 function observeStagedReads(
-  observe: (handle: fs.FileHandle, filePath: string) => void | Promise<void>,
+  observe?: (handle: fs.FileHandle, filePath: string) => void | Promise<void>,
 ) {
+  const state = { path: "", closed: false, finished: createDeferred() };
   const open = fs.open.bind(fs);
-  return vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+  const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
     const handle = await open(...args);
     const [filePath, flags] = args;
     if (
@@ -54,10 +55,18 @@ function observeStagedReads(
       typeof flags === "number" &&
       (flags & (fsSync.constants.O_WRONLY | fsSync.constants.O_RDWR)) === 0
     ) {
-      await observe(handle, filePath);
+      state.path = filePath;
+      const close = handle.close.bind(handle);
+      vi.spyOn(handle, "close").mockImplementation(async () => {
+        await close();
+        state.closed = true;
+        state.finished.resolve();
+      });
+      await observe?.(handle, filePath);
     }
     return handle;
   });
+  return Object.assign(spy, { state });
 }
 
 describe("node worker upload HTTP lifetime", () => {
@@ -68,20 +77,12 @@ describe("node worker upload HTTP lifetime", () => {
     const controller = new AbortController();
     const readOpened = createDeferred();
     const releaseOpen = createDeferred();
-    let stagedPath = "";
-    let readClosed = false;
     const createReadStream = vi.fn();
-    const openSpy = observeStagedReads(async (handle, filePath) => {
-      stagedPath = filePath;
+    const openSpy = observeStagedReads(async (handle) => {
       const stream = handle.createReadStream.bind(handle);
       vi.spyOn(handle, "createReadStream").mockImplementation((options) => {
         createReadStream();
         return stream(options);
-      });
-      const close = handle.close.bind(handle);
-      vi.spyOn(handle, "close").mockImplementation(async () => {
-        await close();
-        readClosed = true;
       });
       readOpened.resolve();
       await releaseOpen.promise;
@@ -106,8 +107,8 @@ describe("node worker upload HTTP lifetime", () => {
       releaseOpen.resolve();
       await withinTest(rejected, signal);
       expect(createReadStream).not.toHaveBeenCalled();
-      expect(readClosed).toBe(true);
-      await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(openSpy.state.closed).toBe(true);
+      await expect(fs.stat(openSpy.state.path)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       releaseOpen.resolve();
       await operation.catch(() => undefined);
@@ -118,22 +119,11 @@ describe("node worker upload HTTP lifetime", () => {
 
   it("accepts a complete response before the final backpressure drain", async () => {
     const f = await uploadFixture(Buffer.alloc(2 * 1024 * 1024, "a"));
-    const readClosed = createDeferred();
-    let readOpened = false;
-    let readFinished = false;
     let finalDrainHeld = false;
     let releaseDrain: (() => void) | undefined;
     let receivedBytes = 0;
     let expectedBytes = 0;
-    const openSpy = observeStagedReads((handle) => {
-      readOpened = true;
-      const close = handle.close.bind(handle);
-      vi.spyOn(handle, "close").mockImplementation(async () => {
-        await close();
-        readFinished = true;
-        readClosed.resolve();
-      });
-    });
+    const openSpy = observeStagedReads();
     const server = createHttpServer(
       transferHandler(async (request, response) => {
         expectedBytes = Number(request.headers["content-length"]);
@@ -191,11 +181,11 @@ describe("node worker upload HTTP lifetime", () => {
       await expect(f.upload(gatewayUrl)).resolves.toBe(f.currentRef);
       expect(receivedBytes).toBe(expectedBytes);
       expect(finalDrainHeld).toBe(true);
-      expect(readFinished).toBe(true);
+      expect(openSpy.state.closed).toBe(true);
     } finally {
       releaseDrain?.();
-      if (readOpened) {
-        await readClosed.promise;
+      if (openSpy.state.path) {
+        await openSpy.state.finished.promise;
       }
       openSpy.mockRestore();
       requestSpy.mockRestore();
@@ -224,8 +214,6 @@ describe("node worker upload HTTP lifetime", () => {
     const requests = new Map<http.ClientRequest, ReturnType<http.ClientRequest["listeners"]>>();
     let responseConsumed = false;
     let snapshotPresentWhenReadSettled = false;
-    let readClosed = false;
-    let stagedPath = "";
     let readSignal: AbortSignal | undefined;
     let heldResponse: http.ServerResponse | undefined;
     let rejected: Promise<void> | undefined;
@@ -234,7 +222,6 @@ describe("node worker upload HTTP lifetime", () => {
       writerAborted.resolve();
     };
     const openSpy = observeStagedReads((handle, filePath) => {
-      stagedPath = filePath;
       const createReadStream = handle.createReadStream.bind(handle);
       vi.spyOn(handle, "createReadStream").mockImplementation((options) => {
         readSignal = options?.signal;
@@ -258,11 +245,6 @@ describe("node worker upload HTTP lifetime", () => {
         } finally {
           readSettled.resolve();
         }
-      });
-      const close = handle.close.bind(handle);
-      vi.spyOn(handle, "close").mockImplementation(async () => {
-        await close();
-        readClosed = true;
       });
     });
     const server = createHttpServer((_request, response) => {
@@ -334,8 +316,8 @@ describe("node worker upload HTTP lifetime", () => {
       await rejected;
       await readSettled.promise;
       expect(snapshotPresentWhenReadSettled).toBe(true);
-      expect(readClosed).toBe(true);
-      await expect(fs.stat(stagedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(openSpy.state.closed).toBe(true);
+      await expect(fs.stat(openSpy.state.path)).rejects.toMatchObject({ code: "ENOENT" });
       expect(responseConsumed).toBe(!cancelled && !headersHeld);
       for (const [outgoing, initialErrorListeners] of requests) {
         expect(outgoing.closed).toBe(true);
@@ -354,7 +336,7 @@ describe("node worker upload HTTP lifetime", () => {
       heldResponse?.end(JSON.stringify({ manifestRef: f.currentRef }));
       releaseRead.resolve();
       await rejected?.catch(() => {});
-      if (stagedPath) {
+      if (openSpy.state.path) {
         await readSettled.promise;
       }
       readSignal?.removeEventListener("abort", onReadAbort);

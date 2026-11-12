@@ -1,4 +1,4 @@
-import { toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { recordModelFallbackStop } from "../failover-error.js";
 import { runOwnedAgentCleanup } from "../run-cleanup-timeout.js";
 import { cliBackendLog } from "./log.js";
@@ -40,4 +40,33 @@ export async function runCliCleanup(
     recordModelFallbackStop(failure);
     throw failure;
   }
+}
+
+/** Preserve typed and frozen errors while refusing replacement of unclosed resources. */
+export function preserveCliRequiredCleanupStop(error: unknown): Error {
+  const failure = error instanceof Error ? error : new Error(formatErrorMessage(error));
+  recordModelFallbackStop(failure);
+  return failure;
+}
+
+/** Join all preparation owners before retaining the initiating failure and terminal stop. */
+export async function throwCliPreparationFailure(
+  params: Pick<RunCliAgentParams, "runId" | "sessionId" | "oneShotCliRun">,
+  error: unknown,
+  cleanup: (() => void | Promise<void>) | undefined,
+): Promise<never> {
+  try {
+    await runCliCleanup(
+      params,
+      "cli-prepare-failure",
+      async () => {
+        await cleanup?.();
+      },
+      "required",
+    );
+  } catch (cleanupError) {
+    cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupError)}`);
+    throw preserveCliRequiredCleanupStop(error);
+  }
+  throw error;
 }

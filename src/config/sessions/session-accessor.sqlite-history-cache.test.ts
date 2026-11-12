@@ -3,6 +3,7 @@ import { renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { disposeNodeSqliteDependents } from "../../infra/kysely-sync-cache-state.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
@@ -25,6 +26,7 @@ import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sql
 import {
   historyEventId,
   historyMessage,
+  readActiveTranscriptStats,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
@@ -90,6 +92,102 @@ describe("SQLite transcript history cache", () => {
     });
     await persist(turn("root", null));
   }
+
+  it("reuses exact accounting across interleaved sessions and retires changed or rolled-back facts", async () => {
+    const now = Date.now();
+    const timestamp = new Date(now).toISOString();
+    const root = {
+      type: "message",
+      id: "root",
+      parentId: null,
+      timestamp,
+      message: { role: "user", content: "é🦞" },
+    };
+    const other = { ...fixtureScope, sessionId: "other", sessionKey: "agent:main:other" };
+    for (const scope of [fixtureScope, other]) {
+      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: now });
+      await persistSessionTranscriptTurn(scope, {
+        messages: [
+          {
+            ...turn(
+              scope === fixtureScope ? "root" : "other-root",
+              null,
+              scope === fixtureScope ? "é🦞" : "separate",
+            ),
+            now,
+          },
+        ],
+        touchSessionEntry: false,
+      });
+    }
+    const database = openOpenClawAgentDatabase(fixtureScope);
+    const count = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["aggregate"],
+      (sql) => (sql.includes('as "size_bytes"') && sql.includes("SUM(") ? "aggregate" : null),
+    );
+    using _ = { [Symbol.dispose]: count.restore };
+    const bytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
+    const readStats = () => readActiveTranscriptStats(fixtureScope);
+    const expectStats = (events: unknown[]) => {
+      const expected = {
+        eventCount: events.length,
+        sizeBytes: events.reduce<number>((total, event) => total + bytes(event), 0),
+      };
+      expect(readStats()).toEqual(expected);
+      const aggregates = count.counts.aggregate;
+      expect(readStats()).toEqual(expected);
+      expect(count.counts.aggregate).toBe(aggregates);
+    };
+    expectStats([root]);
+    readActiveTranscriptStats(other);
+    expectStats([root]);
+    expect(count.counts.aggregate).toBe(2);
+
+    const tail = { ...historyMessage("tail", "root", "next"), timestamp };
+    expect(
+      appendTranscriptMessageSync(fixtureScope, { ...turn("tail", "root", "next"), now }),
+    ).toMatchObject({ ok: true, value: { appended: true } });
+    expectStats([root, tail]);
+    const cut = {
+      type: "compaction",
+      id: "cut",
+      parentId: "tail",
+      summary: "Retained context",
+      tokensBefore: 10,
+      firstKeptEntryId: "root",
+    };
+    expect(appendTranscriptEventSync(fixtureScope, cut)).toMatchObject({ ok: true, value: true });
+    expectStats([root, tail, cut]);
+    const generation = readTranscriptGenerationInTransaction(database, fixtureScope.sessionId)!;
+    const rewritten = {
+      ...root,
+      message: { ...root.message, __openclaw: { steerTargetRunId: "changed-metadata" } },
+    };
+    expect(
+      await rewriteTranscriptEventRowsExact(fixtureScope, {
+        expectedGeneration: generation,
+        rows: [{ seq: 1, expectedEventJson: JSON.stringify(root), event: rewritten }],
+      }),
+    ).toEqual({ generation });
+    expectStats([rewritten, tail, cut]);
+
+    expect(() =>
+      transact(() => {
+        expect(
+          appendTranscriptEventSync(fixtureScope, resetEvent("discarded", "cut")),
+        ).toMatchObject({ ok: true, value: true });
+        expect(readStats()).toEqual({ eventCount: 0, sizeBytes: 0 });
+        throw new Error("rollback accounting");
+      }),
+    ).toThrow("rollback accounting");
+    expectStats([rewritten, tail, cut]);
+    expect(appendTranscriptEventSync(fixtureScope, resetEvent("reset", "cut"))).toMatchObject({
+      ok: true,
+      value: true,
+    });
+    expectStats([]);
+  });
 
   it("keeps worker history cursors scoped to the logical agent on a shared store", async () => {
     await seedRoot();

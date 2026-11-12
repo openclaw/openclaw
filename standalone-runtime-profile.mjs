@@ -1,7 +1,7 @@
 // The executing image owns its runtime profile; sidecars describe artifacts on disk.
 let runtimeExecutionProfile;
 
-export function resolveRuntimeExecutionProfile(build) {
+function resolveRuntimeExecutionProfile(build) {
   return build?.mode === "aot" ? "embedded-aot" : "dynamic-execution";
 }
 

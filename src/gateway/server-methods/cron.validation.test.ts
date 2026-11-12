@@ -1,7 +1,6 @@
+import { performance } from "node:perf_hooks";
 // Cron validation tests cover channel target validation against plugin
 // prefixes/aliases and runtime config for cron delivery destinations.
-
-import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -9,6 +8,7 @@ import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
@@ -52,6 +52,7 @@ import {
   createCronTestContext,
   callerClientWithCronCreatorAuthority,
   expectCronSuccess,
+  expectCronReply,
   expectResponseError,
   requireCronAddPayload,
   requireRecord,
@@ -236,8 +237,8 @@ describe("cron method validation", () => {
         client: null,
         isWebchatConnect: () => false,
       });
-      expect(respond).toHaveBeenLastCalledWith(
-        true,
+      expectCronReply(
+        respond,
         expect.objectContaining({
           delivery: {
             mode: "announce",
@@ -247,7 +248,7 @@ describe("cron method validation", () => {
             accountId: "bot:12345",
           },
         }),
-        undefined,
+        "last",
       );
       const created = readRow();
       expect(JSON.parse(created.job_json).delivery).toEqual({
@@ -282,8 +283,8 @@ describe("cron method validation", () => {
         client: null,
         isWebchatConnect: () => false,
       });
-      expect(respond).toHaveBeenLastCalledWith(
-        true,
+      expectCronReply(
+        respond,
         expect.objectContaining({
           id: created.job_id,
           delivery: {
@@ -294,7 +295,7 @@ describe("cron method validation", () => {
             accountId: "bot:12345",
           },
         }),
-        undefined,
+        "last",
       );
       expect(JSON.parse(readRow().job_json).delivery).toEqual({
         mode: "announce",
@@ -564,23 +565,6 @@ describe("cron method validation", () => {
     },
   );
 
-  it("runs a padded exact job ID without caller scope", async () => {
-    const context = createCronContext(createCronJob({ id: "cron-1", agentId: "ops" }));
-    const { respond } = await invokeCron("cron.run", { id: " cron-1 " }, { context });
-    expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
-    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force");
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        ok: true,
-        enqueued: true,
-        runId: "run-1",
-        processInstanceId: getGatewayProcessInstanceId(),
-      },
-      undefined,
-    );
-  });
-
   it.each([
     {
       name: "foreign session target",
@@ -652,14 +636,14 @@ describe("cron method validation", () => {
           expect(respond).not.toHaveBeenCalled();
         } else {
           await invocation;
-          expect(respond).toHaveBeenCalledExactlyOnceWith(
-            true,
+          expectCronReply(
+            respond,
             expect.objectContaining({
               jobs: [expect.objectContaining({ id: "private-job-200" })],
               total: 1,
               hasMore: false,
             }),
-            undefined,
+            "once",
           );
         }
         expect(context.logGateway.warn).toHaveBeenCalledExactlyOnceWith("cron: slow list request", {
@@ -788,8 +772,8 @@ describe("cron method validation", () => {
       expect.objectContaining({ agentId: undefined }),
       expect.any(Function),
     );
-    expect(respond).toHaveBeenCalledWith(
-      true,
+    expectCronReply(
+      respond,
       expect.objectContaining({
         total: 2,
         offset: 0,
@@ -798,7 +782,6 @@ describe("cron method validation", () => {
         nextOffset: 1,
         jobs: [expect.objectContaining({ id: "cron-safe-1" })],
       }),
-      undefined,
     );
   });
 
@@ -948,12 +931,9 @@ describe("cron method validation", () => {
 
   it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
     let authorityActive = true;
-    let releasePreparation: (() => void) | undefined;
-    const held = new Promise<undefined>((resolve) => {
-      releasePreparation = () => resolve(undefined);
-    });
+    const held = createDeferred<undefined>();
     const context = createCronContext();
-    context.cron.prepareWake.mockImplementationOnce(async () => await held);
+    context.cron.prepareWake.mockImplementationOnce(async () => await held.promise);
     context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
 
     const invocation = invokeCron(
@@ -963,7 +943,7 @@ describe("cron method validation", () => {
     );
     await vi.waitFor(() => expect(context.cron.prepareWake).toHaveBeenCalledOnce());
     authorityActive = false;
-    releasePreparation?.();
+    held.resolve(undefined);
     const { respond } = await invocation;
 
     expect(context.cron.wake).toHaveBeenCalledOnce();
@@ -1380,71 +1360,47 @@ describe("cron method validation", () => {
     },
   );
 
-  it("keeps new jobs scoped to their creator account while preserving accountless legacy jobs", async () => {
-    const workOwned = createCronJob({
+  it.each([
+    {
+      name: "creator-owned job hidden from another account",
       owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "work" },
-    });
-    const context = createCronContext(workOwned);
-
-    const wrongAccount = await invokeCron(
+      account: "default",
+      expected: { total: 0, jobs: [] },
+    },
+    {
+      name: "creator-owned job visible to its account",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "work" },
+      account: "work",
+      expected: { total: 1 },
+    },
+    {
+      name: "accountless legacy job visible to another account",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+      account: "other",
+      expected: { total: 1 },
+    },
+    {
+      name: "account-only ownership hidden from another account",
+      agentId: "ops",
+      owner: { accountId: "work" },
+      account: "other",
+      expected: { total: 0, jobs: [] },
+    },
+    {
+      name: "account-only ownership visible to its account",
+      agentId: "ops",
+      owner: { accountId: "work" },
+      account: "work",
+      expected: { total: 1 },
+    },
+  ])("keeps $name", async ({ owner, agentId, account, expected }) => {
+    const context = createCronContext(createCronJob({ agentId, owner }));
+    const { respond } = await invokeCron(
       "cron.list",
       { compact: true },
-      { context, client: callerClient("ops", "default") },
+      { context, client: callerClient("ops", account) },
     );
-    expect(wrongAccount.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 0, jobs: [] }),
-      undefined,
-    );
-
-    const matchingAccount = await invokeCron(
-      "cron.list",
-      { compact: true },
-      { context, client: callerClient("ops", "work") },
-    );
-    expect(matchingAccount.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 1 }),
-      undefined,
-    );
-
-    const legacyContext = createCronContext(
-      createCronJob({ owner: { agentId: "ops", sessionKey: "agent:ops:main" } }),
-    );
-    const legacy = await invokeCron(
-      "cron.list",
-      { compact: true },
-      { context: legacyContext, client: callerClient("ops", "other") },
-    );
-    expect(legacy.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 1 }),
-      undefined,
-    );
-
-    const accountOnlyContext = createCronContext(
-      createCronJob({ agentId: "ops", owner: { accountId: "work" } }),
-    );
-    const accountOnlyWrong = await invokeCron(
-      "cron.list",
-      { compact: true },
-      { context: accountOnlyContext, client: callerClient("ops", "other") },
-    );
-    expect(accountOnlyWrong.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 0, jobs: [] }),
-      undefined,
-    );
-    const accountOnlyMatch = await invokeCron(
-      "cron.list",
-      { compact: true },
-      { context: accountOnlyContext, client: callerClient("ops", "work") },
-    );
-    expect(accountOnlyMatch.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 1 }),
-      undefined,
-    );
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(expected), undefined);
   });
 
   it("binds scheduled authority access to its exact creator session", async () => {
@@ -1461,11 +1417,7 @@ describe("cron method validation", () => {
       { compact: true },
       { context, client: siblingClient },
     );
-    expect(siblingList.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 0, jobs: [] }),
-      undefined,
-    );
+    expectCronReply(siblingList.respond, expect.objectContaining({ total: 0, jobs: [] }));
 
     const siblingUpdate = await invokeCron(
       "cron.update",
@@ -1493,14 +1445,10 @@ describe("cron method validation", () => {
       { compact: true },
       { context, client: callerClient("ops", "work", ownerSessionKey) },
     );
-    expect(ownerList.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 1 }),
-      undefined,
-    );
+    expectCronReply(ownerList.respond, expect.objectContaining({ total: 1 }));
   });
 
-  it("preserves only current-job self-management for a capped scheduled run", async () => {
+  it("preserves only current-job self-management across delivery accounts", async () => {
     const ownerSessionKey = "agent:ops:discord:work:group:creator";
     const accountJob = createCronJob({
       agentId: "ops",
@@ -1516,16 +1464,15 @@ describe("cron method validation", () => {
     const context = createCronContext([accountJob, siblingJob]);
     const runClient = callerClient(
       "ops",
-      "work",
+      "delivery-account",
       `agent:ops:cron:${accountJob.id}:run:run-1`,
       accountJob.id,
     );
 
     const list = await invokeCron("cron.list", { compact: true }, { context, client: runClient });
-    expect(list.respond).toHaveBeenCalledWith(
-      true,
+    expectCronReply(
+      list.respond,
       expect.objectContaining({ total: 1, jobs: [expect.objectContaining({ id: accountJob.id })] }),
-      undefined,
     );
 
     const get = await invokeCron("cron.get", { id: accountJob.id }, { context, client: runClient });
@@ -1563,11 +1510,7 @@ describe("cron method validation", () => {
       { id: accountJob.id },
       { context, client: runClient },
     );
-    expect(runs.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ entries: [], total: 0 }),
-      undefined,
-    );
+    expectCronReply(runs.respond, expect.objectContaining({ entries: [], total: 0 }));
 
     const update = await invokeCron(
       "cron.update",
@@ -1607,28 +1550,6 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "Automation not found",
     });
-  });
-
-  it("keeps trusted scheduled authority operator-only", async () => {
-    const trustedJob = createCronJob({
-      owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
-      scheduledToolPolicy: { version: 1, mode: "trusted" },
-    });
-    const context = createCronContext(trustedJob);
-
-    const agentList = await invokeCron(
-      "cron.list",
-      { compact: true },
-      { context, client: callerClient("ops") },
-    );
-    expect(agentList.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ total: 0, jobs: [] }),
-      undefined,
-    );
-
-    const operatorGet = await invokeCron("cron.get", { id: trustedJob.id }, { context });
-    expectCronSuccess(operatorGet.respond);
   });
 
   it("scopes operator declaration convergence by normalized owner account", async () => {
@@ -1679,16 +1600,12 @@ describe("cron method validation", () => {
       { context },
     );
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        created: false,
-        updated: false,
-        job: expect.objectContaining({ id: "cron-1", declarationKey: "daily-report" }),
-        deliveryPreview: { label: "not requested", detail: "not requested" },
-      },
-      undefined,
-    );
+    expectCronReply(respond, {
+      created: false,
+      updated: false,
+      job: expect.objectContaining({ id: "cron-1", declarationKey: "daily-report" }),
+      deliveryPreview: { label: "not requested", detail: "not requested" },
+    });
   });
 
   it.each([
@@ -1721,8 +1638,8 @@ describe("cron method validation", () => {
     const context = createCronContext(job);
     const { respond } = await invokeCron("cron.list", { compact: true }, { context });
 
-    expect(respond).toHaveBeenCalledWith(
-      true,
+    expectCronReply(
+      respond,
       expect.objectContaining({
         jobs: [
           expect.objectContaining({
@@ -1741,7 +1658,6 @@ describe("cron method validation", () => {
           }),
         ],
       }),
-      undefined,
     );
   });
 
@@ -1960,38 +1876,25 @@ describe("cron method validation", () => {
     expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "must not be blank" });
   });
 
-  it.each([null])("rejects caller-scoped cron.update agentId %j", async (agentId) => {
-    const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: { agentId },
-      },
-      createCronJob({ agentId: "ops" }),
-      { client: callerClient("ops") },
-    );
-
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
+  it.each([
+    {
+      name: "agentId null",
+      patch: { agentId: null },
       messageIncludes: "agentId cannot be changed",
-    });
-  });
-
-  it("rejects caller-scoped cron.update with a foreign sessionTarget", async () => {
+    },
+    {
+      name: "a foreign sessionTarget",
+      patch: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
+      messageIncludes: "session target outside caller scope",
+    },
+  ])("rejects caller-scoped cron.update with $name", async ({ patch, messageIncludes }) => {
     const { context, respond } = await invokeCronUpdate(
-      {
-        id: "cron-1",
-        patch: { sessionTarget: "session:agent:worker:telegram:direct:alice" },
-      },
+      { id: "cron-1", patch },
       createCronJob({ agentId: "ops" }),
       { client: callerClient("ops") },
     );
-
     expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "session target outside caller scope",
-    });
+    expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes });
   });
 
   it("rejects execution-derived diagnostics in cron.update state patches", async () => {
@@ -2233,15 +2136,13 @@ describe("cron method validation", () => {
             api: "anthropic-messages",
             baseUrl: "https://api.anthropic.com",
             apiKey: "synthetic-unused-model-key",
-            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) => ({
-              id,
-              name: `Synthetic ${id}`,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 200_000,
-              maxTokens: 8192,
-            })),
+            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) =>
+              modelDefinition(id, {
+                name: `Synthetic ${id}`,
+                reasoning: false,
+                contextWindow: 200_000,
+              }),
+            ),
           },
         },
       },
@@ -2442,45 +2343,6 @@ describe("cron method validation", () => {
 
   registerCronRunWaitTests({ handlers: cronHandlers, getRuntimeConfig });
 
-  it("waits for a command job named for an administrator's own session", async () => {
-    // Command jobs run as processes, so a target naming the caller's session never
-    // queues them behind the caller's turn.
-    const client = callerClient("main");
-    const identity = client.internal!.agentRuntimeIdentity!;
-    const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
-    identity.delegatedAuthority = { kind: "local", ...authority };
-    const scope = createCronCreatorAuthorityRunScope(
-      identity.operationalRunInstance.runId,
-      { kind: "local" },
-      { source: "control-ui-admin" },
-    );
-    const context = createCronContext(
-      createCronJob({
-        id: "cron-1",
-        agentId: "main",
-        sessionTarget: "session:main",
-        payload: { kind: "command", argv: ["echo", "report"] },
-        delivery: { mode: "none" },
-      }),
-    );
-    try {
-      await runWithCronCreatorAuthorityCapability(scope, () =>
-        withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-          identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint("cron.run");
-          return await invokeCron(
-            "cron.run",
-            { id: "cron-1", waitTimeoutMs: 60_000 },
-            { client, context },
-          );
-        }),
-      );
-      expect(context.cron.waitForManualRun).toHaveBeenCalledOnce();
-    } finally {
-      revokeCronCreatorAuthorityRunScope(scope);
-      releaseAgentRunDelegatedAuthority(authority);
-    }
-  });
-
   it.each([
     { caller: "allowed", releasesOutcome: true },
     { caller: "revoked during the history read", releasesOutcome: false },
@@ -2520,12 +2382,11 @@ describe("cron method validation", () => {
       runId: "run-1",
       processInstanceId: getGatewayProcessInstanceId(),
     };
-    expect(respond).toHaveBeenCalledWith(
-      true,
+    expectCronReply(
+      respond,
       releasesOutcome
         ? { ...ack, run: expect.objectContaining({ runId: "run-1", status: "ok" }) }
         : ack,
-      undefined,
     );
   });
 

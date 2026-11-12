@@ -7,7 +7,7 @@ import {
 } from "../../../components/session-progress-card.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { listSubagents } from "../chat-subagent-wait.ts";
+import { listSubagents, projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
   type SessionAutomationMobileListProps,
@@ -33,7 +33,7 @@ import type { GitHubPublicationMobileProps } from "./chat-github-publication-mob
 import "../../../styles/chat/github-publication-mobile.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
-import { ChatOutputsMobile, getChatOutputsCount } from "./chat-outputs.tsx";
+import { getChatOutputsCount } from "./chat-outputs-data.ts";
 import {
   ChatPullRequestMobileCollection,
   ChatPullRequestMobileDetail,
@@ -58,10 +58,13 @@ import {
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
 import "../../../styles/chat/details.css";
-import { SessionAutomationResult } from "./session-automation-result.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+
+const ChatOutputsMobile = lazy(() => import("./chat-outputs.tsx"), {
+  export: "ChatOutputsMobile",
+});
 
 const GitHubPublicationMobile = lazy(() => import("./chat-github-publication-mobile.tsx"), {
   export: "GitHubPublicationMobile",
@@ -96,7 +99,7 @@ type ChatDetailsMobileRootContent = {
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
   publicationEntry?: ChatDetailsMobileEntry;
   processes: ChatDetailsMobileProcessesProps["data"] | undefined;
-  /** Keep every native child; the host routes unlisted children through onSessionSelect. */
+  /** The root shows the native subagent collection; ordinary subsessions stay in the sidebar. */
   subagents: Omit<NonNullable<ChatDetailsMobileRootProps["subagents"]>, "rows">;
   /** One session-owned inventory, shared with desktop; never construct it in the opener. */
   automations?: { inventory: SessionAutomationInventory; summary: ChatDetailsMobileEntry };
@@ -167,6 +170,12 @@ function MobileRoot(
           props.details.selectedSession?.startedAt,
           props.details.selectedSession?.endedAt,
           props.details.runActive,
+          projectProgressCardRuntime(
+            props.details.selectedSession,
+            props.details,
+            card.updatedAt,
+            props.details.connected,
+          ),
         )
       : undefined;
   });
@@ -224,7 +233,6 @@ function MobileRoot(
       items: inventory.jobs().map((job) => ({
         value: job.id,
         label: job.name.trim() || job.id,
-        status: <SessionAutomationResult job={job} />,
         // Keep asynchronous schedule reads inside the rendered automations section.
         get description() {
           return job.autoDisabled
@@ -377,7 +385,11 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
       </Match>
       <Match when={props.page.kind === "outputs"}>
         <Show when={props.details.outputs}>
-          {(outputs) => <ChatOutputsMobile {...outputs()} />}
+          {(outputs) => (
+            <ChatLazyBoundary>
+              <ChatOutputsMobile {...outputs()} />
+            </ChatLazyBoundary>
+          )}
         </Show>
       </Match>
       <Match when={props.page.kind === "automations" && props.page}>
@@ -431,6 +443,14 @@ function mobileProgressProps(
     startedAt: details.selectedSession?.startedAt,
     endedAt: details.selectedSession?.endedAt,
     hasActiveRun: details.runActive,
+    runtime: details.progressCard
+      ? projectProgressCardRuntime(
+          details.selectedSession,
+          details,
+          details.progressCard.updatedAt,
+          details.connected,
+        )
+      : undefined,
   };
 }
 

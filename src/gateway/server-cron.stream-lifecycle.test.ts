@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import * as cronStore from "../cron/service/store.js";
@@ -15,20 +15,33 @@ import {
 } from "./server-cron.test-support.js";
 import { cronHandlers } from "./server-methods/cron.js";
 
-function createStreamService(label: string) {
+const extinctionError = "stream process extinction is unconfirmed";
+let disposeSource: (() => Promise<void>) | undefined;
+
+function watchSource(label: string, replacement = false) {
+  const watched = createWatchedRun();
+  const { spawn } = mockCronSupervisor(watched, ...(replacement ? [createWatchedRun()] : []));
   const cfg = createCronConfig(label);
   cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-  const state = loadCronService(cfg);
-  return Object.assign(state, {
-    cfg,
-    async [Symbol.asyncDispose]() {
-      await state.stopStreamWatchers?.();
-      state.cron.stop();
-    },
-  });
+  const state = Object.assign(loadCronService(cfg), { cfg });
+  disposeSource = async () => {
+    watched.waitForExtinction.mockResolvedValue(undefined);
+    await state.stopStreamWatchers?.();
+    state.cron.stop();
+  };
+  return { state, watched, spawn };
 }
 
-async function addSource(state: ReturnType<typeof createStreamService>, name: string) {
+function expectUninterrupted(
+  watched: ReturnType<typeof createWatchedRun>,
+  spawn: ReturnType<typeof mockCronSupervisor>["spawn"],
+) {
+  expect(spawn).toHaveBeenCalledOnce();
+  expect(watched.cancel).not.toHaveBeenCalled();
+  expect(watched.detachOutput).not.toHaveBeenCalled();
+}
+
+async function addSource(state: ReturnType<typeof watchSource>["state"], name: string) {
   const added = await addSystemEventJob(state, name, "event", {
     schedule: { kind: "stream", command: ["source"] },
     sessionTarget: "main",
@@ -38,12 +51,18 @@ async function addSource(state: ReturnType<typeof createStreamService>, name: st
 
 describe("buildGatewayCronService stream lifecycle", () => {
   beforeEach(resetGatewayCronMocks);
+  afterEach(async () => {
+    try {
+      await disposeSource?.();
+    } finally {
+      disposeSource = undefined;
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
 
   it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
-    const watched = createWatchedRun();
-    const { cancel, detachOutput } = watched;
-    const { spawn } = mockCronSupervisor(watched);
-    await using state = createStreamService("server-cron-stream-rejected-update");
+    const { watched, spawn, state } = watchSource("server-cron-stream-rejected-update");
 
     const streamJob = await addSource(state, "stream source");
     expect(streamJob.state.streamStatus).toBe("running");
@@ -62,9 +81,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
       schedule: { kind: "stream", command: ["source"] },
     });
 
-    expect(spawn).toHaveBeenCalledOnce();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(detachOutput).not.toHaveBeenCalled();
+    expectUninterrupted(watched, spawn);
     expect(state.cron.getJob(streamJob.id)?.enabled).toBe(true);
     expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
     const stopped = await state.cron.update(streamJob.id, { enabled: false });
@@ -72,8 +89,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
   });
 
   it("keeps the saved definition when another edit commits during source startup", async () => {
-    const watched = createWatchedRun();
-    const { spawn } = mockCronSupervisor(watched);
+    const { watched, spawn, state } = watchSource("server-cron-stream-observation-race");
     const starting = createDeferred();
     const releaseStart = createDeferred();
     spawn.mockImplementationOnce(async () => {
@@ -81,7 +97,6 @@ describe("buildGatewayCronService stream lifecycle", () => {
       await releaseStart.promise;
       return { ...watched, runId: "held-start" };
     });
-    const state = createStreamService("server-cron-stream-observation-race");
     const adding = addSystemEventJob(state, "original name", "event", {
       id: "observed-source",
       schedule: { kind: "stream", command: ["source"] },
@@ -106,33 +121,31 @@ describe("buildGatewayCronService stream lifecycle", () => {
     } finally {
       releaseStart.resolve();
       await Promise.allSettled([adding, updating]);
-      await state[Symbol.asyncDispose]();
     }
   });
 
   it("rejects a stale removal before stopping the changed watcher", async () => {
-    const watched = createWatchedRun();
-    const replacement = createWatchedRun();
-    const { spawn } = mockCronSupervisor(watched, replacement);
-    await using state = createStreamService("server-cron-stream-stale-removal");
+    const { watched, spawn, state } = watchSource("stale-removal", true);
     const context = createDirectChatContext({
       cron: state.cron,
       getRuntimeConfig: () => state.cfg,
     });
     const remove = expectDefined(cronHandlers["cron.remove"], "registered cron.remove handler");
     const respond = vi.fn();
+    const removeJob = (params: { id: string; expectedConfigRevision: string }) =>
+      remove({
+        req: { type: "req", id: "remove", method: "cron.remove", params },
+        params,
+        respond,
+        context,
+        client: null,
+        isWebchatConnect: () => false,
+      });
     const selected = await addSource(state, "selected watcher");
     const expectedConfigRevision = resolveCronJobConfigRevision(selected);
     const changed = await state.cron.update(selected.id, { name: "changed after selection" });
     const params = { id: selected.id, expectedConfigRevision };
-    await remove({
-      req: { type: "req", id: "stale-remove", method: "cron.remove", params },
-      params,
-      respond,
-      context,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await removeJob(params);
 
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -146,9 +159,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
         },
       }),
     );
-    expect(watched.cancel).not.toHaveBeenCalled();
-    expect(watched.detachOutput).not.toHaveBeenCalled();
-    expect(spawn).toHaveBeenCalledOnce();
+    expectUninterrupted(watched, spawn);
     const current = expectDefined(await state.cron.readJob(selected.id), "changed watcher remains");
     expect(current).toMatchObject({
       name: "changed after selection",
@@ -163,14 +174,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
       expectedConfigRevision: resolveCronJobConfigRevision(current),
     };
     respond.mockClear();
-    await remove({
-      req: { type: "req", id: "current-remove", method: "cron.remove", params: currentParams },
-      params: currentParams,
-      respond,
-      context,
-      client: null,
-      isWebchatConnect: () => false,
-    });
+    await removeJob(currentParams);
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ removed: true }),
@@ -181,16 +185,12 @@ describe("buildGatewayCronService stream lifecycle", () => {
   });
 
   it("does not interrupt the existing source while its replacement requires consent", async () => {
-    const watched = createWatchedRun();
-    const { spawn } = mockCronSupervisor(watched);
-    await using state = createStreamService("server-cron-stream-consent");
+    const { watched, spawn, state } = watchSource("server-cron-stream-consent");
     const original = await addSource(state, "current source");
     await expect(
       state.cron.update(
         original.id,
-        {
-          schedule: { kind: "stream", command: ["replacement"] },
-        },
+        { schedule: { kind: "stream", command: ["replacement"] } },
         {
           execPolicy: {
             kind: "resolved",
@@ -201,9 +201,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
         },
       ),
     ).rejects.toThrow(CronStreamExecApprovalRequiredError);
-    expect(watched.cancel).not.toHaveBeenCalled();
-    expect(watched.detachOutput).not.toHaveBeenCalled();
-    expect(spawn).toHaveBeenCalledOnce();
+    expectUninterrupted(watched, spawn);
     expect(await state.cron.readJob(original.id)).toMatchObject({
       schedule: original.schedule,
       state: {
@@ -214,178 +212,121 @@ describe("buildGatewayCronService stream lifecycle", () => {
   });
 
   it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
-    const watched = createWatchedRun();
-    const { cancel, detachOutput } = watched;
-    const { spawn } = mockCronSupervisor(watched);
-    const state = createStreamService("server-cron-stream-stale-snapshot");
-
-    try {
-      // Gate reconcile's first list call: capture the pre-add (empty) snapshot,
-      // hold it while the add's direct route starts the owner, then release the
-      // stale snapshot. The revision fence must re-list instead of stopping the
-      // freshly started owner as "removed".
-      const originalList = state.cron.list.bind(state.cron);
-      const { promise: staleListGate, resolve: releaseStaleList } = createDeferred();
-      let armed = true;
-      state.cron.list = async (opts?: Parameters<typeof originalList>[0]) => {
-        if (!armed) {
-          return await originalList(opts);
-        }
-        armed = false;
-        const snapshot = await originalList(opts);
-        await staleListGate;
-        return snapshot;
-      };
-
-      const reconciling = state.reconcileStreamWatchers?.();
-      const streamJob = await addSource(state, "stale snapshot stream source");
-      const sourceIdentity = streamJob.state.streamSourceIdentity;
-      expect(spawn).toHaveBeenCalledOnce();
-      releaseStaleList();
-      await reconciling;
-
-      expect(cancel).not.toHaveBeenCalled();
-      expect(detachOutput).not.toHaveBeenCalled();
-      expect(spawn).toHaveBeenCalledOnce();
-      expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
-    } finally {
-      await state[Symbol.asyncDispose]();
-      vi.unstubAllEnvs();
-    }
+    const { watched, spawn, state } = watchSource("server-cron-stream-stale-snapshot");
+    // Release the pre-add snapshot after the direct route starts the owner.
+    const originalList = state.cron.list.bind(state.cron);
+    const { promise: staleListGate, resolve: releaseStaleList } = createDeferred();
+    let armed = true;
+    state.cron.list = async (opts?: Parameters<typeof originalList>[0]) => {
+      if (!armed) {
+        return await originalList(opts);
+      }
+      armed = false;
+      const snapshot = await originalList(opts);
+      await staleListGate;
+      return snapshot;
+    };
+    const reconciling = state.reconcileStreamWatchers?.();
+    const streamJob = await addSource(state, "stale snapshot stream source");
+    const sourceIdentity = streamJob.state.streamSourceIdentity;
+    expect(spawn).toHaveBeenCalledOnce();
+    releaseStaleList();
+    await reconciling;
+    expectUninterrupted(watched, spawn);
+    expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
   });
 
   it.each(["running", "cleanup pending"] as const)(
     "preserves an explicit terminal failure from %s until authorized recovery",
     async (initialState) => {
-      const watched = createWatchedRun();
-      const replacement = createWatchedRun();
-      const { spawn } = mockCronSupervisor(watched, replacement);
-      const state = createStreamService(`server-cron-stream-terminal-${initialState}`);
+      const { watched, spawn, state } = watchSource(
+        `server-cron-stream-terminal-${initialState}`,
+        true,
+      );
+      const streamJob = await addSource(state, "terminal stream source");
+      if (initialState === "cleanup pending") {
+        watched.waitForExtinction.mockRejectedValue(new Error("cleanup is unconfirmed"));
+        await state.cron.update(streamJob.id, { enabled: false });
+      }
+      await state.cron.update(streamJob.id, {
+        state: { streamRestartExhausted: true, streamError: "source exhausted its restarts" },
+      });
+      expect((await state.cron.readJob(streamJob.id))?.state.streamRestartExhausted).toBe(true);
 
-      try {
-        const streamJob = await addSource(state, "terminal stream source");
-        if (initialState === "cleanup pending") {
-          watched.waitForExtinction.mockRejectedValue(new Error("cleanup is unconfirmed"));
-          await state.cron.update(streamJob.id, { enabled: false });
-        }
-        await state.cron.update(streamJob.id, {
-          state: { streamRestartExhausted: true, streamError: "source exhausted its restarts" },
-        });
-        expect((await state.cron.readJob(streamJob.id))?.state.streamRestartExhausted).toBe(true);
+      watched.waitForExtinction.mockResolvedValue(undefined);
+      await state.cron.update(streamJob.id, { name: "after cleanup" });
+      await state.reconcileStreamWatchers?.();
+      expect((await state.cron.readJob(streamJob.id))?.state.streamRestartExhausted).toBe(true);
+      expect(watched.cancel).toHaveBeenCalledWith("manual-cancel");
+      expect(spawn).toHaveBeenCalledOnce();
 
-        watched.waitForExtinction.mockResolvedValue(undefined);
-        await state.cron.update(streamJob.id, { name: "after cleanup" });
-        await state.reconcileStreamWatchers?.();
-        expect((await state.cron.readJob(streamJob.id))?.state.streamRestartExhausted).toBe(true);
-        expect(watched.cancel).toHaveBeenCalledWith("manual-cancel");
-        expect(spawn).toHaveBeenCalledOnce();
+      await state.cron.update(streamJob.id, { enabled: true });
+      const recovered = (await state.cron.readJob(streamJob.id))?.state;
+      expect(recovered?.streamStatus).toBe("running");
+      expect(recovered?.streamRestartExhausted).toBeUndefined();
+      expect(spawn).toHaveBeenCalledTimes(2);
 
-        await state.cron.update(streamJob.id, { enabled: true });
-        expect((await state.cron.readJob(streamJob.id))?.state).toMatchObject({
-          streamStatus: "running",
-        });
-        expect(
-          (await state.cron.readJob(streamJob.id))?.state.streamRestartExhausted,
-        ).toBeUndefined();
-        expect(spawn).toHaveBeenCalledTimes(2);
-
-        await state.cron.update(streamJob.id, {
-          state: {
-            streamRestartExhausted: true,
-            streamError: "replacement exhausted its restarts",
-          },
-        });
-        await state.stopStreamWatchers?.();
-        expect((await state.cron.readJob(streamJob.id))?.state).toMatchObject({
-          streamStatus: "error",
+      await state.cron.update(streamJob.id, {
+        state: {
           streamRestartExhausted: true,
           streamError: "replacement exhausted its restarts",
-        });
-      } finally {
-        watched.waitForExtinction.mockResolvedValue(undefined);
-        await state[Symbol.asyncDispose]();
-      }
+        },
+      });
+      await state.stopStreamWatchers?.();
+      expect((await state.cron.readJob(streamJob.id))?.state).toMatchObject({
+        streamStatus: "error",
+        streamRestartExhausted: true,
+        streamError: "replacement exhausted its restarts",
+      });
     },
   );
 
   it.each(["enable", "clear exhaustion"] as const)(
     "keeps %s recovery in effect after retryable cleanup succeeds",
     async (recovery) => {
-      const watched = createWatchedRun();
-      const { spawn } = mockCronSupervisor(watched);
-      const state = createStreamService(`server-cron-stream-recovery-${recovery}`);
+      const { watched, spawn, state } = watchSource(`server-cron-stream-recovery-${recovery}`);
+      const streamJob = await addSource(state, "recovering source");
+      watched.waitForExtinction.mockRejectedValue(new Error("cleanup is unconfirmed"));
+      await state.cron.update(streamJob.id, {
+        state: { streamRestartExhausted: true, streamError: "source exhausted its restarts" },
+      });
+      expect((await state.cron.readJob(streamJob.id))?.state.streamRestartExhausted).toBe(true);
 
-      try {
-        const streamJob = await addSource(state, "recovering source");
-        watched.waitForExtinction.mockRejectedValue(new Error("cleanup is unconfirmed"));
-        await state.cron.update(streamJob.id, {
-          state: { streamRestartExhausted: true, streamError: "source exhausted its restarts" },
-        });
-        expect((await state.cron.readJob(streamJob.id))?.state.streamRestartExhausted).toBe(true);
-
-        await state.cron.update(
-          streamJob.id,
-          recovery === "enable" ? { enabled: true } : { state: { streamRestartExhausted: false } },
-        );
-        watched.waitForExtinction.mockResolvedValue(undefined);
-        await state.stopStreamWatchers?.();
-        const stopped = expectDefined(await state.cron.readJob(streamJob.id), "retained source");
-        expect(stopped.state.streamStatus).toBe("stopped");
-        expect(stopped.state.streamRestartExhausted).toBeUndefined();
-        expect(stopped.state.streamError).toBeUndefined();
-        expect(spawn).toHaveBeenCalledOnce();
-      } finally {
-        watched.waitForExtinction.mockResolvedValue(undefined);
-        await state[Symbol.asyncDispose]();
-      }
+      await state.cron.update(
+        streamJob.id,
+        recovery === "enable" ? { enabled: true } : { state: { streamRestartExhausted: false } },
+      );
+      watched.waitForExtinction.mockResolvedValue(undefined);
+      await state.stopStreamWatchers?.();
+      const stopped = expectDefined(await state.cron.readJob(streamJob.id), "retained source");
+      expect(stopped.state.streamStatus).toBe("stopped");
+      expect(stopped.state.streamRestartExhausted).toBeUndefined();
+      expect(stopped.state.streamError).toBeUndefined();
+      expect(spawn).toHaveBeenCalledOnce();
     },
   );
 
-  it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
-    const watched = createWatchedRun();
+  it.each(["overlapping stop", "failed drain"])("joins teardown after %s", async (prior) => {
+    const { watched, state } = watchSource(`server-cron-stream-${prior}`);
     const { cancel, waitForExtinction } = watched;
-    mockCronSupervisor(watched);
-    await using state = createStreamService("server-cron-stream-single-drain");
-
-    await addSource(state, "single drain stream source");
-    // cron.stop launches the asynchronous teardown; stopAndDrain must await
-    // that same drain instead of queueing every owner a second shutdown stop.
-    state.cron.stop();
-    await state.cron.stopAndDrain?.();
-    expect(cancel).toHaveBeenCalledWith("manual-cancel");
-    expect(waitForExtinction).toHaveBeenCalledOnce();
-  });
-
-  it("retries stream teardown after a prior drain failure", async () => {
-    const watched = createWatchedRun();
-    const { cancel, waitForExtinction } = watched;
-    waitForExtinction.mockRejectedValue(new Error("stream process extinction is unconfirmed"));
-    mockCronSupervisor(watched);
-    const state = createStreamService("server-cron-stream-retry-drain");
-
-    try {
-      await addSource(state, "retry drain stream source");
-
-      await expect(state.cron.stopAndDrain?.()).rejects.toThrow(
-        "stream process extinction is unconfirmed",
-      );
+    await addSource(state, "drain stream source");
+    if (prior === "failed drain") {
+      waitForExtinction.mockRejectedValue(new Error(extinctionError));
+      await expect(state.cron.stopAndDrain?.()).rejects.toThrow(extinctionError);
       waitForExtinction.mockResolvedValue(undefined);
-      await expect(state.cron.stopAndDrain?.()).resolves.toBeUndefined();
-      expect(cancel).toHaveBeenCalledWith("manual-cancel");
-      expect(waitForExtinction).toHaveBeenCalledTimes(2);
-    } finally {
-      waitForExtinction.mockResolvedValue(undefined);
-      await state[Symbol.asyncDispose]();
+    } else {
+      state.cron.stop();
     }
+    await expect(state.cron.stopAndDrain?.()).resolves.toBeUndefined();
+    expect(cancel).toHaveBeenCalledWith("manual-cancel");
+    expect(waitForExtinction).toHaveBeenCalledTimes(prior === "failed drain" ? 2 : 1);
   });
 
   it("reports a committed stream update as successful when source teardown fails", async () => {
     vi.useFakeTimers();
-    const watched = createWatchedRun();
+    const { watched, state } = watchSource("server-cron-stream-update-teardown-failure");
     const { cancel, waitForExtinction } = watched;
-    waitForExtinction.mockRejectedValue(new Error("stream process extinction is unconfirmed"));
-    mockCronSupervisor(watched);
-    const state = createStreamService("server-cron-stream-update-teardown-failure");
+    waitForExtinction.mockRejectedValue(new Error(extinctionError));
     const commitEntered = createDeferred();
     const commitReleased = createDeferred();
     const persist = cronStore.persistCronJobMutation;
@@ -410,73 +351,58 @@ describe("buildGatewayCronService stream lifecycle", () => {
       expect(cancel).not.toHaveBeenCalled();
       commitReleased.resolve();
       const updated = await updatePromise;
-      expect(updated).toMatchObject({
+      const failure = {
         enabled: false,
         state: {
           streamStatus: "error",
-          streamError: expect.stringContaining("stream process extinction is unconfirmed"),
+          streamError: expect.stringContaining(extinctionError),
         },
-      });
+      };
+      expect(updated).toMatchObject(failure);
       expect(await state.cron.readJob(streamJob.id)).toMatchObject({
-        enabled: false,
-        state: {
-          streamStatus: "error",
-          streamError: expect.stringContaining("stream process extinction is unconfirmed"),
-          streamRestartExhausted: true,
-        },
+        ...failure,
+        state: { ...failure.state, streamRestartExhausted: true },
       });
       expect(cancel).toHaveBeenCalledWith("manual-cancel");
     } finally {
       commitReleased.resolve();
       await updatePromise?.catch(() => undefined);
       mutation.mockRestore();
-      waitForExtinction.mockResolvedValue(undefined);
-      await state[Symbol.asyncDispose]();
-      vi.useRealTimers();
     }
   });
 
   it.each(["rejected", "uncertain"] as const)(
     "retains %s stream removal and clears its error only after confirmed cleanup",
     async (outcome) => {
-      const watched = createWatchedRun();
+      const { watched, state } = watchSource("server-cron-stream-remove-failure");
       const { cancel, detachOutput, waitForExtinction } = watched;
       if (outcome === "uncertain") {
         waitForExtinction.mockResolvedValue({ status: "uncertain", reason: "job-unavailable" });
       } else {
         waitForExtinction.mockRejectedValue(new Error("stream source extinction is unconfirmed"));
       }
-      mockCronSupervisor(watched);
-      const state = createStreamService("server-cron-stream-remove-failure");
+      const streamJob = await addSource(state, "stubborn stream source");
+      await expect(state.cron.remove(streamJob.id)).rejects.toThrow(
+        "stream source extinction is unconfirmed",
+      );
+      expect(waitForExtinction).toHaveBeenCalledTimes(2);
+      expect(cancel).toHaveBeenCalledWith("manual-cancel");
+      expect(detachOutput).toHaveBeenCalled();
+      expect(state.cron.getJob(streamJob.id)).toMatchObject({
+        enabled: true,
+        state: {
+          streamStatus: "error",
+          streamError: expect.stringContaining("stream source failed to stop"),
+          streamRestartExhausted: true,
+        },
+      });
 
-      try {
-        const streamJob = await addSource(state, "stubborn stream source");
-        await expect(state.cron.remove(streamJob.id)).rejects.toThrow(
-          "stream source extinction is unconfirmed",
-        );
-        expect(waitForExtinction).toHaveBeenCalledTimes(2);
-        expect(cancel).toHaveBeenCalledWith("manual-cancel");
-        expect(detachOutput).toHaveBeenCalled();
-        expect(state.cron.getJob(streamJob.id)).toMatchObject({
-          enabled: true,
-          state: {
-            streamStatus: "error",
-            streamError: expect.stringContaining("stream source failed to stop"),
-            streamRestartExhausted: true,
-          },
-        });
-
-        waitForExtinction.mockResolvedValue(undefined);
-        await state.stopStreamWatchers?.();
-        expect(state.cron.getJob(streamJob.id)).toMatchObject({
-          state: { streamStatus: "stopped" },
-        });
-        expect(state.cron.getJob(streamJob.id)?.state.streamError).toBeUndefined();
-        expect(state.cron.getJob(streamJob.id)?.state.streamRestartExhausted).toBeUndefined();
-      } finally {
-        waitForExtinction.mockResolvedValue(undefined);
-        await state[Symbol.asyncDispose]();
-      }
+      waitForExtinction.mockResolvedValue(undefined);
+      await state.stopStreamWatchers?.();
+      const stopped = state.cron.getJob(streamJob.id)?.state;
+      expect(stopped?.streamStatus).toBe("stopped");
+      expect(stopped?.streamError).toBeUndefined();
+      expect(stopped?.streamRestartExhausted).toBeUndefined();
     },
   );
 });

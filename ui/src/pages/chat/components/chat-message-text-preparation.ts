@@ -1,16 +1,11 @@
-import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
+import type { toStreamingMarkdownDomParts } from "../../../components/markdown-live.ts";
 import {
-  partitionMarkdownHtml,
-  toSanitizedMarkdownHtml,
-  toStreamingMarkdownDomParts,
-} from "../../../components/markdown.ts";
+  MARKDOWN_PARSE_LIMIT,
+  type MarkdownRenderOptions,
+} from "../../../components/markdown-render-options.ts";
+import { partitionMarkdownHtml, toSanitizedMarkdownContent } from "../../../components/markdown.ts";
 import { markdownContentHtml, type MarkdownContent } from "../../../lib/markdown-content.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-
-export type DuplicateSuffix = {
-  count: number;
-  label: string;
-};
 
 export type MessageTextOptions = {
   role: string;
@@ -30,12 +25,11 @@ export type AssistantMessageDisclosure = {
   onRetryFullMessage?: () => void;
 };
 
-export function prepareMessageMarkdown(
+/** The rendered source and policy also govern lazy inline-image discovery. */
+export function resolveMessageMarkdownRender(
   markdown: string,
-  messageKey: string,
-  opts: MessageTextOptions,
+  opts: Pick<MessageTextOptions, "role" | "assistantMessageDisclosure">,
   markdownRenderOptions: MarkdownRenderOptions,
-  duplicateSuffix?: DuplicateSuffix,
 ) {
   const disclosure = opts.assistantMessageDisclosure;
   const isAssistant = opts.role === "assistant";
@@ -46,46 +40,46 @@ export function prepareMessageMarkdown(
   const options: MarkdownRenderOptions = recovered
     ? { ...markdownRenderOptions, mode: "document" }
     : markdownRenderOptions;
-  const parts: [MarkdownContent, MarkdownContent] = opts.isStreaming
-    ? toStreamingMarkdownDomParts(source, options, isAssistant ? messageKey : undefined)
-    : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
-  if (duplicateSuffix) {
-    const terminalPart = markdownContentHtml(parts[1]).trim() ? 1 : 0;
-    const template = document.createElement("template");
-    const content = parts[terminalPart];
-    if (typeof content === "string") {
-      template.innerHTML = content;
-    } else {
-      template.content.append(content.fragment.cloneNode(true));
-    }
-    const terminalBlock = template.content.lastElementChild;
-    const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
-
-    const badge = document.createElement("span");
-    badge.className = "chat-duplicate-count";
-    badge.setAttribute("aria-label", duplicateSuffix.label);
-    badge.textContent = `×${duplicateSuffix.count}`;
-    (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-    parts[terminalPart] =
-      typeof content === "string"
-        ? template.innerHTML
-        : { html: template.innerHTML, fragment: template.content };
-  }
-  return { messageKey, source, parts, recoverFullMessage };
+  return { source, options, recoverFullMessage, recovered };
 }
 
-function duplicateSuffixTextOwner(block: Element): Element | null {
-  if (/^(?:P|H[1-6])$/u.test(block.tagName)) {
-    return block;
-  }
-  if (!/^(?:BLOCKQUOTE|LI|OL|UL)$/u.test(block.tagName)) {
-    // Fences, details, raw blocks, and table shells own interactive or copied
-    // content. Keep the status marker after the whole terminal block.
-    return null;
-  }
-  const terminalChild = block.lastElementChild;
-  if (!terminalChild) {
-    return block.textContent?.trim() ? block : null;
-  }
-  return duplicateSuffixTextOwner(terminalChild);
+export function prepareMessageMarkdown(
+  markdown: string,
+  messageKey: string,
+  opts: MessageTextOptions,
+  markdownRenderOptions: MarkdownRenderOptions,
+  renderStreaming?: typeof toStreamingMarkdownDomParts,
+  mutableStreaming = false,
+) {
+  const { source, options, recoverFullMessage, recovered } = resolveMessageMarkdownRender(
+    markdown,
+    opts,
+    markdownRenderOptions,
+  );
+  const isAssistant = opts.role === "assistant";
+  const streaming = opts.isStreaming;
+  const prepare = () => {
+    let parts: [MarkdownContent, MarkdownContent];
+    if (streaming && renderStreaming) {
+      parts = renderStreaming(source, options, isAssistant ? messageKey : undefined);
+    } else {
+      const content = toSanitizedMarkdownContent(source, options);
+      const [stable, tail] = partitionMarkdownHtml(markdownContentHtml(content), messageKey);
+      parts = [tail ? stable : content, tail];
+    }
+    if (mutableStreaming) {
+      parts = ["", markdownContentHtml(parts[0]) + markdownContentHtml(parts[1])];
+    }
+    return parts;
+  };
+  // Settled content must be prepared before the row's first measurement.
+  const deferFormatting = streaming && !recovered && source.length <= MARKDOWN_PARSE_LIMIT;
+  const eagerParts = deferFormatting ? undefined : prepare();
+  return {
+    messageKey,
+    source,
+    parts: eagerParts ? () => eagerParts : prepare,
+    deferFormatting,
+    recoverFullMessage,
+  };
 }

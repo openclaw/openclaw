@@ -8,7 +8,6 @@ import {
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
-  errorShape,
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -50,6 +49,8 @@ import {
 } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { acceptsPresenceDeltas, createPresenceReset } from "../presence-delivery.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
@@ -59,6 +60,7 @@ import { readGatewayProcessVitals } from "../server/process-vitals.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
@@ -80,7 +82,10 @@ function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   return advertisedLanHostPromise;
 }
 
-async function collectSystemInfo(context: GatewayRequestContext): Promise<SystemInfoResult> {
+async function collectSystemInfo(
+  context: GatewayRequestContext,
+  includePaths: boolean,
+): Promise<SystemInfoResult> {
   const { cpuCount, cpuModel } = cpuInfoSnapshot;
   const [oneMinute = 0, fiveMinutes = 0, fifteenMinutes = 0] = os.loadavg();
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
@@ -89,12 +94,12 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   if (
     !stateDiskSnapshot ||
     stateDiskSnapshot.stateDir !== stateDir ||
-    Date.now() >= stateDiskSnapshot.expiresAt
+    monotonicNow() >= stateDiskSnapshot.expiresAt
   ) {
     stateDiskSnapshot = {
       stateDir,
       disk: tryReadDiskSpace(stateDir),
-      expiresAt: Date.now() + 30_000,
+      expiresAt: monotonicNow() + 30_000,
     };
   }
   const { disk } = stateDiskSnapshot;
@@ -102,7 +107,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const port = resolveGatewayPort(config);
   const [lanAddress, disks] = await Promise.all([
     resolveCachedAdvertisedLanHost(),
-    readSystemDisks(),
+    includePaths ? readSystemDisks() : undefined,
   ]);
   const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
   const defaultAgentUtilityModel: SystemInfoResult["defaultAgentUtilityModel"] =
@@ -127,6 +132,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
             ? resolveUtilityModelRefForAgent({
                 cfg: prepared.config,
                 agentId: soleAgentId,
+                catalog: prepared,
                 metadataSnapshot: prepared.metadataSnapshot,
               })
             : undefined;
@@ -176,18 +182,20 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
     memoryTotalBytes: os.totalmem(),
     memoryFreeBytes: readHostFreeMemoryBytes(),
     ...readGatewayProcessVitals(context.getEventLoopHealth),
+    // Host paths are admin-only, matching the connect snapshot's stateDir gate.
     // Keep the existing state-volume reading when native discovery is unavailable;
     // an empty successful discovery intentionally stays empty.
-    disks:
-      disks ??
-      (disk?.totalBytes != null && disk.totalBytes > 0
-        ? [{ path: stateDir, totalBytes: disk.totalBytes, availableBytes: disk.availableBytes }]
-        : undefined),
+    disks: !includePaths
+      ? undefined
+      : (disks ??
+        (disk?.totalBytes != null && disk.totalBytes > 0
+          ? [{ path: stateDir, totalBytes: disk.totalBytes, availableBytes: disk.availableBytes }]
+          : undefined)),
     ...(disk?.totalBytes != null
       ? {
           diskTotalBytes: disk.totalBytes,
           diskAvailableBytes: disk.availableBytes,
-          diskPath: stateDir,
+          ...(includePaths ? { diskPath: stateDir } : {}),
         }
       : {}),
     defaultAgentUtilityModel,
@@ -214,13 +222,10 @@ export const systemHandlers: GatewayRequestHandlers = {
     const { params, respond, context } = options;
     const enabled = params.enabled;
     if (typeof enabled !== "boolean") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid set-heartbeats params: enabled (boolean) required",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid set-heartbeats params: enabled (boolean) required",
       );
       return;
     }
@@ -234,7 +239,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       );
       respond(true, { ok: true, enabled }, undefined);
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(error)));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, String(error));
     }
   },
   "presence.activity": defineValidatedGatewayMethod(
@@ -266,11 +271,11 @@ export const systemHandlers: GatewayRequestHandlers = {
       respond(true, presence, undefined);
     }
   },
-  "system.info": async ({ params, respond, context }) => {
+  "system.info": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSystemInfoParams, "system.info", respond)) {
       return;
     }
-    respond(true, await collectSystemInfo(context), undefined);
+    respond(true, await collectSystemInfo(context, hasGatewayAdminScope(client)), undefined);
   },
   "system-event": async (options) => {
     const { params, respond, context, client } = options;
@@ -281,7 +286,7 @@ export const systemHandlers: GatewayRequestHandlers = {
     // Payload classification below selects behavior and is never an authorization boundary.
     const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "text required");
       return;
     }
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
@@ -301,10 +306,10 @@ export const systemHandlers: GatewayRequestHandlers = {
     const authority = readGatewayRequestMutationAuthority(options);
     const isNodePresenceLine = text.startsWith("Node:");
     if (wake && isNodePresenceLine) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "wake is not supported for node presence events"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "wake is not supported for node presence events",
       );
       return;
     }
@@ -314,11 +319,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       );
       const configuredAgentIds = listAgentIds(cfg).map(normalizeAgentId);
       if (!configuredAgentIds.includes(requestedAgentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`);
         return;
       }
       // A targeted wake starts a model run. Require a live session
@@ -339,13 +340,10 @@ export const systemHandlers: GatewayRequestHandlers = {
             })
           ).entry;
       if (!targetSession || targetSession.archivedAt !== undefined) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Unknown or archived session "${requestedSessionKey}"`,
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `Unknown or archived session "${requestedSessionKey}"`,
         );
         return;
       }

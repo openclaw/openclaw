@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { listDirectoryTreeStrict } from "../../../../src/infra/directory-walk.js";
 import { MediaFetchError, saveRemoteMedia } from "../../../../src/media/fetch.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -47,11 +48,8 @@ function handleTargetRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 async function expectNoPublishedMediaFiles(stateDir: string): Promise<void> {
-  const entries = await fs
-    .readdir(path.join(stateDir, "media"), {
-      withFileTypes: true,
-      recursive: true,
-    })
+  const entries = await listDirectoryTreeStrict(path.join(stateDir, "media"))
+    .then((inventory) => inventory.map((walkEntry) => walkEntry.dirent))
     .catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];

@@ -1,3 +1,8 @@
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -10,11 +15,6 @@ import {
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
-import {
-  attachInternalToolExecutionPreparer,
-  copyInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
@@ -38,6 +38,7 @@ type ToolActionState = Readonly<{
   descriptor?: AgentToolActionDescriptor;
   executionLocation?: AgentToolExecutionLocation;
   gatewayPolicyControl?: true;
+  listingScope?: string;
 }>;
 
 // Rebuilt tools retain prepared classification without adding weak-table edges.
@@ -60,6 +61,15 @@ class ToolActionMetadata extends PluginHostObject {
       void new ToolActionMetadata(tool, state);
     }
   }
+}
+
+/** Configuration/support variant, never live discovery or execution authority. */
+export function bindAgentToolListingScope(tool: AnyAgentTool, scope: string): void {
+  ToolActionMetadata.set(tool, { listingScope: scope });
+}
+
+export function getAgentToolListingScope(tool: AnyAgentTool): string | undefined {
+  return ToolActionMetadata.get(tool)?.listingScope;
 }
 
 /** Only host-owned catalog dispatchers bypass the target-tool allowlist. */

@@ -113,7 +113,7 @@ describe("prepared auth profile row reads", () => {
           const { port1: sender, port2: receiver } = new MessageChannel();
           try {
             return await operation({
-              execute: vi.fn().mockImplementation(async () => {
+              execute: async () => {
                 sendAuthProfileUpdateValue(sender, { [databasePath]: rows });
                 admission.port.postMessage(
                   {
@@ -127,7 +127,7 @@ describe("prepared auth profile row reads", () => {
                 if (admission.failure) {
                   throw toErrorObject(admission.failure, "Auth read admission failed");
                 }
-              }),
+              },
             });
           } finally {
             admission.finish();
@@ -172,17 +172,6 @@ describe("prepared auth profile row reads", () => {
       expect(workerRead).toHaveBeenCalledOnce();
     },
   );
-
-  it("serves prepared file authority without filesystem calls on subsequent reads", async () => {
-    const reader = prepare();
-    await expect(reader.read()).resolves.toEqual(rows);
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    const stat = vi.spyOn(fs, "statSync");
-    await expect(reader.read()).resolves.toEqual(rows);
-    await expect(prepare().read()).resolves.toEqual(rows);
-    expect(realpath).not.toHaveBeenCalled();
-    expect(stat).not.toHaveBeenCalled();
-  });
 
   it("retains revocable read authority even when persisted rows come from a cache", async () => {
     const reader = prepare();

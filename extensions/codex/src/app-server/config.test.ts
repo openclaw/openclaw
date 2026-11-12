@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { codexAppServerStartOptionsKey as startKey } from "./config-runtime.js";
@@ -17,6 +21,62 @@ import {
   shouldAutoApproveCodexAppServerApprovals as autoApproves,
 } from "./config.js";
 import { expectFields, expectRuntimePolicy, resolveRuntimeForTest } from "./config.test-support.js";
+
+it("parses Codex config once per publication and keeps captured revisions independent", () => {
+  const pluginConfig = { appServer: { requestTimeoutMs: 1234 } };
+  const config = { plugins: { entries: { codex: { config: pluginConfig } } } };
+  const captured = Object.freeze({ appServer: Object.freeze({ requestTimeoutMs: 5678 }) });
+  try {
+    setRuntimeConfigSnapshot(config);
+    const first = readCodexPluginConfig(pluginConfig);
+    const snapshot = readCodexPluginConfig(captured);
+    for (let i = 0; i < 3; i++) {
+      expect(readCodexPluginConfig(pluginConfig)).toBe(first);
+      expect(readCodexPluginConfig(captured)).toBe(snapshot);
+    }
+    pluginConfig.appServer.requestTimeoutMs = 4321;
+    setRuntimeConfigSnapshot(config);
+    const next = readCodexPluginConfig(pluginConfig);
+    expect(next.appServer?.requestTimeoutMs).toBe(4321);
+    expect(next).not.toBe(first);
+    expect(first.appServer?.requestTimeoutMs).toBe(1234);
+    expect(readCodexPluginConfig(captured)).toBe(snapshot);
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+});
+
+it.each([
+  {
+    appServer: { approvalPolicy: "untrusted" },
+    message:
+      'plugins.entries.codex.config.appServer.approvalPolicy="untrusted" is retired; run "openclaw doctor --fix" to migrate it to "on-request".',
+  },
+  {
+    appServer: { nativeHookRelay: { url: "http://example.test", credentialDirectory: "/private" } },
+    message:
+      "Invalid plugins.entries.codex.config.appServer.nativeHookRelay configuration; remote hooks require an HTTPS URL and an absolute private credential directory.",
+  },
+  {
+    appServer: { networkProxy: { enabled: true, profileName: "" } },
+    message:
+      'Invalid plugins.entries.codex.config.appServer.networkProxy.profileName; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.',
+  },
+])("revalidates republished invalid config: $message", ({ appServer, message }) => {
+  const pluginConfig: Record<string, unknown> = { appServer: { requestTimeoutMs: 1234 } };
+  const config = { plugins: { entries: { codex: { config: pluginConfig } } } };
+  try {
+    setRuntimeConfigSnapshot(config);
+    expect(readCodexPluginConfig(pluginConfig).appServer?.requestTimeoutMs).toBe(1234);
+    pluginConfig.appServer = appServer;
+    setRuntimeConfigSnapshot(config);
+    for (let i = 0; i < 2; i++) {
+      expect(() => readCodexPluginConfig(pluginConfig)).toThrow(new Error(message));
+    }
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
+});
 
 type RuntimeParams = NonNullable<Parameters<typeof resolveRuntimeForTest>[0]>;
 type RuntimePolicy = Parameters<typeof expectRuntimePolicy>[1];

@@ -14,7 +14,18 @@ const mocks = vi.hoisted(() => ({
   browserCurrent: vi.fn(),
   custody: vi.fn(),
   custodyCurrent: vi.fn(),
+  pauseLog: vi.fn(),
 }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => ({
+      ...actual.createSubsystemLogger(name),
+      info: mocks.pauseLog,
+    }),
+  };
+});
 // mock-isolation: Registry generations are fixture-owned; do not read the real state database.
 vi.mock("./registry.js", () => ({
   assertSandboxRegistryEntryCurrent: mocks.liveCurrent,
@@ -44,7 +55,7 @@ vi.mock("./mount-plan.js", () => ({
   sandboxContainerShowsWorkspacePaths: mocks.imageBacking,
 }));
 import {
-  prepareLocalWorkspaceImageRead,
+  prepareLocalWorkspaceFileRead,
   quiesceLocalWorkspace,
   type LocalWorkspacePausedRuntime,
 } from "./local-workspace-quiescence.js";
@@ -119,7 +130,61 @@ it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (run
   const { resume } = await quiesce({ retained: [{ name: "owned", id }] });
   await resume();
   expect(commands("pause")).toHaveLength(0);
+  expect(mocks.pauseLog).toHaveBeenCalledExactlyOnceWith(
+    expect.stringMatching(
+      /^Local workspace unpause: reason=reconcile durationMs=\d+ dominantPhase=\w+ dominantPhaseMs=\d+ phaseDurationsMs=\{.*\} durationScope=observed outcome=resumed$/u,
+    ),
+    { engine: "docker", runtime: "container" },
+  );
   expect(commands("unpause").length).toBeGreaterThan(0);
+});
+
+it("reports cumulative frozen phases including engine resume, before receipt cleanup", async () => {
+  let elapsed = 0;
+  let resuming = false;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  mocks.current.mockImplementation(() => {
+    if (resuming) {
+      elapsed += 1_000;
+    }
+  });
+  mockEngine({ owned: id }, ({ action }) => {
+    if (action === "pause") {
+      elapsed = 29_000;
+    } else if (action === "resume-inspect") {
+      resuming = true;
+      elapsed += 29_900;
+    } else if (action === "unpause") {
+      elapsed += 29_900;
+    }
+  });
+  try {
+    const control = await quiesce();
+    elapsed = 82_600;
+    control.markPhase("scan");
+    elapsed = 92_600;
+    control.markPhase("staging");
+    elapsed = 107_600;
+    control.markPhase("scan");
+    elapsed = 117_600;
+    control.markPhase("staging");
+    elapsed = 132_600;
+    control.markPhase("preflight");
+    elapsed += 999;
+    persist.mockImplementationOnce(() => {
+      elapsed += 60_000;
+      retained = [];
+    });
+    await control.resume();
+    await control.resume();
+    expect(mocks.pauseLog).toHaveBeenLastCalledWith(
+      'Local workspace unpause: reason=reconcile durationMs=194399 dominantPhase=operation dominantPhaseMs=53600 phaseDurationsMs={"pause":29000,"operation":53600,"scan":20000,"staging":30000,"resumeInspect":29900,"resumeAuthority":1000,"unpause":29900} durationScope=owner outcome=resumed',
+      { engine: "docker", runtime: "container" },
+    );
+    expect(mocks.pauseLog).toHaveBeenCalledTimes(2);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 it("persists exact container and browser custody before pausing and resumes only those IDs", async () => {
@@ -127,20 +192,70 @@ it("persists exact container and browser custody before pausing and resumes only
   const ids: Record<string, string> = { owned: id, "browser-owned": browserId };
   const expected = Object.entries(ids).map(([name, runtimeId]) => ({ name, id: runtimeId }));
   mocks.browsers.mockResolvedValue({
-    entries: [
-      { ...entry, containerName: "browser-owned" },
-      { ...entry, containerName: "foreign", workspaceDir: "/other" },
-    ],
+    entries: [{ ...entry, containerName: "browser-owned" }],
   });
-  mockEngine(ids, ({ action, target }) => {
+  mockEngine(ids, ({ action }) => {
+    if (action === "inspect") {
+      expect(commands("pause")).toEqual([]);
+    }
     if (action === "pause") {
-      expect(persist).toHaveBeenLastCalledWith(target === id ? expected.slice(0, 1) : expected);
+      expect(persist).toHaveBeenLastCalledWith(expected);
     }
   });
-  const { resume } = await quiesce();
+  const { resume } = await quiesce({ reason: "checkpoint" });
+  expect(mocks.pauseLog.mock.calls).toEqual([
+    [
+      "Local workspace pause: reason=checkpoint count=1",
+      { engine: "docker", runtime: "container" },
+    ],
+    ["Local workspace pause: reason=checkpoint count=2", { engine: "docker", runtime: "browser" }],
+  ]);
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();
   expect(commands("unpause")).toEqual([browserId, id].map((runtimeId) => ["unpause", runtimeId]));
+  expect(persist).toHaveBeenCalledTimes(4);
+  expect(retained).toEqual([]);
+});
+
+it.each([false, true])(
+  "clears orphaned custody only when present (retained=%s)",
+  async (orphaned) => {
+    mocks.read.mockResolvedValue({ entries: [] });
+    retained = orphaned ? [{ name: "gone", id }] : [];
+    await (await quiesce()).resume();
+    expect(retained).toEqual([]);
+    expect(persist.mock.calls).toEqual(orphaned ? [[[]]] : []);
+    expect(mocks.command).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "finishes retirement before binding removal (retained=%s)",
+  async (orphaned) => {
+    mocks.read.mockResolvedValue({ entries: [] });
+    retained = orphaned ? [{ name: "gone", id }] : [];
+    const authority = new AbortController();
+    const custody = await quiesce({ assertCurrent: () => authority.signal.throwIfAborted() });
+    await custody.retire();
+    expect(retained).toEqual([]);
+    expect(persist.mock.calls).toEqual(orphaned ? [[[]]] : []);
+    authority.abort(new Error("workspace removed"));
+    await expect(custody.resume()).resolves.toBeUndefined();
+    expect(mocks.command).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps receipt recovery available when retirement cleanup fails", async () => {
+  mocks.read.mockResolvedValue({ entries: [] });
+  retained = [{ name: "gone", id }];
+  persist.mockImplementationOnce(() => {
+    throw new Error("receipt cleanup failed");
+  });
+  const custody = await quiesce();
+  await expect(custody.retire()).rejects.toThrow("receipt cleanup failed");
+  expect(retained).toEqual([{ name: "gone", id }]);
+  await custody.resume();
+  expect(retained).toEqual([]);
 });
 
 it("records each released generation before a later resume failure and re-fences running recovery", async () => {
@@ -155,6 +270,9 @@ it("records each released generation before a later resume failure and re-fences
   });
   const { resume } = await quiesce();
   await expect(resume()).rejects.toThrow("resume failed");
+  expect(
+    mocks.pauseLog.mock.calls.filter(([message]) => message.includes(" unpause:")),
+  ).toHaveLength(1);
   expect(retained).toEqual([{ name: "owned", id }]);
   failFirst = false;
   const { resume: recovered } = await quiesce();
@@ -296,18 +414,20 @@ it("fences a dedicated stream writer and requires settlement before retiring its
     { name: entry.containerName, id },
     { name: `openclaw-stream-${attemptId}`, id: childId },
   ]);
-  expect(commands("pause")).toEqual([
-    ["pause", id],
-    ["pause", childId],
-  ]);
+  expect(commands("pause")).toEqual([id, childId].map((runtimeId) => ["pause", runtimeId]));
   await expect(retire()).rejects.toThrow("Settle persistent streams");
   expect(commands("rm")).toEqual([]);
   await resume();
-  expect(commands("unpause")).toEqual([
-    ["unpause", childId],
-    ["unpause", id],
-  ]);
+  expect(commands("unpause")).toEqual([childId, id].map((runtimeId) => ["unpause", runtimeId]));
   expect(mocks.custodyCurrent).toHaveBeenCalledWith(record);
+  expect(persistCustody).toHaveBeenLastCalledWith([]);
+
+  record.phase = "stopped";
+  mocks.command.mockClear();
+  const stopped = await quiesce({ persist: persistCustody });
+  expect(mocks.command.mock.calls.some(([, args]) => args.at(-1) === childId)).toBe(false);
+  await expect(stopped.retire()).rejects.toThrow("Settle persistent streams");
+  await stopped.resume();
   expect(persistCustody).toHaveBeenLastCalledWith([]);
 
   const imageRead = {
@@ -316,7 +436,7 @@ it("fences a dedicated stream writer and requires settlement before retiring its
     targets: ["/workspace/image.png"],
     assertCurrent: () => {},
   };
-  const assertImageCurrent = await prepareLocalWorkspaceImageRead(imageRead);
+  const assertImageCurrent = await prepareLocalWorkspaceFileRead(imageRead);
   expect(mocks.imageBacking).toHaveBeenCalledOnce();
   expect(mocks.imageBacking).toHaveBeenCalledWith(
     expect.objectContaining({ containerName: entry.containerName }),
@@ -326,8 +446,8 @@ it("fences a dedicated stream writer and requires settlement before retiring its
   });
   expect(assertImageCurrent).toThrow("parent retired");
   mocks.read.mockResolvedValue({ entries: [] });
-  await expect(prepareLocalWorkspaceImageRead(imageRead)).rejects.toThrow(
-    "Sandbox image backing is unavailable",
+  await expect(prepareLocalWorkspaceFileRead(imageRead)).rejects.toThrow(
+    "Sandbox file backing is unavailable",
   );
   expect(mocks.imageBacking).toHaveBeenCalledOnce();
 });

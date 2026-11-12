@@ -1,8 +1,7 @@
 import {
-  ATTACHMENT_TAG_RE,
   extractHtmlFromAttachment,
   extractInlineImageReferences,
-  IMG_SRC_RE,
+  htmlTagAttributeValues,
   isAdvertisedFileAttachment,
   isLikelyImageAttachment,
   normalizeContentType,
@@ -16,9 +15,8 @@ import type {
 } from "./types.js";
 
 function collectHtmlAttachmentIds(html: string, ids: Set<string>): void {
-  ATTACHMENT_TAG_RE.lastIndex = 0;
-  for (const match of html.matchAll(ATTACHMENT_TAG_RE)) {
-    const id = match[1]?.trim();
+  for (const value of htmlTagAttributeValues(html, "attachment", "id")) {
+    const id = value.trim();
     if (id) {
       ids.add(id);
     }
@@ -62,10 +60,9 @@ export function summarizeMSTeamsHtmlAttachments(
       continue;
     }
     htmlAttachments += 1;
-    IMG_SRC_RE.lastIndex = 0;
-    for (const match of html.matchAll(IMG_SRC_RE)) {
+    for (const value of htmlTagAttributeValues(html, "img", "src")) {
       imgTags += 1;
-      const src = match[1]?.trim();
+      const src = value.trim();
       if (src) {
         if (src.startsWith("data:")) {
           dataImages += 1;

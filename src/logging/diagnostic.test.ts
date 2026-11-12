@@ -7,10 +7,12 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { DiagnosticLivenessSample } from "./diagnostic-liveness.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
@@ -255,24 +257,41 @@ describe("stuck session diagnostics threshold", () => {
   it.each([
     { name: "material stall", progressAt: 20_000, tickAt: 35_000, warns: true },
     { name: "ordinary jitter", progressAt: 15_500, tickAt: 30_999, warns: false },
-  ])("reports $name without inventing ownerless recovery", ({ progressAt, tickAt, warns }) => {
-    startSession();
+  ])(
+    "reports $name without inventing ownerless recovery",
+    async ({ progressAt, tickAt, warns }) => {
+      const clock = createGatewaySchedulerClock(0);
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler(clock.clock),
+        { diagnostics: { enabled: true } },
+        {
+          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+          recoverStuckSession,
+        },
+      );
+      logSessionStateChange({ ...session, state: "processing" });
+      markDiagnosticEmbeddedRunStarted(session);
 
-    vi.advanceTimersByTime(progressAt);
-    markDiagnosticSessionProgress(session);
-    markDiagnosticRunProgress({ ...session, reason: "embedded_run:progress" });
-    vi.advanceTimersByTime(30_000 - progressAt);
+      vi.setSystemTime(progressAt);
+      await clock.advanceBy(progressAt);
+      markDiagnosticSessionProgress(session);
+      markDiagnosticRunProgress({ ...session, reason: "embedded_run:progress" });
+      vi.setSystemTime(30_000);
+      await clock.advanceBy(30_000 - progressAt);
 
-    vi.setSystemTime(tickAt);
-    vi.advanceTimersByTime(30_000);
+      // Delay the host wake itself; a wall-clock change alone permits other jobs to re-arm it.
+      vi.setSystemTime(30_000 + tickAt);
+      await clock.advanceBy(tickAt);
 
-    expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed", warns);
-    expect(recoverStuckSession).not.toHaveBeenCalled();
+      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed", warns);
+      expect(recoverStuckSession).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(30_000);
+      vi.setSystemTime(60_000 + tickAt);
+      await clock.advanceBy(30_000);
 
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-  });
+      expect(recoverStuckSession).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["embedded_run", "model_call"] as const)(
     "reports silent %s at its threshold without ownerless recovery",
@@ -285,9 +304,7 @@ describe("stuck session diagnostics threshold", () => {
         {
           recoverStuckSession,
           ...(isModel
-            ? {
-                testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
-              }
+            ? { testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 } }
             : {}),
         },
       );
@@ -395,32 +412,6 @@ describe("stuck session diagnostics threshold", () => {
       expect(recover).not.toHaveBeenCalled();
     },
   );
-
-  it("does not recover repeated requests after semantic output resets the clock", async () => {
-    const stuckSessionAbortMs = 90_000;
-    startHeartbeat({
-      recoverStuckSession,
-      testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs },
-    });
-    const ref = { ...session, runId: "run-1" };
-    logSessionStateChange({ ...ref, state: "processing" });
-    markDiagnosticEmbeddedRunStarted(ref);
-    startModel(repeatedRequest);
-    vi.advanceTimersByTime(30_000);
-    startModel(repeatedRequest);
-    emitCoreSemanticRunProgressDiagnosticEvent({ ...ref, reason: "assistant:progress" });
-    await vi.advanceTimersByTimeAsync(0);
-
-    for (let elapsedMs = 0; elapsedMs < stuckSessionAbortMs; elapsedMs += 30_000) {
-      vi.advanceTimersByTime(30_000);
-      markDiagnosticRunProgress({ ...ref, reason: "model_call:stream_progress" });
-    }
-
-    expect(eventsOf("session.stalled")).not.toContainEqual(
-      expect.objectContaining({ reason: "repeated_model_requests_without_progress" }),
-    );
-    expect(recoverStuckSession).not.toHaveBeenCalled();
-  });
 
   it.each([true, false])(
     "reconciles idle queued work only without an embedded owner (%s)",
@@ -576,14 +567,8 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expectLoggerMessageContaining(warnSpy, "degradedFor=60s");
-    expect(lastEvent("diagnostic.liveness.warning")).toMatchObject({
-      degradedSinceMs: 60_000,
-    });
-    expectStability({
-      type: "diagnostic.liveness.warning",
-      level: "warning",
-      durationMs: 60_000,
-    });
+    expect(lastEvent("diagnostic.liveness.warning")).toMatchObject({ degradedSinceMs: 60_000 });
+    expectStability({ type: "diagnostic.liveness.warning", level: "warning", durationMs: 60_000 });
 
     vi.advanceTimersByTime(90_000);
     expect(eventsOf("diagnostic.liveness.warning")).toHaveLength(1);

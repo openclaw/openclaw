@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  createControlUiMockSameOriginGatewayScript,
+} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   chatMessage,
   newChatPage,
@@ -11,6 +15,128 @@ import {
 
 const suite = createChatFlowE2eSuite();
 suite.define(() => {
+  it("restores final rail highlights at full opacity with the first cached transcript frame", async () => {
+    const page = await newChatPage(suite, {
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const sessionKey = "agent:main:chat:rail-restore";
+    const session = createControlUiSessionRow(sessionKey, "Synthetic rail restore", 1, {
+      archived: true,
+    });
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      sessions: [session],
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      deferredMethods: ["connect"],
+      historyMessages: [
+        ...Array.from({ length: 60 }, (_, index) =>
+          chatMessage(index % 2 ? "assistant" : "user", `Earlier checkpoint ${index}`, {
+            __openclaw: { id: `earlier-${index}`, seq: index + 1 },
+          }),
+        ),
+        chatMessage("user", "Give me the complete final answer.", {
+          __openclaw: { id: "final-question", seq: 61 },
+        }),
+        chatMessage("assistant", "Synthetic final paragraph.\n\n".repeat(60), {
+          __openclaw: { id: "final-answer", seq: 62 },
+        }),
+      ],
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    await gateway.waitForRequest("connect");
+    await gateway.resolveDeferred("connect");
+    await page.locator('.chat-bubble[data-entry-id="final-answer"]').waitFor();
+    await page.waitForFunction(() => {
+      const pane = document.querySelector(".chat-pane-cache__pane--active");
+      const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
+      return (
+        cache &&
+        [...cache.values()].some(({ snapshot }) =>
+          Object.keys(snapshot.widgetHeights ?? {}).some((key) => key.startsWith("row:v1:")),
+        )
+      );
+    });
+    await page.evaluate(async () => {
+      await Reflect.get(
+        document.querySelector(".chat-pane-cache__pane--active")!,
+        "sessionSnapshotStore",
+      ).flush();
+    });
+    await page.addInitScript(() => {
+      const frames: unknown[] = [];
+      Reflect.set(window, "railRestoreFrames", frames);
+      const toggles: string[] = [];
+      Reflect.set(window, "railRestoreToggles", toggles);
+      const sample = () => {
+        const rail = document.querySelector(".chat-position-rail");
+        const inner = rail?.closest(".chat-thread")?.querySelector(".chat-thread-inner");
+        if (rail && inner?.checkVisibility({ checkOpacity: true, visibilityProperty: true })) {
+          const ids = (selector: string) =>
+            [...rail.querySelectorAll<HTMLElement>(selector)].map(
+              (marker) => marker.dataset.positionMarkerId,
+            );
+          if (!frames.length) {
+            new MutationObserver((records) => {
+              for (const record of records) {
+                if (
+                  record.oldValue === null ||
+                  !(record.target as Element).hasAttribute("data-visible")
+                ) {
+                  toggles.push((record.target as HTMLElement).dataset.positionMarkerId!);
+                }
+              }
+            }).observe(rail, {
+              subtree: true,
+              attributes: true,
+              attributeFilter: ["data-visible"],
+              attributeOldValue: true,
+            });
+          }
+          frames.push({
+            overflow: rail.hasAttribute("data-overflow"),
+            visible: ids("[data-position-marker-id][data-visible]"),
+            active: ids('[data-position-marker-id][aria-current="true"]'),
+            opacity: getComputedStyle(rail).opacity,
+            transitioning: rail
+              .getAnimations({ subtree: true })
+              .some((animation) => animation.playState === "running"),
+          });
+        }
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    await page.reload();
+    await gateway.waitForRequest("connect");
+    await page.waitForFunction(() => Reflect.get(window, "railRestoreFrames").length >= 2);
+    await page.locator('.chat-bubble[data-entry-id="final-answer"]').evaluate(async (bubble) => {
+      await new Promise<void>((resolve) => {
+        const observer = new IntersectionObserver(
+          () => {
+            observer.disconnect();
+            requestAnimationFrame(() => resolve());
+          },
+          { root: bubble.closest(".chat-thread") },
+        );
+        observer.observe(bubble);
+      });
+    });
+    const frames = await page.evaluate(() => Reflect.get(window, "railRestoreFrames") as unknown[]);
+    expect(await page.evaluate(() => Reflect.get(window, "railRestoreToggles"))).toEqual([]);
+    expect(frames.length).toBeGreaterThanOrEqual(2);
+    expect(frames).toEqual(
+      frames.map(() => ({
+        overflow: true,
+        visible: ["final-answer"],
+        active: ["final-answer"],
+        opacity: "1",
+        transitioning: false,
+      })),
+    );
+  });
+
   it("shows the position rail only when the conversation overflows", async () => {
     const page = await newChatPage(suite, {
       colorScheme: "dark",

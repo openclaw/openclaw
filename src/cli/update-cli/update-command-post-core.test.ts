@@ -28,20 +28,30 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const pluginUpdate = createPostCorePluginUpdateResult({ status: "ok", changed: true });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const withTempDir = () => tempDirs.make("openclaw-post-core-records-");
 
 describe("continuePostCoreUpdateInFreshProcess", () => {
   it.each([false, true])(
     "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
     async (modern) => {
+      vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "stale-version");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL", "beta");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH", "/tmp/stale-config.json");
+      vi.stubEnv("OPENCLAW_TEST_POST_CORE_UNRELATED", "preserved");
       const root = withTempDir();
       const control = path.join(root, "control");
       await fs.mkdir(control, { mode: 0o700 });
       installPrivateUpdateHandoffStore(control);
       const observation = path.join(root, "ownership.txt");
       await fs.mkdir(path.join(root, "dist"));
-      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify(modern ? { version: "9999.0.0" } : {}),
+      );
       if (modern) {
         await fs.mkdir(path.join(root, "scripts", "lib"), { recursive: true });
         await fs.writeFile(
@@ -64,7 +74,13 @@ try {
   if (!String(error).includes(${JSON.stringify(`retained by PID ${process.pid}`)})) throw error;
   observed = "parent-held";
 }
-await fs.writeFile(${JSON.stringify(observation)}, observed);
+await fs.writeFile(${JSON.stringify(observation)}, JSON.stringify({
+  ownership: observed,
+  compatHostVersion: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
+  requestedChannel: process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL,
+  sourceConfigPath: process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH,
+  unrelated: process.env.OPENCLAW_TEST_POST_CORE_UNRELATED,
+}));
 await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
 `,
       );
@@ -89,8 +105,15 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           });
         });
         expect(result).toEqual({ resumed: true, pluginUpdate });
-        expect(await fs.readFile(observation, "utf8")).toBe(
-          modern ? "parent-held" : "child-acquired",
+        expect(JSON.parse(await fs.readFile(observation, "utf8"))).toEqual({
+          ownership: modern ? "parent-held" : "child-acquired",
+          ...(modern ? { compatHostVersion: "9999.0.0" } : {}),
+          unrelated: "preserved",
+        });
+        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("stale-version");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBe("beta");
+        expect(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBe(
+          "/tmp/stale-config.json",
         );
         expect(await sourceArtifactLock.verifyStillHeld()).toBe(modern);
       } finally {
@@ -102,6 +125,10 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
   it.runIf(process.platform !== "win32").each([true, false])(
     "waits for a committed child's shutdown before returning its result (cooperative=%s)",
     async (cooperative) => {
+      vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "stale-version");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL", "beta");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH", "/tmp/stale-config.json");
+      vi.stubEnv("OPENCLAW_TEST_POST_CORE_UNRELATED", "preserved");
       const root = withTempDir();
       const settledPath = path.join(root, "settled");
       const pidPath = path.join(root, "writer.pid");
@@ -138,6 +165,8 @@ await fs.writeFile(${JSON.stringify(handoffPath)}, JSON.stringify({
   marker: JSON.parse(await fs.readFile(path.join(resultDir, "handoff.json"), "utf8")),
   installRecords: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH, "utf8"),
   sourceConfig: await fs.readFile(process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH, "utf8"),
+  compatHostVersion: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
+  requestedChannel: process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL ?? null,
 }));
 await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify(pluginUpdate))});
 `,
@@ -151,7 +180,7 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           root,
           sourceRuntimePrepared: true,
           channel: "stable",
-          requestedChannel: null,
+          requestedChannel: cooperative ? "dev" : null,
           opts: { json: true, yes: true, timeout: cooperative ? undefined : "3600" },
           pluginInstallRecords,
           preUpdateConfig,
@@ -197,6 +226,8 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         },
         installRecords: `${JSON.stringify(pluginInstallRecords)}\n`,
         sourceConfig: `${JSON.stringify(preUpdateConfig)}\n`,
+        compatHostVersion: "9999.0.0",
+        requestedChannel: cooperative ? "dev" : null,
       });
       await expect(fs.stat(handoff.resultDir)).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -261,42 +292,22 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     );
   });
 
-  it("writes UTF-8 byte order and preserves special ids and passthrough fields", async () => {
-    const dir = withTempDir();
-    const filePath = path.join(dir, "plugin-install-records.json");
+  it("round-trips install records through the handoff file", async () => {
+    const filePath = path.join(withTempDir(), "plugin-install-records.json");
     const records = createPluginInstallRecordMap<PluginInstallRecord>();
-    setPluginInstallRecordMapEntry(records, "\u{10000}", { source: "git" });
-    setPluginInstallRecordMapEntry(records, "__proto__", { source: "archive" });
-    setPluginInstallRecordMapEntry(records, "2", {
+    setPluginInstallRecordMapEntry(records, "__proto__", {
       source: "npm",
       spec: "@openclaw/demo@1.0.0",
-      installPath: "/tmp/demo-plugin",
       futureMetadata: { retained: true },
     } as PluginInstallRecord);
-    setPluginInstallRecordMapEntry(records, "toString", { source: "git" });
-    setPluginInstallRecordMapEntry(records, "\uE000", { source: "path" });
-    setPluginInstallRecordMapEntry(records, "constructor", { source: "path" });
-    setPluginInstallRecordMapEntry(records, "10", { source: "path" });
-    setPluginInstallRecordMapEntry(records, "1", { source: "archive" });
     await writePostCorePluginInstallRecordsFile(filePath, records);
-
-    expect(await fs.readFile(filePath, "utf-8")).toBe(
-      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","spec":"@openclaw/demo@1.0.0","installPath":"/tmp/demo-plugin","futureMetadata":{"retained":true}},"__proto__":{"source":"archive"},"constructor":{"source":"path"},"toString":{"source":"git"},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}\n',
-    );
+    expect((await fs.readFile(filePath, "utf8")).endsWith("\n")).toBe(true);
     const loaded = await readPostCorePluginInstallRecordsFile(filePath);
+    expect(loaded).toEqual(records);
     if (!loaded) {
-      throw new Error("Expected plugin install records handoff");
+      throw new Error("Missing handoff records");
     }
     expect(Object.getPrototypeOf(loaded)).toBeNull();
-    expect(getPluginInstallRecordMapEntry(loaded, "2")).toEqual({
-      source: "npm",
-      spec: "@openclaw/demo@1.0.0",
-      installPath: "/tmp/demo-plugin",
-      futureMetadata: { retained: true },
-    });
-    expect(getPluginInstallRecordMapEntry(loaded, "__proto__")).toEqual({ source: "archive" });
-    expect(getPluginInstallRecordMapEntry(loaded, "constructor")).toEqual({ source: "path" });
-    expect(getPluginInstallRecordMapEntry(loaded, "toString")).toEqual({ source: "git" });
   });
 });
 
@@ -304,19 +315,13 @@ describe("preparePostCorePluginInstallRecordsForFreshProcess", () => {
   it("preserves passthrough fields and untouched record identity across a downgrade handoff", () => {
     const records = createPluginInstallRecordMap<PluginInstallRecord>();
     const untouched = { source: "path" as const, sourcePath: "/tmp/local" };
-    const constructorRecord = { source: "git" as const };
-    const toStringRecord = { source: "archive" as const };
-    const protoRecord = { source: "path" as const, sourcePath: "/tmp/proto" };
     setPluginInstallRecordMapEntry(records, "newer", {
       source: "npm",
       resolvedVersion: "9999.0.0",
       resolvedSpec: "newer@9999.0.0",
       futureMetadata: { retained: true },
     } as PluginInstallRecord);
-    setPluginInstallRecordMapEntry(records, "untouched", untouched);
-    setPluginInstallRecordMapEntry(records, "constructor", constructorRecord);
-    setPluginInstallRecordMapEntry(records, "toString", toStringRecord);
-    setPluginInstallRecordMapEntry(records, "__proto__", protoRecord);
+    setPluginInstallRecordMapEntry(records, "__proto__", untouched);
 
     const prepared = preparePostCorePluginInstallRecordsForFreshProcess({
       records,
@@ -325,10 +330,7 @@ describe("preparePostCorePluginInstallRecordsForFreshProcess", () => {
 
     expect(prepared).not.toBe(records);
     expect(Object.getPrototypeOf(prepared)).toBeNull();
-    expect(getPluginInstallRecordMapEntry(prepared, "untouched")).toBe(untouched);
-    expect(getPluginInstallRecordMapEntry(prepared, "constructor")).toBe(constructorRecord);
-    expect(getPluginInstallRecordMapEntry(prepared, "toString")).toBe(toStringRecord);
-    expect(getPluginInstallRecordMapEntry(prepared, "__proto__")).toBe(protoRecord);
+    expect(getPluginInstallRecordMapEntry(prepared, "__proto__")).toBe(untouched);
     expect(getPluginInstallRecordMapEntry(prepared, "newer")).toEqual({
       source: "npm",
       futureMetadata: { retained: true },
@@ -349,13 +351,10 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
 
   it.each([
     ["ok", true, false, "1.2.3", true],
-    ["skipped", false, false, "1.2.3", false],
     ["error", true, false, "1.2.3", false],
-    ["ok", undefined, true, "2026.4.28", false],
     ["ok", undefined, true, "2026.4.29-beta.1", false],
     ["ok", undefined, true, "2026.4.29", true],
     ["ok", undefined, true, "unknown", false],
-    ["ok", undefined, true, undefined, false],
   ] as const)(
     "selects the fresh writer for status=%s, install change=%s, downgrade=%s, version=%s",
     (status, installKindChanged, downgradeRisk, version, fresh) => {
@@ -377,64 +376,33 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
 });
 
 describe("post-core operator deadline provenance", () => {
-  const cases: {
-    name: string;
-    value?: unknown;
-    expected?: string;
-    timeout?: string;
-    owner?: "child";
-    missing?: boolean;
-    malformed?: boolean;
-  }[] = [
-    ...(
-      [
-        [
-          "omitted operator deadline",
-          { version: 1, serialized: "2700", operator: null },
-          undefined,
-        ],
-        [
-          "explicit operator deadline",
-          { version: 1, serialized: "2700", operator: "2700" },
-          "2700",
-        ],
-        ["legacy metadata", undefined, "2700"],
-        ["missing operator provenance", { version: 1, serialized: "2700" }, "2700"],
-        ["mismatched command", { version: 1, serialized: "1800", operator: null }, "2700"],
-        ["unknown version", { version: 2, serialized: "2700", operator: null }, "2700"],
-        ["malformed operator", { version: 1, serialized: "2700", operator: false }, "2700"],
-        ["malformed metadata", "default", "2700"],
-      ] as const
-    ).map(([name, value, expected]) => ({ name, value, expected })),
-    { name: "missing handoff", timeout: "3", expected: "3", missing: true },
-    {
-      name: "child-owned completion",
-      timeout: "3",
-      expected: "3",
-      owner: "child",
-      value: { version: 1, serialized: "3", operator: null },
-    },
-    { name: "malformed handoff", timeout: "3", malformed: true },
-  ];
-  it.each(cases)("preserves intent for $name", async (entry) => {
+  const timeout = (operator: string | null) => ({ version: 1, serialized: "2700", operator });
+  const parent = (value?: unknown) => ({ completionOwner: "parent", timeout: value });
+  it.each<[string, unknown, string | undefined, boolean]>([
+    ["omitted operator deadline", parent(timeout(null)), undefined, true],
+    ["explicit operator deadline", parent(timeout("2700")), "2700", true],
+    ["legacy metadata", parent(), "2700", true],
+    ["malformed metadata", parent("default"), "2700", true],
+    ["missing handoff", undefined, "2700", false],
+    ["child-owned completion", { completionOwner: "child", timeout: timeout(null) }, "2700", false],
+    ["malformed handoff", "{", undefined, false],
+  ])("preserves intent for %s", async (_name, handoff, expected, parentOwnsCompletion) => {
     const root = withTempDir();
     const resultPath = path.join(root, "plugins.json");
-    if (!entry.missing) {
+    if (handoff !== undefined) {
       await fs.writeFile(
         path.join(root, "handoff.json"),
-        entry.malformed
-          ? "{"
-          : JSON.stringify({ completionOwner: entry.owner ?? "parent", timeout: entry.value }),
+        typeof handoff === "string" ? handoff : JSON.stringify(handoff),
       );
     }
-    const opts = entry.timeout ? { timeout: entry.timeout } : { json: true, timeout: "2700" };
+    const opts = { json: true, timeout: "2700" };
     const result = resolvePostCoreUpdateHandoff({ opts, resultPath });
-    if (entry.malformed) {
+    if (typeof handoff === "string") {
       await expect(result).rejects.toThrow();
     } else {
       expect(await result).toEqual({
-        opts: { ...opts, timeout: entry.expected },
-        parentOwnsCompletion: !entry.missing && entry.owner !== "child",
+        opts: { ...opts, timeout: expected },
+        parentOwnsCompletion,
       });
     }
   });

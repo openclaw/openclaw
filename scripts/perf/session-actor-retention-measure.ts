@@ -1,7 +1,13 @@
-// Synthetic owner proof after transcript-broadcast-measure.ts has populated its child sessions.
+// Synthetic owner proof; seed with session-actor-retention-seed.ts or transcript-broadcast-measure.ts.
+// node --import ./scripts/tsx.mjs scripts/perf/session-actor-retention-measure.ts \
+//   --state-dir <synthetic-state> --output <new-directory> --sessions 4 --reads 1400 --writes 280 --snapshot
+// Repeat with --sessions 140 for byte pressure. Alternate --baseline-dir <original-source-tree>
+// and candidate in fresh processes. Allocation and traced promotion are separate passes:
+// --allocation includes collected objects; --trace-gc emits isolate-matched promotion traces.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -17,6 +23,8 @@ const { values } = parseArgs({
     reads: { type: "string", default: "1200" },
     writes: { type: "string", default: "200" },
     snapshot: { type: "boolean", default: false },
+    allocation: { type: "boolean", default: false },
+    "trace-gc": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
@@ -39,6 +47,8 @@ process.env = {
   OPENCLAW_STATE_DIR: root,
   TMPDIR: path.join(root, "tmp"),
   OPENCLAW_BENCH_RETAINED_WORKER_DIR: output,
+  ...(values.allocation ? { OPENCLAW_BENCH_SAMPLE_ALLOCATION: "1" } : {}),
+  ...(values["trace-gc"] ? { OPENCLAW_BENCH_TRACE_GC: "1" } : {}),
   ...(values["baseline-dir"]
     ? { OPENCLAW_BENCH_BASELINE_DIR: path.resolve(values["baseline-dir"]) }
     : {}),
@@ -63,6 +73,8 @@ const lifetime = { assertCurrent() {}, assertReadable() {} };
 const entryBytes: number[] = [];
 const readMs: number[] = [];
 const writeMs: number[] = [];
+const epochs: string[] = [];
+let rehydrations = 0;
 const runId = values["start-at"] ?? randomUUID();
 type Worker = { prefix: string; commandPath: string };
 const command = async (worker: Worker, operation: string) => {
@@ -122,6 +134,7 @@ try {
     const facts = await actor.read(authority);
     assert(facts.entry?.skillsSnapshot, "Seed real turns before measuring actor retention");
     entryBytes.push(Buffer.byteLength(JSON.stringify(facts.entry)));
+    epochs.push(facts.version.epoch);
   }
   const patch = async (index: number) => {
     const actor = actors[index % sessions]!;
@@ -136,6 +149,9 @@ try {
       authority,
     );
     assert.equal(result.kind, "committed");
+    const slot = index % sessions;
+    rehydrations += Number(epochs[slot] !== result.receipt.postimage.version.epoch);
+    epochs[slot] = result.receipt.postimage.version.epoch;
   };
   for (let index = 0; index < 2 * sessions; index++) {
     await patch(index + 2 * sessions);
@@ -155,6 +171,9 @@ try {
   assert.equal(workers.length, 1, "Expected one native session writer");
   const worker = workers[0]!;
   const before = await command(worker, "collect");
+  const warmupRehydrations = rehydrations;
+  rehydrations = 0;
+  const initialLoad = loadavg();
   console.log("PHASE warmed");
   if (values["start-at"]) {
     const startAt = count(values["start-at"], 1);
@@ -170,6 +189,9 @@ try {
     const facts = await actors[index % sessions]!.read(authority);
     readMs.push(performance.now() - started);
     assert(facts.entry?.skillsSnapshot);
+    const slot = index % sessions;
+    rehydrations += Number(epochs[slot] !== facts.version.epoch);
+    epochs[slot] = facts.version.epoch;
   }
   for (let index = 0; index < writes; index++) {
     const started = performance.now();
@@ -182,6 +204,9 @@ try {
   const result = {
     node: process.version,
     sessions,
+    load: { before: initialLoad, after: loadavg() },
+    warmupRehydrations,
+    rehydrations,
     entryBytes,
     startedAt,
     reads: distribution(readMs),

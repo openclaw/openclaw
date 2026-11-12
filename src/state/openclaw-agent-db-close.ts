@@ -1,5 +1,8 @@
 import { statSync } from "node:fs";
-import { disposeNodeSqliteDependents } from "../infra/kysely-sync-cache-state.js";
+import {
+  assertNodeSqliteDisposalAllowed,
+  disposeNodeSqliteDependents,
+} from "../infra/kysely-sync-cache-state.js";
 import { isPostgresSqlConnection, sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
@@ -16,6 +19,15 @@ import {
 import { releaseOpenClawAgentDatabaseLease } from "./openclaw-agent-db-lease.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 
+/** Include the asynchronous maintenance join in the native owner's close receipt. */
+export async function stopAgentDatabaseWalMaintenance(
+  database: OpenClawAgentDatabase,
+): Promise<void> {
+  const startedAt = performance.now();
+  await database.walMaintenance.stop();
+  database.closeTiming = { startedAt, walStopMs: performance.now() - startedAt };
+}
+
 /** Native handle close uses the lifecycle owner's existing leases and validation. */
 export function createAgentDatabaseHandleCloser(cache: {
   leases: Map<string, { leaseId: string; env: NodeJS.ProcessEnv }>;
@@ -23,12 +35,15 @@ export function createAgentDatabaseHandleCloser(cache: {
   idleTimers: WeakMap<OpenClawAgentDatabase["db"], Disposable>;
 }) {
   return function closeCachedOpenClawAgentDatabase(database: OpenClawAgentDatabase): void {
+    const timing = database.closeTiming ?? { startedAt: performance.now() };
+    delete database.closeTiming;
     // Retiring handles checkpoint once without waiting for peer readers.
     const lease = cache.leases.get(database.path);
     const alreadyClosed = !database.db.isOpen;
     const priorCheckpointError = database.walMaintenance.health?.state === "error";
     const postgres = isPostgresSqlConnection(database.db);
     const anchor = sqlPublicationAnchor(database.db);
+    assertNodeSqliteDisposalAllowed(anchor);
     using seal = !alreadyClosed && !postgres ? prepareSqliteDatabaseCleanClose(anchor) : undefined;
     let clean: { path: string; publishSeal: () => boolean } | undefined;
     let retainRuntimeProof: boolean;
@@ -37,7 +52,9 @@ export function createAgentDatabaseHandleCloser(cache: {
         setSqliteBusyTimeout(anchor, 0);
       }
       disposeNodeSqliteDependents(anchor);
+      const checkpointAt = performance.now();
       database.walMaintenance.close({ checkpointMode: "TRUNCATE" });
+      timing.checkpointMs = performance.now() - checkpointAt;
       const healthy =
         !cache.failures.has(database.path) &&
         !priorCheckpointError &&
@@ -45,12 +62,14 @@ export function createAgentDatabaseHandleCloser(cache: {
       const pathCurrent = !alreadyClosed && healthy && isOpenClawAgentDatabasePathCurrent(database);
       // Healthy peer handles keep runtime proof; restart proof still needs an empty WAL.
       retainRuntimeProof = healthy && (alreadyClosed || pathCurrent);
+      const nativeCloseAt = performance.now();
       if (database.db.isOpen) {
         database.db.close();
       }
       if (postgres && anchor.isOpen) {
         anchor.close();
       }
+      timing.nativeCloseMs = performance.now() - nativeCloseAt;
       if (pathCurrent && !postgres) {
         const { canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
         // Native last-close may finish a checkpoint; a pinned WAL must remain unsealed.
@@ -73,6 +92,7 @@ export function createAgentDatabaseHandleCloser(cache: {
         { env: lease.env, initializationAgentPaths: [database.path] },
         clean ??
           (retainRuntimeProof ? (postgres ? "postgres-closed" : "uncheckpointed") : undefined),
+        timing,
       );
       cache.leases.delete(database.path);
     }

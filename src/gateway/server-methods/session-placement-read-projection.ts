@@ -22,26 +22,23 @@ import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/p
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
 import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
-type PlacementReadContext = {
-  workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
-  workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
-  workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
-  workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
-};
-
 /** Acquire row facts once; selected rows refresh placement facts after owner publications. */
 export function readSessionRowFacts(params: {
   cfg: OpenClawConfig;
   target: Pick<GatewayStoredSessionTarget, "agentId" | "storeTarget"> & { key: string };
   entry: SessionEntry;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
-  context?: PlacementReadContext;
+  context?: {
+    workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
+    workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
+    workerPlacementRuntimeInstallReader?: WorkerPlacementRuntimeInstallReader;
+    workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get" | "readMachineShape">;
+  };
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
   databaseFacts: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
   const {
-    cfg,
     entry,
     preparedRuntimeOwnership,
     placementFactsReader,
@@ -49,6 +46,8 @@ export function readSessionRowFacts(params: {
     context: sourceContext,
   } = params;
   const { key, agentId } = params.target;
+  const matchesRuntimeOwnership = (next: typeof preparedRuntimeOwnership) =>
+    isDeepStrictEqual(preparedRuntimeOwnership, next);
   const context = sourceContext ?? {};
   const hasBoard = params.databaseFacts.hasBoard;
   let placementSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
@@ -99,19 +98,19 @@ export function readSessionRowFacts(params: {
     };
   };
   let placementFacts = readPlacementFacts();
-  let activitySummaryFacts = params.databaseFacts;
-  const readActivitySummary = () => {
+  let activitySummaryWatermark = params.databaseFacts.activitySummaryWatermark;
+  const readActivitySummary = (cfg: OpenClawConfig) => {
     const summary = projectSessionActivitySummary({
       key,
       agentId,
       cfg,
       entry,
       enabled: activitySummaryEnabled,
-      watermark: activitySummaryFacts.activitySummaryWatermark,
+      watermark: activitySummaryWatermark,
     });
     return summary && Object.freeze(summary);
   };
-  let activitySummary = readActivitySummary();
+  let activitySummary = readActivitySummary(params.cfg);
   let presented:
     | Readonly<
         Pick<
@@ -129,9 +128,9 @@ export function readSessionRowFacts(params: {
   let runtimeInstallVersion: number | undefined;
   return {
     hasBoard,
-    matches(next: Parameters<typeof readSessionRowFacts>[0]) {
+    matchesRuntimeOwnership,
+    matches(next: Omit<Parameters<typeof readSessionRowFacts>[0], "cfg">) {
       return (
-        cfg === next.cfg &&
         entry === next.entry &&
         key === next.target.key &&
         agentId === next.target.agentId &&
@@ -139,16 +138,18 @@ export function readSessionRowFacts(params: {
         placementFactsReader === next.placementFactsReader &&
         activitySummaryEnabled === next.activitySummaryEnabled &&
         hasBoard === next.databaseFacts.hasBoard &&
-        isDeepStrictEqual(preparedRuntimeOwnership, next.preparedRuntimeOwnership) &&
-        isDeepStrictEqual(
-          activitySummaryFacts.activitySummaryWatermark,
-          next.databaseFacts.activitySummaryWatermark,
-        )
+        matchesRuntimeOwnership(next.preparedRuntimeOwnership) &&
+        isDeepStrictEqual(activitySummaryWatermark, next.databaseFacts.activitySummaryWatermark)
       );
     },
-    refreshActivitySummary(databaseFacts = activitySummaryFacts) {
-      activitySummaryFacts = databaseFacts;
-      activitySummary = readActivitySummary();
+    refreshActivitySummary(
+      cfg: OpenClawConfig,
+      databaseFacts?: Pick<SessionRowDatabaseFacts, "activitySummaryWatermark">,
+    ) {
+      if (databaseFacts) {
+        activitySummaryWatermark = databaseFacts.activitySummaryWatermark;
+      }
+      activitySummary = readActivitySummary(cfg);
       presented = undefined;
     },
     present: () => {

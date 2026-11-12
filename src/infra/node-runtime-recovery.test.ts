@@ -15,12 +15,28 @@ import {
   isUsableNode,
   recoverNodeRuntime,
 } from "../../node-runtime-recovery.mjs";
-import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { encodeWindowsLauncherScript } from "./windows-launcher-encoding.js";
+
+// Platform fixtures do not create host files; node discovery still uses its real bootstrap.
+vi.mock("../../runtime-process-scripts.generated.mjs", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../runtime-process-scripts.generated.mjs")>();
+  return {
+    ...actual,
+    createRuntimeProcessScriptFile: (
+      name: Parameters<typeof actual.createRuntimeProcessScriptFile>[0],
+      options?: Parameters<typeof actual.createRuntimeProcessScriptFile>[1],
+    ) =>
+      name === "daemonRuntimeProbe"
+        ? { url: new URL("file:///qa/daemon-runtime-probe.mjs"), dispose() {} }
+        : actual.createRuntimeProcessScriptFile(name, options),
+  };
+});
 
 const mocks = vi.hoisted(() => ({
   currentAdmitted: false,
@@ -74,13 +90,12 @@ const probeResult = (text: boolean): SpawnSyncReturns<string> => ({
   signal: null,
   output: [],
   stderr: "",
-  stdout: JSON.stringify({ version: "24.22.1", probe: sqlite(text) }),
+  stdout: JSON.stringify({ nodeVersion: "24.22.1", sqliteProbe: sqlite(text) }),
 });
 
 const originalArgv = process.argv;
 const originalExecArgv = process.execArgv;
-const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const ttyMock = createCliTtyMock();
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
 const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const nodeVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "node")!;
@@ -161,21 +176,12 @@ afterEach(async () => {
   process.exitCode = originalExitCode;
   process.argv = originalArgv;
   process.execArgv = originalExecArgv;
-  for (const [stream, descriptor] of [
-    [process.stdin, stdinTtyDescriptor],
-    [process.stdout, stdoutTtyDescriptor],
-  ] as const) {
-    if (descriptor) {
-      Object.defineProperty(stream, "isTTY", descriptor);
-    } else {
-      Reflect.deleteProperty(stream, "isTTY");
-    }
-  }
+  ttyMock.restore();
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
-    Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
     Object.defineProperty(process, "execPath", execPathDescriptor);
   }
+  Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   if (home) {
@@ -203,6 +209,30 @@ async function expectRecoveryStarted(options: Parameters<typeof recoverNodeRunti
 }
 
 describe("runtime recovery discovery", () => {
+  it.each([true, false])(
+    "selects only an installed security-patched Node for a certificate-only gap (patched=%s)",
+    async (patched) => {
+      mocks.currentAdmitted = true;
+      Object.defineProperty(process.versions, "node", { value: "24.21.0", configurable: true });
+      const candidate = await writeFixture("bin/node");
+      mocks.admissible.add(candidate);
+      mocks.probe.mockReturnValue({
+        ...probeResult(true),
+        stdout: JSON.stringify({
+          nodeVersion: patched ? "24.22.1" : "24.21.0",
+          sqliteProbe: sqlite(true),
+        }),
+      });
+      if (patched) {
+        await expectRecoveryStarted({ homeDir: home, allowInstall: true });
+        expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+      } else {
+        expect(await recoverNodeRuntime({ homeDir: home, allowInstall: true })).toBe(false);
+        expect(mocks.spawn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     { platform: "win32", quote: '"', relative: false, selected: true },
     { platform: "win32", quote: "", relative: false, selected: true },
@@ -363,7 +393,7 @@ describe("runtime recovery discovery", () => {
         childProcess.spawnSync = (command) => {
           result.probes.push(command);
           return { status: [${JSON.stringify(installedNode)}, ${JSON.stringify(workspaceNode)}].includes(command) ? 0 : 1,
-            stdout: JSON.stringify({ version: "24.22.1", probe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }) };
+            stdout: JSON.stringify({ nodeVersion: "24.22.1", sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true } }) };
         };
         childProcess.spawn = (command) => {
           result.selected = command;
@@ -870,7 +900,7 @@ describe("candidate admission probe", () => {
 
     expect(mocks.probe).toHaveBeenCalledOnce();
     const [, args, options] = expectDefined(mocks.probe.mock.calls[0], "runtime probe call");
-    expect(args).toEqual(["-e", expect.stringContaining(SQLITE_CAPABILITY_PROBE)]);
+    expect(args).toEqual([expect.stringMatching(/daemon-runtime-probe\.mjs$/), "node"]);
     expect(options).toMatchObject({
       timeout: 5_000,
       maxBuffer: 65_536,
@@ -925,7 +955,7 @@ it("selects a target-compatible inherited runtime even when the current CLI is s
   mocks.probe.mockImplementation((filename, args, options) => {
     const result = probe(filename, args, options);
     const payload = JSON.parse(result.stdout);
-    payload.version = filename === newNode ? "26.12.1" : "24.22.1";
+    payload.nodeVersion = filename === newNode ? "26.12.1" : "24.22.1";
     return { ...result, stdout: JSON.stringify(payload) };
   });
   const selected = await findUsableNodeRuntime({

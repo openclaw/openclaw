@@ -136,6 +136,7 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
       }
       const account = resolveNextcloudTalkAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
       if (
+        ctx.audioAsVoice !== true &&
         account.enabled &&
         !account.config.apiUser?.trim() &&
         account.config.apiPassword === undefined &&
@@ -211,6 +212,13 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         reactions: true,
         threads: false,
         media: true,
+        tts: {
+          voice: {
+            synthesisTarget: "audio-file",
+            audioFileFormats: ["mp3", "wav", "audio/mpeg", "audio/wav"],
+            captionedFinalText: true,
+          },
+        },
         nativeCommands: false,
         blockStreaming: true,
       },

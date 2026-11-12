@@ -105,6 +105,15 @@ merging a nested value such as voice settings.
     This optional field preserves existing plugin contracts, index contents,
     and embedding-cache identities.
 
+    The returned `runtime` can set `inlineIndexConcurrency` to cap how many
+    non-batch file indexing jobs memory runs at once. Use a positive safe
+    integer; omit it to keep the host default of 4. Invalid declarations are
+    ignored, and provider batch jobs keep their own concurrency. Servers that
+    answer requests in arrival order on the same host, such as Ollama and the
+    managed `local` llama-server, declare 1 so a search does not queue behind
+    several indexing requests. The generic OpenAI-compatible adapter declares 1
+    only when its base URL is a loopback address.
+
     `embed` and `embedBatch` accept an optional `onUsage` call option. A provider
     that reports usage calls it once per successful upstream request, before
     resolving, with `{ promptTokens, totalTokens }` or `undefined` when that
@@ -112,11 +121,13 @@ merging a nested value such as voice settings.
     unavailable response as incomplete usage. The shared remote factory reports
     OpenAI-style usage; vector return values and existing plugins stay unchanged.
 
-    Memory search applies an explicit `memory.search.queryInstruction` before
-    calling `embed` and sets the `queryInstructionApplied` call option. For queries
-    carrying this flag, preserve the supplied text and skip provider-owned query
-    templates. Without the flag, retain existing formatting behavior. Document
-    calls do not carry this flag.
+    Memory search applies an explicit `memory.search.queryInstruction` or
+    `memory.search.inputFormat.query` before calling `embed` and sets the
+    `queryInstructionApplied` call option. Explicit `inputFormat.document` sets
+    `documentFormatApplied` on document calls and asynchronous batch options.
+    Preserve supplied text and skip the corresponding provider-owned template
+    when its flag is set, including when the configured prefix is empty.
+    Without the corresponding flag, retain existing formatting behavior.
 
     Providers that accept model aliases can expose
     `normalizeModel(options): string`. Memory uses this synchronous hook for
@@ -258,6 +269,8 @@ merging a nested value such as voice settings.
     `overflowUrl` provides delivery only when the body exceeds that cap; malformed
     media and transport errors still fail. The caller owns response cleanup.
     `downloadGeneratedVideoAsset` also owns fetching, deadlines, and cleanup.
+    Its optional `dispatcherPolicy` preserves configured result transport while
+    keeping strict target checks. Do not pass task headers or private-network trust.
 
   </Tab>
   <Tab title="Web fetch and search">
@@ -349,6 +362,10 @@ merging a nested value such as voice settings.
     requests and check cancellation after asynchronous work. Existing
     one-argument implementations remain valid; OpenClaw rejects late fetch
     results after cancellation before publishing them to its fetch cache.
+
+    Forward the same signal to `resolveCitationRedirectUrl(url, signal)` when
+    enriching search citations. Caller cancellation rejects with its original
+    reason; ordinary redirect failures and timeouts keep the original URL.
 
   </Tab>
 </Tabs>

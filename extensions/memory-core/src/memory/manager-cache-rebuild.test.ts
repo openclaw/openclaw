@@ -24,6 +24,82 @@ describe("memory rebuild cache reuse", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
+    { cacheEnabled: true, vectorEnabled: true },
+    { cacheEnabled: false, vectorEnabled: false },
+  ])(
+    "reuses shifted chunks during ordinary edits (cache=$cacheEnabled, vector=$vectorEnabled)",
+    async ({ cacheEnabled, vectorEnabled }) => {
+      const file = path.join(fixture.paths.memory, "2026-01-12.md");
+      const original = Array.from({ length: 18 }, (_, i) =>
+        `Alpha archive record ${i}: stable reference details.`.padEnd(900, "."),
+      ).join("\n");
+      await fs.writeFile(file, original);
+      const manager = await fixture.getFreshManager(
+        fixture.createConfig({ sources: ["memory"], cacheEnabled, vectorEnabled }),
+        "cli",
+      );
+      await manager.sync({ reason: "cli", force: true });
+      const writer = memoryIndexFixtureWriter(manager);
+      const read = () =>
+        writer
+          .prepare(
+            "SELECT id, hash, text, start_line, embedding FROM memory_index_chunks ORDER BY start_line",
+          )
+          .all();
+      const before = read();
+      expect(before.length).toBeGreaterThan(5);
+      // Model a cache miss without deleting the canonical published vectors.
+      writer.exec("DELETE FROM memory_embedding_cache");
+      fixture.provider.embeddedBatchTexts.length = 0;
+      await fs.writeFile(file, "Beta newly inserted header.\n" + original);
+      Reflect.set(manager, "dirty", true);
+      if (cacheEnabled) {
+        writer.exec(`CREATE TRIGGER fail_edit_publication BEFORE INSERT ON memory_index_chunks
+          BEGIN SELECT RAISE(ABORT, 'injected edit publication failure'); END;`);
+        try {
+          await expect(manager.sync({ reason: "watch" })).rejects.toThrow(
+            "injected edit publication failure",
+          );
+          expect(read()).toEqual(before);
+          expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
+            n: 1,
+          });
+        } finally {
+          writer.exec("DROP TRIGGER fail_edit_publication");
+        }
+      }
+      // Retry keeps the failed run's new vector; only the initial cache miss embeds it.
+      await manager.sync({ reason: "watch" });
+      const after = read();
+      const unchanged = after.filter((row) => before.some((old) => old.hash === row.hash));
+      expect(unchanged.length).toBeGreaterThan(5);
+      expect(
+        unchanged.every((row) =>
+          before.some(
+            (old) =>
+              old.hash === row.hash && old.id !== row.id && old.start_line !== row.start_line,
+          ),
+        ),
+      ).toBe(true);
+      expect(fixture.provider.embeddedBatchTexts).toEqual([
+        `Beta newly inserted header.\n${original.split("\n")[0]}`,
+      ]);
+      for (const row of unchanged) {
+        expect(row.embedding).toEqual(before.find((old) => old.hash === row.hash)?.embedding);
+      }
+      const results = await manager.search("Beta newly inserted header", { minScore: 0 });
+      expect(
+        results.some((row) => row.path === "memory/2026-01-12.md" && row.snippet.includes("Beta")),
+      ).toBe(true);
+      if (!cacheEnabled) {
+        expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
+          n: 0,
+        });
+      }
+    },
+  );
+
+  it.each([
     { emptyIndex: false, failPublication: false },
     { emptyIndex: true, failPublication: false },
     { emptyIndex: false, failPublication: true },
@@ -35,7 +111,7 @@ describe("memory rebuild cache reuse", () => {
         fixture.createConfig({
           sources: ["memory"],
           cacheEnabled: true,
-          vectorEnabled: false,
+          vectorEnabled: true,
         }),
       );
       (manager as unknown as { cache: { maxEntries?: number } }).cache.maxEntries = 12;
@@ -76,22 +152,35 @@ describe("memory rebuild cache reuse", () => {
         await rebuild;
       }
 
-      expect(fixture.provider.embeddedBatchTexts.toSorted()).toEqual([
-        "cached text 0",
-        "cached text 1",
-        "cached text 2",
-        "cached text 3",
-      ]);
+      expect(fixture.provider.embeddedBatchTexts.toSorted()).toEqual(
+        emptyIndex ? ["cached text 0", "cached text 1", "cached text 2", "cached text 3"] : [],
+      );
       expect(writer.prepare("SELECT count(*) AS n FROM memory_index_chunks").get()).toEqual({
         n: 12,
       });
       expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
         n: 12,
       });
+      if (!emptyIndex && !failPublication) {
+        await manager.close();
+        const changedModel = await fixture.getFreshManager(
+          fixture.createConfig({
+            sources: ["memory"],
+            cacheEnabled: true,
+            vectorEnabled: true,
+            model: "different-embedding-model",
+          }),
+        );
+        fixture.provider.embeddedBatchTexts.length = 0;
+        await changedModel.sync({ reason: "cli", force: true });
+        expect(fixture.provider.embeddedBatchTexts.toSorted()).toEqual(
+          Array.from({ length: 12 }, (_, i) => `cached text ${i}`).toSorted(),
+        );
+      }
     },
   );
 
-  it("bounds the canonical cache before every incremental transaction commits", async () => {
+  it.each(["incremental", "full"] as const)("bounds every %s cache transaction", async (mode) => {
     await fs.rm(path.join(fixture.paths.memory, "2026-01-12.md"));
     const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
@@ -111,7 +200,11 @@ describe("memory rebuild cache reuse", () => {
         const client = await open(options, source, {
           ...worker,
           moduleUrl: resolveRuntimeWorkerUrl(memoryPublicationFaultEntrypoint),
-          input: { kind: "cache-capacity", publication: worker.input, maximum: 2 },
+          input: {
+            kind: "cache-capacity",
+            publication: worker.input,
+            maximum: mode === "full" ? 4 : 2,
+          },
         });
         interceptedPaths.push(options.path);
         return client;
@@ -127,13 +220,14 @@ describe("memory rebuild cache reuse", () => {
     };
     harness.cache.maxEntries = 2;
     await memoryManager.sync({ reason: "cli", force: true });
-    for (let i = 0; i < 4; i += 1) {
+    const files = mode === "full" ? 5 : 4;
+    for (let i = 0; i < files; i += 1) {
       await fs.writeFile(path.join(fixture.paths.memory, `${i}.md`), `unique cache content ${i}`);
     }
-    // Allow UPSERT-before-prune within a transaction, but reject overflow at
-    // every commit so a later transaction cannot hide a published excess.
+    // Full rebuilds may use twice the cap; every commit must stay within its
+    // budget, and completion restores the normal cap.
     harness.dirty = true;
-    await memoryManager.sync({ reason: "cli" });
+    await memoryManager.sync({ reason: "cli", force: mode === "full" });
 
     expect(interceptedPaths.length).toBeGreaterThan(0);
     expect(interceptedPaths.every((filename) => filename === harness.db.location())).toBe(true);
@@ -143,7 +237,7 @@ describe("memory rebuild cache reuse", () => {
       count: 2,
     });
     expect(harness.db.prepare("SELECT COUNT(*) AS count FROM memory_index_sources").get()).toEqual({
-      count: 4,
+      count: files,
     });
   });
 });

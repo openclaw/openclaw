@@ -4,6 +4,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderResolveConfigContext,
+  RealtimeVoiceProviderConfiguredContext,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
@@ -130,6 +131,23 @@ export function buildOpenAIRealtimeVoiceProvider(
     logger?: Pick<PluginLogger, "debug" | "warn">;
   },
 ): RealtimeVoiceProviderPlugin {
+  const prepareBrowserSessionAuth = (params: RealtimeVoiceProviderConfiguredContext) => {
+    const { cfg, providerConfig, agentId } = params;
+    const config = normalizeProviderConfig(providerConfig);
+    if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
+      return false;
+    }
+    const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+    const isGptLive = isOpenAIGptLiveModel(model);
+    const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
+    if (isGptLive && !hasBroker) {
+      return false;
+    }
+    return {
+      authParams: { configuredApiKey: config.apiKey, cfg, agentId },
+      allowsSubscription: hasBroker && (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)),
+    };
+  };
   const provider: RealtimeVoiceProviderPlugin = {
     id: "openai",
     label: "OpenAI Realtime Voice",
@@ -445,24 +463,12 @@ export function buildOpenAIRealtimeVoiceProvider(
   const isBrowserSessionConfiguredAsync: NonNullable<
     InternalRealtimeVoiceProviderApi["isBrowserSessionConfiguredAsync"]
   > = async ({ cfg, providerConfig, agentId }) => {
-    const config = normalizeProviderConfig(providerConfig);
-    if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
-      return false;
-    }
-    const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-    const isGptLive = isOpenAIGptLiveModel(model);
-    const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
-    if (isGptLive && !hasBroker) {
-      return false;
-    }
+    const prepared = prepareBrowserSessionAuth({ cfg, providerConfig, agentId });
     return (
-      (await hasOpenAIRealtimePlatformAuthInputAsync(
-        { configuredApiKey: config.apiKey, cfg, agentId },
-        context,
-      )) ||
-      (hasBroker &&
-        (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
-        (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
+      prepared &&
+      ((await hasOpenAIRealtimePlatformAuthInputAsync(prepared.authParams, context)) ||
+        (prepared.allowsSubscription &&
+          (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context))))
     );
   };
   const projectGptLiveCapabilities = (model: string, supportsGatewayControl = false) => ({
@@ -474,24 +480,12 @@ export function buildOpenAIRealtimeVoiceProvider(
   const internalApi: InternalRealtimeVoiceProviderApi = {
     // Retained for public synchronous SDK calls through 2026-12-31.
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
-      const config = normalizeProviderConfig(providerConfig);
-      if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {
-        return false;
-      }
-      const model = config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-      const isGptLive = isOpenAIGptLiveModel(model);
-      const hasBroker = options?.quicksilverBrowserSessionBroker !== undefined;
-      if (isGptLive && !hasBroker) {
-        return false;
-      }
+      const prepared = prepareBrowserSessionAuth({ cfg, providerConfig, agentId });
       return (
-        hasOpenAIRealtimePlatformAuthInput(
-          { configuredApiKey: config.apiKey, cfg, agentId },
-          context,
-        ) ||
-        (hasBroker &&
-          (!isGptLive || isOpenAIGptLiveSubscriptionModel(model)) &&
-          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
+        prepared &&
+        (hasOpenAIRealtimePlatformAuthInput(prepared.authParams, context) ||
+          (prepared.allowsSubscription &&
+            hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context)))
       );
     },
     isBrowserSessionConfiguredAsync,

@@ -105,6 +105,9 @@ export type ConfigSnapshot = {
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
   issues?: { path: string; message: string }[] | null;
+  warnings?: { path: string; message: string }[] | null;
+  /** Files reached through $include, when the config uses any. */
+  includedPaths?: string[] | null;
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
@@ -116,6 +119,8 @@ export type { GatewayContextWindowOption };
 export type SessionWorkspaceListResult = ProtocolSessionsFilesListResult & {
   artifacts?: ProtocolArtifactSummary[];
 };
+
+export type CyberAccessProgram = NonNullable<GatewayWireSessionRow["cyberAccessProgram"]>;
 
 export type GatewaySessionRow = Omit<GatewayWireSessionRow, "archivedBy" | "updatedAt"> &
   Pick<SessionRow, "archivedBy" | "updatedAt"> & {
@@ -162,6 +167,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;
+  cyberAccessProgram?: CyberAccessProgram;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

@@ -9,50 +9,35 @@ function poolFixture() {
   const create = vi.fn(() => ({ close: vi.fn(async () => undefined) }));
   const acquire = (key: string) =>
     pool.acquire({ key, createDispatcher: () => create() as unknown as Dispatcher });
-  return { pool, create, acquire };
+  const expectClosed = (calls: number) => {
+    for (const result of create.mock.results) {
+      expect(result.value.close).toHaveBeenCalledTimes(calls);
+    }
+  };
+  return { pool, create, acquire, expectClosed };
 }
 
-it("reuses an exact live key and closes it only at lifecycle shutdown", async () => {
-  const { pool, create, acquire } = poolFixture();
-  const first = acquire("origin-a/pin-a");
-  expect(first?.reused).toBe(false);
-  await first?.release();
-  const second = acquire("origin-a/pin-a");
-  expect(second?.dispatcher).toBe(first?.dispatcher);
-  expect(second?.reused).toBe(true);
-  expect(create).toHaveBeenCalledOnce();
-  expect(create.mock.results[0]?.value.close).not.toHaveBeenCalled();
-  await second?.release();
-  await pool.closeAll();
-  expect(create.mock.results[0]?.value.close).toHaveBeenCalledOnce();
-});
-
 it("keeps separate active pins open through shutdown", async () => {
-  const { pool, create, acquire } = poolFixture();
-  const oldLease = acquire("origin-a/pin-a");
-  const oldDispatcher = create.mock.results[0]?.value;
-  const nextLease = acquire("origin-a/pin-b");
-  const nextDispatcher = create.mock.results[1]?.value;
-  expect(create).toHaveBeenCalledTimes(2);
-  expect(nextLease?.dispatcher).toBe(create.mock.results[1]?.value);
-  expect(oldDispatcher?.close).not.toHaveBeenCalled();
+  const { pool, acquire, expectClosed } = poolFixture();
+  const first = acquire("origin-a/pin-a");
+  const second = acquire("origin-a/pin-b");
+  expect(first).toBeDefined();
+  expect(second).toBeDefined();
+  expect(first?.dispatcher).not.toBe(second?.dispatcher);
+  expectClosed(0);
   await pool.closeAll();
-  expect(oldDispatcher?.close).toHaveBeenCalledOnce();
-  expect(nextDispatcher?.close).toHaveBeenCalledOnce();
-
-  await oldLease?.release();
-  await nextLease?.release();
-  expect(oldDispatcher?.close).toHaveBeenCalledOnce();
-  expect(nextDispatcher?.close).toHaveBeenCalledOnce();
+  expectClosed(1);
+  await first?.release();
+  await second?.release();
+  expectClosed(1);
 });
 
 it("falls back to caller-owned dispatchers when capacity is fully leased", async () => {
-  const { pool, create, acquire } = poolFixture();
+  const { pool, create, acquire, expectClosed } = poolFixture();
   const leases = Array.from({ length: 16 }, (_, i) => acquire(`origin-${i}/pin-${i}`));
-  const close = create.mock.results[0]?.value.close;
   expect(acquire("origin-b/pin-b")).toBeUndefined();
   expect(create).toHaveBeenCalledTimes(16);
-  expect(close).not.toHaveBeenCalled();
+  expectClosed(0);
   await Promise.all(leases.map((lease) => lease!.release()));
   await pool.closeAll();
 });

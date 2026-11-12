@@ -1,6 +1,6 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ThemeArtwork, ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
-import { fnv1aUtf16 } from "../lib/fnv1a.ts";
+import { fnv1aUtf16 } from "../../../src/shared/fnv1a.js";
 import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import type { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
 

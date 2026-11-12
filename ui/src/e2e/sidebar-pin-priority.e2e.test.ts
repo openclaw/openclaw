@@ -25,6 +25,7 @@ suite.define(() => {
         { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entries },
       );
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         awaitInitialRoster: false,
         sessionKey: selected.key,
         sessions: [selected, ...pins],
@@ -49,6 +50,11 @@ suite.define(() => {
       const pinned = page.locator('[data-session-section="pinned"] .sidebar-recent-session');
       const viewport = page.locator(".sidebar-shell__body");
       await pinned.getByText("Pinned chat 0", { exact: true }).waitFor();
+      // Describe replies can settle out of order; collect rows only after all pins arrive.
+      await page
+        .locator('[data-session-section="pinned"] [role="listitem"][aria-setsize="30"]')
+        .first()
+        .waitFor();
       const seen = new Map<string, number>();
       await expect
         .poll(async () => {

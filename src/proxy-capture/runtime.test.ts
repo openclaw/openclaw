@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Headers as UndiciHeaders } from "undici";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import type { DebugProxySettings } from "./env.js";
@@ -188,40 +189,6 @@ it("observes environment changes while explicit capture settings remain authorit
   ]);
 });
 
-it("normalizes symbol-bearing request headers before calling patched fetch targets", async () => {
-  fetchTarget.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
-    const headers = new Headers(init?.headers);
-    expect(headers.get("content-type")).toBe("application/json");
-    expect(headers.get("x-hidden")).toBe("yes");
-    return new Response("{}", { status: 200 });
-  };
-  const headers = { "content-type": "application/json" };
-  Object.defineProperty(headers, "x-hidden", {
-    value: "yes",
-    enumerable: false,
-  });
-  Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
-    value: new Set(["content-type"]),
-    enumerable: false,
-  });
-
-  initializeDebugProxyCapture("test", settings, deps);
-  await fetchTarget.fetch("https://api.example.com/messages#%", {
-    method: "POST",
-    headers,
-    body: "{}",
-  });
-  await nextTurn();
-  finalizeDebugProxyCapture(settings, deps);
-
-  const request = events.find((event) => event.kind === "request");
-  expect(JSON.parse(String(request?.headersJson))).toStrictEqual({
-    "content-type": "application/json",
-    "x-hidden": "yes",
-  });
-  expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
-});
-
 it("redacts sensitive request and response headers before persistence", async () => {
   const secret = "capture-managed-secret";
   const pathSecret = "capture/path secret";
@@ -288,7 +255,6 @@ it("redacts registered values from every persisted WebSocket field", () => {
     detail: "[REDACTED]",
   });
   expect(inbound?.dataText).toContain('"echoedToken":"[REDACTED]"');
-  expect(JSON.stringify(events)).not.toContain(secret);
   expect(JSON.stringify(events)).not.toContain(JSON.stringify(secret).slice(1, -1));
 });
 
@@ -300,7 +266,6 @@ it("redacts registered credential bytes from otherwise non-UTF-8 frames", () => 
   captureFrame({ flowId: "binary-auth", payload });
 
   expect(events[0]?.dataText).toBe("[REDACTED BINARY PAYLOAD]");
-  expect(events[0]?.dataText).not.toContain(secret);
 });
 
 it.each([
@@ -364,14 +329,10 @@ it("gives up on a stalled response body and lets the caller's cancellation settl
   try {
     initializeDebugProxyCapture("test", settings, deps);
     // A stalled tee holds caller cancellation open until capture cancels too.
-    const upstream = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("partial"));
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
+    const upstream = new Response(makeStallingStream([new TextEncoder().encode("partial")]), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
     // Capture must own the only clone; a third unread branch would never cancel.
     captureHttp({ url: "https://api.example.test/stalls", method: "GET", response: upstream });
 

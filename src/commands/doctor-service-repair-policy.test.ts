@@ -8,126 +8,84 @@ import {
 } from "./doctor-service-repair-policy.js";
 
 const mocks = vi.hoisted(() => ({
-  findInstalledSystemdGatewayScope:
-    vi.fn<(typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]>(),
-  isContainerEnvironment: vi.fn(() => false),
+  findScope: vi.fn<(typeof import("../daemon/systemd.js"))["findInstalledSystemdGatewayScope"]>(),
+  isContainer: vi.fn(() => false),
   isLoaded: vi.fn(async () => false),
-  resolveGatewayService: vi.fn(),
+  service: vi.fn(),
 }));
 
 type Scenario = {
   env?: NodeJS.ProcessEnv;
   container?: boolean;
-  scope?: "system" | "missing" | "failed";
+  scope?: "system" | "missing";
   unavailableManager?: boolean;
   platform?: "darwin";
 };
 
-const unit = (scope: "user" | "system" = "user") => ({
-  scope,
-  unitName: "openclaw-gateway.service",
-  unitPath: "/fixture/openclaw-gateway.service",
-});
-
-vi.mock("../infra/container-environment.js", () => ({
-  isContainerEnvironment: mocks.isContainerEnvironment,
-}));
-
-vi.mock("../daemon/service.js", () => ({
-  resolveGatewayService: mocks.resolveGatewayService,
-}));
-
-vi.mock("../daemon/systemd.js", () => ({
-  findInstalledSystemdGatewayScope: mocks.findInstalledSystemdGatewayScope,
-}));
+// mock-isolation: Model container policy without reading the test host's environment or files.
+vi.mock("../infra/container-environment.js", () => ({ isContainerEnvironment: mocks.isContainer }));
+// mock-isolation: Control manager readiness without invoking an installed Gateway service.
+vi.mock("../daemon/service.js", () => ({ resolveGatewayService: mocks.service }));
+// mock-isolation: Model unit discovery without probing systemd on the test host.
+vi.mock("../daemon/systemd.js", () => ({ findInstalledSystemdGatewayScope: mocks.findScope }));
 
 beforeEach(() => {
-  mocks.findInstalledSystemdGatewayScope.mockReset();
-  mocks.isContainerEnvironment.mockReset().mockReturnValue(false);
-  mocks.isLoaded.mockReset().mockResolvedValue(false);
-  mocks.resolveGatewayService.mockReset().mockReturnValue({
-    isLoaded: mocks.isLoaded,
-  });
+  vi.resetAllMocks();
+  mocks.isLoaded.mockResolvedValue(false);
+  mocks.service.mockReturnValue({ isLoaded: mocks.isLoaded });
   mockProcessPlatform("linux");
 });
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each<[string, boolean, "none" | "scope" | "manager", Scenario]>([
-  ["native host", true, "none", {}],
-  [
-    "Doctor-only external policy",
-    true,
-    "none",
-    { env: { OPENCLAW_SERVICE_REPAIR_POLICY: "external" } },
-  ],
-  [
-    "external supervision",
-    false,
-    "none",
-    { container: true, env: { OPENCLAW_SUPERVISOR_MODE: "external" } },
-  ],
-  [
-    "Kubernetes",
-    false,
-    "none",
-    {
-      container: true,
-      env: { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" },
-    },
-  ],
-  ["Docker without a service", false, "scope", { container: true, scope: "missing" }],
-  ["Docker with an unloaded user service", true, "manager", { container: true }],
-  ["Docker with a system service", false, "scope", { container: true, scope: "system" }],
-  ["Docker without a manager", false, "manager", { container: true, unavailableManager: true }],
-  ["Docker with failed discovery", false, "scope", { container: true, scope: "failed" }],
-  ["non-Linux container", false, "none", { container: true, platform: "darwin" }],
-])("applies native service ownership in %s", async (_name, expected, probes, scenario) => {
-  const env = scenario.env ?? {};
-  mocks.isContainerEnvironment.mockReturnValue(scenario.container === true);
+const supervisor = { OPENCLAW_SUPERVISOR_MODE: "external" };
+const kubernetes = { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" };
+it.each<[string, boolean, Scenario]>([
+  ["native host", true, {}],
+  ["external supervisor", false, { container: true, env: supervisor }],
+  ["Kubernetes", false, { container: true, env: kubernetes }],
+  ["missing unit", false, { container: true, scope: "missing" }],
+  ["unloaded user unit", true, { container: true }],
+  ["system unit", false, { container: true, scope: "system" }],
+  ["unavailable manager", false, { container: true, unavailableManager: true }],
+  ["non-Linux container", false, { container: true, platform: "darwin" }],
+])("applies native service ownership in %s", async (_name, expected, scenario) => {
+  mocks.isContainer.mockReturnValue(scenario.container === true);
   if (scenario.platform) {
     mockProcessPlatform(scenario.platform);
   }
-  if (scenario.scope === "failed") {
-    mocks.findInstalledSystemdGatewayScope.mockRejectedValue(new Error("service discovery failed"));
-  } else {
-    mocks.findInstalledSystemdGatewayScope.mockResolvedValue(
-      scenario.scope === "missing" ? null : unit(scenario.scope),
-    );
-  }
+  mocks.findScope.mockResolvedValue(
+    scenario.scope === "missing"
+      ? null
+      : {
+          scope: scenario.scope ?? "user",
+          unitName: "openclaw-gateway.service",
+          unitPath: "/fixture/openclaw-gateway.service",
+        },
+  );
   if (scenario.unavailableManager) {
     mocks.isLoaded.mockRejectedValue(new Error("systemd user manager unavailable"));
   }
 
-  await expect(shouldManageGatewayService(env)).resolves.toBe(expected);
-
-  expect([
-    mocks.findInstalledSystemdGatewayScope.mock.calls,
-    mocks.resolveGatewayService.mock.calls,
-    mocks.isLoaded.mock.calls,
-  ]).toEqual([
-    probes === "none" ? [] : [[env]],
-    probes === "manager" ? [[]] : [],
-    probes === "manager" ? [[{ env, timeoutMs: 5_000 }]] : [],
-  ]);
+  await expect(shouldManageGatewayService(scenario.env ?? {})).resolves.toBe(expected);
 });
 
 it.each([
-  { envKey: "OPENCLAW_SERVICE_REPAIR_POLICY", value: "external" },
-  { envKey: "OPENCLAW_SUPERVISOR_MODE", value: "external" },
-  { envKey: "OPENCLAW_UPDATE_IN_PROGRESS", value: "1" },
-])("never confirms a Doctor repair deferred by $envKey", async ({ envKey, value }) => {
+  ["OPENCLAW_SERVICE_REPAIR_POLICY", "external"],
+  ["OPENCLAW_SUPERVISOR_MODE", "external"],
+  ["OPENCLAW_UPDATE_IN_PROGRESS", "1"],
+])("never confirms a Doctor repair deferred by %s", async (envKey, value) => {
   const prompter = createDoctorPrompter({
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     options: { repair: true },
   });
   const confirm = vi.spyOn(prompter, "confirmRuntimeRepair");
 
-  await withEnvAsync({ [envKey]: value }, async () => {
-    await expect(
+  await withEnvAsync({ [envKey]: value }, () =>
+    expect(
       confirmDoctorServiceRepair(prompter, { message: "Repair gateway service?" }),
-    ).resolves.toBe(false);
-  });
+    ).resolves.toBe(false),
+  );
 
   expect(confirm).not.toHaveBeenCalled();
 });

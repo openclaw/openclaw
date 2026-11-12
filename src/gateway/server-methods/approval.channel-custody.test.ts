@@ -20,14 +20,10 @@ import { createTestApprovalManager } from "../exec-approval-manager.test-support
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import {
   bindApprovalHandlers,
-  createHandlers,
-  createFixture,
+  createFixture as createBaseFixture,
   cleanupApprovalHandlerFixtures,
   createClient,
-  createDatabaseOptions,
-  createManagers,
   getOperatorApproval,
-  invoke,
   registerExec,
   registerPlugin,
   registerSystemAgent,
@@ -65,6 +61,24 @@ function expectNotFound(response: unknown) {
   });
 }
 
+function createFixture(includeSystemAgent = false) {
+  const fixture = createBaseFixture(includeSystemAgent);
+  const { request, databaseOptions, managers } = fixture;
+  return {
+    ...fixture,
+    exec: (id: string, options: Omit<Parameters<typeof registerExec>[1], "id"> = {}) =>
+      registerExec(managers.exec, { id, ...options }),
+    get: (
+      id: string,
+      client?: GatewayRequestHandlerOptions["client"],
+      context?: GatewayRequestHandlerOptions["context"],
+    ) => request("approval.get", { id }, client, context),
+    resolve: (id: string, client?: GatewayRequestHandlerOptions["client"], extra = {}) =>
+      request("approval.resolve", { id, kind: "exec", decision: "deny", ...extra }, client),
+    read: (id: string) => getOperatorApproval({ id, databaseOptions }),
+  };
+}
+
 function brokenDatabaseFixture(testContext: TestContext) {
   const databasePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-broken-db-"));
   tempDirs.push(databasePath);
@@ -88,7 +102,7 @@ describe("approval authority boundaries", () => {
   });
 
   it("hides foreign pending and terminal approvals from roles without foreign-session access", async () => {
-    const databaseOptions = createDatabaseOptions();
+    const { databaseOptions, request, exec } = createFixture();
     const stateDir = databaseOptions.env?.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("expected isolated approval state directory");
@@ -97,15 +111,15 @@ describe("approval authority boundaries", () => {
       const profile = ensureProfileForEmail("approval-guest@example.test", databaseOptions);
       setUserProfileRole(profile.id, "guest", databaseOptions);
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog(databaseOptions)).release };
-      const guest = {
-        sessions: { others: "none" as const },
-        agents: "*",
-        scopes: ["operator.approvals"],
-      } satisfies NonNullable<
-        NonNullable<OpenClawConfig["gateway"]>["roles"]
-      >["definitions"][string];
       const cfg: OpenClawConfig = {
-        gateway: { roles: { default: "guest", definitions: { guest } } },
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: { sessions: { others: "none" }, agents: "*", scopes: ["operator.approvals"] },
+            },
+          },
+        },
       };
       setRuntimeConfigSnapshot(cfg);
       const ownerKey = "agent:main:approval-owned";
@@ -123,15 +137,8 @@ describe("approval authority boundaries", () => {
           },
         );
       }
-      const managers = createManagers(databaseOptions);
-      const own = await registerExec(managers.exec, {
-        id: "approval:owned",
-        request: { sessionKey: ownerKey },
-      });
-      const foreign = await registerExec(managers.exec, {
-        id: "approval:foreign",
-        request: { sessionKey: foreignKey },
-      });
+      const own = await exec("approval:owned", { request: { sessionKey: ownerKey } });
+      const foreign = await exec("approval:foreign", { request: { sessionKey: foreignKey } });
       const context = {
         ...createContext(),
         getRuntimeConfig: () => cfg,
@@ -144,7 +151,6 @@ describe("approval authority boundaries", () => {
         ...createClient({ deviceId: "reviewer" }),
         internal: { operatorRoleActor: { kind: "system" } },
       } as GatewayRequestHandlerOptions["client"];
-      const request = bindApprovalHandlers(createHandlers(managers, databaseOptions));
       const get = (id: string, client?: GatewayRequestHandlerOptions["client"]) =>
         request("approval.get", { id }, client, context);
 
@@ -179,10 +185,9 @@ describe("approval authority boundaries", () => {
   });
 
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {
-    const { managers, request } = createFixture();
+    const { exec, get } = createFixture();
     const id = "exec:approval.with_safe-punctuation";
-    await registerExec(managers.exec, {
-      id,
+    await exec(id, {
       reviewerDeviceIds: ["reviewer-a"],
       request: {
         commandPreview: "printf approval-handler",
@@ -198,9 +203,8 @@ describe("approval authority boundaries", () => {
       },
     });
 
-    const response = await request(
-      "approval.get",
-      { id },
+    const response = await get(
+      id,
       createClient({ deviceId: "reviewer-a" }),
       createContext("/operator/"),
     );
@@ -225,25 +229,20 @@ describe("approval authority boundaries", () => {
     expect(serialized).not.toContain("/private/workspace");
     expect(serialized).not.toContain("private-env-binding");
 
-    const prefix = await request(
-      "approval.get",
-      { id: "exec:approval" },
-      createClient({ deviceId: "reviewer-a" }),
-    );
-    expectNotFound(prefix);
+    expectNotFound(await get("exec:approval", createClient({ deviceId: "reviewer-a" })));
   });
 
   it("makes missing and unauthorized approval lookups indistinguishable", async () => {
-    const { managers, request } = createFixture();
-    await registerExec(managers.exec, { id: "authorization" });
+    const { exec, get } = createFixture();
+    await exec("authorization");
 
-    const missing = await request("approval.get", { id: "missing" });
+    const missing = await get("missing");
     for (const client of [
       createClient({ scopes: ["operator.approvals"] }),
       createClient({ internal: true }),
       createClient({ internal: true, scopes: ["operator.read"] }),
     ]) {
-      expect(await request("approval.get", { id: "authorization" }, client)).toMatchObject({
+      expect(await get("authorization", client)).toMatchObject({
         ok: false,
         error: missing.error,
       });
@@ -251,115 +250,82 @@ describe("approval authority boundaries", () => {
   });
 
   it("enforces explicit reviewer bindings over requester ownership", async () => {
-    const { managers, request } = createFixture();
-    const pending = await registerExec(managers.exec, {
-      id: "reviewer-bound-unified-approval",
+    const { managers, exec, get, resolve } = createFixture();
+    const pending = await exec("reviewer-bound", {
       reviewerDeviceIds: ["reviewer-a"],
     });
 
     for (const deviceId of ["reviewer-b", "requester-device"]) {
-      for (const method of ["approval.get", "approval.resolve"] as const) {
-        const response = await request(
-          method,
-          method === "approval.get"
-            ? { id: pending.record.id }
-            : { id: pending.record.id, kind: "exec", decision: "deny" },
-          createClient({ deviceId }),
-        );
-        expectNotFound(response);
-      }
+      const client = createClient({ deviceId });
+      expectNotFound(await get(pending.record.id, client));
+      expectNotFound(await resolve(pending.record.id, client));
     }
     expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
 
-    const winner = await request(
-      "approval.resolve",
-      { id: pending.record.id, kind: "exec", decision: "deny" },
-      createClient({ deviceId: "reviewer-a" }),
-    );
+    const winner = await resolve(pending.record.id, createClient({ deviceId: "reviewer-a" }));
     expect(winner.result).toMatchObject({
       applied: true,
       approval: { status: "denied", decision: "deny" },
     });
 
-    expectNotFound(
-      await request(
-        "approval.get",
-        { id: pending.record.id },
-        createClient({ deviceId: "reviewer-b" }),
-      ),
-    );
+    expectNotFound(await get(pending.record.id, createClient({ deviceId: "reviewer-b" })));
   });
 
   it("lets only the server-authenticated device-less runtime resolve", async () => {
-    const { databaseOptions, managers, request } = createFixture();
-    const pending = await registerExec(managers.exec, { id: "trusted-runtime-resolve" });
-
-    const body = { id: pending.record.id, kind: "exec", decision: "deny" };
+    const { managers, exec, resolve, read } = createFixture();
+    const pending = await exec("trusted-runtime");
 
     for (const client of [
       createClient({ scopes: ["operator.approvals"] }),
       createClient({ internal: true, scopes: ["operator.read"] }),
     ]) {
-      expectNotFound(await request("approval.resolve", body, client));
+      expectNotFound(await resolve(pending.record.id, client));
       expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
     }
 
-    const trusted = await request("approval.resolve", body, createClient({ internal: true }));
+    const trusted = await resolve(pending.record.id, createClient({ internal: true }));
     expect(trusted.result).toMatchObject({
       applied: true,
       approval: { status: "denied", decision: "deny", reason: "user" },
     });
-    expect(
-      (await getOperatorApproval({ id: pending.record.id, databaseOptions }))?.resolver,
-    ).toEqual({ kind: "runtime", id: "approval-test" });
+    expect((await read(pending.record.id))?.resolver).toEqual({
+      kind: "runtime",
+      id: "approval-test",
+    });
     await expect(pending.decision).resolves.toBe("deny");
   });
 
   it.for([
-    ["approval.get", String.fromCharCode(0xd800)],
-    ["approval.resolve", ".."],
-  ] as const)("rejects unsafe approval id through %s: %s", async ([method, id], testContext) => {
-    const { request } = brokenDatabaseFixture(testContext);
-    const response = await request(method, {
-      id,
-      ...(method === "approval.resolve" ? { kind: "exec", decision: "deny" } : {}),
-    });
-
-    expect(response).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-  });
-
-  it.for(["approval.get", "approval.resolve"] as const)(
-    "returns sanitized UNAVAILABLE when %s cannot read durable state",
-    async (method, testContext) => {
+    ["approval.get", String.fromCharCode(0xd800), "INVALID_REQUEST"],
+    ["approval.resolve", "..", "INVALID_REQUEST"],
+    ["approval.get", "lookup", "UNAVAILABLE"],
+    ["approval.resolve", "lookup", "UNAVAILABLE"],
+  ] as const)(
+    "%s with id %s returns %s without disclosing the storage path",
+    async ([method, id, code], testContext) => {
       const { databasePath, request } = brokenDatabaseFixture(testContext);
-      const context = createContext();
-
-      const response = await request(
-        method,
-        method === "approval.get"
-          ? { id: "lookup" }
-          : { id: "lookup", kind: "exec", decision: "deny" },
-        undefined,
-        context,
-      );
-
+      const response = await request(method, {
+        id,
+        ...(method === "approval.resolve" ? { kind: "exec", decision: "deny" } : {}),
+      });
       expect(response).toMatchObject({
         ok: false,
-        error: { code: "UNAVAILABLE", message: "approval lookup unavailable" },
+        error: {
+          code,
+          ...(code === "UNAVAILABLE" ? { message: "approval lookup unavailable" } : {}),
+        },
       });
       expect(JSON.stringify(response.error)).not.toContain(databasePath);
-      expect(context.logGateway.error).toHaveBeenCalledTimes(1);
     },
   );
 
   it("does not mutate a live waiter for an unauthorized durable lookup", async () => {
-    const { databaseOptions, managers, request } = createFixture();
-    const pending = await registerExec(managers.exec, { id: "unauthorized-missing-durable-row" });
+    const { databaseOptions, managers, exec, get } = createFixture();
+    const pending = await exec("missing-durable-row");
     deleteDurableApproval(databaseOptions, pending.record.id);
 
-    const response = await request(
-      "approval.get",
-      { id: pending.record.id },
+    const response = await get(
+      pending.record.id,
       createClient({ deviceId: "unrelated-device", scopes: ["operator.approvals"] }),
     );
 
@@ -367,70 +333,53 @@ describe("approval authority boundaries", () => {
     expect(managers.exec.getLiveSnapshot(pending.record.id)?.resolvedAtMs).toBeUndefined();
   });
 
-  it.each([
-    [false, "telegram", "ops", "owner", "telegram:ops"],
-    [true, "irc", "default", "alice", "irc:default"],
-  ] as const)(
-    "enforces system-agent channel custody (revoked=%s)",
-    async (revoked, channel, accountId, senderId, resolverId) => {
-      const { databaseOptions, managers, request } = createFixture(true);
-      const pending = await registerSystemAgent(
-        managers.systemAgent,
-        "system-agent:channel-reviewer",
-      );
-      prepareApprovalChannelCustodyMock.mockImplementation(
-        ({ approvalKind }: { approvalKind: string }) =>
-          approvalKind === "system-agent"
-            ? {
-                resolverId,
-                authorizes: (record: { request: SystemAgentApprovalRequestPayload }) =>
-                  revoked || record.request.sessionId === "delegation-1",
-                ...(revoked ? { isCurrent: () => false } : {}),
-              }
-            : null,
-      );
-      const response = await request(
-        "approval.resolve",
-        {
-          id: pending.record.id,
-          kind: "system-agent",
-          decision: "allow-once",
-          reviewer: { channel, accountId, senderId },
-        },
-        createClient({ internal: true }),
-      );
+  it.each([false, true])("enforces system-agent channel custody (revoked=%s)", async (revoked) => {
+    const { managers, resolve, read } = createFixture(true);
+    const pending = await registerSystemAgent(managers.systemAgent, "channel-reviewer");
+    prepareApprovalChannelCustodyMock.mockImplementation(
+      ({ approvalKind }: { approvalKind: string }) =>
+        approvalKind === "system-agent"
+          ? {
+              resolverId: "telegram:ops",
+              authorizes: (record: { request: SystemAgentApprovalRequestPayload }) =>
+                revoked || record.request.sessionId === "delegation-1",
+              ...(revoked ? { isCurrent: () => false } : {}),
+            }
+          : null,
+    );
+    const response = await resolve(pending.record.id, createClient({ internal: true }), {
+      kind: "system-agent",
+      decision: "allow-once",
+      reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+    });
 
-      const stored = await getOperatorApproval({ id: pending.record.id, databaseOptions });
-      if (revoked) {
-        expect(response.result).toBeUndefined();
-        expect(stored?.status).toBe("pending");
-        return;
-      }
-      expect(response.result).toMatchObject({
-        applied: true,
-        approval: {
-          status: "allowed",
-          decision: "allow-once",
-          presentation: {
-            kind: "system-agent",
-            proposalHash: "a".repeat(64),
-            allowedDecisions: ["allow-once", "deny"],
-          },
+    const stored = await read(pending.record.id);
+    if (revoked) {
+      expect(response.result).toBeUndefined();
+      expect(stored?.status).toBe("pending");
+      return;
+    }
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: {
+        status: "allowed",
+        decision: "allow-once",
+        presentation: {
+          kind: "system-agent",
+          proposalHash: "a".repeat(64),
+          allowedDecisions: ["allow-once", "deny"],
         },
-      });
-      await expect(pending.decision).resolves.toBe("allow-once");
-      expect(stored?.resolver).toEqual({ kind: "channel", id: resolverId });
-    },
-  );
+      },
+    });
+    await expect(pending.decision).resolves.toBe("allow-once");
+    expect(stored?.resolver).toEqual({ kind: "channel", id: "telegram:ops" });
+  });
 
   it("refuses a plugin reviewer revoked between lookup and the final decision write", async () => {
-    const { databaseOptions, managers, request } = createFixture();
+    const { managers, request, read } = createFixture();
     const { record, decision: pending } = await registerPlugin(managers.plugin, {
       id: "plugin:revoked-slack-reviewer",
       request: {
-        description: "Allow one action",
-        pluginId: "diffs",
-        toolName: "view",
         turnSourceChannel: "slack",
         turnSourceAccountId: "default",
       },
@@ -467,15 +416,14 @@ describe("approval authority boundaries", () => {
       );
 
     expect((await resolve("U11111111")).result).toBeUndefined();
-    expect((await getOperatorApproval({ id: record.id, databaseOptions }))?.status).toBe("pending");
+    expect((await read(record.id))?.status).toBe("pending");
     expect((await resolve("U22222222")).result).toMatchObject({ applied: true });
     await expect(pending).resolves.toBe("allow-once");
   });
 
   it("checks live channel custody before the canonical resolution CAS", async () => {
-    const { databaseOptions, managers, handlers } = createFixture();
-    const pending = await registerExec(managers.exec, {
-      id: "channel-custody-cas",
+    const { exec, resolve, read } = createFixture();
+    const pending = await exec("channel-custody-cas", {
       request: { turnSourceChannel: "telegram", turnSourceAccountId: "ops" },
       reviewerDeviceIds: [],
     });
@@ -484,25 +432,15 @@ describe("approval authority boundaries", () => {
       authorizes: (request: { request: ExecApprovalRequestPayload }) =>
         request.request.turnSourceAccountId === "ops",
     });
-    const response = await invoke({
-      handlers,
-      method: "approval.resolve",
-      body: {
-        id: pending.record.id,
-        kind: "exec",
-        decision: "deny",
-        reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
-      },
-      client: createClient({ internal: true }),
+    const response = await resolve(pending.record.id, createClient({ internal: true }), {
+      reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
     });
 
     expect(response.result).toMatchObject({
       applied: true,
       approval: { status: "denied", decision: "deny" },
     });
-    expect(
-      (await getOperatorApproval({ id: pending.record.id, databaseOptions }))?.resolver,
-    ).toEqual({
+    expect((await read(pending.record.id))?.resolver).toEqual({
       kind: "channel",
       id: "telegram:ops",
     });

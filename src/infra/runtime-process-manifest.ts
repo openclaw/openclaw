@@ -17,13 +17,31 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     } as const;
   }
 
+  const loaderFreeEntrypoint = (modulePath: string) =>
+    runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
+
   return {
+    daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
+    repositoryPublicationRestore: loaderFreeEntrypoint(
+      "gateway/repository-publication-restore.generated.worker",
+    ),
+    nodeWorkspacePublicationSnapshot: loaderFreeEntrypoint(
+      "node-host/node-worker-publication-snapshot.generated.worker",
+    ),
+    nodeWorkspaceManifest: loaderFreeEntrypoint(
+      "node-host/node-worker-workspace-manifest.generated.worker",
+    ),
+    nodeWorkspaceGitHistory: loaderFreeEntrypoint(
+      "node-host/node-worker-workspace-git-history.generated.worker",
+    ),
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
     ),
+    doctorDatabaseBloat: runtimeProcessEntrypoint("commands/doctor-db-bloat.worker"),
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
+    sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),
     managedHandoffEngine: runtimeProcessEntrypoint(
       "infra/update-managed-service-handoff-engine.worker",
@@ -32,35 +50,34 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     databasePortCommand: runtimeProcessEntrypoint(
       "infra/database-engine/port-command.entry.worker",
     ),
+    stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
+    fileLog: runtimeProcessEntrypoint("logging/logger-file.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
-    shutdownHardExit: runtimeProcessEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
+    openclawIdTunnel: runtimeProcessEntrypoint("gateway/openclaw-id/tunnel-child/entry"),
+    shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
       "infra/package-update-integrity-hasher.worker",
     ),
     packageLocalOverrides: runtimeProcessEntrypoint("infra/package-local-overrides.worker"),
     directoryWatchHost: runtimeProcessEntrypoint("infra/directory-watch-host.worker"),
     directoryWatchParent: runtimeProcessEntrypoint("infra/directory-watch-parent.worker"),
-    workspaceQuiescenceAcquire: runtimeProcessEntrypoint(
+    workspaceQuiescenceAcquire: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-acquire.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRenew: runtimeProcessEntrypoint(
+    workspaceQuiescenceRenew: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-renew.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRelease: runtimeProcessEntrypoint(
+    workspaceQuiescenceRelease: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-release.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     packageActivationRecovery: runtimeProcessEntrypoint(
       "infra/package-update-activation-sealed",
       "package-update-activation-recovery",
+      ".mjs",
+    ),
+    managedHandoffPostgresBridge: runtimeProcessEntrypoint(
+      "infra/update-managed-service-handoff-postgres.worker",
+      "managed-handoff-postgres-bridge.worker",
       ".mjs",
     ),
     managedHandoffRuntime: runtimeProcessEntrypoint(
@@ -90,11 +107,14 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
     fileToolRead: runtimeProcessEntrypoint("agents/sessions/tools/read-file.worker"),
     attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
+    widgetScriptSyntax: runtimeProcessEntrypoint("canvas/widget-script-syntax.worker"),
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
+    execRealpath: runtimeProcessEntrypoint("infra/exec-realpath.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
+    secretFileRead: runtimeProcessEntrypoint("infra/secret-file-read.worker"),
     ttsPreferences: runtimeProcessEntrypoint("tts/tts-settings-write.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
@@ -138,6 +158,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     ),
     stateMigrationSnapshot: runtimeProcessEntrypoint("infra/state-migrations.snapshot.worker"),
     githubExec: runtimeProcessEntrypoint("agents/github-exec-launcher"),
+    shellSnapshotEnvironment: runtimeProcessEntrypoint("agents/shell-snapshot-env.worker"),
     sqliteReadOnly: runtimeProcessEntrypoint("infra/sqlite-readonly-location.worker"),
     sqliteSnapshotStaging: runtimeProcessEntrypoint("infra/sqlite-snapshot-staging.worker"),
     sqliteReadOnlyNativeResource: runtimeProcessEntrypoint("infra/sqlite-readonly-native-resource"),
@@ -152,6 +173,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "agents/worktrees/retired-worktree-cleanup.worker",
     ),
     updateNativeGate: runtimeProcessEntrypoint("cli/update-cli/update-command-native-gate.worker"),
+    updateStateSizes: runtimeProcessEntrypoint("infra/update-state-sizes.entry"),
     updateRepair: runtimeProcessEntrypoint("infra/update-repair.worker"),
     immutableBuild: runtimeProcessEntrypoint("infra/update-immutable-build.worker"),
     updateMigratedFinalize: runtimeProcessEntrypoint("infra/update-migrated-finalize.worker"),
@@ -169,6 +191,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "config/sessions/session-accessor.sqlite-archive.worker",
     ),
     sessionTranscript: runtimeProcessEntrypoint("config/sessions/session-transcript.worker"),
+    usageOverview: runtimeProcessEntrypoint("infra/session-cost-usage-overview-report.worker"),
     workerTranscriptCommit: runtimeProcessEntrypoint(
       "gateway/worker-environments/transcript-commit.worker",
     ),
@@ -231,6 +254,7 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("code-mode-quickjs", "src/executor", "src/code-mode.worker"),
     sourceWorkerName: "code-mode.worker",
   },
+  codexStdio: pluginRuntimeProcess("codex", "stdio-worker-entrypoint", "stdio.worker"),
   codexCatalogPage: pluginRuntimeProcess(
     "codex",
     "catalog-page-worker-entrypoint",
@@ -283,6 +307,14 @@ export const pluginRuntimeProcessManifest = {
   iMessageChatDb: {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
     sourceWorkerName: "chat-db.worker",
+  },
+  knowledgeRegistry: {
+    ...pluginRuntimeProcess("knowledge", "src/registry-client", "src/registry-worker"),
+    sourceWorkerName: "registry-worker",
+  },
+  knowledgeStorage: {
+    ...pluginRuntimeProcess("knowledge", "src/storage-client", "src/storage-worker"),
+    sourceWorkerName: "storage-worker",
   },
   mxcLauncher: {
     plugin: "mxc",
@@ -413,6 +445,14 @@ export const pluginRuntimeProcessManifest = {
     sourceWorkerName: "telegram-ingress-worker.runtime",
     distWorkerPath: "telegram-ingress-worker.runtime.js",
   },
+  telegramWidgetCheck: {
+    ...pluginRuntimeProcess(
+      "telegram",
+      "src/widgets/widget-check",
+      "src/widgets/widget-check.worker",
+    ),
+    sourceWorkerName: "widget-check.worker",
+  },
   onnxInference: pluginRuntimeProcess("onnx", "index", "src/inference.worker"),
   teamReportsStore: pluginRuntimeProcess("team-reports", "index", "src/store.worker"),
   teamReportsRun: pluginRuntimeProcess("team-reports", "index", "src/run.worker"),
@@ -434,6 +474,7 @@ export const runtimeProcessDeployManifest = {
     source: "src/worker/worker-deploy-client-credentials.ts",
     split: false,
   },
+  "file-log.worker": { source: "src/worker/worker-deploy-file-log.ts", split: false },
   "file-tool-planning.worker": {
     source: "src/worker/worker-deploy-file-tool-planning.ts",
     split: false,
@@ -474,6 +515,10 @@ export const runtimeProcessHelperManifest = {
 
 // Each sealed bootstrap selects only the sibling entries it owns.
 export const runtimeProcessSealedManifest = {
+  managedHandoff: {
+    ownerSource: "src/infra/update-managed-service-handoff-sealed.ts",
+    entries: [["postgresBridge", "managedHandoffPostgresBridge"]],
+  },
   worker: {
     ownerSource: "src/worker/worker-deploy-runtime.ts",
     entries: [
@@ -481,6 +526,7 @@ export const runtimeProcessSealedManifest = {
       ["codeModeNode", "code-mode-node.worker"],
       ["stateRead", "openclaw-state-read.worker"],
       ["workerNativeLifecycle", "worker-native-lifecycle.worker"],
+      ["fileLog", "file-log.worker"],
       ["fileToolPlanning", "file-tool-planning.worker"],
       ["fileToolRead", "file-tool-read.worker"],
       ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker"],
@@ -502,25 +548,33 @@ export const runtimeProcessSealedManifest = {
     ownerSource: string;
     entries: readonly (readonly [
       keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
-      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
+      (
+        | keyof typeof runtimeProcessDeployManifest
+        | keyof typeof runtimeProcessHelperManifest
+        | keyof ReturnType<typeof createRuntimeProcessEntrypoints>
+      ),
     ])[];
   }
 >;
 
-export function createSealedRuntimeProcessEntrypoints(
-  group: keyof typeof runtimeProcessSealedManifest,
-  currentModuleUrl: string,
-) {
-  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
-    name,
-    url: new URL(`./${entry}.mjs`, currentModuleUrl),
-  }));
+/** Source-only build workers are declared without entering the packaged runtime graph. */
+export const runtimeProcessToolingEntrypoints = {
+  kyselyTypes: "scripts/generate-kysely-types.mts",
+  npmPackageLock: "scripts/generate-npm-package-lock.worker.mts",
+  testSelectorSourceScan: "scripts/lib/test-selector-source-facts.worker.mts",
+} as const;
+
+export function resolveRuntimeToolingEntrypointUrl(
+  name: keyof typeof runtimeProcessToolingEntrypoints,
+): URL {
+  return new URL(`../../${runtimeProcessToolingEntrypoints[name]}`, import.meta.url);
 }
 
 // These programs belong to the selected external installation, not the running image.
 export const runtimeProcessExternalPackageEntrypoints = {
   sourceCli: "src/entry.ts",
   sourceUiBuild: "scripts/ui.js",
+  sourcePluginMetadata: "scripts/copy-bundled-plugin-metadata.mjs",
   sourceRunner: "scripts/run-node.mjs",
   cliLauncher: "openclaw.mjs",
   gatewayIndex: "dist/index.js",
@@ -529,6 +583,7 @@ export const runtimeProcessExternalPackageEntrypoints = {
   gatewayEntryModule: "dist/entry.mjs",
   preinstall: "scripts/preinstall-package-manager-warning.mjs",
   postinstall: "scripts/postinstall-bundled-plugins.mjs",
+  fsSafePrebuild: "scripts/lib/fs-safe-prebuild.mjs",
 } as const;
 
 /** Dependency programs retain their installed package topology and disk runtime. */
@@ -537,6 +592,13 @@ export const runtimeProcessDependencyEntrypoints = {
     specifier: "npm/bin/npm-cli.js",
     packageJsonSpecifier: "npm/package.json",
     relativePath: "bin/npm-cli.js",
+    execution: "external-disk",
+    kind: "standalone-package-manager",
+  },
+  npx: {
+    specifier: "npm/bin/npx-cli.js",
+    packageJsonSpecifier: "npm/package.json",
+    relativePath: "bin/npx-cli.js",
     execution: "external-disk",
     kind: "standalone-package-manager",
   },
@@ -560,9 +622,11 @@ export const runtimeProcessGatewayEntrypointNames = [
   "gatewayEntryModule",
 ] as const satisfies readonly (keyof typeof runtimeProcessExternalPackageEntrypoints)[];
 
-export const runtimeProcessStandaloneModules = [
+const runtimeProcessStandaloneModules = [
+  "../runtime-process-scripts.generated.mjs",
   "../openclaw.mjs",
   "../node-compile-cache.mjs",
+  "../runtime-process-bootstrap.generated.mjs",
   "tooling/managed-memory-launcher.js",
   "tooling/managed-windows-job-launcher.js",
 ] as const;
@@ -601,6 +665,58 @@ export function createStandaloneRuntimeProcessEntrypoints(
 
 // Script assets execute in their destination runtime rather than a worker thread.
 export const runtimeProcessScriptEntrypoints = {
+  bunSqliteLibraryProbe: {
+    buildSource: "src/infra/bun-sqlite-library-probe.entry.ts",
+    sourceModule: "src/infra/bun-sqlite-library-probe.generated.ts",
+    sourceBinding: "BUN_SQLITE_LIBRARY_PROBE_SOURCE",
+    kind: "file",
+    fileName: "bun-sqlite-library-probe.mjs",
+    materialize: true,
+  },
+  packageCliNodeProbe: {
+    buildSource: "scripts/lib/package-cli-node-probe.entry.mjs",
+    sourceModule: "scripts/lib/package-cli-node-probe.generated.mjs",
+    sourceBinding: "PACKAGE_CLI_NODE_PROBE_SOURCE",
+    kind: "file",
+    fileName: "package-cli-node-probe.mjs",
+    materialize: true,
+  },
+  fsSafeNpmCliPreload: {
+    buildSource: "scripts/lib/fs-safe-npm-cli-preload.entry.mjs",
+    sourceModule: "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    sourceBinding: "FS_SAFE_NPM_CLI_PRELOAD_DATA_URL",
+    kind: "data-url",
+  },
+  repositoryPublicationRestoreRemote: {
+    sourceModule: "src/gateway/github-repository-publication-restore.ts",
+    sourceBinding: "RESTORE_PUBLICATION_INDEX_JS",
+    kind: "source",
+  },
+  nodeRuntimeProbe: {
+    buildSource: "src/infra/node-runtime-probe.entry.ts",
+    sourceModule: "src/infra/node-runtime-probe.generated.mjs",
+    sourceBinding: "NODE_RUNTIME_PROBE_SOURCE",
+    kind: "file",
+    fileName: "node-runtime-probe.mjs",
+    materialize: true,
+  },
+  daemonRuntimeProbe: {
+    buildSource: "src/infra/daemon-runtime-probe.entry.ts",
+    sourceModule: "src/infra/daemon-runtime-probe.generated.mjs",
+    sourceBinding: "DAEMON_RUNTIME_PROBE_SOURCE",
+    kind: "file",
+    fileName: "daemon-runtime-probe.mjs",
+    materialize: true,
+    runtimeEntrypoint: "daemonRuntimeProbe",
+  },
+  updateStateSizes: {
+    sourceModule: "src/infra/update-state-sizes.generated.mjs",
+    sourceBinding: "UPDATE_STATE_SIZES_SOURCE",
+    kind: "file",
+    fileName: "update-state-sizes.mjs",
+    materialize: true,
+    runtimeEntrypoint: "updateStateSizes",
+  },
   updateNativeGate: {
     sourceModule: "src/cli/update-cli/update-command-native-gate.generated.ts",
     sourceBinding: "UPDATE_NATIVE_GATE_SOURCE",

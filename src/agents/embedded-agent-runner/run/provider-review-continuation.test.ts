@@ -16,6 +16,7 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { issueProviderReviewAcknowledgment } from "../../../sessions/provider-review.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 
 const store = vi.hoisted(() => ({
@@ -42,18 +43,15 @@ vi.mock("../../../config/sessions/provider-review-store.js", () => ({
     return store.entry;
   },
 }));
-const model = {
+const model = makeProviderModelFixture<"openai-chatgpt-responses">({
   id: "test-model",
   name: "Test",
   provider: "openai",
   api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128000,
   maxTokens: 1000,
-} satisfies Model<"openai-chatgpt-responses">;
+}) satisfies Model<"openai-chatgpt-responses">;
 const context: Context = {
   systemPrompt: "Keep existing permissions.",
   messages: [

@@ -22,6 +22,7 @@ import {
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
+  publicationPullRequest,
 } from "./chat-pull-requests.ts";
 
 let container: HTMLDivElement;
@@ -31,15 +32,7 @@ const text = (selector: string) => query(selector)?.textContent;
 const click = (selector: string) => container.querySelector<HTMLButtonElement>(selector)?.click();
 
 function paint(props: Partial<ChatPullRequestsProps>) {
-  paintChatPullRequests(
-    {
-      pullRequests: [],
-      status: "ready",
-      onDismiss: () => {},
-      ...props,
-    },
-    container,
-  );
+  paintChatPullRequests(props, container);
 }
 
 function published(requestId: string, url = pullRequest().url) {
@@ -77,9 +70,9 @@ function disposeContainer() {
 describe("ChatPullRequests", () => {
   beforeEach(setupContainer);
   afterEach(disposeContainer);
-  it("keeps unknown diff counts absent rather than inventing zeroes", () => {
+  it("keeps unavailable counts absent and PR rows outside live regions", () => {
     paint({ pullRequests: [pullRequest({ additions: undefined, deletions: 0 })] });
-    expect(query(".chat-pr__additions")).toBeNull();
+    expect(query(".chat-pr__additions, .chat-prs[aria-live]")).toBeNull();
     expect(text(".chat-pr__deletions")).toBe("−0");
   });
 
@@ -90,7 +83,7 @@ describe("ChatPullRequests", () => {
       onDismiss: () => {},
     });
     const warning = query(".chat-pr__warning");
-    expect(warning?.getAttribute("aria-label")).toContain("could not be refreshed");
+    expect(warning?.getAttribute("aria-label")).toContain("Couldn’t refresh GitHub status");
     expect(warning?.getAttribute("aria-label")).not.toContain("rate limit");
     expect(text(".chat-pr__number")).toBe("openclaw/openclaw#103469");
   });
@@ -131,7 +124,7 @@ describe("ChatPullRequests", () => {
       expect(text(".chat-pr__number")).toBe("openclaw/openclaw#103469");
       if (kind === "merged") {
         expect(query(".chat-pr")?.getAttribute("data-state")).toBe("merged");
-        expect(query("openclaw-chat-ci-automation")).not.toBeNull();
+        expect(query("openclaw-chat-ci-automation")).toBeNull();
         expect(query(".chat-pr__diff, openclaw-chat-ci-details, .chat-pr__warning")).toBeNull();
         expect(query(".chat-pr__publication-outcome, .chat-pr__create")).toBeNull();
         expect(container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.disabled).toBe(
@@ -182,7 +175,7 @@ describe("ChatPullRequests", () => {
       );
       expect(history?.closest("article")).toBeNull();
       expect(history?.querySelector("summary")?.textContent?.trim()).toBe(
-        "Publication attempt failed",
+        "Couldn’t publish. Try again.",
       );
       expect(history?.open).toBe(false);
       expect(history?.textContent).toContain("Check repository read access before retrying");
@@ -296,7 +289,7 @@ describe("ChatPullRequests", () => {
       "details.chat-pr__publication-status",
     );
     expect(status?.open).toBe(false);
-    expect(status?.querySelector("summary")?.textContent?.trim()).toBe("Publication failed");
+    expect(status?.querySelector("summary")?.textContent?.trim()).toBe("Couldn’t publish");
     expect(failure?.closest("article")?.getAttribute("data-state")).toBe("branch");
     expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent).toContain(
       "Choose a new publication",
@@ -339,6 +332,25 @@ describe("branch row dismissal", () => {
 
     paint({ ...props, branchDismissed: true });
     expect(query(".chat-pr")).toBeNull();
+  });
+});
+
+describe("publication pull request", () => {
+  it("folds only a confirmed published receipt into the listed PR it names", () => {
+    const listed = pullRequest({ owner: "OpenClaw", number: 42 });
+    const receipt = published("receipt", "https://github.com/openclaw/openclaw/pull/42");
+
+    expect(publicationPullRequest(publication({ result: receipt }), [listed])).toBe(listed);
+    expect(
+      publicationPullRequest(publication({ result: receipt }), [pullRequest({ number: 43 })]),
+    ).toBeUndefined();
+    // A failed verification keeps its own recovery pill.
+    expect(
+      publicationPullRequest(publication({ result: receipt, error: "Verify first" }), [listed]),
+    ).toBeUndefined();
+    expect(
+      publicationPullRequest(publication({ result: failedResult("Retry") }), [listed]),
+    ).toBeUndefined();
   });
 });
 
@@ -445,12 +457,13 @@ describe("CI job details", () => {
       onDismiss() {},
     };
     paintChatPullRequests(props, container);
-    const element = container.querySelector<ChatCiDetailsElement>("openclaw-chat-ci-details")!;
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-pr__checks")!;
     return {
       request,
       props,
-      element,
+      get element() {
+        return container.querySelector<ChatCiDetailsElement>("openclaw-chat-ci-details")!;
+      },
       disclosure,
       disconnect() {
         publish({ ...gateway.snapshot, phase: "offline" });
@@ -458,9 +471,11 @@ describe("CI job details", () => {
     };
   }
 
-  async function settle(element: ChatCiDetailsElement) {
+  async function settle(element?: ChatCiDetailsElement) {
     await vi.advanceTimersByTimeAsync(0);
-    await element.updateComplete;
+    await vi.dynamicImportSettled();
+    await element?.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
   }
 
   async function openDetails(h: ReturnType<typeof harness>) {
@@ -490,6 +505,7 @@ describe("CI job details", () => {
     const h = harness();
     await settle(h.element);
     expect(h.request).not.toHaveBeenCalled();
+    expect(h.element).toBeNull();
     h.disclosure.open = true;
     await settle(h.element);
     expect(h.request).toHaveBeenCalledOnce();

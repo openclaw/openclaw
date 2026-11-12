@@ -22,6 +22,7 @@ import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
@@ -43,15 +44,6 @@ type InFlightMemoryApply = {
 };
 
 const inFlightMemoryApplies = new WeakMap<object, Map<string, InFlightMemoryApply>>();
-
-function memoryApplyInflightMap(dedupe: object): Map<string, InFlightMemoryApply> {
-  let active = inFlightMemoryApplies.get(dedupe);
-  if (!active) {
-    active = new Map();
-    inFlightMemoryApplies.set(dedupe, active);
-  }
-  return active;
-}
 
 function isCachedMemoryApply(value: unknown): value is CachedMemoryApply {
   if (!value || typeof value !== "object") {
@@ -234,7 +226,7 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       const previous =
         cached && isCachedMemoryApply(cached.payload)
           ? cached.payload
-          : memoryApplyInflightMap(context.dedupe).get(dedupeKey);
+          : getOrCreateWeakOwnerMap(inFlightMemoryApplies, context.dedupe).get(dedupeKey);
       if (previous) {
         if (previous.requestFingerprint !== requestFingerprint) {
           respond(
@@ -248,7 +240,7 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         respondMemoryApply(outcome, respond, true);
         return;
       }
-      const inFlightMap = memoryApplyInflightMap(context.dedupe);
+      const inFlightMap = getOrCreateWeakOwnerMap(inFlightMemoryApplies, context.dedupe);
       const completion = createDeferredCore<MemoryApplyOutcome>();
       // Reserve before acquisition. Once apply completes, even an unreadable result is terminal.
       inFlightMap.set(dedupeKey, { requestFingerprint, completion: completion.promise });

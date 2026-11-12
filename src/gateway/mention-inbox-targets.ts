@@ -39,14 +39,22 @@ export function createMentionTargetCache(params: {
     }
   }
 
-  async function prepareTarget(
+  function prepareTarget(
     sessionKey: string,
     agentId?: string,
     key = mentionTargetKey(sessionKey, agentId),
-  ): Promise<void> {
+  ): Promise<void> | void {
     if (readTarget(key)) {
       return;
     }
+    return prepareMissingTarget(sessionKey, agentId, key);
+  }
+
+  async function prepareMissingTarget(
+    sessionKey: string,
+    agentId: string | undefined,
+    key: string,
+  ) {
     removeTarget(targetAliases.get(key) ?? key);
     const cfg = params.getRuntimeConfig();
     const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId });
@@ -77,10 +85,15 @@ export function createMentionTargetCache(params: {
     targetAliases.set(key, canonicalKey);
   }
 
-  async function prepareTargets(): Promise<void> {
-    for (const item of params.readItems()) {
+  async function prepareTargets(
+    items: Iterable<StoredMention> = params.readItems(),
+  ): Promise<void> {
+    for (const item of items) {
       const { sessionKey, agentId } = item.message.content;
-      await prepareTarget(sessionKey, agentId, item.targetKey);
+      const pending = prepareTarget(sessionKey, agentId, item.targetKey);
+      if (pending) {
+        await pending;
+      }
     }
   }
 

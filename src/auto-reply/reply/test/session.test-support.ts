@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expect } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../../config/sessions.js";
 import {
   appendTranscriptEvent,
@@ -15,6 +16,16 @@ import { initSessionState as initSessionStateRaw } from "../session.js";
 
 type ProjectedSessionEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 type SessionFixtureScope = { storePath: string; sessionKey: string; sessionId: string };
+
+export function expectEntryFields(
+  entry: SessionEntry,
+  expected: Record<string, unknown>,
+  label?: string,
+): void {
+  for (const [key, value] of Object.entries(expected)) {
+    expect((entry as unknown as Record<string, unknown>)[key], label ?? key).toEqual(value);
+  }
+}
 
 function projectSessionEntry(entry: SessionEntry): ProjectedSessionEntry {
   return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };
@@ -54,18 +65,10 @@ export async function writeTerminalTranscriptSessionStore(
     status?: SessionEntry["status"];
     updatedAt: number;
     endedAt: number;
-    transcriptMutationOrder: "after-registry" | "before-registry";
+    transcriptMutationOrder: "after-registry";
   },
 ): Promise<void> {
-  const { storePath, sessionKey, transcriptMutationOrder, ...entry } = params;
-  const appendTranscript = () =>
-    appendTranscriptEvent(
-      { agentId: "main", sessionId: entry.sessionId, sessionKey, storePath },
-      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
-    );
-  if (transcriptMutationOrder === "before-registry") {
-    await appendTranscript();
-  }
+  const { storePath, sessionKey, transcriptMutationOrder: _order, ...entry } = params;
   await writeSessionStore(storePath, {
     [sessionKey]: {
       ...entry,
@@ -75,9 +78,10 @@ export async function writeTerminalTranscriptSessionStore(
       status: entry.status ?? "done",
     },
   });
-  if (transcriptMutationOrder === "after-registry") {
-    await appendTranscript();
-  }
+  await appendTranscriptEvent(
+    { agentId: "main", sessionId: entry.sessionId, sessionKey, storePath },
+    { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+  );
 }
 
 export function readSessionStore(storePath: string): Record<string, ProjectedSessionEntry> {
@@ -89,9 +93,7 @@ export function readSessionStore(storePath: string): Record<string, ProjectedSes
     get(target, prop, receiver) {
       if (typeof prop === "string" && !(prop in target)) {
         const entry = loadSessionEntry({ storePath, sessionKey: prop, readConsistency: "latest" });
-        if (entry) {
-          target[prop] = projectSessionEntry(entry);
-        }
+        return entry ? (target[prop] = projectSessionEntry(entry)) : undefined;
       }
       return Reflect.get(target, prop, receiver);
     },
@@ -104,23 +106,14 @@ export async function runExplicitResetCases(
   const { storePath, sessionKey, sessionId, entry } = params;
   const results = [];
   for (const name of ["new", "reset"] as const) {
-    const body = `/${name}`;
     await writeSessionStore(storePath, {
       [sessionKey]: { sessionId, updatedAt: Date.now(), ...entry },
     });
     const result = await initSessionState({
-      ctx: {
-        Body: body,
-        From: "reset-user",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      },
+      ctx: { Body: `/${name}`, SessionKey: sessionKey, Provider: "telegram" },
       cfg: { session: { store: storePath } },
     });
-    results.push({ name, body, result, stored: readSessionStore(storePath) });
+    results.push({ name, result, stored: readSessionStore(storePath) });
   }
   return results;
 }

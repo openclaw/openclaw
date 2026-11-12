@@ -6,18 +6,35 @@ import { WebSocket, WebSocketServer } from "ws";
 
 type Request = { id: string; method: string; params: Record<string, unknown> };
 
-export async function createSdkWebSocketServer(port = 0) {
+export async function startSdkWebSocketServer(port = 0) {
   const server = new WebSocketServer({ host: "127.0.0.1", port });
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Expected the SDK loopback server address");
   }
+  return {
+    server,
+    url: `ws://127.0.0.1:${address.port}`,
+    async close(this: void) {
+      for (const socket of server.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
+
+export function replySdkRequest(socket: WebSocket, id: string, payload: unknown, ok = true) {
+  socket.send(JSON.stringify({ type: "res", id, ok, ...(ok ? { payload } : { error: payload }) }));
+}
+
+export async function createSdkWebSocketServer(port = 0) {
+  const { server, url, close } = await startSdkWebSocketServer(port);
   let requestHandler: ((socket: WebSocket, request: Request) => void) | undefined;
   const sequences = new WeakMap<WebSocket, number>();
-  const reply = (socket: WebSocket, id: string, payload: unknown) => {
-    socket.send(JSON.stringify({ type: "res", id, ok: true, payload }));
-  };
   server.on("connection", (socket) => {
     socket.send(
       JSON.stringify({
@@ -32,7 +49,7 @@ export async function createSdkWebSocketServer(port = 0) {
         throw new Error("Expected an SDK request frame");
       }
       if (request.method === "connect") {
-        reply(socket, request.id, {
+        replySdkRequest(socket, request.id, {
           type: "hello-ok",
           protocol: PROTOCOL_VERSION,
           server: { version: "sdk-live", connId: "sdk-live-connection" },
@@ -56,8 +73,7 @@ export async function createSdkWebSocketServer(port = 0) {
     });
   });
   return {
-    url: `ws://127.0.0.1:${address.port}`,
-    reply,
+    url,
     setRequestHandler(handler?: typeof requestHandler) {
       requestHandler = handler;
     },
@@ -75,13 +91,6 @@ export async function createSdkWebSocketServer(port = 0) {
       sequences.set(socket, seq);
       socket.send(JSON.stringify({ type: "event", event, payload, seq }));
     },
-    async close() {
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    close,
   };
 }

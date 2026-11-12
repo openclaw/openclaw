@@ -40,6 +40,7 @@ import {
 } from "../registry/subagent-registry-read.js";
 import type { PendingFinalDeliveryPayload } from "../registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { getSubagentTerminalReplySummary } from "../registry/subagent-run-payload-facts.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
@@ -220,7 +221,7 @@ async function runSubagentAnnounceFlowBound(
       if (!settled && isSessionRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
         // Keep delete cleanup retryable until the active child can be removed.
-        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
+        if (outcome.status !== "timeout" || params.cleanup === "delete") {
           return "retryable";
         }
       }
@@ -259,20 +260,26 @@ async function runSubagentAnnounceFlowBound(
       }
 
       const childSessionCurrent = await prepareChildSessionEffects();
+      const assertChildSessionCurrent = () => {
+        if (!childSessionEffectsAllowed()) {
+          throw new Error("Subagent child-session effects are no longer current.");
+        }
+      };
       const pendingChildDescendantRuns =
         !childSessionCurrent || !childSessionEffectsAllowed()
           ? 0
-          : Math.max(
-              0,
-              await countPendingDescendantRuns(params.childSessionKey, () => {
-                if (!childSessionEffectsAllowed()) {
-                  throw new Error("Subagent child-session effects are no longer current.");
-                }
-              }),
-            );
+          : await countPendingDescendantRuns(params.childSessionKey, assertChildSessionCurrent);
       if (pendingChildDescendantRuns > 0) {
+        // Suspended descendants keep the child session for recovery but cannot hold this completion.
         shouldDeleteChildSession = false;
-        return "retryable";
+        const unsettledDescendantRuns = await countPendingDescendantRuns(
+          params.childSessionKey,
+          assertChildSessionCurrent,
+          { excludeSuspendedDelivery: true },
+        );
+        if (unsettledDescendantRuns > 0) {
+          return "retryable";
+        }
       }
 
       if (
@@ -373,7 +380,10 @@ async function runSubagentAnnounceFlowBound(
         reply = timeoutProgress;
       }
     }
-    if (!params.terminalReply && (!ownResult || !childRun?.completion?.terminalReply)) {
+    if (
+      !params.terminalReply &&
+      (!ownResult || !childRun || !getSubagentTerminalReplySummary(childRun))
+    ) {
       if (
         !legacySilent &&
         !reply &&
@@ -603,7 +613,7 @@ async function runSubagentAnnounceFlowBound(
     if (hasSqliteWorkerOutcomeUnknown(err)) {
       throw err;
     }
-    defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
+    defaultRuntime.error(`Subagent announce failed: ${String(err)}`);
     if (!deliveryResultReported) {
       await reportDeliveryResult(
         err instanceof SourceOwnerChangedError

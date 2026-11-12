@@ -1,8 +1,8 @@
-import { readFile } from "node:fs/promises";
 import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
+import { readControlUiE2eDownload } from "../test-helpers/control-ui-e2e-download.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import {
   meetingEntry,
@@ -63,12 +63,64 @@ async function expectDownload(page: Page, format: "Markdown" | "JSONL", contents
   await click(control(page, "article", "Transcript reader"), `Download ${format}`);
   const download = await event;
   expect(download.suggestedFilename()).toBe(`design-review.${extension}`);
-  const file = await download.path();
-  expect(file).not.toBeNull();
-  expect(await readFile(file!, "utf8")).toBe(contents);
+  expect((await readControlUiE2eDownload(download)).toString("utf8")).toBe(contents);
 }
 
 suite.define(() => {
+  it("aligns the library with its header without widening the selected reader", async () => {
+    await withPage(async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: methods,
+        methodResponses: {
+          "transcripts.list": { sessions: [meetingEntry], nextCursor: null },
+          "transcripts.get": transcriptPage(meetingPage.utterances),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}meetings`);
+      const library = page.locator(".transcripts-library");
+      await library.getByRole("link", { name: /Design review/ }).waitFor();
+      const expectColumns = () =>
+        expect
+          .poll(() =>
+            page.locator(".transcripts-workspace").evaluate((workspace) => {
+              const header = workspace.querySelector(".content-header")!;
+              const bounds = header.getBoundingClientRect();
+              const style = getComputedStyle(header);
+              const left = bounds.left + Number.parseFloat(style.paddingLeft);
+              const right = bounds.right - Number.parseFloat(style.paddingRight);
+              return [".transcripts-filters", ".meetings-timeline"].flatMap((selector) => {
+                const box = workspace.querySelector(selector)!.getBoundingClientRect();
+                return [Math.round(box.left - left), Math.round(box.right - right)];
+              });
+            }),
+          )
+          .toEqual([0, 0, 0, 0]);
+      for (const width of [1400, 820, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await expectColumns();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+          width,
+        );
+      }
+      await page.setViewportSize({ width: 1400, height: 1000 });
+      await library.locator("summary").click();
+      await control(library, "searchbox", "Provider").waitFor();
+      await expectColumns();
+      await library.getByRole("link", { name: /Design review/ }).click();
+      const reader = control(page, "article", "Transcript reader");
+      await text(reader, "Reader layout discussed.").waitFor();
+      expect((await reader.boundingBox())!.width).toBeLessThanOrEqual(820);
+      expect((await library.boundingBox())!.width).toBeLessThanOrEqual(360);
+      await control(reader, "link", "Back to library").click();
+      await gateway.setMethodResponse("transcripts.list", { sessions: [], nextCursor: null });
+      await control(library, "searchbox", "Search meetings").fill("no-match");
+      await click(library, "Filter");
+      await expectParams(gateway, "transcripts.list", { query: "no-match" });
+      await library.getByRole("heading", { name: "No meetings match your search." }).waitFor();
+      await click(library, "Clear filters");
+      await library.getByRole("heading", { name: "No meetings yet." }).waitFor();
+    });
+  });
   it("renders provider locators after native selection and saves a new capture source", async () => {
     await withPage(async ({ page }) => {
       const config = { transcripts: { enabled: false, autoStart: [] } };
@@ -183,7 +235,7 @@ suite.define(() => {
         __mockError: { code: "INVALID_REQUEST", message: "Transcript export exceeds 4 MiB" },
       });
       await click(reader, "Download JSONL");
-      await reader.getByRole("alert").filter({ hasText: "Download failed" }).waitFor();
+      await reader.getByRole("alert").filter({ hasText: "Couldn’t download" }).waitFor();
       await control(page, "link", "Meeting capture").click();
       const capture = page.locator("openclaw-meeting-capture-settings");
       await text(capture, "Not active").waitFor();
@@ -229,7 +281,8 @@ suite.define(() => {
         await gateway.setMethodResponse("transcripts.list", {
           __mockError: { code: "FORBIDDEN", message: "Shared archive restricted" },
         });
-        await click(page, "Refresh");
+        await click(page, "More actions");
+        await control(page, "menuitem", "Refresh").click();
         await control(page, "heading", "Transcript access is restricted").waitFor();
         expect(await page.locator(".transcripts-list__entry").count()).toBe(0);
       },

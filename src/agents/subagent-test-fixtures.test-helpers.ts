@@ -2,6 +2,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { SessionOrigin } from "../config/sessions/types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
@@ -33,26 +34,37 @@ export function mockGatewayMethods<TRequest extends GatewayRequest, TResult>(
   responses: Record<string, GatewayResponse<TRequest, TResult>>,
   fallback = {} as TResult,
 ): void {
-  mock.mockImplementation(
-    vi.fn(async (request: TRequest) => {
-      const response =
-        request.method === undefined ? fallback : (responses[request.method] ?? fallback);
-      if (response instanceof Error) {
-        throw response;
-      }
-      if (typeof response === "function") {
-        const handler = response as (request: TRequest) => TResult | Promise<TResult>;
-        return await handler(request);
-      }
-      return response;
-    }),
-  );
+  mock.mockImplementation(async (request) => {
+    const response =
+      request.method === undefined ? fallback : (responses[request.method] ?? fallback);
+    if (response instanceof Error) {
+      throw response;
+    }
+    if (typeof response === "function") {
+      const handler = response as (request: TRequest) => TResult | Promise<TResult>;
+      return await handler(request);
+    }
+    return response;
+  });
 }
 
 export type MockSubagentRegistryRows = (
   rows: Map<string, SubagentRunRecord>,
   runIds: readonly string[],
 ) => void | Promise<void>;
+
+/** Policy fixtures supply commit facts; native delivery is covered by real-worker tests. */
+export function acknowledgeMockSubagentRegistryWrite(
+  createAdmission: SqliteWorkerAdmissionFactory | undefined,
+  writeId: string,
+): void {
+  if (!createAdmission) {
+    throw new Error("Registry policy fixture requires a native receipt consumer");
+  }
+  const { admission } = createAdmission({ settled: Promise.resolve({ kind: "completed" }) });
+  Object.defineProperty(admission, "committed", { value: { facts: { writeId, notices: [] } } });
+  admission.finish();
+}
 
 /** Policy fixtures retain the real row owner and stub only the worker transport ACK. */
 export async function configureMockSubagentRegistryPersistence(methods: {
@@ -73,21 +85,18 @@ export async function configureMockSubagentRegistryPersistence(methods: {
             return original(context, (scope) => scope.execute(command), options);
           }
           const write = command.input;
-          const values = write.values.map((row) => {
-            if (typeof row.payload_json !== "string") {
-              throw new Error("Registry fixture write is missing its payload");
-            }
-            return {
-              ...row,
-              payload_json: row.payload_json,
-              controller_session_key: row.controller_session_key ?? null,
-              controller_store_path: row.controller_store_path ?? null,
-              requester_store_path: row.requester_store_path ?? null,
-            };
-          });
           const rows = new Map(
-            values.map((row) => {
-              const entry = rowToSubagentRunRecord(row);
+            write.values.map((row) => {
+              if (typeof row.payload_json !== "string") {
+                throw new Error("Registry fixture write is missing its payload");
+              }
+              const entry = rowToSubagentRunRecord({
+                ...row,
+                payload_json: row.payload_json,
+                controller_session_key: row.controller_session_key ?? null,
+                controller_store_path: row.controller_store_path ?? null,
+                requester_store_path: row.requester_store_path ?? null,
+              });
               if (!entry) {
                 throw new Error("Registry fixture write has an invalid payload");
               }
@@ -96,7 +105,7 @@ export async function configureMockSubagentRegistryPersistence(methods: {
           );
           await methods.persistRegistryRows(rows, [...rows.keys(), ...write.deleteRunIds]);
           options?.assertCurrent?.();
-          return { writeId: write.writeId, notices: [] };
+          acknowledgeMockSubagentRegistryWrite(options?.createAdmission, write.writeId);
         }),
       });
     });

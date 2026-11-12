@@ -1,4 +1,7 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
+import {
+  markModelPayloadObserver,
+  modelRequestBodyState,
+} from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -38,7 +41,10 @@ import {
   formatPropagatedDiagnosticTraceparent,
   hasDiagnosticTracePropagationConsumer,
 } from "../../../infra/diagnostic-trace-propagation.js";
-import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  modelUsageTimelineAttributes,
+} from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
 import type { ModelRequestHeaders } from "../../../llm/types.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
@@ -199,7 +205,7 @@ export function createModelLifecycle(params: {
 }) {
   const callId = params.ctx.nextCallId();
   const runContext = getAgentRunContext(params.ctx.runId);
-  const transportContext = {
+  const transportContext: Parameters<typeof withModelTransportContext>[0] = {
     sessionKey: params.ctx.sessionKey,
     runId: params.ctx.runId,
     requestId: callId,
@@ -258,6 +264,13 @@ export function createModelLifecycle(params: {
       timestamp: new Date(startedAt).toISOString(),
       runId: eventBase.runId,
       spanId: callId,
+      provider: eventBase.provider,
+      attributes: {
+        model: eventBase.model,
+        observationUnit: "logical-call",
+        ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+        traceId: trace.traceId,
+      },
     },
     { config: params.ctx.config },
   );
@@ -267,7 +280,8 @@ export function createModelLifecycle(params: {
   const originalOnPayload = options?.onPayload;
   const originalOnResponse = options?.onResponse;
   const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
-    if (modelRequestBodyState(requestOptions).enabled) {
+    const requestBody = modelRequestBodyState(requestOptions);
+    if (requestBody.enabled || requestBody.reportsBytes) {
       return originalOnPayload?.(payload, model);
     }
     if (!originalOnPayload) {
@@ -305,7 +319,7 @@ export function createModelLifecycle(params: {
     ...options,
     requestId: callId,
     ...((options?.headers || traceparent) && { headers }),
-    onPayload,
+    onPayload: markModelPayloadObserver(onPayload, originalOnPayload),
     onResponse,
   };
   modelRequestBodyState(requestOptions).onBytes = (bytes) => {
@@ -435,6 +449,11 @@ export function createModelLifecycle(params: {
         ok: failure === undefined,
         ...(responseStatus !== undefined ? { status: responseStatus } : {}),
         attributes: {
+          observationUnit: "logical-call",
+          ...modelUsageTimelineAttributes(observer.terminalFields().usage),
+          ...(observer.state.responseModel ? { responseModel: observer.state.responseModel } : {}),
+          ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+          traceId: trace.traceId,
           ...(model ? { model } : {}),
           ...(api ? { api } : {}),
           ...(transport ? { transport } : {}),
@@ -457,7 +476,7 @@ export function createModelLifecycle(params: {
         durationMs,
         ...providerTimingFields,
         ...sizeTimingFields,
-        ...observer.usageField(),
+        ...observer.terminalFields(),
       },
       ownerGeneration,
       modelContentPrivateData(observer.completedContent()),
@@ -476,6 +495,7 @@ export function createModelLifecycle(params: {
   const notifyFinished = () => {
     if (!finishedNotified) {
       finishedNotified = true;
+      transportContext.onRateLimitWait = undefined;
       clearWait();
       signal?.removeEventListener("abort", clearWait);
       params.ctx.onFinished?.(callId);

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { sessionRow } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
   newChatPage,
@@ -26,13 +27,6 @@ type FrameSample = {
   minOpacity: number;
   sessionKey: string;
 };
-const sessionRow = (key: string, label: string, updatedAt: number, extra = {}) => ({
-  key,
-  kind: "direct",
-  label,
-  updatedAt,
-  ...extra,
-});
 async function expectVisiblePair(page: Page, userIndex: number) {
   await expect
     .poll(async () => {
@@ -103,6 +97,7 @@ suite.define(() => {
       { key: deletedSession, kind: "direct", label: "Session C", updatedAt: 1 },
     ]);
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       methodResponses: {
         "chat.history": historyCases,
         "chat.startup": historyCases,
@@ -189,6 +184,7 @@ suite.define(() => {
       timestamp: baseTs + index,
     }));
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       // A stays fixed while B's shared history/startup snapshot grows below.
       historyMessages: currentSessionMessages,
       sessionTranscripts: {
@@ -291,6 +287,7 @@ suite.define(() => {
       {
         hasMore: true,
         nextOffset: 100,
+        olderCursor: "older-session-b",
         thinkingLevel: null,
         totalMessages: 140,
       },
@@ -301,7 +298,7 @@ suite.define(() => {
         "chat.history": {
           cases: [
             {
-              match: { offset: 100, sessionKey: "agent:main:session-b" },
+              match: { cursor: "older-session-b", sessionKey: "agent:main:session-b" },
               response: {
                 hasMore: false,
                 messages: olderMessages,

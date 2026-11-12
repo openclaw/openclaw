@@ -30,18 +30,23 @@ function digestReferences(dockerfile: string): string[] {
   }
   const fromLines = lines.filter((line) => line.startsWith("FROM "));
   expect(fromLines.length, "Dockerfile should define a FROM line").toBeGreaterThan(0);
-  // Check the base and every ARG-backed stage; later literal stages may be scratch or aliases.
-  return fromLines
-    .filter((line, index) => index === 0 || /FROM\s+\$(?:\{[A-Z0-9_]+\}|[A-Z0-9_]+)/.test(line))
-    .map((line) => {
-      const image = line.match(/^FROM\s+(\S+?)(?:\s+AS\s+\S+)?$/)?.[1] ?? line;
-      const arg = image.match(/^\$(?:\{([A-Z0-9_]+)\}|([A-Z0-9_]+))$/);
-      return arg ? (argDefaults.get(arg[1] ?? arg[2] ?? "") ?? image) : image;
-    });
+  const stages = new Set<string>();
+  return fromLines.flatMap((line) => {
+    const match = line.match(/^FROM\s+(\S+?)(?:\s+AS\s+(\S+))?$/);
+    const image = match?.[1] ?? line;
+    const arg = image.match(/^\$(?:\{([A-Z0-9_]+)\}|([A-Z0-9_]+))$/);
+    const resolved = arg ? (argDefaults.get(arg[1] ?? arg[2] ?? "") ?? image) : image;
+    // An ARG can select an internal stage, but only one already declared.
+    const external = resolved !== "scratch" && !stages.has(resolved);
+    if (match?.[2]) {
+      stages.add(match[2]);
+    }
+    return external ? [resolved] : [];
+  });
 }
 
 describe("docker base image pinning", () => {
-  it("pins the base and every ARG-backed FROM stage to immutable sha256 digests", async () => {
+  it("pins every external FROM image to an immutable sha256 digest", async () => {
     for (const dockerfilePath of DIGEST_PINNED_DOCKERFILES) {
       const dockerfile = await readFile(resolve(repoRoot, dockerfilePath), "utf8");
       for (const imageRef of digestReferences(dockerfile)) {
@@ -50,6 +55,28 @@ describe("docker base image pinning", () => {
         );
       }
     }
+  });
+
+  it("excludes only scratch and previously declared stages from digest checks", () => {
+    const pinned = "node:24@sha256:" + "a".repeat(64);
+    expect(
+      digestReferences(
+        [
+          "ARG BASE=" + pinned,
+          "ARG SELECTED=runtime",
+          "ARG EXTERNAL=node:latest",
+          "FROM ${BASE} AS build",
+          "FROM build AS runtime",
+          "FROM ${SELECTED} AS selected",
+          "FROM ${EXTERNAL} AS external",
+          "FROM external AS reused",
+          "FROM busybox:latest",
+          "FROM future",
+          "FROM build AS future",
+          "FROM scratch",
+        ].join("\n"),
+      ),
+    ).toEqual([pinned, "node:latest", "busybox:latest", "future"]);
   });
 
   it("keeps Dependabot Docker updates enabled for root Dockerfiles", async () => {

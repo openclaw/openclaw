@@ -3,10 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  buildConfiguredModelCatalog,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { buildThinkingCatalog } from "../agents/model-thinking-default-core.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -323,14 +321,16 @@ export function resolveCommandArgChoices(
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
+    const provider = params.provider ?? defaults.provider ?? DEFAULT_PROVIDER;
+    const model = params.model ?? defaults.model ?? DEFAULT_MODEL;
     choices = choices({
       cfg,
       command: params.command,
       arg,
-      provider: params.provider ?? defaults.provider ?? DEFAULT_PROVIDER,
-      model: params.model ?? defaults.model ?? DEFAULT_MODEL,
+      provider,
+      model,
       agentRuntime: params.agentRuntime,
-      catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
+      catalog: params.catalog ?? (cfg ? buildThinkingCatalog({ cfg, provider, model }) : undefined),
     });
   }
   return choices.map((choice) =>
@@ -422,7 +422,11 @@ function resolveCommandArgMenuChoices(params: CommandArgMenuParams): ResolvedCom
     return null;
   }
   const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
-  const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
+  // Without an explicit model, resolveCommandArgChoices resolves the default first and builds
+  // the catalog for it.
+  const resolvedCatalog =
+    catalog ??
+    (cfg && provider && model ? buildThinkingCatalog({ cfg, provider, model }) : undefined);
   const resolveChoices = (arg: CommandArgDefinition) =>
     resolveCommandArgChoices({
       command,

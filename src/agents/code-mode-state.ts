@@ -58,8 +58,6 @@ type CodeModeRunState = {
   continuation: CodeModeExecutorContinuation;
   pending: PendingBridgeState[];
   settlementMode: CodeModeSettlementMode;
-  // True only when every future bridge call is enforced read-only before execution.
-  replaySafe: boolean;
   output: CodeModeOutputState;
   expiresAt: number;
   agentWaitRetainUntil?: number;
@@ -296,13 +294,13 @@ function scheduleActiveRunExpiry(): void {
         removeExpiredRuns();
         scheduleActiveRunExpiry();
       },
-      Math.max(1, nextExpiresAt - Date.now()),
+      Math.max(1, nextExpiresAt - performance.now()),
     ),
   );
-  activeRunExpiryTimer.unref?.();
+  activeRunExpiryTimer.unref();
 }
 
-export function removeExpiredRuns(now = Date.now()): void {
+export function removeExpiredRuns(now = Math.floor(performance.now())): void {
   for (const [runId, state] of activeRuns) {
     if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
       // Parked collectors extend idle TTL, bounded so a lost terminal event cannot pin all slots.
@@ -453,7 +451,9 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
     removeExpiredRuns();
     if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
-      throw new ToolInputError("too many suspended code mode runs.");
+      throw new ToolInputError(
+        "too many suspended code mode runs. Resume an existing run with wait, or use exec with awaitResults:true to collect an existing tool result without suspending. Do not repeat already-dispatched work.",
+      );
     }
   } else {
     const state = activeRuns.get(ownedRunId);
@@ -474,50 +474,6 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
     released = true;
     activeRunReservations = Math.max(0, activeRunReservations - 1);
   };
-}
-
-export function pendingBridgeRequestsReplaySafe(
-  pending: readonly PendingBridgeRequest[],
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  return pending.every((request) =>
-    isPendingBridgeRequestReplaySafe(request, runtime, catalogProjection),
-  );
-}
-
-function isPendingBridgeRequestReplaySafe(
-  request: PendingBridgeRequest,
-  runtime: ToolSearchRuntime,
-  catalogProjection: CodeModeCatalogProjection,
-): boolean {
-  if (
-    request.method === "search" ||
-    request.method === "describe" ||
-    request.method === "yield" ||
-    request.method === "agentSpawn" ||
-    request.method === "agentWait" ||
-    request.method === "skillsList" ||
-    request.method === "skillsSearch" ||
-    request.method === "skillsRead" ||
-    request.method === "sleep"
-  ) {
-    return true;
-  }
-  if (request.method === "nodes") {
-    return request.args[0] === "list" || request.args[0] === "get";
-  }
-  // Saved references are transient, and deletion cannot be replayed safely.
-  // Result operations intentionally stay outside restart-safe execution.
-  if (request.method !== "callValue") {
-    return false;
-  }
-  const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
-  if (typeof callableName !== "string") {
-    return false;
-  }
-  const binding = catalogProjection.byCallableName.get(callableName);
-  return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
 export function createPendingBridgeStates(
@@ -590,7 +546,7 @@ export function createPendingBridgeStates(
         const active = activeRuns.get(params.activeRunId);
         if (active?.pending.includes(state)) {
           const renewed = resolveExpiresAtMsFromDurationSeconds(active.config.snapshotTtlSeconds, {
-            nowMs: Date.now(),
+            nowMs: Math.floor(performance.now()),
           });
           if (renewed !== undefined) {
             active.expiresAt = renewed;
@@ -616,7 +572,7 @@ export function storeSuspendedRun(
     cancelPendingBridgeStates(params.pending);
     return codeModeAbortedResult(params);
   }
-  const now = Date.now();
+  const now = Math.floor(performance.now());
   const expiresAt = resolveExpiresAtMsFromDurationSeconds(params.config.snapshotTtlSeconds, {
     nowMs: now,
   });
@@ -639,7 +595,6 @@ export function storeSuspendedRun(
       runId,
       reason: codeModeWaitingReason(params.pending),
       pendingToolCalls: pendingToolCalls(params.pending),
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     {},
@@ -658,7 +613,6 @@ export function storeSuspendedRun(
 export function codeModeAbortedResult(params: {
   bridgeDispatch: CodeModeBridgeDispatchState;
   output: CodeModeOutputState;
-  replaySafe: boolean;
   runtime: ToolSearchRuntime;
 }) {
   return params.output.takeResult(
@@ -667,7 +621,6 @@ export function codeModeAbortedResult(params: {
       code: "aborted" as const,
       failurePhase: params.bridgeDispatch.started ? ("bridge" as const) : ("host" as const),
       bridgeDispatchStarted: params.bridgeDispatch.started,
-      replaySafe: params.replaySafe,
       telemetry: telemetry(params.runtime),
     },
     { error: "code mode execution aborted" },

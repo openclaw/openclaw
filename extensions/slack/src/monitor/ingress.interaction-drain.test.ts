@@ -29,14 +29,14 @@ function createReceiver() {
   const ack = vi.fn(async () => {});
   const deliver = async (body: unknown) => {
     for (const receive of receiver.client.listeners("slack_event")) {
-      await receive.call(receiver.client, { body, ack });
+      await Promise.resolve(receive.call(receiver.client, { body, ack }));
     }
   };
   return { app, ingress, ack, deliver };
 }
 
 it.each(["button", "message shortcut"] as const)(
-  "drains an acknowledged %s before suspension and refuses another delivery",
+  "tracks an acknowledged %s across freeze refusal and prepared-drain admission",
   async (kind) => {
     const { prepareGatewaySuspend, getGatewaySuspendStatus, resumeGatewaySuspend } =
       await loadGatewaySuspendCoordinatorForTest();
@@ -57,9 +57,14 @@ it.each(["button", "message shortcut"] as const)(
     });
     const held = createDeferred<void>();
     const reached = createDeferred<void>();
+    // A wrongly admitted second interaction must finish so the ACK assertion can fail.
+    let firstInteraction = true;
     ctx.readRuntimeContext = async () => {
-      reached.resolve();
-      await held.promise;
+      if (firstInteraction) {
+        firstInteraction = false;
+        reached.resolve();
+        await held.promise;
+      }
       return ctx;
     };
     registerSlackInteractionEvents({ ctx });
@@ -86,19 +91,31 @@ it.each(["button", "message shortcut"] as const)(
         }),
       ]);
       expect(ack).toHaveBeenCalledTimes(1);
-      const prepare = () =>
+      const prepare = (drain: boolean) =>
         prepareGatewaySuspend({
           requestId: "interaction-test",
-          drain: true,
+          drain,
           pauseScheduling() {},
           resumeScheduling() {},
         });
-      const result = prepare();
+      const freeze = prepare(false);
+      if (freeze.status === "ready" || freeze.status === "draining") {
+        suspensionId = freeze.suspensionId;
+      }
+      expect(freeze).toMatchObject({
+        status: "busy",
+        reason: "active-work",
+        activeCount: 1,
+        blockers: [{ kind: "root-request", count: 1 }],
+      });
+      // Drain readiness waits for writes, while accepted listeners remain active
+      // until handoff. Its prepared fence still refuses new direct deliveries.
+      const result = prepare(true);
       if (result.status === "ready" || result.status === "draining") {
         suspensionId = result.suspensionId;
       }
       expect(result).toMatchObject({
-        status: "draining",
+        status: "ready",
         activeCount: 1,
         blockers: [{ kind: "root-request", count: 1 }],
       });
@@ -109,7 +126,7 @@ it.each(["button", "message shortcut"] as const)(
       await processing;
       expect(enqueued).toHaveBeenCalledTimes(1);
       expect(enqueued.mock.calls[0]?.[1].deliveryContext?.threadId).toBe(thread);
-      expect(prepare()).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
+      expect(prepare(true)).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
       if (!suspensionId) {
         throw new Error("Expected a held suspension");
       }
@@ -119,7 +136,9 @@ it.each(["button", "message shortcut"] as const)(
       expect(enqueued).toHaveBeenCalledTimes(1);
     } finally {
       held.resolve();
-      if (suspensionId) resumeGatewaySuspend(suspensionId);
+      if (suspensionId) {
+        resumeGatewaySuspend(suspensionId);
+      }
       await processing;
     }
   },
@@ -134,14 +153,14 @@ it("joins an acknowledged listener that fails during account stop", async () => 
   app.error(async (error) => {
     errors.push(error);
   });
-  app.shortcut("inspect", async ({ ack }) => {
-    await ack();
+  app.shortcut("inspect", async ({ ack: acknowledge }) => {
+    await acknowledge();
     reached.resolve();
     await held.promise;
     throw failure;
   });
-  app.shortcut("later", async ({ ack }) => {
-    await ack();
+  app.shortcut("later", async ({ ack: acknowledge }) => {
+    await acknowledge();
   });
   const body = { type: "shortcut", callback_id: "inspect", user: { id: "U1" } };
   const processing = deliver(body);
