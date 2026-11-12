@@ -74,6 +74,13 @@ When `bridgeDispatchStarted` is `true`, check the destination before repeating a
 send or another action that changes state, even for a guest error. A failed `exec`
 does not by itself prove that a message was not delivered.
 
+If a new observer fails with `too many suspended code mode runs`, the observed
+workload has not necessarily failed. Resume an existing Code Mode `runId` with
+`wait`. To collect an already-dispatched process, submit a new `exec` with outer
+`awaitResults: true` and poll the original process `sessionId`; required-completion
+cells do not need a suspended-run slot. Do not relaunch the workload to recover
+its output. Process retention and expiry still apply.
+
 ## Telemetry
 
 Each result's `telemetry` field reports: hidden catalog size and a source
