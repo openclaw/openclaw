@@ -21,7 +21,7 @@ import { directSessionReq } from "./test/server-sessions.test-helpers.js";
 const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 test.each([false, true])(
-  "member connection owns creation sandbox with named roles=%s",
+  "stamps member-created sessions and rejects unavailable sandbox provisioning (named roles=%s)",
   async (enforced) => {
     const { storePath } = await createSessionStoreDir();
     const profile = ensureProfileForEmail("member-sandbox@example.test");

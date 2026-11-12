@@ -185,7 +185,7 @@ export function resolveOperatorRolePolicyForAssignment(
   );
 }
 
-/** Resolve membership isolation first; historical human attribution only preserves named-role restrictions. */
+/** Resolve the membership sandbox requirement first; human attribution preserves named-role restrictions. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
   creation:

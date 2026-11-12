@@ -11,7 +11,7 @@ import { prepareGatewayOperatorSessionRun } from "../operator-session-run.js";
 import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./tunnel-principal.js";
 
-it("restored member runs and scheduled occurrences retain membership isolation without named roles", async () => {
+it("restored member runs and scheduled admission retain required sandbox facts without named roles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     const profile = ensureProfileForEmail("member-recovery-sandbox@example.test");
     const principal = {
