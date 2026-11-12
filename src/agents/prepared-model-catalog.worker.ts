@@ -451,6 +451,7 @@ async function runCatalogRequest(
     // Saved catalogs seed the template registry. Every provider this plan saves publishes its
     // live rows, so an accepted empty listing withdraws the saved ones.
     const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) =>
+      // SAFETY: the models.json plan serializes each generated catalog with a providers record.
       Object.keys((JSON.parse(contents) as { providers?: object }).providers ?? {}),
     );
     for (const provider of [
