@@ -185,7 +185,10 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
       return;
     }
     const hasSubmitModifier = event.metaKey || event.ctrlKey;
-    const isBackgroundShortcut = hasSubmitModifier && event.shiftKey;
+    // While plain Enter sends, the modified chord starts in the background like
+    // the command palette. A modifier-enter preference keeps it for Send, so
+    // Shift selects the background start there.
+    const isBackgroundShortcut = hasSubmitModifier && (event.shiftKey || !options.requiresModifier);
     const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
     if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
       return;

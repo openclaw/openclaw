@@ -38,7 +38,6 @@ function fixture() {
       "sessions.list": result,
     },
   });
-  // The production owner reads only model-selection and run/catalog facts from the pane.
   const pane = Object.assign(host, {
     chatRunError: { summary: "Provider request failed", runId: "failed-run" },
     chatModelCatalogInitialized: true,

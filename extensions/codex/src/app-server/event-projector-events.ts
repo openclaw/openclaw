@@ -500,7 +500,7 @@ export class CodexEventProjection {
               : item.id,
           phase: params.phase,
           kind,
-          title: itemTitle(item),
+          title: subagent ? "Subagent" : itemTitle(item),
           ...(status ? { status } : {}),
           ...(status === undefined
             ? { summary: "Outcome unknown", title: `${itemTitle(item)} — outcome unknown` }

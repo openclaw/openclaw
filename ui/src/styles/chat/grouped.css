@@ -107,6 +107,13 @@
   margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
+/* A collapsed work summary leads into its answer, not another activity block. */
+:is(.chat-group > .chat-group-messages, .chat-agent-run-body)
+  > .chat-work-group:not(.is-open)
+  + .chat-bubble {
+  margin-block-start: 0;
+}
+
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;

@@ -28,13 +28,6 @@ const FLOOR_OUTCOMES = 3;
 const USER_SHARE = 0.55;
 const ANCHOR_SHARE = 0.25;
 
-const SECRET_PATTERNS = [
-  /\b(?:sk|pk|rk|ghp|gho|ghu|ghs|github_pat|xox[abprs]|glpat|AKIA|AIza)[-_A-Za-z0-9]{16,}/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g,
-  /\b(?:api[_-]?key|token|secret|password|passwd|authorization|bearer)\b\s*[:=]\s*["']?[^\s"']{8,}/gi,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-];
-
 const ANCHOR_PATTERNS: Array<[kind: string, pattern: RegExp]> = [
   [
     "repo",
@@ -45,10 +38,6 @@ const ANCHOR_PATTERNS: Array<[kind: string, pattern: RegExp]> = [
   ["url", /(https?:\/\/[^\s"'<>)\]]{6,200})/g],
   ["path", /(?<![\w.-])((?:~|\.{1,2})?\/[\w.@-]+(?:\/[\w.@-]+){1,12})/g],
 ];
-
-function redactSecrets(text: string): string {
-  return SECRET_PATTERNS.reduce((value, pattern) => value.replace(pattern, "[redacted]"), text);
-}
 
 function clip(text: string, maxChars: number): string {
   const line = text.replace(/\s+/g, " ").trim();
@@ -81,8 +70,8 @@ export function buildCompactionFloor(
     if (message.role !== "user" && message.role !== "assistant") {
       return;
     }
-    // Redact once, before excerpts and anchors, so no detached credential fragment survives.
-    const text = redactSecrets(extractCompactionMessageText(message));
+    // Extraction redacts credentials before excerpts and anchors are cut from it.
+    const text = extractCompactionMessageText(message);
     if (!text) {
       return;
     }

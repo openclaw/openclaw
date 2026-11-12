@@ -202,6 +202,10 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. Gateway chat sends acknowledge saved input custody without waiting
 for steering admission behind older queued messages or for the active turn to end.
+The built-in runtime waits up to two minutes for an accepted steer to reach its
+transcript boundary. If it can withdraw the still-pending input, the input returns
+to the followup queue. Rejection logs include the runtime's reason, capped at 512
+characters; a transcript timeout is distinct from an initial refusal to accept input.
 Steering and followup delivery retain their original order, and later events report
 the input's outcome. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.

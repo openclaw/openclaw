@@ -790,8 +790,11 @@ extension GatewayConnectionController {
     private func beginAutoConnectSuppression(restoresAutoReconnect: Bool) -> AutoConnectSuppressionLease {
         let lease = AutoConnectSuppressionLease(
             generation: self.connectAttemptGeneration &+ 1,
+            // User intent, unless the node itself is paused. An operator-only pause (scope approval)
+            // must not strand the route Offline after the review is cancelled.
             previousAutoReconnectEnabled: self.autoConnectSuppression?.previousAutoReconnectEnabled ??
-                self.appModel?.gatewayAutoReconnectEnabled ?? false,
+                (self.appModel.map { $0.gatewayAutoReconnectEnabled && $0.connection.node.pausedProblem == nil } ??
+                    false),
             restoresAutoReconnect: self.autoConnectSuppression?.restoresAutoReconnect == true || restoresAutoReconnect,
             suspendedConfig: self.autoConnectSuppression?.suspendedConfig ??
                 (restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil))
@@ -1035,6 +1038,8 @@ extension GatewayConnectionController {
         guard !self.didAutoConnect else { return }
         guard let appModel else { return }
         guard appModel.gatewayServerName == nil else { return }
+        // Reapplying the active config restarts a paused route; only the user leaves a pause.
+        guard !appModel.connection.isPaused else { return }
 
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "gateway.autoconnect") else { return }
@@ -1162,7 +1167,7 @@ extension GatewayConnectionController {
 
     private func attemptAutoReconnectIfNeeded() {
         guard let appModel else { return }
-        guard appModel.gatewayAutoReconnectEnabled else { return }
+        guard appModel.canAutoReconnect else { return }
         guard self.autoConnectSuppression == nil else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
@@ -1239,7 +1244,7 @@ extension GatewayConnectionController {
             @MainActor func canRetryAutomatically() -> Bool {
                 guard !userInitiated, isCurrent(),
                       appModel.activeGatewayConnectConfig == nil,
-                      appModel.gatewayAutoReconnectEnabled,
+                      appModel.canAutoReconnect,
                       UserDefaults.standard.bool(forKey: "gateway.autoconnect"),
                       UserDefaults.standard.string(forKey: "node.instanceId") == instanceID,
                       let automaticGateway, let active = GatewaySettingsStore.activeGatewayEntry(),
@@ -1425,9 +1430,7 @@ extension GatewayConnectionController {
                 activeConfig?.hasSameConnectionInputs(as: $0.config) == true
         } == true
         let generation = appModel.beginGatewayConnectAttempt()
-        let shouldRestoreActiveConfig = appModel.gatewayAutoReconnectEnabled &&
-            !appModel.gatewayPairingPaused &&
-            appModel.lastGatewayProblem?.pauseReconnect != true &&
+        let shouldRestoreActiveConfig = appModel.canAutoReconnect &&
             (inheritedRestoration || appModel.hasGatewaySessionResetInFlight)
         self.pendingGatewayRestoration = if shouldRestoreActiveConfig, let activeConfig {
             GatewayRestoration(config: activeConfig, generation: generation, replacementStableID: targetStableID)
@@ -1462,10 +1465,7 @@ extension GatewayConnectionController {
             {
                 return
             }
-            guard appModel.gatewayAutoReconnectEnabled,
-                  !appModel.gatewayPairingPaused,
-                  appModel.lastGatewayProblem?.pauseReconnect != true
-            else { return }
+            guard appModel.canAutoReconnect else { return }
             self.pendingGatewayRestoration = nil
             appModel.applyGatewayConnectConfig(restoration.config, expectedGeneration: generation)
         }
