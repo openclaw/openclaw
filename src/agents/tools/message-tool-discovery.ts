@@ -451,7 +451,8 @@ function* resolveMessageToolSchemaActionsSteps(
     }
   }
   if (!available) {
-    for (const channel of resolveMessageToolDiscoveryChannels(params)) {
+    // Bindings prune schema details, not the outbound routes execution can use.
+    for (const channel of listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog)) {
       const outbound = resolveConfiguredOutboundMessageToolDiscoveryAdapter(
         channel.id,
         params.preparedMessageToolCatalog,

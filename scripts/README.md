@@ -1165,6 +1165,8 @@ node scripts/perf/message-tool-availability.mjs --build <installed-build> \
 ```
 
 The routes are `none`, `internal`, `external-webchat`, and `configured`.
+Add `--unbound-sender` to the configured route to verify that a disabled bound
+channel does not hide a working sender on a different channel.
 Stage baseline and candidate artifacts at the same disposable installation path;
 installation paths appear in prompts. Use the same state path for each edition,
 preserving the completed state elsewhere before the next run. Existing state and

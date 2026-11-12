@@ -245,8 +245,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 85973,
-    "roughTokens": 21494
+    "chars": 100550,
+    "roughTokens": 25138
   },
   "openClawBaseInstructions": {
     "chars": 8015,
@@ -265,8 +265,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 3441
   },
   "totalWithDynamicToolsJson": {
-    "chars": 99737,
-    "roughTokens": 24935
+    "chars": 114314,
+    "roughTokens": 28579
   },
   "userInputText": {
     "chars": 879,
@@ -517,7 +517,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
+    "description": "Send/manage channel messages. Supports actions: react, send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -530,6 +530,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "asDocument": {
           "description": "Alias for forceDocument.",
+          "type": "boolean"
+        },
+        "asVideoNote": {
+          "description": "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
           "type": "boolean"
         },
         "asVoice": {
@@ -571,6 +575,34 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "contentType": {
           "type": "string"
         },
+        "delivery": {
+          "description": "Delivery prefs; pin when supported.",
+          "properties": {
+            "pin": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "notify": {
+                      "type": "boolean"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["enabled"],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
         "dryRun": {
           "type": "boolean"
         },
@@ -583,7 +615,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "emoji": {
-          "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+          "description": "Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:\"emoji-list\" directly as emoji. Use action:\"emoji-list\" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.",
           "type": "string"
         },
         "filename": {
@@ -609,6 +641,39 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "groupId": {
           "type": "string"
         },
+        "location": {
+          "description": "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
+          "properties": {
+            "accuracy": {
+              "description": "Pin uncertainty radius in meters.",
+              "maximum": 1500,
+              "minimum": 0,
+              "type": "number"
+            },
+            "address": {
+              "description": "Venue address; requires name.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "latitude": {
+              "maximum": 90,
+              "minimum": -90,
+              "type": "number"
+            },
+            "longitude": {
+              "maximum": 180,
+              "minimum": -180,
+              "type": "number"
+            },
+            "name": {
+              "description": "Venue name; requires address.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": ["latitude", "longitude"],
+          "type": "object"
+        },
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
@@ -627,6 +692,298 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "mimeType": {
           "type": "string"
+        },
+        "pollAnonymous": {
+          "description": "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
+          "type": "boolean"
+        },
+        "pollDurationSeconds": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pollPublic": {
+          "description": "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
+          "type": "boolean"
+        },
+        "presentation": {
+          "description": "Rich text/chart/table/button/select/context; unsupported degrades to text.",
+          "properties": {
+            "blocks": {
+              "items": {
+                "properties": {
+                  "buttons": {
+                    "items": {
+                      "properties": {
+                        "action": {
+                          "anyOf": [
+                            {
+                              "properties": {
+                                "command": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "const": "command",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "command"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "callback",
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "value"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "url",
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "web-app",
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "widgetId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "web-app",
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "widgetId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "widgetId"],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "reusable": {
+                          "type": "boolean"
+                        },
+                        "style": {
+                          "enum": ["primary", "secondary", "success", "danger"],
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string"
+                        },
+                        "web_app": {
+                          "properties": {
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["url"],
+                          "type": "object"
+                        },
+                        "webApp": {
+                          "properties": {
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["url"],
+                          "type": "object"
+                        }
+                      },
+                      "required": ["label"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "caption": {
+                    "type": "string"
+                  },
+                  "categories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "chartType": {
+                    "enum": ["pie", "bar", "area", "line"],
+                    "type": "string"
+                  },
+                  "headers": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "options": {
+                    "items": {
+                      "properties": {
+                        "action": {
+                          "anyOf": [
+                            {
+                              "properties": {
+                                "command": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "const": "command",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "command"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "callback",
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "value"],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["label"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "placeholder": {
+                    "type": "string"
+                  },
+                  "rowHeaderColumnIndex": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rows": {
+                    "items": {
+                      "items": {
+                        "type": ["string", "number"]
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "segments": {
+                    "items": {
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["label", "value"],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "series": {
+                    "items": {
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "values": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["name", "values"],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": ["text", "context", "divider", "buttons", "select", "chart", "table"],
+                    "type": "string"
+                  },
+                  "xLabel": {
+                    "type": "string"
+                  },
+                  "yLabel": {
+                    "type": "string"
+                  }
+                },
+                "required": ["type"],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "tone": {
+              "enum": ["info", "success", "warning", "danger", "neutral"],
+              "type": "string"
+            }
+          },
+          "required": ["blocks"],
+          "type": "object"
         },
         "quoteText": {
           "description": "Telegram reply quote text.",

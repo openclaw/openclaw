@@ -506,6 +506,9 @@ src/auto-reply/thinking.shared.ts
 src/auto-reply/thinking.ts
 src/auto-reply/tokens.ts
 src/bootstrap/node-compiler-args.ts
+src/channels/account-configuration.ts
+src/channels/message/adapter.ts
+src/channels/plugins/outbound-message-tool-discovery.ts
 src/channels/bundled-channel-catalog-read.ts
 src/channels/bundled-channel-ids.generated.ts
 src/channels/chat-meta-shared.ts
