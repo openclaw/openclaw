@@ -262,9 +262,10 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var outboxMessageIDsByCommandID: [String: UUID] = [:]
     @ObservationIgnored
-    var outboxFailureVersionsByMessageID: [
-        UUID: (attemptVersion: Int, retryCount: Int, lastError: String?)
-    ] = [:]
+    var outboxFailuresByMessageID: [UUID: OutboxFailure] = [:]
+    @ObservationIgnored var outboxRestoreEvidence = OutboxRestoreEvidence()
+    /// "Not sent" notices for messages restored into a composer, by composer key.
+    var composerNoticesBySession: [String: String] = [:]
     /// Recent canonical keys let the MainActor resolve proof that arrives
     /// after SQLite cancellation commits but before its UI continuation runs.
     @ObservationIgnored

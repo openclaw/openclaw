@@ -101,3 +101,118 @@ extension ChatTranscriptCacheStoreTests {
         #expect(await store.loadCommands().map(\.id) == ["older", "newer"])
     }
 }
+
+extension ChatTranscriptCacheStoreTests {
+    @Test func `edit moves a queued row below the draft in one write`() async throws {
+        let key = "agent:main:main"
+        await store.saveComposerDraftText(key: key, text: "typed", revision: 3)
+        #expect(await store.insertComposerDraftAttachment(
+            key: key, attachment: draftAttachment("typed.jpg", bytes: 4), revision: 3) == .inserted(position: 0))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "queued", text: "queued text", attachments: [draftAttachment("queued.jpg", bytes: 5)])))
+
+        let result = await store.cancelCommand(id: "queued", moveToDraftKey: key, revision: 4)
+
+        #expect(result == .moved(
+            attachments: [.init(position: 1, attachment: draftAttachment("queued.jpg", bytes: 5))]))
+        #expect(await store.loadCommands().isEmpty)
+        let draft = try #require(await store.loadComposerDraft(key: key))
+        #expect(draft.text == "typed\n\nqueued text" && draft.revision == 4)
+        #expect(draft.attachments.map(\.attachment.fileName) == ["typed.jpg", "queued.jpg"])
+    }
+
+    @Test func `an unconfirmed row stays, and so does its branch park`() async throws {
+        let key = "agent:main:main"
+        // A live send that may have landed is stored failed without an unacknowledged-send mark.
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "ambiguous",
+            text: "ambiguous",
+            status: .failed,
+            lastError: OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError)))
+        #expect(await store.cancelCommand(id: "ambiguous", moveToDraftKey: key, revision: 1) == .missing)
+        _ = await store.confirmBranchChange(
+            .init(sessionKey: "main", agentID: "main"), activeLeafEntryID: "leaf-2", lastError: "Branch changed")
+        let parked = try #require(await store.loadCommands().first)
+        #expect(parked.lastError?.hasPrefix("Branch changed\n# branch-park:") == true)
+
+        #expect(await store.cancelCommand(id: "ambiguous", moveToDraftKey: key, revision: 1) == .missing)
+        #expect(await store.loadCommands().map(\.id) == ["ambiguous"])
+        #expect(await store.loadComposerDraft(key: key) == .empty)
+    }
+
+    @Test func `restore never evicts other drafts and edit does`() async {
+        let key = "agent:main:main"
+        let megabyte = 1_000_000
+        #expect(await store.insertComposerDraftAttachment(
+            key: "agent:main:other", attachment: draftAttachment("other.mov", bytes: 40 * megabyte), revision: 1) ==
+            .inserted(position: 0))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "rejected",
+            text: "rejected",
+            attachments: [draftAttachment("photo.mov", bytes: 15 * megabyte)],
+            status: .failed,
+            lastError: "rejected")))
+
+        #expect(await store.cancelCommand(
+            id: "rejected",
+            moveToDraftKey: key,
+            revision: 1,
+            restoring: .init(attemptVersion: 1, retryCount: 0, lastError: "rejected")) == .draftFull)
+        #expect(await store.loadCommands().map(\.id) == ["rejected"])
+        #expect(await store.loadComposerDraft(key: "agent:main:other")?.attachments.count == 1)
+
+        #expect(await store.cancelCommand(id: "rejected", moveToDraftKey: key, revision: 1) == .moved(
+            attachments: [.init(position: 0, attachment: draftAttachment("photo.mov", bytes: 15 * megabyte))]))
+        #expect(await store.loadComposerDraft(key: "agent:main:other") == .empty)
+    }
+
+    @Test func `restore takes only the pinned failure of a row that never left the device`() async throws {
+        let key = "agent:main:main"
+        let expiredError = OpenClawChatSQLiteTranscriptCache.outboxExpiredError
+        let unconfirmedError = OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError
+        let stale = Date().timeIntervalSince1970 - OpenClawChatSQLiteTranscriptCache.outboxCommandMaxAge - 60
+        #expect(await store.enqueueCommand(outboxCommand(id: "never-sent", text: "never sent", createdAt: stale)))
+        #expect(await store.enqueueCommand(outboxCommand(id: "migrated", text: "migrated", createdAt: stale)))
+        #expect(await store.enqueueCommand(outboxCommand(
+            id: "retried", text: "retried", createdAt: stale, status: .failed, lastError: unconfirmedError)))
+        // Retrying an unconfirmed row keeps its identity; that row then expires unsent.
+        #expect(await store.markCommandRetriedIfPresent(
+            id: "retried",
+            expectation: .init(attemptVersion: 1, retryCount: 0, lastError: unconfirmedError),
+            agentID: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            expectedSessionSettings: .init(permissionMode: nil, toolOverrides: nil),
+            replacementID: nil) == .updated)
+        try await databases.stateQueue.write { db in
+            try db.execute(
+                sql: "UPDATE outbox_commands SET created_at = ? WHERE client_uuid = 'retried'",
+                arguments: [stale])
+            // An older build's attempt that left no attempt-version trace.
+            try db.execute(sql: "UPDATE outbox_commands SET had_unacknowledged_send = 1 WHERE client_uuid = 'migrated'")
+        }
+        let failed = await store.loadCommands()
+        #expect(failed.map(\.lastError) == [expiredError, expiredError, expiredError])
+        let retried = try #require(failed.first { $0.id == "retried" })
+
+        #expect(await store.cancelCommand(
+            id: "retried",
+            moveToDraftKey: key,
+            revision: 1,
+            restoring: .init(
+                attemptVersion: retried.attemptVersion,
+                retryCount: retried.retryCount,
+                lastError: retried.lastError)) == .missing)
+        let expired = OpenClawChatOutboxRetryExpectation(attemptVersion: 1, retryCount: 0, lastError: expiredError)
+        #expect(await store.cancelCommand(id: "migrated", moveToDraftKey: key, revision: 1, restoring: expired) ==
+            .missing)
+        #expect(await store.cancelCommand(
+            id: "never-sent",
+            moveToDraftKey: key,
+            revision: 1,
+            restoring: .init(attemptVersion: 1, retryCount: 1, lastError: expiredError)) == .missing)
+        #expect(await store.cancelCommand(id: "never-sent", moveToDraftKey: key, revision: 1, restoring: expired) ==
+            .moved(attachments: []))
+        #expect(await store.loadCommands().map(\.id) == ["migrated", "retried"])
+    }
+}
