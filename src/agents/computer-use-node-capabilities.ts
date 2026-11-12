@@ -92,14 +92,17 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
   if (params.embeddedMode === true) {
     return undefined;
   }
-  const { signal } = params;
-  const inProcess = shouldUseInProcessGatewayTool({});
-  const caller = getGatewayToolCallerIdentity();
-  const context = inProcess ? caller?.gatewayContextResolver?.() : undefined;
   const ordinaryComputer =
     params.computerAllowed &&
     params.modelHasVision !== false &&
     params.computerTransport === undefined;
+  if (!ordinaryComputer && !params.mobileUiAllowed) {
+    return undefined;
+  }
+  const { signal } = params;
+  const inProcess = shouldUseInProcessGatewayTool({});
+  const caller = getGatewayToolCallerIdentity();
+  const context = inProcess ? caller?.gatewayContextResolver?.() : undefined;
   // Only the hosted path can reuse prepared inventory for mobile-only listing.
   // Other callers remain unknown rather than adding a discovery round trip.
   if (!ordinaryComputer && !(inProcess && params.mobileUiAllowed)) {
