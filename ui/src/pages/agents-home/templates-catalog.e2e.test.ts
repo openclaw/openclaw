@@ -149,9 +149,23 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
                 { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
                 { name: "AGENTS.md", source: "workspace/AGENTS.md" },
               ],
-              skills: [{ name: "Trip research", version: "1.0.0", excerpt: skillExcerpt }],
+              skills: [
+                {
+                  name: "Trip research",
+                  source: "clawhub",
+                  ref: "@openclaw/trip-research",
+                  version: "2.0.0",
+                  excerpt: skillExcerpt,
+                },
+              ],
               integrations: [
-                { name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" },
+                {
+                  name: "@openclaw/workflow-tools",
+                  kind: "plugin",
+                  source: "clawhub",
+                  ref: "@openclaw/workflow-tools",
+                  version: "1.2.0",
+                },
               ],
               automations: [],
             },
@@ -164,6 +178,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
               name: "Workflow Tools",
               packageName: "@openclaw/workflow-tools",
               clawhubPackage: "@openclaw/workflow-tools",
+              version: "1.2.0",
               installed: true,
               enabled: true,
               state: "enabled",
@@ -314,6 +329,91 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(Number(official));
   }
 
+  it("shows dependency origins and versions without treating another plugin version as installed", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.setMethodResponse("plugins.list", {
+      plugins: [
+        {
+          id: "workflow-tools",
+          name: "Workflow Tools",
+          clawhubPackage: "@openclaw/workflow-tools",
+          version: "1.1.0",
+          installed: true,
+          enabled: true,
+          state: "enabled",
+        },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    const detail = await openDetail(page);
+    await capture(page, "dependency-provenance", detail.getByRole("heading", { name: "Skills" }));
+    await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
+    await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
+    expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
+  });
+
+  it.each([viewports[0], viewports[3]])(
+    "shows bundled and referenced contents at $name width",
+    async (viewport) => {
+      const { page, gateway } = await fixture(viewport);
+      await gateway.setMethodResponse("templates.catalog.detail", {
+        detail: {
+          ...workflowOperator,
+          version: "1.2.0",
+          agentName: "Workflow Operator",
+          contents: {
+            instructions: [{ name: "AGENTS.md", source: "workspace/AGENTS.md" }],
+            skills: [
+              {
+                name: "Local research",
+                source: "bundled",
+                path: "skills/research",
+                excerpt: "Research public releases.",
+              },
+              {
+                name: "Trip research",
+                source: "clawhub",
+                ref: "@openclaw/trip-research",
+                version: "2.0.0",
+              },
+            ],
+            integrations: [
+              {
+                name: "workflow-tools",
+                kind: "plugin",
+                source: "bundled",
+                path: "plugins/workflow-tools",
+              },
+              {
+                name: "@openclaw/workflow-tools",
+                kind: "plugin",
+                source: "clawhub",
+                ref: "@openclaw/workflow-tools",
+                version: "1.2.0",
+              },
+            ],
+            automations: [],
+          },
+        },
+      });
+      const detail = await openDetail(page);
+      await capture(
+        page,
+        `bundled-provenance-${viewport.name}`,
+        detail.getByRole("heading", { name: "Skills" }),
+      );
+      expect(await detail.getByText("Bundled with template", { exact: true }).count()).toBe(2);
+      await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
+      await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
+      expect(await detail.getByText("Installed", { exact: true }).count()).toBe(1);
+      expect(await detail.textContent()).not.toContain("undefined");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        viewport.width,
+      );
+    },
+  );
+
   async function expectClamped(description: Locator) {
     const layout = await description.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -403,13 +503,11 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await page.waitForURL(
         /\/templates\/packages\/%40openclaw%2Fworkflow-operator\?version=1\.2\.0$/u,
       );
-      if (viewport.name === "desktop") {
-        await capture(
-          page,
-          "after-detail",
-          detail.getByRole("heading", { name: "Workspace files" }),
-        );
-      }
+      await capture(
+        page,
+        `after-detail-${viewport.name}`,
+        detail.getByRole("heading", { name: "Workspace files" }),
+      );
       await expectPublisher(detail, "openclaw", true);
       const workspace = detail.locator(".plugin-capabilities").first();
       const help = workspace.getByRole("button", { name: "About SOUL.md" });
@@ -450,6 +548,38 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       );
     },
   );
+
+  it("shows paused automation declarations in details and the inline preview", async () => {
+    const { page, gateway } = await fixture();
+    await gateway.setMethodResponse("templates.catalog.detail", {
+      detail: {
+        ...workflowOperator,
+        version: "1.2.0",
+        contents: {
+          instructions: [{ name: "AGENTS.md", source: "AGENTS.md" }],
+          skills: [],
+          integrations: [],
+          automations: [
+            { name: "Weekly brief", schedule: "0 9 * * 1", timezone: "UTC", enabled: false },
+          ],
+        },
+      },
+    });
+    const detail = await openDetail(page);
+    const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
+    await capture(page, "paused-automation-detail", automation);
+    expect(await automation.textContent()).toContain("Paused");
+    await page.goto(`${server.baseUrl}chat/main`);
+    await page.locator("a.markdown-template-link").first().click();
+    const shell = page.getByRole("dialog", { name: "Template details", exact: true });
+    await shell.getByRole("button", { name: /Automations/ }).click();
+    const row = shell.getByRole("button", { name: /Weekly brief/ });
+    expect(await row.textContent()).toContain("Paused");
+    await row.click();
+    await capture(page, "paused-automation-preview", shell);
+    expect(await shell.textContent()).toContain("Paused");
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
+  });
 
   it("keeps the inline preview shell stable through category and file navigation", async () => {
     const { page, gateway } = await fixture();

@@ -2,7 +2,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
-import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
+import {
+  assignSessionOwner,
+  replaceSessionEntrySync,
+} from "../../../src/config/sessions/session-accessor.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import {
   setDisplayName,
@@ -28,7 +31,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("offers only readable owners and preserves owner selection across reload", async () => {
+  it("keeps guest owner filters and Person grouping within readable sessions", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
       label: "guest-owner-filter",
@@ -209,6 +212,126 @@ suite.define(() => {
             );
             expect(denied).toBe(true);
           }
+
+          // Person grouping remains meaningful when reassignment leaves one readable owner.
+          for (const i of [0, 1, 2]) {
+            assignSessionOwner(
+              { agentId: "main", sessionKey: "agent:main:dashboard:owner-proof-" + i },
+              {
+                owner: { type: "human", id: ids[1]! },
+                assignedBy: { type: "human", id: ids[0]! },
+              },
+            );
+          }
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await trigger.click();
+          await option("all").click();
+          await expect
+            .poll(() => page.locator(".sidebar-recent-sessions [data-session-key]").count())
+            .toBe(3);
+          expect(
+            await evaluateControlUiContext(page, async (app) =>
+              (
+                await app.gateway.snapshot.client!.request<{ owners: Array<{ id: string }> }>(
+                  "sessions.list",
+                  {},
+                )
+              ).owners.map((owner) => owner.id),
+            ),
+          ).toEqual([ids[1]]);
+          const available: number[] = [];
+          const proofDir =
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? createControlUiE2eArtifactDir("guest-person-grouping")
+              : undefined;
+          for (const viewport of [
+            { width: 1280, height: 800 },
+            { width: 390, height: 844 },
+          ]) {
+            await page.setViewportSize(viewport);
+            if (viewport.width < 560) {
+              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+            }
+            await page.getByRole("button", { name: /^Filter & sort/ }).click();
+            await page.getByRole("button", { name: /^Group by:/ }).click();
+            const person = page.getByRole("option", { name: "Person", exact: true });
+            if (proofDir) {
+              const frame = await takeControlUiScreenshotFrame(
+                page,
+                page.getByRole("option", { name: "Custom groups", exact: true }),
+                [page.getByRole("option", { name: "None", exact: true })],
+                { animations: "disabled" },
+              );
+              await writeFile(
+                path.join(proofDir, "group-by-" + viewport.width + ".png"),
+                frame.png,
+              );
+            }
+            available.push(await person.count());
+            await page.keyboard.press("Escape");
+            await page.keyboard.press("Escape");
+          }
+          expect(available).toEqual([1, 1]);
+          await page.setViewportSize({ width: 1280, height: 800 });
+          await page.getByRole("button", { name: /^Filter & sort/ }).click();
+          await page.getByRole("button", { name: /^Group by:/ }).click();
+          await page.getByRole("option", { name: "Person", exact: true }).click();
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          await expect
+            .poll(() =>
+              page
+                .locator(
+                  '[data-session-section="person:profile:' + ids[1] + '"] [data-session-key]',
+                )
+                .count(),
+            )
+            .toBe(3);
+          await page.getByRole("button", { name: /^Filter & sort/ }).click();
+          await page.getByRole("button", { name: "Group by: Person", exact: true }).waitFor();
+          await page.keyboard.press("Escape");
+          setDisplayName(ids[2]!, "Avery");
+          assignSessionOwner(
+            { agentId: "main", sessionKey: "agent:main:dashboard:owner-proof-2" },
+            {
+              owner: { type: "human", id: ids[2]! },
+              assignedBy: { type: "human", id: ids[0]! },
+            },
+          );
+          await page.reload();
+          await waitForControlUiGatewayReady(page);
+          const sections = page.locator('[data-session-section^="person:"]');
+          await expect.poll(() => sections.count()).toBe(2);
+          for (const [index, count] of [
+            [1, 2],
+            [2, 1],
+          ] as const) {
+            const section = page.locator(
+              '[data-session-section="person:profile:' + ids[index] + '"]',
+            );
+            expect(await section.locator("[data-session-key]").count()).toBe(count);
+            expect(await section.textContent()).toContain("Avery");
+          }
+          const previousUrl = page.url();
+          await page
+            .locator(".sidebar-recent-sessions")
+            .getByRole("link", { name: /Avery shared planning/ })
+            .click();
+          await expect.poll(() => page.url()).not.toBe(previousUrl);
+          await waitForControlUiGatewayReady(page);
+          await expect.poll(() => sections.count()).toBe(2);
+          await trigger.click();
+          await option("owner:" + ids[0]).click();
+          await expect
+            .poll(() => page.locator(".sidebar-recent-sessions [data-session-key]").count())
+            .toBe(0);
+          await page.getByRole("button", { name: /^Filter & sort/ }).click();
+          await page.getByRole("button", { name: "Group by: Person", exact: true }).waitFor();
+          await page.keyboard.press("Escape");
+          await trigger.click();
+          await option("all").click();
+          await expect.poll(() => sections.count()).toBe(2);
         },
       );
     } finally {

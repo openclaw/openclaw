@@ -276,13 +276,11 @@ describe("agents tools panel (browser)", () => {
       /^\d+\/\d+$/,
     );
 
-    view.update({
-      ...params,
-      effective: {
-        ...toolPreview,
-        groups: [{ id: "core", label: "Built-in tools", source: "core", tools: [] }],
-      },
-    });
+    const emptyPreview: ToolsEffectiveResult = {
+      ...toolPreview,
+      groups: [{ id: "core", label: "Built-in tools", source: "core", tools: [] }],
+    };
+    view.update({ ...params, effective: emptyPreview, effectivePreview: emptyPreview });
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("0");
     expect(container.textContent).toContain("No tools in this preview.");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
