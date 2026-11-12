@@ -40,13 +40,13 @@ function mockAgentRun({
     attempts: [],
   });
 }
-function mockChildRun(payloads: unknown[] = [], collect = true, meta = {}) {
+function mockChildRun(payloads: unknown[] = [], collector = true, meta = {}) {
   mockAgentRun({
     payloads,
     usage: { input: 10, output: 1 },
     meta,
     acceptedSessionSpawns: [
-      { runId: "run-child", childSessionKey: "agent:default:child", collect },
+      { runId: "run-child", childSessionKey: "agent:default:child", collector },
     ],
   });
 }

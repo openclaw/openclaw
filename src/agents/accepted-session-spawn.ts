@@ -14,7 +14,7 @@ export type AcceptedSessionSpawn = {
   /** True only when this child owns a terminal completion for its requester. */
   expectsCompletionMessage?: boolean;
   /** Host-recorded: the requester collects this child itself (sessions_spawn collect=true). */
-  collect?: true;
+  collector?: true;
 };
 
 // Accounting follows the exact admission through provider fallback and plugin
@@ -99,7 +99,7 @@ export function hasCompletionMessageSessionSpawn(
 export function hasOwedSessionSpawn(acceptedSessionSpawns?: readonly AcceptedSessionSpawn[]) {
   return (
     acceptedSessionSpawns?.some(
-      (spawn) => spawn.expectsCompletionMessage === true || spawn.collect === true,
+      (spawn) => spawn.expectsCompletionMessage === true || spawn.collector === true,
     ) === true
   );
 }

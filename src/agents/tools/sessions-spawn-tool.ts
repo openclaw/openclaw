@@ -94,12 +94,12 @@ const loadVisibleSpawnModule = createLazyPromise(() => import("./sessions-spawn-
 function recordAcceptedSessionSpawn(
   result: Record<string, unknown>,
   context: "fork" | "isolated" | undefined,
-  collect = false,
+  collector = false,
 ): void {
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const accepted = normalizeAcceptedSessionSpawnResult({ details: result });
   if (instance && accepted) {
-    mergeAcceptedSessionSpawnsForRun(instance, [collect ? { ...accepted, collect } : accepted]);
+    mergeAcceptedSessionSpawnsForRun(instance, [collector ? { ...accepted, collector } : accepted]);
   }
   const childSessionKey =
     typeof result.childSessionKey === "string" ? result.childSessionKey.trim() : "";
