@@ -176,16 +176,17 @@ it.each(["desktop", "mobile", undefined] as const)(
 
 describe("session workspace path actions", () => {
   it.each([
-    ["reports/monthly", false, "reports"],
-    ["reports", true, null],
+    ["reports/monthly", false, "reports", undefined],
+    ["reports", true, null, undefined],
+    ["reports/monthly", true, null, { path: "", search: "report", entries: [] }],
   ] as const)(
     "keeps folder recovery available for %s (loading: %s)",
-    async (path, loading, parentPath) => {
+    async (path, loading, parentPath, browser) => {
       const onBrowsePath = vi.fn();
       const workspace = createWorkspace({
         browserPath: path,
         loading,
-        list: { files: [], root: "/workspace" },
+        list: { files: [], root: "/workspace", browser },
         onBrowsePath,
       });
       const { container: mount } = await mountWorkspace(workspace);

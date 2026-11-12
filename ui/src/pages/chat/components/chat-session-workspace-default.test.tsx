@@ -3,6 +3,7 @@
 import { createSignal, flush, onSettled } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { createGatewayRequestMock } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
@@ -28,17 +29,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("retains a browser download and focus across held native search replies", async () => {
+it("keeps a recursive browser download until an admitted search removes it", async () => {
   type List = NonNullable<SessionWorkspaceProps["list"]>;
   const listing: List = {
     sessionKey: "agent:main:files",
     root: "/workspace",
     files: [],
-    browser: {
-      path: "",
-      entries: [{ kind: "file", path: "report.md", name: "report.md" }],
-    },
+    browser: { path: "", entries: [{ kind: "directory", path: "reports", name: "reports" }] },
   };
+  const path = "reports/annual/report.md";
   const queries: { query: string; response: ReturnType<typeof createDeferred<List>> }[] = [];
   const listFiles = vi
     .fn<SessionWorkspaceHost["sessions"]["listFiles"]>()
@@ -49,7 +48,7 @@ it("retains a browser download and focus across held native search replies", asy
       return response.promise;
     });
   const download = createDeferred<{ url: string; filename: string }>();
-  const request = vi.fn((method: string) =>
+  const request = createGatewayRequestMock((method) =>
     method === "sessions.files.download" ? download.promise : { artifacts: [] },
   );
   const save = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
@@ -73,8 +72,23 @@ it("retains a browser download and focus across held native search replies", asy
     for (const query of queries) query.response.resolve(listing);
   });
   await waitForSolid(() =>
-    expect(mounted.queryByRole("button", { name: "report.md" })).not.toBeNull(),
+    expect(mounted.queryByRole("button", { name: "reports" })).not.toBeNull(),
   );
+  const accept = async (query: string, include: boolean) => {
+    queries.at(-1)!.response.resolve({
+      ...listing,
+      browser: {
+        path: "",
+        search: query,
+        entries: include ? [{ kind: "file", path, name: "report.md" }] : [],
+      },
+    });
+    await state.sessionWorkspaceState!.readResult;
+    flush();
+  };
+  current().onSearch("report");
+  await vi.waitFor(() => expect(queries).toHaveLength(1));
+  await accept("report", true);
   const action = mounted.getByRole("button", { name: "Download file" });
   const copy = mounted.getByRole("button", { name: "Copy path" });
   action.click();
@@ -84,25 +98,31 @@ it("retains a browser download and focus across held native search replies", asy
       request.mock.calls.filter(([method]) => method === "sessions.files.download"),
     ).toHaveLength(1),
   );
-  for (const [index, query] of ["report", "rep", ""].entries()) {
+  const call = request.mock.calls.find(([method]) => method === "sessions.files.download")!;
+  expect(call[1]).toMatchObject({ path: "/workspace/" + path });
+  for (const [index, query] of ["rep", "absent"].entries()) {
     current().onSearch(query);
-    await vi.waitFor(() => expect(queries).toHaveLength(index + 1));
+    await vi.waitFor(() => expect(queries).toHaveLength(index + 2));
     copy.focus();
-    const held = queries[index]!;
-    expect(held.query).toBe(query);
+    expect(queries.at(-1)!.query).toBe(query);
     expect(mounted.getByRole("button", { name: /^Download/ })).toBe(action);
-    held.response.resolve({
-      ...listing,
-      browser: { ...listing.browser!, search: query || undefined },
-    });
-    await state.sessionWorkspaceState!.readResult;
-    flush();
-    expect(mounted.getByRole("button", { name: /^Download/ })).toBe(action);
+    expect(mounted.container.textContent).toContain(
+      "Search results: " + (index ? "rep" : "report"),
+    );
+    expect(call[2]?.signal?.aborted).toBe(false);
     expect(document.activeElement).toBe(copy);
-    expect(save).not.toHaveBeenCalled();
+    await accept(query, index === 0);
+    if (index === 0) {
+      expect(mounted.getByRole("button", { name: /^Download/ })).toBe(action);
+      expect(document.activeElement).toBe(copy);
+    }
   }
+  await waitForSolid(() => expect(call[2]?.signal?.aborted).toBe(true));
+  expect(mounted.queryByRole("button", { name: /^Download/ })).toBeNull();
   download.resolve({ filename: "report.md", url: "/api/artifacts/download/connection/ticket" });
-  await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
+  await download.promise;
+  await new Promise<void>((resolve) => onSettled(resolve));
+  expect(save).not.toHaveBeenCalled();
 });
 
 it("navigates default directory search hits without opening them as files", async () => {
@@ -134,7 +154,7 @@ it("navigates default directory search hits without opening them as files", asyn
 
 it.each(
   (["session", "workspace"] as const).flatMap((origin) =>
-    (["connection", "presentation", "query", "filtered"] as const).map((changed) => ({
+    (["connection", "presentation"] as const).map((changed) => ({
       origin,
       changed,
     })),
@@ -173,39 +193,16 @@ it.each(
     mounted.update(
       changed === "presentation"
         ? { ...workspace, presentation: "desktop" }
-        : changed === "connection"
-          ? { ...workspace, connectionEpoch: 2 }
-          : { ...workspace, browserSearch: changed === "query" ? "report" : "absent" },
+        : { ...workspace, connectionEpoch: 2 },
     );
     flush();
-    if (changed === "presentation" || changed === "filtered") {
+    if (changed === "presentation") {
       await waitForSolid(() => expect(download.mock.calls[0]?.[2].aborted).toBe(true));
-    }
-    if (changed === "query") {
-      expect(mounted.getByRole("button", { name: /^Download/ })).toBe(action);
-      expect(download.mock.calls[0]?.[2].aborted).toBe(false);
-      const copy = mounted.getByRole("button", { name: "Copy path" });
-      copy.focus();
-      for (const query of ["rep", "report", ""]) {
-        mounted.update({
-          ...workspace,
-          browserSearch: query,
-          list: workspace.list?.browser
-            ? {
-                ...workspace.list,
-                browser: { ...workspace.list.browser, search: query || "report" },
-              }
-            : workspace.list,
-        });
-        flush();
-        expect(mounted.getByRole("button", { name: /^Download/ })).toBe(action);
-        expect(document.activeElement).toBe(copy);
-      }
     }
     pending.resolve({ filename: "report.md", url: "https://example.invalid/report.md" });
     await pending.promise;
     await new Promise<void>((resolve) => onSettled(resolve));
-    await waitForSolid(() => expect(save).toHaveBeenCalledTimes(changed === "query" ? 1 : 0));
+    await waitForSolid(() => expect(save).not.toHaveBeenCalled());
   },
 );
 

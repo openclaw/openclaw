@@ -385,6 +385,10 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.workspace-desktop--default .workspace-desktop__notice {
+  overflow-wrap: anywhere;
+}
+
 .workspace-desktop__path {
   flex-shrink: 0;
   overflow: hidden;

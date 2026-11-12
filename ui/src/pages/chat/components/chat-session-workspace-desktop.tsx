@@ -161,17 +161,9 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
       defaultCatalog() ? "session" : "project",
     ),
   );
-  // Default searches filter the same row owners, so a matching download keeps its lifetime.
-  const projectRows = createProjection(
-    () =>
-      defaultCatalog() && searching()
-        ? searchResults()
-            .filter((file) => file.origin === "workspace")
-            .map((file) => ({ ...file, directory: file.directory ?? false }))
-        : [...catalog().project.values()],
-    [],
-    { key: "key" },
-  );
+  // Browser rows belong to the accepted native snapshot, not the requested query.
+  // Keep their owners until the next admitted reply; session rows filter immediately.
+  const projectRows = createProjection(() => [...catalog().project.values()], [], { key: "key" });
   const projectByPath = createMemo(
     () => new Map(projectRows.map((row) => [row.workspacePath ?? row.path, row])),
   );
@@ -253,7 +245,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
     props.workspace.list !== null &&
     !props.workspace.browserSearch.trim() &&
     root() !== "" &&
-    !directoryBrowser(root());
+    !props.workspace.list?.browser;
   const parentPath = () =>
     directoryBrowser(root())?.parentPath ??
     (unavailableFolder() ? root().slice(0, Math.max(0, root().lastIndexOf("/"))) : null);
@@ -472,6 +464,13 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                 expanded={(defaultCatalog() && searching()) || expanded().includes(root())}
                 onToggle={() => props.workspace.onToggleDirectory?.(root())}
               >
+                <Show when={defaultCatalog() && props.workspace.list?.browser?.search}>
+                  {(query) => (
+                    <div class="workspace-desktop__notice">
+                      {t("chat.workspaceFiles.searchResults")}: {query()}
+                    </div>
+                  )}
+                </Show>
                 <WorkspaceRows
                   rows={childrenByPath().get(root()) ?? []}
                   workspace={props.workspace}
