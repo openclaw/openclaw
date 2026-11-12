@@ -1355,8 +1355,10 @@
   white-space: pre;
 }
 
-/* Unwrapped, the first row fades out before the control and can scroll clear of it. */
+/* Include the end padding in the scrollable width so every line can clear the fade. */
 .chat-group.user .code-block-wrapper--wrap-only:not(.is-wrapped) pre {
+  width: max-content;
+  min-width: 100%;
   padding-right: 48px;
 }
 

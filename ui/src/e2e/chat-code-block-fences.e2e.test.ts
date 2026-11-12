@@ -156,6 +156,35 @@ suite.define(() => {
           ),
         ).toBeLessThanOrEqual(1);
         await capture("unwrapped");
+
+        // A scrollable box is not enough: its last character must clear the faded control gutter.
+        await viewport.hover();
+        await page.mouse.wheel(10_000, 0);
+        await expect
+          .poll(() =>
+            viewport.evaluate(
+              (element) => element.scrollWidth - element.clientWidth - element.scrollLeft,
+            ),
+          )
+          .toBeLessThanOrEqual(1);
+        const end = await bubble.evaluate((element) => {
+          const sourceElement = element.querySelector("code")!;
+          const walker = document.createTreeWalker(sourceElement, NodeFilter.SHOW_TEXT);
+          let tail = walker.nextNode()!;
+          for (let next = walker.nextNode(); next; next = walker.nextNode()) {
+            tail = next;
+          }
+          const range = document.createRange();
+          const length = tail.textContent!.trimEnd().length;
+          range.setStart(tail, length - 1);
+          range.setEnd(tail, length);
+          return {
+            text: range.getBoundingClientRect().right,
+            gutter: element.querySelector(".code-block-wrap")!.getBoundingClientRect().left,
+          };
+        });
+        expect(end.text).toBeLessThanOrEqual(end.gutter);
+
         await toggle.focus();
         await page.keyboard.press("Space");
         await polledAttribute(toggle, "aria-pressed").toBe("true");
