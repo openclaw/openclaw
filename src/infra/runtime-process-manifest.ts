@@ -467,6 +467,7 @@ export const runtimeProcessDeployManifest = {
     source: "src/worker/worker-deploy-client-credentials.ts",
     split: false,
   },
+  "file-log.worker": { source: "src/worker/worker-deploy-file-log.ts", split: false },
   "file-tool-planning.worker": {
     source: "src/worker/worker-deploy-file-tool-planning.ts",
     split: false,
@@ -514,6 +515,7 @@ export const runtimeProcessSealedManifest = {
       ["codeModeNode", "code-mode-node.worker"],
       ["stateRead", "openclaw-state-read.worker"],
       ["workerNativeLifecycle", "worker-native-lifecycle.worker"],
+      ["fileLog", "file-log.worker"],
       ["fileToolPlanning", "file-tool-planning.worker"],
       ["fileToolRead", "file-tool-read.worker"],
       ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker"],

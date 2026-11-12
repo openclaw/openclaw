@@ -2336,6 +2336,7 @@ src/utils/zod-parse.ts
 src/version.ts
 src/worker/device-folder.ts
 src/worker/protocol-record.ts
+src/worker/worker-deploy-file-log.ts
 test/helpers/temp-dir.ts
 test/test-home-context.mts
 test/test-home-policy.mts
