@@ -9,4 +9,6 @@
 # query disclosure retention and desktop/theme/phone long-label boundary proof.
 # Includes canonical self-profile ownership in the shared test Gateway and
 # exact self-mention response/privacy assertions; production behavior unchanged.
-1066
+# Includes 77 LF for bounded setup-stage diagnostics and one privacy/lifetime
+# regression to identify the unresolved production-HTTP beforeAll timeout.
+1143

@@ -15,7 +15,7 @@ import {
 } from "../../../src/process/gateway-work-admission-state.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
-import { beginUiE2ePhase } from "../../../test/helpers/ui-e2e-phase.js";
+import { beginUiE2ePhase, type UiE2eSetupObserver } from "../../../test/helpers/ui-e2e-phase.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -36,6 +36,7 @@ declare module "vitest" {
 type ControlUiE2eSuiteOptions = {
   browserLaunchOptions?: Omit<NonNullable<Parameters<typeof chromium.launch>[0]>, "executablePath">;
   name: string;
+  observeSetup?: UiE2eSetupObserver;
   resources?: ControlUiE2eScenario<void>;
   setupTimeoutMs?: number;
   teardownTimeoutMs?: number;
@@ -617,21 +618,21 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
                   ],
                   executablePath: chromiumExecutablePath,
                 });
+          const observeSetup: UiE2eSetupObserver["run"] =
+            options.observeSetup?.run ?? ((_stage, run) => run());
           const finishPhase = beginUiE2ePhase("suite-setup");
           setupPromise = Promise.resolve()
             .then(async () => {
               if (options.startServerBeforeBrowser) {
-                server = await startServer();
-                if (stopping) {
-                  return;
+                server = await observeSetup("server-start", startServer);
+                if (!stopping) {
+                  browser = await observeSetup("browser-launch", launchBrowser);
                 }
-                browser = await launchBrowser();
               } else {
-                browser = await launchBrowser();
-                if (stopping) {
-                  return;
+                browser = await observeSetup("browser-launch", launchBrowser);
+                if (!stopping) {
+                  server = await observeSetup("server-start", startServer);
                 }
-                server = await startServer();
               }
               if (!stopping) {
                 // Only an owner whose acquisition began may receive cleanup callbacks.
@@ -648,8 +649,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           resourceLifetime.abort();
           activeScenario?.controller.abort();
           const finishPhase = beginUiE2ePhase("suite-cleanup");
-          const closingContexts = closeOpenBrowserContexts();
-          const contexts = Promise.allSettled([closingContexts]);
+          const contexts = Promise.allSettled([closeOpenBrowserContexts()]);
           const teardown = (async () => {
             const [setup] = await Promise.allSettled([setupPromise]);
             await Promise.allSettled(scenarios);

@@ -5,6 +5,7 @@ import { expect, inject, it } from "vitest";
 import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { createUiE2eSetupObserver } from "../../../test/helpers/ui-e2e-phase.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { buildProductionControlUiE2e, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -15,31 +16,47 @@ let requests = 0;
 // This suite exercises the asset-free fallback, not the preferred Web UI lane.
 const controlUiRoot: ControlUiRootState = { kind: "missing" };
 let currentUiRoot = "";
+const setupObserver = createUiE2eSetupObserver("ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts");
+const observeSetup = setupObserver.run;
 const suite = createControlUiE2eSuite({
+  observeSetup: setupObserver,
   name: "Fresh browser at the production Gateway HTTP boundary",
   startServerBeforeBrowser: true,
   browserLaunchOptions: { ignoreDefaultArgs: ["--disable-back-forward-cache"] },
   async startServer() {
     const productionRoot = inject("controlUiE2ePrebuiltAssets")?.root;
-    if (productionRoot) {
-      // The deployment lane owns immutable production-relative assets.
-      currentUiRoot = productionRoot;
-    } else {
-      await mkdir(path.resolve(".openclaw/tmp"), { recursive: true });
-      currentUiRoot = await mkdtemp(path.resolve(".openclaw/tmp/fallback-current-ui-"));
-      await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
-    }
-    const { createOpenClawTestState } =
-      await import("../../../src/test-utils/openclaw-test-state.ts");
-    const state = await createOpenClawTestState({
-      prefix: "fresh-browser-maintenance-",
-      scenario: "minimal",
-      applyEnv: true,
-      prepareProfileCatalog: true,
-    });
+    await observeSetup(
+      "ui-assets",
+      async () => {
+        if (productionRoot) {
+          // The deployment lane owns immutable production-relative assets.
+          currentUiRoot = productionRoot;
+        } else {
+          await mkdir(path.resolve(".openclaw/tmp"), { recursive: true });
+          currentUiRoot = await mkdtemp(path.resolve(".openclaw/tmp/fallback-current-ui-"));
+          await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
+        }
+      },
+      { prebuiltAssets: Boolean(productionRoot) },
+    );
+    const { createOpenClawTestState } = await observeSetup(
+      "test-state-import",
+      () => import("../../../src/test-utils/openclaw-test-state.ts"),
+    );
+    const state = await observeSetup("test-state", () =>
+      createOpenClawTestState({
+        prefix: "fresh-browser-maintenance-",
+        scenario: "minimal",
+        applyEnv: true,
+        prepareProfileCatalog: true,
+      }),
+    );
     let harness: typeof import("../../../src/gateway/server-http.test-harness.ts");
     try {
-      harness = await import("../../../src/gateway/server-http.test-harness.ts");
+      harness = await observeSetup(
+        "http-import",
+        () => import("../../../src/gateway/server-http.test-harness.ts"),
+      );
     } catch (error) {
       await state.cleanup();
       throw error;
@@ -78,7 +95,7 @@ const suite = createControlUiE2eSuite({
               baseUrl: "http://127.0.0.1:" + address.port + "/console/",
               async close() {
                 done.resolve();
-                await lifetime;
+                await lifetime.finally(setupObserver.report);
               },
             });
             try {
@@ -97,7 +114,7 @@ const suite = createControlUiE2eSuite({
         productionRoot ? Promise.resolve() : rm(currentUiRoot, { recursive: true, force: true }),
     );
     void lifetime.catch(ready.reject);
-    return ready.promise;
+    return observeSetup("http-ready", () => ready.promise);
   },
 });
 
