@@ -30,13 +30,14 @@ const fixtures = vi.hoisted(() => ({
   revisions: new Map<string, number>(),
   projectRoot: "/fixture/project",
   busyRoot: "/fixture/busy",
+  records: undefined as { id: string; path: string }[] | undefined,
 }));
 // mock-isolation: Fixed inventory replaces host database discovery; run custody remains real.
 vi.mock("../agents/worktrees/registry-read.js", () => ({
   readWorktreeCleanupState: async () => ({
-    records: [
-      { id: "idle", path: "/fixture/idle", ownerKind: "session", ownerId: "agent:main:idle" },
+    records: fixtures.records ?? [
       { id: "busy", path: fixtures.busyRoot, ownerKind: "session", ownerId: "agent:main:busy" },
+      { id: "idle", path: "/fixture/idle", ownerKind: "session", ownerId: "agent:main:idle" },
     ],
     leases: { liveScopes: [], staleScopes: [] },
   }),
@@ -75,6 +76,7 @@ vi.mock("./session-worker-placement-context.js", () => ({
 }));
 
 beforeEach(() => {
+  fixtures.records = undefined;
   fixtures.release.mockClear();
   fixtures.read.mockClear();
   fixtures.revisions.clear();
@@ -313,3 +315,51 @@ it.each(["unbound", "running"] as const)(
     }
   },
 );
+
+it("reclaims old scratch across restarts before a newer checkout exhausts the candidate budget", async () => {
+  const tempDirs = createTrackedTempDirs();
+  const root = await fs.realpath(await tempDirs.make("scratch-restart-order-"));
+  const recent = path.join(root, "recent");
+  const older = path.join(root, "older");
+  // The registry publishes newest-created worktrees first.
+  fixtures.records = [
+    { id: "recent", path: recent },
+    { id: "older", path: older },
+  ];
+  const now = Date.now();
+  const expired = new Date(now - SCRATCH_TTL_MS - 1_000);
+  for (const checkout of [recent, older]) {
+    const scratch = path.join(checkout, ".openclaw/tmp");
+    await fs.mkdir(scratch, { recursive: true });
+    for (let index = 0; index < 258; index++) {
+      const file = path.join(scratch, String(index));
+      await fs.writeFile(file, "scratch");
+      if (checkout === older) {
+        await fs.utimes(file, expired, expired);
+      }
+    }
+  }
+  try {
+    for (const expected of [256, 2]) {
+      const prepared = await prepareScratchMaintenanceTargets(config);
+      const cursor: ScratchCleanupCursor = {};
+      try {
+        const result = await cleanScratch({
+          targets: prepared.targets,
+          now,
+          cursor,
+          assertCurrent: () => {},
+          pause: async () => {},
+        });
+        expect(result.entriesRemoved).toBe(expected);
+      } finally {
+        await closeScratchCleanupCursor(cursor);
+        prepared.release();
+      }
+    }
+    expect(await fs.readdir(path.join(older, ".openclaw/tmp"))).toEqual([]);
+    expect(await fs.readdir(path.join(recent, ".openclaw/tmp"))).toHaveLength(258);
+  } finally {
+    await tempDirs.cleanup();
+  }
+});
