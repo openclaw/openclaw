@@ -6,6 +6,7 @@ import type {
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   formatBrowserPairCode,
   formatBrowserPairDeviceId,
@@ -21,7 +22,7 @@ type PairOpts = GatewayRpcOpts & { yes?: boolean; json?: boolean };
 
 const PAIR_DEFAULT_TIMEOUT_MS = 10_000;
 
-async function callPairCode(opts: PairOpts, params: DevicePairCodeParams) {
+async function callPairCode(opts: PairOpts, params: DevicePairCodeParams, signal?: AbortSignal) {
   try {
     return await callGatewayFromCliWithTransport<DevicePairCodeResult>(
       "device.pair.code",
@@ -32,6 +33,7 @@ async function callPairCode(opts: PairOpts, params: DevicePairCodeParams) {
         defaultTimeoutMs: PAIR_DEFAULT_TIMEOUT_MS,
         scopes: [ADMIN_SCOPE],
         sharedStateMode: "read-only",
+        signal,
       },
     );
   } catch (error) {
@@ -79,7 +81,20 @@ export async function runPairCommand(rawCode: string, opts: PairOpts): Promise<v
       "That is not a pairing code. Copy the code shown in the browser, for example ABCD-EFGH.",
     );
   }
-  const request = await callPairCode(opts, { code });
+  // The pairing-code read stops with the command; nothing it settles to is printed after Ctrl+C.
+  const signal = getAsyncWorkSignal();
+  let request: DevicePairCodeResult;
+  try {
+    request = await callPairCode(opts, { code }, signal);
+  } catch (error) {
+    if (signal?.aborted) {
+      return;
+    }
+    throw error;
+  }
+  if (signal?.aborted) {
+    return;
+  }
   if (!opts.json) {
     logRequest(request);
   }
