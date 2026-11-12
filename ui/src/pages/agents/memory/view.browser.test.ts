@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
+import "../../../styles.css";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { createDreamingViewState } from "./dreaming.ts";
 import {
@@ -52,5 +53,22 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
     expect(dates.getBoundingClientRect().right).toBeLessThanOrEqual(
       host.getBoundingClientRect().right,
     );
+  });
+
+  it("smooths diary prose for reading while dates and page chrome stay antialiased", () => {
+    host = document.createElement("div");
+    document.body.append(host);
+    const props = createDreamingViewProps(createDreamingViewState(), {
+      dreamDiaryContent: "# Dream Diary\n\n---\n\n*October 1, 2026, 3:00 AM*\n\nA quiet dream.",
+    });
+    renderDreamingView(props, host);
+
+    const smoothing = (selector: string) =>
+      getComputedStyle(expectDefined(document.querySelector(selector), selector)).getPropertyValue(
+        "-webkit-font-smoothing",
+      );
+    expect(smoothing(".dreams-diary__para")).toBe("auto");
+    expect(smoothing(".dreams-diary__date")).toBe("antialiased");
+    expect(smoothing("body")).toBe("antialiased");
   });
 });
