@@ -536,7 +536,11 @@ as before.
 Generic metadata writes (`workboard_create`, `workboard.cards.update`) cannot add
 evidence, and Gateway `workboard.cards.complete` rejects `claims` because it has no
 agent identity to stamp. A card keeps the 4 newest records of each kind, within about
-6 KiB in total, so evidence never crowds out proof or run history. Workboard versions
+6 KiB in total. Evidence only uses room the card's other records leave: when the
+card is near its 24 KiB metadata budget, Workboard drops the oldest evidence first,
+never proof, attempts, comments, or artifacts. Claims and observations that cannot
+fit are dropped without failing completion; `workboard_verify` returns an error
+instead. Workboard versions
 before this one ignore the field and may drop it on their next write to the card.
 
 ## Dispatch

@@ -12,8 +12,9 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
 import { cardRunId } from "./store-card-helpers.js";
+import { MAX_CARD_METADATA_BYTES } from "./store-constants.js";
 import type { WorkboardUpdateCardOptions } from "./store-inputs.js";
-import { normalizeBoundedString, trimMetadataToBudget } from "./store-normalizers.js";
+import { normalizeBoundedString } from "./store-normalizers.js";
 
 // Evidence lives in automation JSON, outside the metadata trim loop, so it keeps its
 // own bounds: the newest few of each kind, then a byte cap on the whole list.
@@ -40,24 +41,46 @@ export function appendEvidence(
   return kept;
 }
 
+function fitsCardBudget(metadata: WorkboardMetadata): boolean {
+  return Buffer.byteLength(JSON.stringify(metadata), "utf8") <= MAX_CARD_METADATA_BYTES;
+}
+
+function attachEvidence(metadata: WorkboardMetadata, evidence: WorkboardResultEvidence[]) {
+  return { ...metadata, automation: { ...metadata.automation, evidence } };
+}
+
 /**
  * Evidence is store-owned. Normalizing a metadata patch never carries it, so every
  * card write restores the stored list, or the replacement an evidence writer built,
  * here. Raw metadata therefore cannot add, edit, or drop evidence.
+ *
+ * Evidence only uses room the card's other records leave: it drops its own oldest
+ * entries until the card fits and never makes the metadata trimmer evict anything.
  */
 export function withStoredEvidence(
   metadata: WorkboardMetadata,
   existing: WorkboardCard,
   options: WorkboardUpdateCardOptions,
 ): WorkboardMetadata {
-  const evidence = options.automationEvidence ?? existing.metadata?.automation?.evidence;
-  if (!evidence) {
-    return metadata;
+  const evidence = [
+    ...(options.automationEvidence ?? existing.metadata?.automation?.evidence ?? []),
+  ];
+  for (; evidence.length > 0; evidence.shift()) {
+    const next = attachEvidence(metadata, evidence);
+    if (fitsCardBudget(next)) {
+      return next;
+    }
   }
-  return trimMetadataToBudget(
-    { ...metadata, automation: { ...metadata.automation, evidence } },
-    options,
-  );
+  return metadata;
+}
+
+/** A checker gets a visible refusal, rather than a silent drop, when its record cannot fit. */
+export function assertEvidenceFits(card: WorkboardCard, record: WorkboardResultEvidence): void {
+  if (!fitsCardBudget(attachEvidence(card.metadata ?? {}, [record]))) {
+    throw new Error(
+      "card metadata has no room for this verification; shorten scope, note, or url.",
+    );
+  }
 }
 
 function cardHasId(entries: readonly { id: string }[] | undefined, id: string | undefined) {

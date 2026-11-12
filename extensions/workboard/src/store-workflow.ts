@@ -31,7 +31,12 @@ import {
   MAX_CARD_ARTIFACTS,
   secondsToDurationMs,
 } from "./store-constants.js";
-import { appendEvidence, buildCompletionClaims, buildVerification } from "./store-evidence.js";
+import {
+  appendEvidence,
+  assertEvidenceFits,
+  buildCompletionClaims,
+  buildVerification,
+} from "./store-evidence.js";
 import type {
   WorkboardBlockInput,
   WorkboardCardPatch,
@@ -331,6 +336,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const verification = buildVerification(existing, input, checkerId, Date.now());
+      assertEvidenceFits(existing, verification);
       return await this.updateCard(
         existing,
         {},
