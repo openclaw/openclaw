@@ -11,7 +11,7 @@ import {
   type UsageCostWorkerInput,
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
-import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
+import { resolveWorkerHeapLimitMb, resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { createOwnedWorkerTaskPool, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type {
   SessionHistoryWorkerInput,
@@ -21,7 +21,7 @@ import type {
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 // V8's default young generation lets each idle reader keep ~60 MiB of nursery.
 export const SESSION_TRANSCRIPT_WORKER_LIMITS = {
-  maxOldGenerationSizeMb: 512,
+  maxOldGenerationSizeMb: resolveWorkerHeapLimitMb(),
   maxYoungGenerationSizeMb: 32,
 };
 

@@ -18,6 +18,7 @@ import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
+import { resolveWorkerHeapLimitMb } from "../../infra/worker-pool-sizing.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -83,7 +84,7 @@ export function createSqliteTranscriptArchiveWorker(
   const postgresPool = createPostgresPoolEndpoints();
   try {
     worker = createCpuTrackedWorker(workerUrl, {
-      resourceLimits: { maxOldGenerationSizeMb: 512 },
+      resourceLimits: { maxOldGenerationSizeMb: resolveWorkerHeapLimitMb() },
       workerData: {
         ...workerData,
         postgresPool,
