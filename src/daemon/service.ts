@@ -6,7 +6,6 @@ import {
   installLaunchAgent,
   isLaunchAgentEnabled,
   isLaunchAgentLoaded,
-  readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   restartLaunchAgent,
   startLaunchAgent,
@@ -28,13 +27,16 @@ import {
   stageScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks-install.js";
-import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { stopStalledGatewayStartup } from "./schtasks-process.js";
 import {
   isScheduledTaskEnabled,
   isScheduledTaskInstalled,
   readScheduledTaskRuntime,
 } from "./schtasks-runtime.js";
+import {
+  GATEWAY_SERVICE_COMMAND_READERS,
+  isSupportedGatewayServicePlatform,
+} from "./service-command.js";
 import { recoverForegroundGatewayForService } from "./service-foreground-recovery.js";
 import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
@@ -61,7 +63,6 @@ import {
   findInstalledSystemdGatewayScope,
   installSystemdService,
   isSystemdServiceEnabled,
-  readSystemdServiceExecStart,
   readSystemdServiceRuntime,
   restartSystemdService,
   startSystemdService,
@@ -182,7 +183,7 @@ export function describeGatewayServiceRestart(
   };
 }
 
-type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
+type SupportedGatewayServicePlatform = keyof typeof GATEWAY_SERVICE_COMMAND_READERS;
 type ServiceKind = "gateway" | "node";
 
 function describeUnsupportedGatewayService(kind: ServiceKind): string {
@@ -239,7 +240,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,
     isEnabled: isLaunchAgentEnabled,
-    readCommand: readLaunchAgentProgramArguments,
+    readCommand: GATEWAY_SERVICE_COMMAND_READERS.darwin,
     readRuntime: readLaunchAgentRuntime,
   },
   linux: {
@@ -273,7 +274,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
         ...(systemdReadTarget ? { systemdReadTarget } : {}),
         ...(requireLoaded ? { requireLoaded: true } : {}),
       }),
-    readCommand: readSystemdServiceExecStart,
+    readCommand: GATEWAY_SERVICE_COMMAND_READERS.linux,
     readRuntime: readSystemdServiceRuntime,
   },
   win32: {
@@ -288,7 +289,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     restart: restartScheduledTask,
     isLoaded: isScheduledTaskInstalled,
     isEnabled: isScheduledTaskEnabled,
-    readCommand: readScheduledTaskCommand,
+    readCommand: GATEWAY_SERVICE_COMMAND_READERS.win32,
     readRuntime: readScheduledTaskRuntime,
   },
 };
@@ -468,12 +469,6 @@ function withGatewayServiceMutationGuards(
       },
     ),
   };
-}
-
-function isSupportedGatewayServicePlatform(
-  platform: NodeJS.Platform,
-): platform is SupportedGatewayServicePlatform {
-  return Object.hasOwn(GATEWAY_SERVICE_REGISTRY, platform);
 }
 
 export function resolveGatewayService(kind: ServiceKind = "gateway"): GatewayService {

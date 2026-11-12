@@ -28,11 +28,12 @@ import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.adm
 import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
 import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import { createStateDatabaseWalOwner } from "./openclaw-state-db-cache.wal.js";
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseCloseOptions,
-  OpenClawStateDatabaseLifecycleEvent,
-  StateDatabaseHandle,
+import {
+  STATE_DATABASE_LIFECYCLE_KEY,
+  type OpenClawStateDatabase,
+  type OpenClawStateDatabaseCloseOptions,
+  type OpenClawStateDatabaseLifecycleEvent,
+  type StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
 import {
   closeStateDatabaseHandle,
@@ -45,7 +46,6 @@ import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-const STATE_DATABASE_LIFECYCLE_KEY = Symbol.for("openclaw.stateDatabaseLifecycle");
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
   STATE_DATABASE_LIFECYCLE_KEY,
   () => ({
