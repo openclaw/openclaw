@@ -335,6 +335,33 @@ it("coalesces archives in the maintenance context and sweeps again after in-flig
   expect(gc).toHaveBeenCalledTimes(2);
 });
 
+it.each(["checkout", "template"])(
+  "carries scratch pressure into %s backoff without holding GC entry",
+  async (kind) => {
+    // A fresh slow commit is reported once; unchanged counters are healthy on the next sample.
+    const probe = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
+    await using fixture = maintenanceFixture();
+    const removed = vi.fn();
+    const gc = vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+      if (kind === "template") {
+        await params.beforeTemplateRemoval!();
+      } else {
+        await params.beforeRemoval!(cleanupRecord);
+      }
+      removed();
+      return completedResult();
+    });
+    fixture.start().request();
+    void fixture.run();
+    await vi.waitFor(() => expect(gc).toHaveBeenCalledOnce());
+    await fixture.clock.advanceBy(299_999);
+    expect(removed).not.toHaveBeenCalled();
+    await fixture.clock.advanceBy(1);
+    await vi.waitFor(() => expect(removed).toHaveBeenCalledOnce());
+  },
+);
+
 it.each([
   { budget: "eight checkouts", batchSize: 8, elapsedMs: 0 },
   { budget: "five seconds", batchSize: 1, elapsedMs: 5_000 },

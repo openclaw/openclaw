@@ -256,8 +256,9 @@ export function startWorktreeMaintenance(params: {
               async () => {
                 await previousDrain;
                 assertCurrent();
+                let scratchPressure = false;
                 try {
-                  let scratchPressure = await hasIoPressure();
+                  scratchPressure = await hasIoPressure();
                   const assertScratchCurrent = () => {
                     assertCurrent();
                     if (scratchPressure) {
@@ -286,6 +287,10 @@ export function startWorktreeMaintenance(params: {
                 } catch (error) {
                   assertCurrent();
                   params.onError(`Scratch cleanup failed: ${String(error)}`);
+                }
+                // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
+                if (scratchPressure) {
+                  nextRemovalAt = Math.max(nextRemovalAt, scheduler.now() + PRESSURE_BACKOFF_MS);
                 }
                 const result = await managedWorktrees.gc({
                   ...createManagedWorktreeOwnerPolicy(config),
