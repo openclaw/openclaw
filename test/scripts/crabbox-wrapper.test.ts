@@ -76,7 +76,7 @@ const GIT_MERGE_BASE_RELEASE_HEAD_KEY = "merge-base\u0000origin/release/2026.7.2
 const GIT_CHECK_RELEASE_REF_KEY = "check-ref-format\u0000refs/remotes/origin/release/2026.7.2";
 const defaultProviderHelp =
   "provider: hetzner, aws, ascii-box, local-container, blacksmith-testbox, or cloudflare\n";
-const brokerProviderHelp = "provider: aws, azure, blacksmith-testbox, or daytona\n";
+const brokerProviderHelp = "provider: ascii-box, aws, azure, blacksmith-testbox, or daytona\n";
 const azureProviderHelp =
   "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
 const fakeRunValueOptionHelp = [
@@ -86,6 +86,7 @@ const fakeRunValueOptionHelp = [
   "blacksmith-workflow string",
   "capture-stderr string",
   "capture-stdout string",
+  "class string",
   "download value",
   "fresh-pr string",
   "id string",
@@ -97,6 +98,7 @@ const fakeRunValueOptionHelp = [
   "script string",
   "target string",
   "ttl duration",
+  "type string",
   "windows-mode string",
 ]
   .map((option) => `  -${option}\n`)
@@ -582,6 +584,9 @@ function wrapperEnv(helpText: string, options: WrapperOptions): NodeJS.ProcessEn
     CRABBOX_TARGET: "",
     CRABBOX_TARGET_OS: "",
     CRABBOX_WINDOWS_MODE: "",
+    CRABBOX_DEFAULT_CLASS: "",
+    CRABBOX_SERVER_TYPE: "",
+    CRABBOX_CONFIG: "",
     OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "",
     OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
     OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
@@ -2023,14 +2028,14 @@ describe("scripts/crabbox-wrapper", () => {
       name: "fails closed when no policy provider is ready",
       args: ["run", "--workload", "ci-fast", "--", "echo ok"],
       options: {
-        env: fakeCrabboxEnv({ UNREADY_PROVIDERS: "blacksmith-testbox,daytona,azure,aws" }),
+        env: fakeCrabboxEnv({ UNREADY_PROVIDERS: "ascii-box,daytona,azure,aws" }),
       },
       includes: [
         "no ready provider for workload=ci-fast",
         "provider readiness",
-        "blacksmith-testbox:doctor exited 1: provider (failed)",
+        "ascii-box:doctor exited 1: provider (failed)",
       ],
-      matches: [/recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u],
+      matches: [/recovery: run `\S+crabbox doctor --provider ascii-box --json`/u],
     },
     {
       name: "ignores the legacy direct AWS override",
@@ -2305,6 +2310,20 @@ describe("scripts/crabbox-wrapper", () => {
     messages?: string[];
     timeoutProbe?: boolean;
   }>([
+    {
+      name: "selects Boat first for routine CI proof",
+      args: ["run", "--workload", "ci-fast", "--no-sync", "--no-hydrate", "--", "echo ok"],
+      options: {},
+      provider: "ascii-box",
+      messages: ["selected=ascii-box chain=ascii-box,daytona,azure,aws"],
+    },
+    {
+      name: "uses the next eligible provider when Boat is not ready",
+      args: ["run", "--workload", "ci-proof", "--no-sync", "--no-hydrate", "--", "echo ok"],
+      options: { env: fakeCrabboxEnv({ UNREADY_PROVIDERS: "ascii-box" }) },
+      provider: "daytona",
+      messages: ["selected=daytona chain=ascii-box,daytona,azure,aws", "ascii-box:doctor exited 1"],
+    },
     {
       name: "falls through a doctor-reported auth failure to the next provider",
       args: ["run", "--workload", "desktop", "--", "echo ok"],
@@ -3081,46 +3100,52 @@ console.error = function (...args) {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([0, 43])(
-    "executes the named Testbox job with frozen preparation (install exit %s)",
-    (installExit) => {
-      const root = invocationLogTempDirs.make("openclaw-testbox-job-");
-      const events = path.join(root, "events");
-      writeShellCommand(
-        path.join(root, "corepack"),
-        `
-case "$*" in
-  'pnpm install --frozen-lockfile')
-    printf 'install\\n' >> ${shellQuote(events)}
-    printf 'install diagnostics\\n'
-    exit ${installExit}
-    ;;
-  'pnpm check:changed')
-    printf 'payload\\n' >> ${shellQuote(events)}
-    printf 'payload\\n'
-    ;;
-  *) exit 64 ;;
-esac
-`,
-      );
-      const config = parse(readFileSync(path.join(repoRoot, ".crabbox.yaml"), "utf8")) as {
-        jobs: { "testbox-changed": { shell?: boolean; command: string } };
-      };
-      const job = config.jobs["testbox-changed"];
-      // Crabbox jobRunArgs uses strings.Fields unless shell is enabled.
-      const command = job.shell
-        ? job.command
-        : job.command.trim().split(/\s+/u).map(shellQuote).join(" ");
-      const result = spawnSync("bash", ["-c", command], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: { ...process.env, PATH: [root, process.env.PATH].join(path.delimiter) },
+  it.each<{
+    name: string;
+    args?: string[];
+    config?: Record<string, unknown>;
+    env?: Record<string, string>;
+    warmup?: boolean;
+    fast?: boolean;
+  }>([
+    { name: "new Boat run", fast: true },
+    { name: "new fixed Boat warmup", warmup: true, args: ["--lease-id", "cbx_new"], fast: true },
+    { name: "explicit class", args: ["--class", "standard"] },
+    { name: "explicit native size", args: ["--type=small"] },
+    { name: "environment class", env: { CRABBOX_DEFAULT_CLASS: "standard" } },
+    { name: "environment size", env: { CRABBOX_SERVER_TYPE: "small" } },
+    { name: "alternate config", env: { CRABBOX_CONFIG: "fixture.yaml" } },
+    { name: "configured class", config: { class: "large" } },
+    { name: "configured native size", config: { serverTypeExplicit: true } },
+    { name: "existing Boat lease", args: ["--id", "cbx_existing"] },
+    { name: "explicit AWS", args: ["--provider", "aws"] },
+    { name: "automatic Windows", args: ["--target", "windows"] },
+  ])(
+    "preserves repository defaults and sizing for $name",
+    ({ args = [], config: overrides, env, warmup, fast = false }) => {
+      const config = parse(readFileSync(path.join(repoRoot, ".crabbox.yaml"), "utf8"));
+      expect(config).toMatchObject({
+        provider: "boat",
+        class: "standard",
+        asciiBox: { noEnv: true, noSnapshots: true, visibility: "private" },
+        actions: { workflow: ".github/workflows/crabbox-hydrate.yml", job: "hydrate" },
+        jobs: {
+          prewarm: { provider: "azure", class: "standard", type: "Standard_D4ads_v6" },
+          changed: { provider: "azure", class: "standard", type: "Standard_D4ads_v6" },
+        },
       });
-      expect(result.status, result.stderr).toBe(installExit);
-      expect(result.stdout).toBe(installExit ? "" : "payload\n");
-      expect(result.stderr).toContain("install diagnostics");
-      expect(readFileSync(events, "utf8")).toBe(installExit ? "install\n" : "install\npayload\n");
+      expect(config.jobs).not.toHaveProperty("testbox-changed");
+      const result = runWrapper(
+        brokerProviderHelp,
+        warmup
+          ? ["warmup", ...args]
+          : ["run", ...args, "--no-sync", "--no-hydrate", "--", "echo", "ok"],
+        { configJson: { ...config, serverTypeExplicit: false, ...overrides }, env },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const output = parseFakeCrabboxOutput(result);
+      expect(output.args.filter((arg) => arg === "fast")).toHaveLength(fast ? 1 : 0);
+      expect(output.args).toEqual(expect.arrayContaining(args));
     },
   );
 
@@ -4046,12 +4071,12 @@ esac
     // First probe is SIGKILLed at 25ms; the retry gets the full generous timeout
     // and reads the (80ms) stderr help, so the wrapper must not hard-fail.
     const result = runWrapper(helpText, ["--version"], {
-      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
+      env: { CRABBOX_PROVIDER: "aws", OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
       extraPathEntries: [makeSlowHelpCrabbox(helpText, 80)],
     });
 
     expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).not.toContain("could not parse provider list");
     expect(result.stderr).not.toContain("selected binary failed --help sanity checks");
     expect(result.stderr).toContain(

@@ -331,6 +331,13 @@ export async function ensureCanonicalUserProfileForOpenClawIdIdentity(
 ): Promise<UserProfile> {
   return unwrap(await write("userProfiles.ensureOpenClawId", input, options));
 }
+
+export async function ensureCanonicalDelegatedUserProfile(
+  input: UserProfileWriteOperations["userProfiles.ensureDelegated"]["input"],
+  options: ProfileWriteOptions = {},
+): Promise<UserProfile> {
+  return unwrap(await write("userProfiles.ensureDelegated", input, options));
+}
 export async function syncCanonicalGitHubIdentity(
   input: UserProfileWriteOperations["userProfiles.syncGitHub"]["input"],
   options: ProfileWriteOptions = {},

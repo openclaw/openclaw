@@ -89,7 +89,8 @@ it("lets the installed plugin request review and gates its effect on Allow once 
       `---\n${JSON.stringify({
         schemaVersion: 1,
         agent: { id: "approval-template", name: "Approval Template" },
-        packages: [{ kind: "plugin", source: "clawhub", ref: packageName, version }],
+        skills: [],
+        plugins: [{ ref: packageName, version }],
       })}\n---\n`,
     );
 

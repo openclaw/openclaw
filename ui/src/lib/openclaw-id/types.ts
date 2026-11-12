@@ -69,6 +69,8 @@ export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   seq?: number;
   /** Active owner devices only; removed and expired ones are not listed. */
   ownerDevices?: OpenClawIdOwnerDevice[];
+  /** The last publication to Discovery, while one was attempted. */
+  publication?: OpenClawIdPublication;
 };
 
 /** An active owner device as `openclawId.people` lists it. */

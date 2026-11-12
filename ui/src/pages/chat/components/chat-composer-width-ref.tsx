@@ -20,14 +20,13 @@ try {
   // A module reload finds it already registered.
 }
 
-/** The transcript's reading column: no Details track, scrollbar gutters, or reading inset. */
+/** The transcript's reading column: no Details reservation, scrollbar gutters, or reading inset. */
 export function transcriptColumnWidth(transcript: HTMLElement) {
   const style = getComputedStyle(transcript);
-  // Desktop CSS reserves Details in the second track; the first is the reading column.
+  // The scrollport spans Details; its reading column reserves that space.
   const column =
-    style.display === "grid"
-      ? Number.parseFloat(style.gridTemplateColumns)
-      : transcript.clientWidth;
+    transcript.clientWidth -
+    (Number.parseFloat(style.getPropertyValue("--chat-details-space")) || 0);
   return column - 2 * Number.parseFloat(style.getPropertyValue("--chat-thread-inline-inset"));
 }
 

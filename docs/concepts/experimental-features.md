@@ -260,17 +260,18 @@ you set the options below. Or use config:
     entries: {
       advisor: {
         enabled: true,
-        config: { everyToolCalls: 10, everyMinutes: 20 },
+        config: { everyMinutes: 20, everyToolCalls: 0 },
       },
     },
   },
 }
 ```
 
-- `everyToolCalls` (default `10`, range `0`–`1000`): review after this many tool
-  calls in a conversation.
 - `everyMinutes` (default `20`, range `0`–`1440`): review after this many minutes
-  of work in a run, checked when a tool starts.
+  of work in a run, checked when a tool starts. Runs shorter than this are not
+  reviewed.
+- `everyToolCalls` (default `0`, off; range `0`–`1000`): also review after this
+  many tool calls in a conversation.
 - `reviewInstructions` (optional, up to 4,000 characters): replaces the built-in
   definition of "off course". Changes apply to the next review.
 
@@ -278,8 +279,12 @@ Set both triggers to `0` to turn reviews off.
 
 Behavior and limits:
 
-- Only user-triggered runs are reviewed. Heartbeat, cron and other automatic
-  runs are not.
+- Only the main agent's user-triggered runs are reviewed. Heartbeat, cron and
+  other automatic runs are not, and neither are subagent sessions: the main
+  agent sees what its subagents report, so Advisor corrects the main agent,
+  which can redirect the subagent.
+- After a correction steers a run, later reviews in that run are told what was
+  already said and stay quiet unless they find a different problem.
 - A due review waits until every running tool call has its result, so the fork
   never sees a missing or synthetic tool outcome. A stalled call delays the
   review rather than forcing it.
@@ -353,6 +358,10 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   the account menu. Nodes and other devices are managed as before.
 - There is no owner reset in this version: a claw keeps the recovery kit it was
   linked with, so store the kit safely.
+- To move a claw to new connection keys (a lost or leaked key file, a new computer
+  without the key files, or routine rotation), run `openclaw id rebind` on the
+  computer that runs it, with its recovery kit. Devices, people, nodes and invites
+  stay ([CLI](/cli/id)).
 
 ### Sign in with OpenClaw ID
 
@@ -383,7 +392,8 @@ instead of asking you to paste one.
   reports `keys_missing` or `key_mismatch`. Nothing is published or dialed with
   another key. The Gateway itself keeps running, so everything on this computer
   works as before. To bring remote access back, restore the original key files,
-  then restart the Gateway.
+  then restart the Gateway, or move the claw to new keys with its recovery kit
+  on this computer: `openclaw id rebind` ([CLI](/cli/id)).
 - The child admits a device only if the Gateway's membership lists the
   device's endpoint key, and checks that before accepting any stream. Until a
   claw is linked, nobody is admitted.

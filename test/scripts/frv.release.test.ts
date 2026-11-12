@@ -1769,9 +1769,13 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps blocked Decision and active Diagnostic Drain distinct (json=%s)",
-    async (json) => {
+  it.each([
+    [false, "Diagnostic Drain"],
+    [true, "Diagnostic Drain"],
+    [true, "Diagnostic Drain / Watch"],
+  ] as const)(
+    "keeps blocked Decision and active Diagnostic Drain distinct (json=%s, job=%s)",
+    async (json, drainName) => {
       const fixture = publicationFixture();
       fixture.root.status = "in_progress";
       const result = await runPublicationCli(
@@ -1781,7 +1785,7 @@ describe("publication status real CLI", () => {
           responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
             jobs: [
               {
-                ...job("Diagnostic Drain"),
+                ...job(drainName),
                 status: "in_progress",
                 conclusion: null,
                 run_attempt: 2,
