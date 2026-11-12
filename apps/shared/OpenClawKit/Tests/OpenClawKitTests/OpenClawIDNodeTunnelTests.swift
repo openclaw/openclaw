@@ -339,6 +339,58 @@ struct OpenClawIDNodeTunnelTests {
         await tunnel.shutdown()
     }
 
+    @Test func `a refused refresh revokes a pending dial to the previous key`() async throws {
+        let a = "iroh:" + String(repeating: "a", count: 64)
+        let endpoint = NodeOverlappingEndpoint(oldKey: a)
+        // The probe's refresh is refused after A was verified, as when a newer binding is pinned
+        // but its snapshot is rejected.
+        let keys = NodeKeySequence([a])
+        let tunnel = try OpenClawIDNodeTunnel(
+            endpoint: endpoint,
+            verifiedServerKey: { try await keys.next() },
+            relayURL: #require(URL(string: "https://relay.example/")),
+            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { duration in
+                if duration == .milliseconds(500) { return }
+                try await NodeTestWaiter<Void>().wait()
+            }))
+        let lead = Task { try await tunnel.openStream() }
+        try await endpoint.oldDialStarted.wait()
+        await #expect(throws: OpenClawIDNodeEnrollmentError.rollback) { try await tunnel.checkLiveness() }
+        endpoint.releaseOldDial.resolve(())
+        await #expect(throws: OpenClawIDNodeTransportError.closed) { try await lead.value }
+        #expect(await endpoint.oldConnection.opens == 0)
+        #expect(await endpoint.oldConnection.closes == [0])
+        await tunnel.shutdown()
+    }
+
+    @Test func `a superseded key cannot report the node removed`() async throws {
+        let a = "iroh:" + String(repeating: "a", count: 64)
+        let b = "iroh:" + String(repeating: "b", count: 64)
+        let endpoint = NodeOverlappingEndpoint(oldKey: a, oldCloseCode: 1)
+        let keys = NodeKeySequence([a, b, b])
+        let admissionTimers = NodeTestCounter()
+        let tunnel = try OpenClawIDNodeTunnel(
+            endpoint: endpoint,
+            verifiedServerKey: { try await keys.next() },
+            relayURL: #require(URL(string: "https://relay.example/")),
+            clock: OpenClawIDNodeClock(now: { 0 }, sleep: { duration in
+                // A's admission timer never fires, so its close result must decide that dial.
+                if duration == .milliseconds(500), admissionTimers.next() > 1 { return }
+                try await NodeTestWaiter<Void>().wait()
+            }))
+        let lead = Task { try await tunnel.openStream() }
+        try await endpoint.oldDialStarted.wait()
+        let probe = Task { try await tunnel.checkLiveness() }
+        try await endpoint.newDialStarted.wait()
+        endpoint.releaseOldDial.resolve(())
+        await #expect(throws: OpenClawIDNodeTransportError.closed) { try await lead.value }
+        endpoint.releaseNewDial.resolve(())
+        try await probe.value
+        _ = try await tunnel.openStream()
+        #expect(await endpoint.dials == [a, b, b])
+        await tunnel.shutdown()
+    }
+
     @Test func `a stream opening during key retirement is reset before return`() async throws {
         let a = "iroh:" + String(repeating: "a", count: 64)
         let b = "iroh:" + String(repeating: "b", count: 64)
@@ -481,6 +533,16 @@ private struct NodeTestConnection: OpenClawIDNodeConnection {
 }
 
 /// A cancellable suspension without real timers, used for the losing deadline/close waits.
+private final class NodeTestCounter: Sendable {
+    private let value = Mutex(0)
+    func next() -> Int {
+        self.value.withLock { value in
+            value += 1
+            return value
+        }
+    }
+}
+
 private final class NodeTestWaiter<Value: Sendable>: Sendable {
     private struct State: Sendable {
         var result: Result<Value, Error>?
@@ -610,8 +672,10 @@ private actor NodeOverlappingConnection: OpenClawIDNodeConnection {
     let blockOpen: Bool
     nonisolated let openStarted = NodeTestWaiter<Void>()
     nonisolated let releaseOpen = NodeTestWaiter<Void>()
-    init(blockOpen: Bool = false) {
+    let closeCode: Int64?
+    init(blockOpen: Bool = false, closeCode: Int64? = nil) {
         self.blockOpen = blockOpen
+        self.closeCode = closeCode
     }
 
     func openBi() async throws -> any OpenClawIDNodeStream {
@@ -622,7 +686,8 @@ private actor NodeOverlappingConnection: OpenClawIDNodeConnection {
     }
 
     func closed() async throws -> OpenClawIDNodeClose {
-        try await NodeTestWaiter<OpenClawIDNodeClose>().wait()
+        if let closeCode { return .init(code: closeCode, kind: .application) }
+        return try await NodeTestWaiter<OpenClawIDNodeClose>().wait()
     }
 
     func close(code: Int64) async {
@@ -637,12 +702,14 @@ private actor NodeOverlappingEndpoint: OpenClawIDNodeEndpoint {
     nonisolated let releaseOldDial = NodeTestWaiter<Void>()
     nonisolated let releaseNewDial = NodeTestWaiter<Void>()
     let oldConnection: NodeOverlappingConnection
-    init(oldKey: String, blockOldStream: Bool = false) {
+    var dials: [String] = []
+    init(oldKey: String, blockOldStream: Bool = false, oldCloseCode: Int64? = nil) {
         self.oldKey = oldKey
-        self.oldConnection = NodeOverlappingConnection(blockOpen: blockOldStream)
+        self.oldConnection = NodeOverlappingConnection(blockOpen: blockOldStream, closeCode: oldCloseCode)
     }
 
     func connect(serverKey: String, relayURL: URL, alpn: Data) async throws -> any OpenClawIDNodeConnection {
+        self.dials.append(serverKey)
         if serverKey == self.oldKey {
             self.oldDialStarted.resolve(())
             try await self.releaseOldDial.wait()

@@ -88,21 +88,33 @@ public actor OpenClawIDNodeTunnel {
         let task = Task {
             _ = try? await previous?.value
             try self.checkActive()
-            let key = try await refresh()
+            let key: String
+            do {
+                key = try await refresh()
+            } catch {
+                // A refused refresh may already have committed a newer binding pin, so no earlier
+                // key keeps dial or installation authority until a later refresh verifies one.
+                await self.publish(nil)
+                throw error
+            }
             try self.checkActive()
             // Publication belongs to the serialized refresh, not its awaiting caller. The next
             // refresh cannot commit before this key is visible and its predecessor is retired.
-            self.latestKey = key
-            if let active = self.active, active.key != key {
-                self.active = nil
-                self.closeWatcher?.cancel()
-                self.closeWatcher = nil
-                await active.connection.close(code: 10)
-            }
+            await self.publish(key)
             return key
         }
         self.keyLane = task
         return try await task.value
+    }
+
+    private func publish(_ key: String?) async {
+        self.latestKey = key
+        if let active = self.active, active.key != key {
+            self.active = nil
+            self.closeWatcher?.cancel()
+            self.closeWatcher = nil
+            await active.connection.close(code: 10)
+        }
     }
 
     private func dial() async throws -> (connection: any OpenClawIDNodeConnection, key: String) {
@@ -136,7 +148,9 @@ public actor OpenClawIDNodeTunnel {
                     return try await group.next().flatMap(\.self)
                 }
                 if let close {
-                    if close.requiresReenrollment {
+                    // Only the current server key may report removal; a superseded one cannot
+                    // disable the replacement binding.
+                    if close.requiresReenrollment, key == self.latestKey {
                         await self.markRemoved()
                         throw OpenClawIDNodeTransportError.removed
                     }
