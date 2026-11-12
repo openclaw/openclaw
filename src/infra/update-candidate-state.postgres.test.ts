@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { checkTargetDatabaseSchemasForContexts as checkSchemas } from "../cli/update-cli/schema-preflight.js";
+import { prepareDoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBackupEngine } from "../snapshot/database-backup.js";
 import { withArtifactPreservingStateReads as preserveArtifacts } from "../state/artifact-preserving-state-reads.js";
@@ -17,7 +18,10 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { agentPortProvider } from "./database-engine/agent-port.js";
+import { getDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { writePortAnchor } from "./database-engine/port-backup.test-support.js";
 import { materializeDatabasePort } from "./database-engine/port.worker.js";
 import { statePortProvider } from "./database-engine/state-port.js";
@@ -34,6 +38,8 @@ import {
   createStateSnapshotInput,
   runUpdateCandidateSnapshotWorker,
 } from "./update-candidate-state.test-support.js";
+import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
+import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -275,12 +281,41 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
     expect(versions.find((entry) => entry.path === shared)).toMatchObject({
       userVersion: STATE_VERSION,
     });
-    // The rehearsal copy is a private SQLite image of the PostgreSQL store.
-    using copied = openDatabase(path.join(targetStateDir, path.relative(stateDir, workboard)), {
-      readOnly: true,
-    });
-    expect(copied.prepare("SELECT name FROM workboard_boards").all()).toEqual([
-      { name: "Card A board" },
-    ]);
+    {
+      // The rehearsal copy is a private SQLite image of the PostgreSQL store.
+      using copied = openDatabase(path.join(targetStateDir, path.relative(stateDir, workboard)), {
+        readOnly: true,
+      });
+      expect(copied.prepare("SELECT name FROM workboard_boards").all()).toEqual([
+        { name: "Card A board" },
+      ]);
+    }
+    // Released drivers copy the source database selection into the rehearsal config.
+    await fs.writeFile(
+      path.join(targetStateDir, "openclaw.json"),
+      JSON.stringify({ database: { engine: "postgres", postgres: { connection } } }),
+    );
+    const rehearsalEnv = {
+      ...buildUpdateRehearsalPathEnv(targetStateDir),
+      ...buildUpdateDoctorEnv({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+        serviceRepairPolicy: "external",
+        deferConfiguredPluginInstallRepair: true,
+      }),
+    };
+    resetDatabaseEngineSelectionForTest();
+    try {
+      const preflight = await withEnvAsync(rehearsalEnv, () =>
+        prepareDoctorDatabasePreflight({ preserveSourceArtifacts: true }),
+      );
+      expect(preflight.indeterminate).toEqual([]);
+      expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+        state: "sqlite",
+        workboard: "sqlite",
+      });
+    } finally {
+      resetDatabaseEngineSelectionForTest();
+    }
   });
 });
