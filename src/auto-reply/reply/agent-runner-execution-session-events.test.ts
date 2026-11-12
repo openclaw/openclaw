@@ -9,6 +9,7 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import * as cronInference from "../../cron/run-inference.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
+import { resolveMessageActionTurnAuthorization } from "../../gateway/message-action-turn-capability.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
   consumeCronNextCheckProposal,
@@ -150,28 +151,33 @@ describe("ordinary session event execution", () => {
         expect(params.extraSystemPrompt).toBe("Existing shared session instructions");
       }
       if (runtime === "cli") {
-        expect(staticPrompts).toEqual([
-          "Stable shared session instructions",
-          "Stable shared session instructions",
-        ]);
+        expect(staticPrompts).toEqual(Array(2).fill("Stable shared session instructions"));
       }
     },
   );
 
-  it("captures a structured result before event settlement consumes the invocation", async () => {
+  it("captures a structured result and binds the scheduled grant to the policy session", async () => {
     const runId = "automation-result-capture";
+    const policySessionKey = "agent:main:irc:default:direct:alice";
     const automation = createScheduledAutomation();
     automation.job.payload = {
       kind: "agentTurn",
       message: "Check quietly",
       includeReasoning: true,
     };
+    automation.deliveryAttemptFence = { beforeAttempt: async () => {}, assertCurrent: vi.fn() };
     const followupRun = createFollowupRun();
     const event = createEventExecution();
     followupRun.run.scheduledAutomation = automation;
     followupRun.run.internalEventExecution = event;
     let recordResult: ReturnType<typeof createAutomationResultRecorder> | undefined;
-    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+    let redeemed: unknown[] = [];
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (run) => {
+      // Tools redeem under this peer's policy key only; the grant names its executing session.
+      const lookup = { token: run.messageActionTurnCapability, agentId: "main", runId };
+      redeemed = [policySessionKey, "agent:main:irc:default:direct:bob", "main"].map((sessionKey) =>
+        resolveMessageActionTurnAuthorization({ ...lookup, sessionKey, sessionId: "session" }),
+      );
       recordResult = createAutomationResultRecorder(runId, automation.job.id);
       recordResult({ outcome: "no_change", summary: "Nothing new." });
       return { payloads: [{ text: "No updates." }], meta: {} };
@@ -185,9 +191,10 @@ describe("ordinary session event execution", () => {
     });
     const { replyOperation } = createMockReplyOperation();
 
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
-    );
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun, replyOperation, opts: { runId } }),
+      runtimePolicySessionKey: policySessionKey,
+    });
 
     expect(event.onTerminal).toHaveBeenCalledOnce();
     expect(result.outcome).toMatchObject({
@@ -198,22 +205,15 @@ describe("ordinary session event execution", () => {
         includeReasoning: true,
       },
     });
+    expect(redeemed[0]).toMatchObject({ sourceReplySessionKey: "main", deliveryAttempt: {} });
+    expect(redeemed.slice(1)).toEqual([undefined, undefined]);
   });
 
+  const declared = ["openai/gpt-5.4"];
   it.for([
-    {
-      label: "declared fallback",
-      fallbacks: ["openai/gpt-5.4"],
-      locked: false,
-      expected: ["openai/gpt-5.4"],
-    },
+    { label: "declared fallback", fallbacks: declared, locked: false, expected: declared },
     { label: "explicit empty fallback", fallbacks: [], locked: false, expected: [] },
-    {
-      label: "locked session",
-      fallbacks: ["openai/gpt-5.4"],
-      locked: true,
-      expected: [],
-    },
+    { label: "locked session", fallbacks: declared, locked: true, expected: [] },
   ])(
     "preserves scheduled fallback policy: $label",
     async ({ fallbacks, locked, expected }, { onTestFinished }) => {

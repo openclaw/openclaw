@@ -932,6 +932,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/celeris:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/cerebras:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -1291,6 +1297,12 @@ importers:
         version: link:../..
 
   extensions/fal:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/fastino:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1948,6 +1960,12 @@ importers:
       zod:
         specifier: 4.6.7
         version: 4.6.7
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/nace:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
