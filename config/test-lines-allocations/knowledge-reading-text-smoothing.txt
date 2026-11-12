@@ -1,0 +1,2 @@
+51
+# Knowledge page prose and claims keep auto font smoothing over the antialiased app body.
