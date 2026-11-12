@@ -568,14 +568,30 @@ describe("own-run question admission", () => {
           storePath: resolveOpenClawAgentSqlitePath(sessionScope),
           factsInvalidated: true,
         });
+        // Background membership refresh shares this lane; fault only the question's row read.
         const run = projectionLane.pool.run.bind(projectionLane.pool);
-        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
-          if (cause === "transient worker failure") {
-            throw failure;
+        let injected = false;
+        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+          let selected = false;
+          const result = await run(async () => {
+            const input = typeof args[0] === "function" ? await args[0]() : args[0];
+            if (
+              !injected &&
+              input.kind === "session-exact-entries" &&
+              input.sessionKeys?.includes(sessionScope.sessionKey)
+            ) {
+              injected = true;
+              selected = true;
+              if (cause === "transient worker failure") {
+                throw failure;
+              }
+            }
+            return input;
+          }, args[1]);
+          if (selected) {
+            entered.resolve();
+            await release.promise;
           }
-          const result = await run(...args);
-          entered.resolve();
-          await release.promise;
           return result;
         });
         const request = f.call(
