@@ -1265,8 +1265,10 @@ describe("exportTrajectoryBundle", () => {
     );
     await exportFrom(tmpDir, { sessionTarget });
 
-    const compiled = readEvents(outputDir).find((event) => event.type === "context.compiled");
-    expectDefined(compiled);
+    const compiled = expectDefined(
+      readEvents(outputDir).find((event) => event.type === "context.compiled"),
+      "exported context.compiled event",
+    );
     const data = compiled.data as Record<string, unknown>;
     expect(data.messages).toEqual(messages);
     expect(data.tools).toEqual(tools);
@@ -1290,8 +1292,10 @@ describe("exportTrajectoryBundle", () => {
     );
     await exportFrom(tmpDir, { sessionTarget });
 
-    const compiled = readEvents(outputDir).find((event) => event.type === "context.compiled");
-    expectDefined(compiled);
+    const compiled = expectDefined(
+      readEvents(outputDir).find((event) => event.type === "context.compiled"),
+      "exported context.compiled event",
+    );
     expect((compiled.data as Record<string, unknown>).tools).toEqual(tools);
     const exportedTools = JSON.parse(readText(outputDir, "tools.json")) as unknown;
     expect(exportedTools).toEqual(tools);
