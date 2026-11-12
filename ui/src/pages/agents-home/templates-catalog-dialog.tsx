@@ -3,7 +3,6 @@ import {
   readTemplateReviewRequiredError,
 } from "@openclaw/gateway-protocol";
 import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
@@ -14,11 +13,7 @@ import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import {
-  buildAgentMainSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../../lib/sessions/session-key.ts";
+import { openTemplateAgentChat } from "./template-agent-chat.ts";
 import {
   applyTemplateAdd,
   readTemplateAddReviewPlan,
@@ -192,26 +187,8 @@ class TemplatesCatalogModel {
   }
 
   private openAgentChat(agentId: string, context: ApplicationContext) {
-    const mainKey =
-      resolveUiConfiguredMainKey({
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      }) ?? "main";
-    const sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
-    const target = sessionNavigationTarget({
-      context,
-      face: "chat",
-      sessionKey,
-      agentId,
-    });
-    selectApplicationSession({
-      selection: context.agentSelection,
-      gateway: context.gateway,
-      sessionKey,
-      agentId,
-    });
     this.close();
-    context.navigate("chat", target.options);
+    openTemplateAgentChat(context, agentId);
   }
 
   private async finishChatHandoff(agentId: string, context: ApplicationContext) {

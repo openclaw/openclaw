@@ -11,6 +11,34 @@
   overflow-y: auto;
 }
 
+/* The composer's edge fades: shown only while content continues past that edge. */
+.template-import-dialog > .oc-dialog__body:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
+  --template-import-mask-top: currentColor;
+  --template-import-mask-bottom: currentColor;
+
+  mask-image: linear-gradient(
+    to bottom,
+    var(--template-import-mask-top) 0,
+    currentColor 24px,
+    currentColor calc(100% - 24px),
+    var(--template-import-mask-bottom) 100%
+  );
+}
+
+.template-import-dialog > .oc-dialog__body[data-scroll-fade-top] {
+  --template-import-mask-top: transparent;
+}
+
+.template-import-dialog > .oc-dialog__body[data-scroll-fade-bottom] {
+  --template-import-mask-bottom: transparent;
+}
+
+.template-import-content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
 .template-import-dialog > .oc-dialog__header {
   grid-template-columns: auto minmax(0, 1fr);
 }
@@ -29,8 +57,8 @@
   padding: 0 8px;
   border-radius: var(--radius-sm);
   --btn-bg: var(--surface-hover);
-  color: var(--text);
-  font-size: 11px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
 }
 
 .template-import-file > span {
@@ -45,40 +73,49 @@
   flex-shrink: 0;
 }
 
+/* One level only: the Template sits on the dialog, its contents on one list surface. */
 .template-import-review {
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--surface-hover);
+  display: grid;
+  gap: 12px;
+  min-width: 0;
 }
 
 .template-import-identity {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   min-width: 0;
-  gap: 4px;
-  padding-inline-start: 4px;
-  margin-bottom: 8px;
+  gap: 12px;
 }
 
-.template-import-identity__icon {
-  display: grid;
+.template-import-identity > .agents-home__template-art {
   flex: 0 0 36px;
-  height: 36px;
-  place-items: center;
-  color: var(--accent);
 }
 
-.template-import-identity > div {
+.template-import-identity__text {
+  display: grid;
   flex: 1;
   min-width: 0;
+  gap: 2px;
 }
 
 .template-import-identity h3 {
-  margin: 0 0 2px;
+  margin: 0;
+  overflow: hidden;
   color: var(--text-strong);
-  font-size: 15px;
+  font-size: calc(15px * var(--control-ui-text-scale));
   font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-import-identity__text > span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .template-import-identity__description {
@@ -86,32 +123,43 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
-  margin: 2px 0 0;
+  margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
+}
+
+.template-import-result > .agents-home__template-art {
+  color: var(--ok);
 }
 
 .template-import-tabs {
   display: flex;
-  gap: 12px;
-  margin-bottom: 8px;
+  gap: 16px;
+  margin-top: 4px;
 }
 
 .template-import-tabs .oc-tab {
-  padding: 8px 0;
+  padding: 0;
   border: 0;
+  border-radius: var(--radius-sm);
   color: var(--muted);
-  font-size: 12px;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
+.template-import-tabs .oc-tab:hover,
 .template-import-tabs .oc-tab[aria-selected="true"] {
   color: var(--text-strong);
 }
 
+.template-import-tabs .oc-tab:focus-visible {
+  outline-offset: 4px;
+}
+
 .template-import-surface {
-  border-radius: 14px;
-  background: var(--overlay-modal-surface);
+  border-radius: var(--radius-lg);
+  background: var(--surface-hover);
   overflow: hidden;
 }
 
@@ -120,7 +168,7 @@
   align-items: center;
   gap: 12px;
   min-height: 0;
-  padding: 12px;
+  padding: 10px 12px;
   list-style: none;
 }
 
@@ -128,10 +176,19 @@
   display: none;
 }
 
+.template-import-capability > summary:hover {
+  background: var(--surface-hover);
+}
+
 .template-import-capability__icon {
   display: flex;
   flex-shrink: 0;
   color: var(--accent);
+}
+
+.template-import-capability__icon svg {
+  width: 20px;
+  height: 20px;
 }
 
 .template-import-capability .settings-row__text {
@@ -141,74 +198,165 @@
 
 .template-import-capability .settings-row__title {
   display: block;
-  font-size: 13px;
+  font-size: calc(13px * var(--control-ui-text-scale));
   line-height: 1.5;
 }
 
 .template-import-capability .settings-row__desc {
   display: block;
   margin-top: 0;
+  overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
   line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.template-import-capability .settings-row__chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.template-import-capability .settings-row__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.template-import-capability[open] > summary .settings-row__chevron {
+  transform: rotate(90deg);
+}
+
+/* Disclosed content lines up under the row title, past the icon column. */
 .template-import-capability__details {
   padding: 0 12px 12px 44px;
-  font-size: 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.6;
+}
+
+.template-import-detail-content .template-import-capability__details {
+  padding-inline-start: 12px;
+}
+
+.template-import-capability__details > :first-child {
+  margin-top: 0;
+}
+
+.template-import-capability__details > :last-child {
+  margin-bottom: 0;
 }
 
 .template-import-capability__details ul {
   margin: 0;
-  padding-left: 14px;
+  padding: 0;
+  list-style: none;
 }
 
 .template-import-capability__details li + li {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
-.template-import-detail-content {
+.template-import-files {
+  columns: 2;
+  column-gap: 16px;
+  font-family: var(--mono);
+}
+
+.template-import-files li {
+  break-inside: avoid;
+}
+
+.template-import-detail-content > .template-import-fields {
   padding: 12px;
-  font-size: 12px;
-  line-height: 1.6;
 }
 
-.template-import-detail-content > :first-child {
-  margin-top: 0;
-}
-
-.template-import-detail-content > :last-child {
-  margin-bottom: 0;
-}
-
+/* The plugin detail's definition grid: muted label, value beside it. */
 .template-import-fields {
-  margin: 12px 0;
+  display: grid;
+  grid-template-columns: minmax(88px, max-content) minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0;
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 1.5;
 }
 
-.template-import-fields > div {
-  margin: 8px 0;
+.template-import-capability__details .template-import-fields {
+  font-size: var(--control-ui-text-xs);
 }
 
 .template-import-fields dt {
   color: var(--muted);
-  font-size: 11px;
 }
 
 .template-import-fields dd {
-  margin: 2px 0 0;
+  margin: 0;
+  color: var(--text);
 }
 
-.template-import-configuration {
-  margin-top: 12px;
-}
-
+/* Package grants and warnings read as one more quiet list, not a second dialog. */
 .template-import-consent {
-  display: contents;
+  display: grid;
+  gap: 8px;
+}
+
+.template-import-consent:empty {
+  display: none;
+}
+
+.template-import-consent > .templates-add-consent__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface-hover);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+}
+
+.template-import-consent > .templates-add-consent__item > strong:first-child {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+}
+
+.template-import-consent > .templates-add-consent__item > strong:not(:first-child) {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.template-import-consent > .templates-add-consent__item > ul {
+  display: flex;
+  flex-wrap: wrap;
+  flex-basis: 100%;
+  gap: 2px 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.template-import-consent .templates-trust-warning {
+  flex-basis: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .template-import-footer {
   padding: 0 var(--overlay-modal-padding) var(--overlay-modal-padding);
   flex-shrink: 0;
+}
+
+/* Without a note above them, the actions keep the body's own separation. */
+.template-import-footer > openclaw-modal-actions:first-child {
+  margin-top: 8px;
 }
 
 .template-import-trust {
@@ -217,29 +365,36 @@
   gap: 8px;
   margin: 0 0 12px;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.template-import-acknowledgement {
-  margin: 0 0 12px;
-  color: var(--warn);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--control-ui-text-xs);
+  line-height: 16px;
 }
 
 .template-import-trust > svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
   color: var(--warn);
   flex-shrink: 0;
-  margin-top: 2px;
+}
+
+.template-import-skeleton {
+  display: grid;
+  gap: 8px;
+}
+
+.template-import-skeleton > .skeleton-line {
+  height: 12px;
+}
+
+.template-import-skeleton-rows > .template-import-skeleton {
+  padding: 12px 12px 12px 44px;
 }
 
 .template-import-dialog pre {
+  margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: var(--control-ui-text-xs);
 }
 
 .template-import-dialog code,
@@ -248,26 +403,4 @@
 .template-import-fields dt,
 .template-import-capability__details li {
   overflow-wrap: anywhere;
-}
-
-.template-import-capability__icon svg {
-  width: 20px;
-  height: 20px;
-}
-
-.template-import-capability .settings-row__chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.template-import-capability .settings-row__chevron svg {
-  width: 14px;
-  height: 14px;
-}
-
-.template-import-identity__icon svg {
-  width: 36px;
-  height: 36px;
 }

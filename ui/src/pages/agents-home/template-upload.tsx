@@ -5,12 +5,16 @@ import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { openTemplateAgentChat } from "./template-agent-chat.ts";
+import { templateImportFacts } from "./template-import-facts.ts";
 import { TemplateImportReview } from "./template-import-review.tsx";
 import {
   applyTemplateAdd,
@@ -31,6 +35,12 @@ export function TemplateUpload() {
   const [review, setReview] = createSignal<TemplateAddReviewPlan | null>(null);
   const [busy, setBusy] = createSignal(false);
   const [message, setMessage] = createSignal("");
+  const [installed, setInstalled] = createSignal<{ agentId: string; name: string } | null>(null);
+  // Only a failed review may pick again; an uncertain apply must not invite a blind retry.
+  const [canChooseAgain, setCanChooseAgain] = createSignal(false);
+  const [opening, setOpening] = createSignal(false);
+  const reviewing = () => busy() && !review();
+  const applying = () => (busy() && Boolean(review())) || opening();
   // Keep archive bytes only for this selection's review/apply, never in persisted UI state.
   let source: TemplateUploadSource | undefined;
   let generation = 0;
@@ -41,7 +51,25 @@ export function TemplateUpload() {
     setReview(null);
     setBusy(false);
     setMessage("");
+    setInstalled(null);
+    setCanChooseAgain(false);
+    setOpening(false);
   }
+  let scrollBody!: HTMLDivElement;
+  let scrollContent!: HTMLDivElement;
+  // The shared measurement owner retires observers when the dialog closes.
+  const updateScrollFades = createLayoutMeasurement(
+    () => filename(),
+    () => {
+      const top = scrollBody.scrollTop > 1;
+      const bottom = scrollBody.scrollTop + scrollBody.clientHeight < scrollBody.scrollHeight - 1;
+      return () => {
+        scrollBody.toggleAttribute("data-scroll-fade-top", top);
+        scrollBody.toggleAttribute("data-scroll-fade-bottom", bottom);
+      };
+    },
+    { targets: () => [scrollBody, scrollContent] },
+  );
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: reset,
@@ -83,10 +111,36 @@ export function TemplateUpload() {
     } catch (error) {
       if (gateway.isCurrent(scope) && current === generation) {
         setMessage(formatUiError(error));
+        setCanChooseAgain(true);
       }
     } finally {
       if (gateway.isCurrent(scope) && current === generation) {
         setBusy(false);
+      }
+    }
+  }
+  async function openChat() {
+    const done = installed();
+    const current = generation;
+    if (!done || opening()) {
+      return;
+    }
+    setOpening(true);
+    setMessage("");
+    try {
+      const roster = await context.agents.refreshList();
+      if (current !== generation) {
+        return;
+      }
+      if (!roster?.agents.some((agent) => agent.id === done.agentId)) {
+        throw new Error(t("templatesCatalog.openChatFailed"));
+      }
+      reset();
+      openTemplateAgentChat(context, done.agentId);
+    } catch {
+      if (current === generation) {
+        setMessage(t("templatesCatalog.openChatFailed"));
+        setOpening(false);
       }
     }
   }
@@ -105,11 +159,11 @@ export function TemplateUpload() {
       if (gateway.isCurrent(scope) && current === generation) {
         source = undefined;
         setReview(null);
-        setMessage(
-          result.status === "complete"
-            ? t("templatesCatalog.installedAgent", { agentId: result.agentId })
-            : (result.error?.message ?? t("templatesCatalog.incompleteImport")),
-        );
+        if (result.status === "complete" && result.agentId) {
+          setInstalled({ agentId: result.agentId, name: templateImportFacts(plan).name });
+        } else {
+          setMessage(result.error?.message ?? t("templatesCatalog.incompleteImport"));
+        }
       }
     } catch (error) {
       if (gateway.isCurrent(scope) && current === generation) {
@@ -128,15 +182,20 @@ export function TemplateUpload() {
     <Show when={canUpload()}>
       <FloatingHeaderActions
         fallback={
-          <button type="button" class="btn" disabled={busy()} onClick={() => fileInput?.click()}>
-            <Icon name="plus" /> {t("templatesCatalog.importButton")}
+          <button
+            type="button"
+            class="btn"
+            disabled={applying()}
+            onClick={() => fileInput?.click()}
+          >
+            <Icon name="import" /> {t("templatesCatalog.importButton")}
           </button>
         }
       >
         <IconButton
           icon="import"
           label={t("templatesCatalog.importButton")}
-          disabled={busy()}
+          disabled={applying()}
           onClick={() => fileInput?.click()}
         />
       </FloatingHeaderActions>
@@ -148,7 +207,7 @@ export function TemplateUpload() {
         type="file"
         accept=".tgz"
         aria-label={t("templatesCatalog.archiveLabel")}
-        disabled={busy()}
+        disabled={applying()}
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           event.currentTarget.value = "";
@@ -163,7 +222,7 @@ export function TemplateUpload() {
           style={{ "--openclaw-modal-width": "540px" }}
           onModal-cancel={(event: Event) => {
             event.preventDefault();
-            if (!busy()) {
+            if (!applying()) {
               reset();
             }
           }}
@@ -172,66 +231,139 @@ export function TemplateUpload() {
             <DialogHeader
               title={t("templatesCatalog.importTitle")}
               actions={
-                <openclaw-tooltip
-                  prop:content={t("templatesCatalog.chooseAnotherArchive") + ": " + filename()}
-                >
-                  <button
-                    type="button"
-                    class="btn template-import-file"
-                    aria-label={t("templatesCatalog.chooseAnotherArchive")}
-                    aria-describedby={filenameId}
-                    disabled={busy()}
-                    onClick={() => fileInput?.click()}
+                <Show when={!installed() && (reviewing() || review() || canChooseAgain())}>
+                  <openclaw-tooltip
+                    prop:content={t("templatesCatalog.chooseAnotherArchive") + ": " + filename()}
                   >
-                    <Icon name="fileText" />
-                    <span id={filenameId} title={filename()}>
-                      {filename()}
-                    </span>
-                  </button>
-                </openclaw-tooltip>
+                    <button
+                      type="button"
+                      class="btn template-import-file"
+                      aria-label={t("templatesCatalog.chooseAnotherArchive")}
+                      aria-describedby={filenameId}
+                      disabled={applying()}
+                      onClick={() => fileInput?.click()}
+                    >
+                      <Icon name="fileText" />
+                      <span id={filenameId} title={filename()}>
+                        {filename()}
+                      </span>
+                    </button>
+                  </openclaw-tooltip>
+                </Show>
               }
-              closeDisabled={busy()}
+              closeDisabled={applying()}
               onClose={reset}
             />
-            <div class="oc-dialog__body">
-              <Show when={busy() && !review()}>
-                <p role="status">{t("templatesCatalog.reviewingArchive")}</p>
-              </Show>
-              <Show when={message()}>
-                <p role="status">{message()}</p>
-              </Show>
-              <Show when={review()}>
-                {(plan) => (
-                  <>
-                    <TemplateImportReview plan={plan()} />
-                    <div id={consentId} class="template-import-consent">
-                      <TemplatePackageConsent plan={plan()} />
+            <div
+              class="oc-dialog__body"
+              ref={(element) => (scrollBody = element)}
+              onScroll={updateScrollFades}
+            >
+              <div class="template-import-content" ref={(element) => (scrollContent = element)}>
+                <Show when={reviewing()}>
+                  <div class="template-import-review" aria-hidden="true">
+                    <div class="template-import-identity">
+                      <span class="agents-home__template-art skeleton" />
+                      <div class="template-import-identity__text template-import-skeleton">
+                        <span class="skeleton skeleton-line" style={{ width: "148px" }} />
+                        <span class="skeleton skeleton-line" style={{ width: "220px" }} />
+                      </div>
                     </div>
-                    <Show when={plan().blockers.length}>
-                      <ul role="alert">
-                        <For each={plan().blockers}>{(item) => <li>{item.message}</li>}</For>
-                      </ul>
-                    </Show>
-                  </>
-                )}
-              </Show>
+                    <div class="template-import-surface template-import-skeleton-rows">
+                      <For each={[132, 64, 118]}>
+                        {(width) => (
+                          <div class="template-import-skeleton">
+                            <span class="skeleton skeleton-line" style={{ width: width + "px" }} />
+                            <span
+                              class="skeleton skeleton-line"
+                              style={{ width: width + 48 + "px" }}
+                            />
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
+                <Show when={installed()}>
+                  {(done) => (
+                    <div class="template-import-identity template-import-result">
+                      <span class="agents-home__template-art" aria-hidden="true">
+                        <Icon name="check" />
+                      </span>
+                      <div class="template-import-identity__text">
+                        <h3>{done().name}</h3>
+                        <span role="status">
+                          {t("templatesCatalog.installedAgent", { agentId: done().agentId })}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </Show>
+                <Show when={message()}>
+                  <InlineAlert tone="danger" role="alert">
+                    {message()}
+                  </InlineAlert>
+                </Show>
+                <Show when={review()}>
+                  {(plan) => (
+                    <>
+                      <TemplateImportReview plan={plan()} />
+                      <div id={consentId} class="template-import-consent">
+                        <TemplatePackageConsent plan={plan()} />
+                      </div>
+                      <Show when={plan().blockers.length}>
+                        <InlineAlert tone="danger" role="alert">
+                          <ul>
+                            <For each={plan().blockers}>{(item) => <li>{item.message}</li>}</For>
+                          </ul>
+                        </InlineAlert>
+                      </Show>
+                    </>
+                  )}
+                </Show>
+              </div>
             </div>
             <div class="oc-dialog__footer template-import-footer">
-              <Show when={review()}>
-                <p id={trustId} class="template-import-trust">
-                  <Icon name="alertTriangle" />
-                  <span>{t("templatesCatalog.importTrust")}</span>
+              <Show when={reviewing()}>
+                <p class="template-import-trust">
+                  <span role="status" class="text-shimmer">
+                    {t("templatesCatalog.reviewingArchive")}
+                  </span>
                 </p>
               </Show>
-              <Show when={review()?.riskAcknowledgementRequired}>
-                <p id={acknowledgementId} class="template-import-acknowledgement">
-                  {t("templatesCatalog.importRiskAcknowledgement")}
+              <Show when={review()}>
+                <p class="template-import-trust">
+                  <Icon name="alertTriangle" />
+                  <span>
+                    <span id={trustId}>{t("templatesCatalog.importTrust")}</span>
+                    <Show when={review()?.riskAcknowledgementRequired}>
+                      {" "}
+                      <span id={acknowledgementId}>
+                        {t("templatesCatalog.importRiskAcknowledgement")}
+                      </span>
+                    </Show>
+                  </span>
                 </p>
               </Show>
               <openclaw-modal-actions>
-                <button type="button" class="btn" disabled={busy()} onClick={reset}>
-                  {t(review() ? "common.cancel" : "common.close")}
+                <button type="button" class="btn" disabled={applying()} onClick={reset}>
+                  {t(review() || reviewing() ? "common.cancel" : "common.close")}
                 </button>
+                <Show when={canChooseAgain()}>
+                  <button type="button" class="btn primary" onClick={() => fileInput?.click()}>
+                    {t("templatesCatalog.chooseAnotherArchive")}
+                  </button>
+                </Show>
+                <Show when={installed()}>
+                  <button
+                    type="button"
+                    class="btn primary"
+                    disabled={opening()}
+                    onClick={() => void openChat()}
+                  >
+                    {t("templatesCatalog.openChat")}
+                  </button>
+                </Show>
                 <Show when={review()}>
                   <button
                     type="button"

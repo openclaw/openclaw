@@ -25,6 +25,10 @@ const enTemplates = {
     importFsNote: "Workspace-only file access does not restrict shell commands.",
     importWeekdayBriefing: "Weekday briefing",
     importPrivate: "private",
+    importPackageLabel: "Package",
+    importVersionLabel: "Version",
+    importAgentLabel: "Agent ID",
+    importWorkspaceLabel: "Workspace",
     importConfiguration: "Configuration",
     importRaw: "Raw review data",
     importTrust:

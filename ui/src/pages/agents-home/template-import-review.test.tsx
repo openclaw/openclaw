@@ -72,10 +72,11 @@ describe("native local Template review", () => {
         ?.classList.contains("template-import-surface"),
     ).toBe(true);
     const identity = view.container.querySelector(".template-import-identity")!;
-    expect(identity.textContent).not.toContain("v0.1.2");
-    expect(identity.textContent).toContain("A private briefing from selected sources.");
-    expect(identity.textContent).not.toContain("@example/briefing");
-    expect(identity.querySelector("h3 + .template-import-identity__description")).not.toBeNull();
+    // The card's identity: artwork tile, name, then package and version.
+    expect(identity.querySelector(".agents-home__template-art")).not.toBeNull();
+    expect(identity.textContent).toContain("@example/briefing · v0.1.2");
+    const description = view.container.querySelector(".template-import-identity__description")!;
+    expect(description.textContent).toBe("A private briefing from selected sources.");
     expect(view.getByText("SOUL.md, AGENTS.md + 1 more")).toBeTruthy();
     expect(view.getByText("@example/weather · v1.0.0 · install")).toBeTruthy();
     const disclosures = [
@@ -85,12 +86,10 @@ describe("native local Template review", () => {
     expect(new Set(disclosures.map((row) => row.name)).size).toBe(1);
     view.getByRole("tab", { name: "Details" }).click();
     flush();
-    expect(view.getByRole("tabpanel").textContent).toContain(
-      "A private briefing from selected sources.",
-    );
-    expect(view.getByRole("tabpanel").textContent).toContain("@example/briefing");
-    expect(view.getByRole("tabpanel").textContent).toContain("0.1.2");
-    expect(identity.querySelector(".template-import-identity__description")).toBeNull();
+    expect(view.getByRole("tabpanel").textContent).toContain("Package@example/briefing");
+    expect(view.getByRole("tabpanel").textContent).toContain("Version0.1.2");
+    // Switching tabs must not move the tabs: the header above them stays as it was.
+    expect(description.isConnected).toBe(true);
     expect(
       view.container
         .querySelector(".template-import-detail-content")

@@ -13,20 +13,26 @@ registerEnglishCatalog(registerTemplatesEnglish);
 
 function CapabilityRow(props: {
   group: string;
-  icon: IconName;
+  icon?: IconName;
   title: string;
-  description: string;
+  description?: string;
   children: JSX.Element;
 }) {
   return (
     <details name={props.group} class="settings-disclosure template-import-capability">
       <summary class="settings-row settings-row--nav settings-disclosure__summary">
-        <span class="template-import-capability__icon" aria-hidden="true">
-          <Icon name={props.icon} />
-        </span>
+        <Show when={props.icon}>
+          {(icon) => (
+            <span class="template-import-capability__icon" aria-hidden="true">
+              <Icon name={icon()} />
+            </span>
+          )}
+        </Show>
         <span class="settings-row__text oc-settings-row-content">
           <span class="settings-row__title oc-settings-row-title">{props.title}</span>
-          <span class="settings-row__desc oc-settings-row-description">{props.description}</span>
+          <Show when={props.description}>
+            <span class="settings-row__desc oc-settings-row-description">{props.description}</span>
+          </Show>
         </span>
         <span class="settings-row__chevron settings-disclosure__chevron" aria-hidden="true">
           <Icon name="chevronRight" />
@@ -37,20 +43,23 @@ function CapabilityRow(props: {
   );
 }
 
-function Configuration(props: { value: unknown }) {
-  const fields = createMemo(() => structuredTemplateFields(props.value));
+function Fields(props: { fields: Array<[string, string | undefined]> }) {
   return (
     <dl class="template-import-fields">
-      <For each={fields()}>
+      <For each={props.fields.filter(([, value]) => value)}>
         {([key, value]) => (
-          <div>
+          <>
             <dt>{key}</dt>
             <dd>{value}</dd>
-          </div>
+          </>
         )}
       </For>
     </dl>
   );
+}
+
+function Configuration(props: { value: unknown }) {
+  return <Fields fields={structuredTemplateFields(props.value)} />;
 }
 
 function scheduleSummary(job: ReturnType<typeof templateImportFacts>["schedules"][number]) {
@@ -92,6 +101,7 @@ export function TemplateImportReview(props: { plan: TemplateAddReviewPlan }) {
   const [tab, setTab] = createSignal("overview");
   const id = createUniqueId();
   const source = () => props.plan.manifestDisclosure?.source;
+  const version = () => source()?.version ?? props.plan.target.targetVersion ?? "";
   const shortFiles = () =>
     facts().fileNames.length > 2
       ? t("templatesCatalog.importMore", {
@@ -102,16 +112,23 @@ export function TemplateImportReview(props: { plan: TemplateAddReviewPlan }) {
   return (
     <div class="template-import-review">
       <div class="template-import-identity">
-        <span class="template-import-identity__icon" aria-hidden="true">
+        <span class="agents-home__template-art" aria-hidden="true">
           <TemplateArtwork />
         </span>
-        <div>
+        <div class="template-import-identity__text">
           <h3>{facts().name}</h3>
-          <Show when={tab() === "overview" && facts().description}>
-            <p class="template-import-identity__description">{facts().description}</p>
+          <Show when={source()}>
+            {(pkg) => (
+              <span>
+                {pkg().packageName} · {t("templatesCatalog.importVersion", { version: version() })}
+              </span>
+            )}
           </Show>
         </div>
       </div>
+      <Show when={facts().description}>
+        <p class="template-import-identity__description">{facts().description}</p>
+      </Show>
       <Tabs
         class="template-import-tabs"
         active={tab()}
@@ -143,7 +160,7 @@ export function TemplateImportReview(props: { plan: TemplateAddReviewPlan }) {
               title={t("templatesCatalog.importFiles", { count: String(facts().files.length) })}
               description={shortFiles()}
             >
-              <ul>
+              <ul class="template-import-files">
                 <For each={facts().fileNames}>{(name) => <li>{name}</li>}</For>
               </ul>
             </CapabilityRow>
@@ -260,27 +277,22 @@ export function TemplateImportReview(props: { plan: TemplateAddReviewPlan }) {
       </TabPanel>
       <TabPanel id={id + "-details"} tabId={id + "-details-tab"} active={tab() === "details"}>
         <div class="template-import-surface template-import-detail-content">
-          <Show when={facts().description}>
-            <p>{facts().description}</p>
-          </Show>
-          <Configuration
-            value={{
-              package: source()?.packageName,
-              version: source()?.version ?? props.plan.target.targetVersion,
-              agent: props.plan.target.agentId,
-              workspace: props.plan.target.workspace,
-            }}
+          <Fields
+            fields={[
+              [t("templatesCatalog.importPackageLabel"), source()?.packageName],
+              [t("templatesCatalog.importVersionLabel"), version()],
+              [t("templatesCatalog.importAgentLabel"), props.plan.target.agentId],
+              [t("templatesCatalog.importWorkspaceLabel"), props.plan.target.workspace],
+            ]}
           />
-          <details class="template-import-configuration">
-            <summary>{t("templatesCatalog.importConfiguration")}</summary>
+          <CapabilityRow group={id + "-details"} title={t("templatesCatalog.importConfiguration")}>
             <p>{t("templatesCatalog.importAccessNote")}</p>
             <Configuration value={props.plan.configuredAccess} />
             <For each={props.plan.capabilities}>{(capability) => <p>{capability.reason}</p>}</For>
-          </details>
-          <details class="template-import-configuration">
-            <summary>{t("templatesCatalog.importRaw")}</summary>
+          </CapabilityRow>
+          <CapabilityRow group={id + "-details"} title={t("templatesCatalog.importRaw")}>
             <pre>{JSON.stringify(props.plan, null, 2)}</pre>
-          </details>
+          </CapabilityRow>
         </div>
       </TabPanel>
     </div>
