@@ -48,6 +48,7 @@ jobs:
           node-version: "26.12.1"
           install-bun: "false"
           install-deps: "false"
+          cache-mode: "off"
 
       - name: Prepare Swift build inputs
         run: |
