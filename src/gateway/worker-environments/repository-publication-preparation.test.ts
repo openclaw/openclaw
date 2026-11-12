@@ -1,9 +1,15 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+} from "../../plugins/runtime.js";
+import {
   NODE_WORKSPACE_PUBLICATION_CONFLICT_CODE,
   NodeWorkerPublicationConflictError,
 } from "../../worker/node-workspace-transfer-protocol.js";
+import { registerPublicationCredentialFixture } from "../github-publication-credential.test-helpers.js";
+import { assertRepositoryDispatchAdmission } from "../repository-dispatch.js";
 import {
   createManager,
   environment as tunnelEnvironment,
@@ -19,13 +25,179 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  seedAttachedPlacementEnvironment,
+  writePlacementEnvironmentFixture,
+} from "./placement-test-fixtures.js";
 import { createRepositoryPublicationPreparation } from "./repository-publication-preparation.js";
+import type { WorkerPlacementDispatchContract } from "./service-contract.js";
 import { setupWorkerEnvironmentServiceSuite, testState } from "./service.test-support.js";
+import { ensureWorkerSessionPlacement } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
+import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 import { createWorkerTurnTunnel } from "./worker-turn-launcher.test-support.js";
 
 setupWorkerEnvironmentServiceSuite();
+
+// Real publication preparation, placement persistence, recovery and admission;
+// the provider/transport and credential issuer are synthetic, with no model turn.
+it.each([false, true])(
+  "recovers publication with its invocation reader (revoked: %s)",
+  async (revoke) => {
+    const registry = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(registry));
+    const events: string[] = [];
+    testState.config.gateway = {};
+    registerPublicationCredentialFixture({ config: testState.config }, events);
+    const placements = createWorkerSessionPlacementStore({ database: testState.stateDb });
+    const { attached } = createDispatchEnvironmentFixtures();
+    writePlacementEnvironmentFixture(testState.stateDb, attached);
+    const active = await seedActivePlacement(placements, {
+      environmentId: attached.environmentId,
+      ownerEpoch: attached.ownerEpoch,
+    });
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: attached.environmentId,
+      ownerEpoch: attached.ownerEpoch,
+    };
+    const draining = await placements.startDrain({
+      ...owner,
+      expectedGeneration: active.generation,
+    });
+    const reconciling = await placements.startReconcile({
+      ...owner,
+      expectedGeneration: draining.generation,
+    });
+    const reclaimed = await placements.transition({
+      sessionId: active.sessionId,
+      from: "reconciling",
+      to: "reclaimed",
+      expectedGeneration: reconciling.generation,
+    });
+    writePlacementEnvironmentFixture(testState.stateDb, {
+      ...attached,
+      state: "destroyed",
+      attachedSessionIds: [],
+    });
+    let readerCurrent = true;
+    const assertReaderCurrent = () => {
+      if (!readerCurrent) {
+        throw new Error("publication dispatch reader revoked");
+      }
+    };
+    const readNativeCredential = Object.assign(
+      async () => {
+        assertReaderCurrent();
+        return "synthetic-dispatch-credential";
+      },
+      {
+        assertCurrent: assertReaderCurrent,
+        admit: async () => {
+          assertReaderCurrent();
+          events.push("admitted");
+        },
+      },
+    );
+    const dispatch: WorkerPlacementDispatchContract["dispatch"] = async (
+      request,
+      _transition,
+      assertCurrent,
+    ) => {
+      assertCurrent?.();
+      assertRepositoryDispatchAdmission(request.readNativeCredential, testState.config);
+      await request.readNativeCredential?.admit?.();
+      events.push("provision");
+      writePlacementEnvironmentFixture(testState.stateDb, attached);
+      const recovered = await seedActivePlacement(placements, {
+        environmentId: attached.environmentId,
+        ownerEpoch: attached.ownerEpoch,
+      });
+      if (recovered.state !== "active") {
+        throw new Error("expected active fixture");
+      }
+      return recovered;
+    };
+    const redispatchPlacement = createWorkerPlacementRedispatch({
+      placements: {
+        readProjection: async (...args) => {
+          const projection = await placements.readProjection(...args);
+          readerCurrent = !revoke;
+          return projection;
+        },
+      },
+      dispatch,
+    });
+    const result = {
+      snapshotRoot: "/fixture",
+      snapshot: {
+        version: 1 as const,
+        baseCommit: "a".repeat(40),
+        baseTree: "b".repeat(40),
+        workspaceTree: "c".repeat(40),
+        entries: [],
+      },
+      release: async () => {},
+    };
+    const unexpected = async (): Promise<never> => {
+      throw new Error("unexpected fresh placement or turn");
+    };
+    const tunnel = createWorkerTurnTunnel({
+      launchTurn: unexpected,
+      reconcileWorkspace: unexpected,
+      integratePublication: async (input) => {
+        input.assertCurrent();
+        events.push("integrate");
+        return result;
+      },
+    });
+    const prepare = createRepositoryPublicationPreparation({
+      placements,
+      ensurePlacement: (input) =>
+        ensureWorkerSessionPlacement({
+          ...input,
+          placements,
+          environments: { get: () => attached },
+          redispatchPlacement,
+          dispatch: unexpected,
+          startDispatch: unexpected,
+          waitForInitialPlacement: unexpected,
+        }),
+      getConfig: () => testState.config,
+      resolveDevicePlacementRequirement: unexpected,
+      environments: {
+        get: () => attached,
+        startTunnel: async () => tunnel,
+        inspectTurnLease: unexpected,
+      },
+      waitForNode: unexpected,
+      reconcileActive: unexpected,
+    });
+    const pending = prepare(REQUEST, {
+      snapshotRoot: "/fixture",
+      snapshotDigest: `sha256:${"a".repeat(64)}`,
+      sourceUrl: "https://github.com/owner/repository.git",
+      targetUrl: "https://github.com/owner/repository.git",
+      targetCommit: "a".repeat(40),
+      token: "synthetic-execution-credential",
+      readNativeCredential,
+      assertCurrent: () => {},
+    });
+    if (revoke) {
+      await expect(pending).rejects.toThrow("publication dispatch reader revoked");
+      expect(events).toEqual([]);
+      expect(placements.get(REQUEST.sessionId)).toEqual(reclaimed);
+    } else {
+      expect(await pending).toBe(result);
+      expect(events).toEqual(["admitted", "provision", "integrate"]);
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "active",
+        sessionId: reclaimed.sessionId,
+        sessionKey: reclaimed.sessionKey,
+      });
+    }
+  },
+);
 
 it.each([false, true])(
   "admits retained compute before reconnect and rechecks authority (revoked: %s)",
