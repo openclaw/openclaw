@@ -14,6 +14,8 @@ Every model has a context window: the maximum number of tokens it can process. W
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
+In the Control UI, the **Context compacted** divider shows the tokens saved and the percentage reduction from the pre-compaction token count when both before and after counts are available.
+
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
 Compaction and branch summaries omit an edit or write from modified-file metadata when its matching tool result explicitly reports `changed: false`. An earlier change to the same path remains recorded. Missing results and errors without that explicit outcome remain conservative: an error alone does not prove that no file changed.

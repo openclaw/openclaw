@@ -1,0 +1,2 @@
+28
+# Real mentions.list regression: an unavailable foreign target must not block unchanged empty or nonempty requester inboxes; its owner still receives UNAVAILABLE.
