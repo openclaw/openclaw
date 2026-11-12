@@ -648,6 +648,65 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
   const outputDir = fs.mkdtempSync(path.join(packageDir, ".openclaw-patched-dependencies-"));
   const cleanup = () => fs.rmSync(outputDir, { recursive: true, force: true });
   try {
+    // Temporary proof instrumentation; remove after the inclusive CI diagnosis.
+    let diagnosticEnv = process.env;
+    try {
+      const observerPath = path.join(outputDir, "npm-raw-exit-probe.cjs");
+      fs.writeFileSync(
+        observerPath,
+        String.raw`
+function report(value) {
+  try { require("node:fs").writeSync(2, value); } catch {}
+}
+try {
+  const npmRequire = require("node:module").createRequire(process.argv[1]);
+  const { redactLog } = npmRequire("@npmcli/redact");
+  const ExitHandler = npmRequire("../lib/cli/exit-handler.js");
+  const originalExit = ExitHandler.prototype.exit;
+  const originalEmit = process.emit;
+  if (typeof originalExit !== "function" || typeof originalEmit !== "function") {
+    throw new Error("unsupported exit handler");
+  }
+  function observe(error) {
+    try {
+      if (error) {
+        const fields = typeof error === "string" ? { message: error } : {};
+        for (const key of ["name", "code", "message", "stack"]) {
+          const value = error[key];
+          if (typeof value === "string" || typeof value === "number") fields[key] = value;
+        }
+        report(Buffer.concat([
+          Buffer.from("[npm-raw-exit-probe] "),
+          Buffer.from(redactLog(JSON.stringify(fields))).subarray(0, 8192),
+          Buffer.from("\n"),
+        ]));
+      }
+    } catch {
+      report("[npm-raw-exit-probe] capture unavailable\n");
+    }
+  }
+  ExitHandler.prototype.exit = function (error) {
+    try { observe(error); } finally { return originalExit.call(this, error); }
+  };
+  process.emit = function (event, ...args) {
+    try {
+      if (event === "uncaughtException" || event === "unhandledRejection") observe(args[0]);
+    } finally {
+      return originalEmit.call(this, event, ...args);
+    }
+  };
+} catch {
+  report("[npm-raw-exit-probe] setup unavailable\n");
+}
+`,
+      );
+      diagnosticEnv = {
+        ...process.env,
+        NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(observerPath)}`,
+      };
+    } catch {
+      console.error("[npm-raw-exit-probe] file setup unavailable");
+    }
     const artifacts: NpmLocalPackageArtifact[] = dependencies.map(
       ({ name, version, packageDir: source }) => {
         const result = spawnNpmSync(
@@ -663,7 +722,7 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
           ],
           {
             cwd: packageDir,
-            env: process.env,
+            env: diagnosticEnv,
             encoding: "utf8",
             stdio: ["ignore", "pipe", "pipe"],
           },
