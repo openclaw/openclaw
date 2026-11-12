@@ -3,6 +3,7 @@ import { parseCompactionDetails } from "../../../packages/agent-core/src/harness
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
+import { withCompactionWatchdogAllowance } from "../../sessions/session-controller.watchdog-allowance.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { buildCoreCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -13,7 +14,6 @@ import {
   settleCompactionSummary,
   withCompactionSummaryRoute,
 } from "../compaction-summary-refusal.js";
-import { withCompactionWatchdogAllowance } from "../embedded-agent-runner/compact.foreground-work.js";
 import {
   COMPACTION_CEILING_WINDOWS,
   resolveCompactionTimeoutMs,

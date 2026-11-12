@@ -29,6 +29,9 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { projectControllerDiagnosticActivity } from "../../logging/diagnostic-controller-projection.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -39,9 +42,6 @@ import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.
 import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
-import { projectControllerDiagnosticActivity } from "../../logging/diagnostic-controller-projection.js";
-import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
-import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { estimateContextTokens } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";

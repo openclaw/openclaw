@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withCompactionWatchdogAllowance } from "../../sessions/session-controller.watchdog-allowance.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
@@ -11,7 +12,6 @@ import {
   COMPACTION_CEILING_WINDOWS,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
-import { withCompactionWatchdogAllowance } from "./compact.foreground-work.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,

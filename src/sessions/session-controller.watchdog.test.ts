@@ -2,11 +2,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
 import { beginReplyOperationFinalizationWork } from "../auto-reply/reply/reply-run-finalization-lease.js";
-import { projectControllerDiagnosticActivity } from "../logging/diagnostic-controller-projection.js";
 import {
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import { projectControllerDiagnosticActivity } from "../logging/diagnostic-controller-projection.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withSessionTurn } from "./session-controller.admission.js";
 import { createReplyOperation } from "./session-controller.operation.js";
