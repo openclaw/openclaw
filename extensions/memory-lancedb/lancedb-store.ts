@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import type * as LanceDB from "@lancedb/lancedb";
 import type * as Arrow from "apache-arrow";
 import type { FileLockHandle } from "openclaw/plugin-sdk/file-lock";
-import type { MemoryCategory } from "./config.js";
 import { acquireMemoryTableUsage, withExclusiveMemoryTable } from "./lancedb-custody.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
 import {
@@ -16,6 +15,7 @@ import {
   type MemoryQueryColumn,
   type MemoryQueryFilter,
 } from "./lancedb-schema.js";
+import type { MemoryCategory } from "./memory-policy-data.js";
 
 // LanceDB's CJS serializer needs Arrow datatypes from the same module instance.
 const { Field, FixedSizeList, Float32, Float64, Schema, Utf8 }: typeof Arrow = createRequire(
