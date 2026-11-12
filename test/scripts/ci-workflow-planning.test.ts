@@ -613,10 +613,6 @@ function runRunnerProfileFixture(options: {
       ].join("\n"),
       "utf8",
     );
-    writeFileSync(
-      path.join(root, "qualification-pr.json"),
-      JSON.stringify({ author: options.author ?? "vincentkoc" }),
-    );
     const outputPath = path.join(root, "profile.out");
     writeFileSync(outputPath, "", "utf8");
     const step = requiredWorkflowStep(
@@ -2652,6 +2648,123 @@ describe("ci workflow guards", () => {
     expect(manifest.output).toContain(
       "main validation tier requires canonical same-revision manual or scheduled validation",
     );
+  });
+
+  it("projects admitted exact main onto scheduled-main coverage despite empty or docs-only scope", () => {
+    const workflow = readCiWorkflow();
+    const sha = "a".repeat(40);
+    const profile = runRunnerProfileFixture({
+      configuredProfile: "hybrid",
+      requestedProfile: "boat",
+      qualificationDispatch: true,
+      ciShape: "main",
+      eventName: "workflow_dispatch",
+      targetSupportsContract: true,
+    });
+    expect(profile.status, profile.output).toBe(0);
+    const manifestStep = requiredWorkflowStep(workflow.jobs.preflight.steps, "Build CI manifest");
+    const fixture = {
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      bunTestRuntime: true,
+      uiE2eProjectsCapability: true,
+      uiReleaseTier: true,
+      androidCiCapabilities: true,
+    };
+    const projectEnv = (eventName: "schedule" | "workflow_dispatch", paths: string[] | null) =>
+      Object.fromEntries(
+        Object.entries(expectDefined(manifestStep.env, "manifest env")).map(([key, value]) => [
+          key,
+          String(
+            evaluateWorkflowExpression(value, {
+              eventName,
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              workflowSha: sha,
+              sha,
+              targetRef: sha,
+              validationTier: "main",
+              requestedRunnerBackend: "boat",
+              ciShape: "main",
+              includeAndroid: true,
+              steps: {
+                checkout_ref: { outputs: { sha } },
+                runner_profile: {
+                  outputs: {
+                    ...profile.outputs,
+                    ci_qualification: eventName === "schedule" ? "false" : "true",
+                  },
+                },
+                qualification_dispatch: {
+                  outputs: { eligible: eventName === "schedule" ? "false" : "true" },
+                },
+                docs_scope: { outputs: { docs_only: "true", docs_changed: "false" } },
+                changed_scope: {
+                  outputs: { changed_paths_file: "", changed_paths_json: JSON.stringify(paths) },
+                },
+              },
+            }),
+          ),
+        ]),
+      );
+    const scheduled = runCiManifestFixture({
+      ...fixture,
+      eventName: "schedule",
+      changedPaths: null,
+      scopeEnv: projectEnv("schedule", null),
+    });
+    expect(scheduled.status, scheduled.output).toBe(0);
+    for (const changedPaths of [null, [], ["docs/help/fixture.md"]]) {
+      const qualified = runCiManifestFixture({
+        ...fixture,
+        changedPaths,
+        scopeEnv: projectEnv("workflow_dispatch", changedPaths),
+      });
+      expect(qualified.status, qualified.output).toBe(0);
+      const coverageKeys = Object.keys(scheduled.outputs).filter(
+        (key) =>
+          key.startsWith("run_") ||
+          key.endsWith("_matrix") ||
+          ["docs_only", "docs_changed", "validation_tier", "docker_seed_lanes"].includes(key),
+      );
+      for (const key of coverageKeys) {
+        expect(qualified.outputs[key], key).toEqual(scheduled.outputs[key]);
+      }
+      const plan = JSON.parse(
+        expectDefined(
+          qualified.output.match(/node-test-plan-options:(.+)/u)?.[1],
+          "Node plan options",
+        ),
+      );
+      expect(plan).toMatchObject({
+        mainValidation: true,
+        compactNodeJobCap: 77,
+        compactMode: "pull-request",
+        includeProofTests: true,
+        includeReleaseOnlyToolingShards: true,
+        includeReleaseOnlyRuntimeTests: false,
+        includePrExemptRuntimeTests: true,
+      });
+      expect(readJsonOutput(qualified.outputs, "node_test_matrix").include).toEqual([
+        expect.objectContaining({ test_runtime_policy: "bun-all" }),
+      ]);
+      expect(qualified.outputs.docs_only).toBe("false");
+      expect(qualified.outputs.docs_changed).toBe("true");
+    }
+  });
+
+  it("rejects full-tier substitution for admitted exact main", () => {
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      scopeEnv: {
+        OPENCLAW_CI_QUALIFICATION: "true",
+        OPENCLAW_CI_SHAPE: "main",
+        OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
+      },
+    });
+    expect(manifest.status).not.toBe(0);
+    expect(manifest.output).toContain("Exact main qualification requires validation_tier=main");
   });
 
   it.each([
@@ -5746,13 +5859,45 @@ describe("ci workflow guards", () => {
     expect(readJsonOutput(dispatchManifest.outputs, "qa_smoke_ci_matrix").include).toHaveLength(6);
   });
 
-  it("admits CI qualification only for a maintainer's open exact-head canonical main PR", () => {
+  it("admits CI qualification only for a maintainer's exact main or open exact-head canonical PR", () => {
     const step = requiredWorkflowStep(
       readCiWorkflow().jobs.preflight.steps,
       "Validate CI qualification dispatch",
     );
     const sha = "a".repeat(40);
+    const main = {
+      releaseGate: false,
+      prNumber: "",
+      ref: "refs/heads/main",
+      refName: "main",
+      ciShape: "main",
+      validationTier: "main",
+    };
     const scenarios = [
+      { ...main, name: "exact main admin", permission: "admin", admitted: true },
+      { ...main, name: "exact main maintainer", permission: "maintain", admitted: true },
+      { ...main, name: "exact main writer", permission: "write", admitted: true },
+      { ...main, name: "main full tier", validationTier: "full", admitted: false },
+      { ...main, name: "main branch", ref: "refs/heads/other", admitted: false },
+      { ...main, name: "main tag", ref: "refs/tags/main", admitted: false },
+      { ...main, name: "main ref name", refName: "other", admitted: false },
+      { ...main, name: "main PR number", prNumber: "123", admitted: false },
+      { ...main, name: "main default shape", ciShape: "default", admitted: false },
+      { ...main, name: "main empty SHA", targetRef: "", admitted: false },
+      { ...main, name: "main checkout mismatch", githubSha: "b".repeat(40), admitted: false },
+      {
+        ...main,
+        name: "main workflow mismatch",
+        workflowRevision: "b".repeat(40),
+        admitted: false,
+      },
+      { ...main, name: "main fork", repository: "fork/openclaw", admitted: false },
+      { ...main, name: "main reader", permission: "read", admitted: false },
+      { ...main, name: "main permission failure", apiFailure: "permission", admitted: false },
+      { ...main, name: "main historical", historicalTag: "v2026.8.1", admitted: false },
+      { ...main, name: "main candidate", candidateRef: "refs/tags/candidate", admitted: false },
+      { ...main, name: "main context", contextRef: "refs/heads/release", admitted: false },
+      { ...main, name: "PR gate without PR", releaseGate: true, admitted: false },
       { name: "admin", permission: "admin", admitted: true },
       { name: "maintainer", permission: "maintain", admitted: true },
       { name: "writer", permission: "write", admitted: true },
@@ -5823,23 +5968,26 @@ describe("ci workflow guards", () => {
           PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
           GITHUB_ACTOR: "maintainer",
           GITHUB_SHA: scenario.githubSha ?? sha,
-          GITHUB_REF_NAME: "qualification-branch",
+          GITHUB_REF: scenario.ref ?? "refs/heads/qualification-branch",
+          GITHUB_REF_NAME: scenario.refName ?? "qualification-branch",
           CI_SHAPE: scenario.ciShape ?? "default",
+          VALIDATION_TIER: scenario.validationTier ?? "full",
           REQUESTED_RUNNER_PROFILE: scenario.requestedProfile ?? "runson",
           RELEASE_SCOPE: scenario.releaseScope ?? "full",
           HISTORICAL_TARGET_TAG: scenario.historicalTag ?? "",
-          RELEASE_CANDIDATE_REF: "",
-          TARGET_CONTEXT_REF: "",
+          RELEASE_CANDIDATE_REF: scenario.candidateRef ?? "",
+          TARGET_CONTEXT_REF: scenario.contextRef ?? "",
           GITHUB_REPOSITORY: scenario.repository ?? "openclaw/openclaw",
           GITHUB_OUTPUT: output,
           RUNNER_TEMP: root,
           RELEASE_GATE: String(scenario.releaseGate ?? true),
-          PULL_REQUEST_NUMBER: "123",
-          TARGET_REF: sha,
+          PULL_REQUEST_NUMBER: scenario.prNumber ?? "123",
+          TARGET_REF: scenario.targetRef ?? sha,
           WORKFLOW_REVISION: scenario.workflowRevision ?? sha,
           MOCK_PERMISSION: scenario.permission ?? "write",
           MOCK_API_FAILURE: scenario.apiFailure ?? "",
           MOCK_PR: JSON.stringify({
+            author: "pr-author",
             state: scenario.prState ?? "open",
             head: scenario.prHead ?? sha,
             repository: scenario.prRepository ?? "openclaw/openclaw",
@@ -5850,9 +5998,30 @@ describe("ci workflow guards", () => {
         },
       });
       expect(result.status === 0, `${scenario.name}: ${result.stderr}`).toBe(scenario.admitted);
-      expect(readWorkflowOutputs(output), scenario.name).toEqual(
-        scenario.admitted ? { eligible: "true" } : {},
+      const outputs = readWorkflowOutputs(output);
+      expect(outputs, scenario.name).toEqual(
+        scenario.admitted
+          ? {
+              eligible: "true",
+              source_author: scenario.releaseGate === false ? "maintainer" : "pr-author",
+            }
+          : {},
       );
+      if (scenario.admitted) {
+        const profile = requiredWorkflowStep(
+          readCiWorkflow().jobs.preflight.steps,
+          "Resolve logical runner profile",
+        );
+        expect(
+          evaluateWorkflowExpression(expectDefined(profile.env, "profile env").SOURCE_AUTHOR, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            actor: "maintainer",
+            steps: { qualification_dispatch: { outputs } },
+          }),
+        ).toBe(outputs.source_author);
+      }
     }
   });
 
@@ -5885,6 +6054,19 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
+    ...[
+      { author: "vincentkoc", starter: "vincentkoc", admitted: true },
+      { author: "other-maintainer", starter: "vincentkoc", admitted: false },
+      { author: "vincentkoc", starter: "other-maintainer", admitted: false },
+      { author: "vincentkoc", starter: "vincentkoc", runAttempt: 2, admitted: false },
+    ].map((scenario) => ({
+      ...scenario,
+      eventName: "workflow_dispatch" as const,
+      configuredProfile: "hybrid",
+      requestedProfile: "boat" as const,
+      ciShape: "main" as const,
+      qualificationDispatch: true,
+    })),
     { author: "vincentkoc", starter: "vincentkoc", admitted: true },
     { author: "contributor", starter: "vincentkoc", admitted: false },
     { author: "vincentkoc", starter: "contributor", admitted: false },
