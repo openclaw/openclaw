@@ -124,6 +124,7 @@ export type OpenClawToolsOptions = {
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
   agentChannel?: string;
+  abortSignal?: AbortSignal;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
   assertInputCommitAllowed?: () => void;

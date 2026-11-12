@@ -1,9 +1,6 @@
+import { getConfigValueAtPath } from "../config/config-paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  formatConcreteConfigPath,
-  parseConcreteConfigPath,
-  readObjectPath,
-} from "../shared/dot-path.js";
+import { formatConcreteConfigPath, parseConcreteConfigPath } from "../shared/dot-path.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 
 /** Only host-authored explanations may be attached to an exact approval request. */
@@ -47,7 +44,7 @@ export function describeDelegatedChangePolicyApproval(
   if (path.length === grant.length) {
     settingPath = formatConcreteConfigPath(path);
     // Show only this boolean policy, never arbitrary config/SecretRef values.
-    const current = config ? readObjectPath(config, path) : undefined;
+    const current = config ? getConfigValueAtPath(config, path) : undefined;
     const previous =
       typeof current === "boolean"
         ? String(current)
