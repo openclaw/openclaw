@@ -121,6 +121,7 @@ describe("OpenAI provider Codex transport hooks", () => {
         },
       ],
       defaultModel: "openai/gpt-6.1-sol",
+      defaultModelSelection: "if-unset",
     });
     expect(result?.configPatch?.agents?.defaults?.models).toEqual({ "openai/gpt-6.1-sol": {} });
   });

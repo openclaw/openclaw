@@ -385,7 +385,7 @@ function buildOpenAICodexAuthResult(
     access: creds.access,
     email: readStringValue(creds.email),
   });
-  return buildResult({
+  const result = buildResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     configPatch: { agents: { defaults: { models: { [OPENAI_CODEX_DEFAULT_MODEL]: {} } } } },
@@ -396,6 +396,7 @@ function buildOpenAICodexAuthResult(
     profileName: identity.profileName,
     credentialExtra: buildCodexCredentialExtra(identity),
   });
+  return { ...result, defaultModelSelection: "if-unset" as const };
 }
 
 async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {

@@ -56,6 +56,12 @@ export type ProviderAuthResult = {
     };
   };
   defaultModel?: string;
+  /**
+   * Let connection-only login initialize an unset model from `defaultModel`.
+   * The host preserves configured selections and applies this only after saving credentials.
+   * Omit to retain credential-only login's usual model-preservation behavior.
+   */
+  defaultModelSelection?: "if-unset";
   /** Setup routes the selected agent's model through this runtime, without changing global defaults. */
   agentRuntimeId?: string;
   notes?: string[];

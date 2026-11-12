@@ -14,8 +14,15 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 ## Getting started
 
 Fresh ChatGPT OAuth setup defaults to `openai/gpt-6.1-sol` for Codex browser
-login, device-code login, and Sign in with ChatGPT (Beta). Existing explicit
-model selections are preserved. API-key setup has its own default.
+login, device-code login, and inference-enabled Sign in with ChatGPT (Beta).
+Connecting an agent through the Models page or `models auth login` also
+initializes Sol when no model has been selected. Existing explicit selections
+and configured provider-model defaults are preserved, including choices made
+while sign-in is running. Identity-only sign-in does not select an inference
+model. Direct OpenAI API-key setup keeps its separate Astra default.
+
+Detected native Codex setup recommends Sol regardless of whether Codex itself
+uses a ChatGPT account or an API key. This is separate from OpenAI API-key setup.
 
 <Tabs>
   <Tab title="API key (OpenAI Platform)">
