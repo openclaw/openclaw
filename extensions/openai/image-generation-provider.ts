@@ -23,7 +23,10 @@ import {
   isOpenAICodexBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
-import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
+import {
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL,
+} from "./default-models.js";
 import {
   annotateDirectImageAuthFailure,
   sanitizeLogValue,
@@ -42,8 +45,9 @@ import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_MODEL_REF_PREFIX = "openai/";
-// The image-tool host is independent of the subscription chat default.
-const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-6-astra";
+const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = OPENAI_CODEX_DEFAULT_MODEL.slice(
+  OPENAI_MODEL_REF_PREFIX.length,
+);
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_AZURE_OPENAI_IMAGE_TIMEOUT_MS = 600_000;
@@ -377,9 +381,8 @@ async function resolveOptionalImageAuth(req: OpenAIImageRequest, apiKeyOnly = fa
   }
 }
 
-// ChatGPT plans do not all offer the default image Responses model. It stays first so
-// working installs keep their route; configured OpenAI models are the recovery order
-// when the account rejects the model that hosts the image_generation tool.
+// Use the shared ChatGPT default first. Only configured OpenAI primary/fallback
+// models are recovery candidates when the account rejects the image-tool host.
 function resolveCodexImageResponsesModels(cfg: OpenClawConfig | undefined): [string, ...string[]] {
   const agentModel = cfg?.agents?.defaults?.model;
   const retryModels = new Set<string>();

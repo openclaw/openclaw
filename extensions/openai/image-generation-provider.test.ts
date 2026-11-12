@@ -392,7 +392,7 @@ describe("openai image generation provider", () => {
       });
 
       expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
-      expect((jsonRequestCall().body as Record<string, unknown>).model).toBe("gpt-6-astra");
+      expect((jsonRequestCall().body as Record<string, unknown>).model).toBe("gpt-6.1-sol");
       expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
     });
 
@@ -405,7 +405,7 @@ describe("openai image generation provider", () => {
           new Response(
             JSON.stringify({
               detail:
-                "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+                "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.",
             }),
             { status: 400, headers: header ? { [header]: "req-image-proof" } : {} },
           ),
@@ -423,9 +423,9 @@ describe("openai image generation provider", () => {
         postJsonRequestMock.mock.calls.map(
           ([call]) => ((call as RequestCall).body as Record<string, unknown>).model,
         ),
-      ).toEqual(["gpt-6-astra", "gpt-6-luna", "gpt-6-luna"]);
+      ).toEqual(["gpt-6.1-sol", "gpt-6-luna", "gpt-6-luna"]);
       expect(logInfoMock).toHaveBeenCalledWith(
-        "codex image responses model unavailable: responsesModel=gpt-6-astra retryResponsesModel=gpt-6-luna",
+        "codex image responses model unavailable: responsesModel=gpt-6.1-sol retryResponsesModel=gpt-6-luna",
       );
       expect(result.images.map((image) => image.buffer)).toEqual([
         Buffer.from("codex-image"),
@@ -436,7 +436,7 @@ describe("openai image generation provider", () => {
     it.each([
       "Invalid image size",
       "Unknown model",
-      "The 'gpt-6-astra' model does not support image generation.",
+      "The 'gpt-6.1-sol' model does not support image generation.",
     ])("does not retry an unrelated HTTP 400: %s", async (detail) => {
       const error = new Error(`OpenAI Codex image generation failed (HTTP 400): ${detail}`);
       assertOkOrThrowHttpErrorMock.mockRejectedValueOnce(error);
@@ -804,6 +804,7 @@ describe("openai image generation provider", () => {
         url: "https://chatgpt.com/backend-api/codex/responses",
         timeoutMs: 180_000,
         body: {
+          model: "gpt-6.1-sol",
           input: [
             {
               role: "user",
