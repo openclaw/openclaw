@@ -1,6 +1,7 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import { patchSettings } from "../../app/settings.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { cacheChatComposerAgentDefault } from "./chat-composer-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -9,6 +10,8 @@ import { inlineCommandPresentation } from "./chat-inline-command-presentation.ts
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
+
+registerChatSessionEnglish();
 
 export function subscribeChatPaneSnapshotInvalidation(
   getState: () => ChatPageHost | undefined,
@@ -82,7 +85,10 @@ export function initializeChatPaneSettings(
     page.inlineCommandPreparationError &&
     state.settings.chatInlineCommands &&
     !state.inlineCommandPresentation
-      ? state.setRecoverableChatError(page.inlineCommandPreparationError)
+      ? state.setRecoverableChatError(
+          t("chat.view.inlineCommandsUnavailable"),
+          page.inlineCommandPreparationError,
+        )
       : undefined;
   state.clearInlineCommandError = () => {
     clearInlineCommandError?.();
@@ -98,7 +104,10 @@ export function initializeChatPaneSettings(
     } catch (error) {
       if (isCurrent()) {
         state.clearInlineCommandError();
-        clearInlineCommandError = state.setRecoverableChatError(formatUiError(error));
+        clearInlineCommandError = state.setRecoverableChatError(
+          t("chat.view.inlineCommandsUnavailable"),
+          error,
+        );
       }
     }
   };

@@ -93,7 +93,9 @@ it("publishes load failure through the rendered error owner and preserves newer 
   }
   await vi.waitFor(() => {
     for (const state of panes) {
-      expect(state.lastError).toBe("Synthetic inline presentation unavailable");
+      expect(state.lastError).toContain("Grouped commands remain available");
+      expect(state.lastError).toContain("View");
+      expect(state.lastErrorDetail).toEqual(new Error("Synthetic inline presentation unavailable"));
       expect(state.settings.chatInlineCommands).not.toBe(true);
     }
   });
@@ -168,8 +170,9 @@ it.each([false, true])(
     await waitForSolid(() => {
       expect(pane.querySelector("textarea")).not.toBeNull();
       expect(pane.querySelector(".chat-error")?.textContent).toContain(
-        "Synthetic startup presentation unavailable",
+        "Grouped commands remain available",
       );
+      expect(pane.state.lastErrorDetail).toContain("Synthetic startup presentation unavailable");
       expect(pane.state.inlineCommandPresentation).toBeUndefined();
       expect(pane.state.chatSessionMessageSubscription?.key).toBe("agent:main:inline-readiness");
       expect(pane.state.chatSessionMessageSubscription?.includeLiveToolOutput).not.toBe(true);

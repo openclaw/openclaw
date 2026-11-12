@@ -93,6 +93,14 @@ keep their monochrome activity icons. Missing or unreadable logos fall back to
 the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
 icon. Unknown publisher metadata does not enable branding.
 
+Choose **View → Inline command trail (this browser)** in the session menu to show
+compact command, read, and search rows in conversation order while work is running.
+Command output advances in place; expand a row for captured output and details.
+Grouped tool activity remains the default, and completed dashboard turns keep their
+**Worked for…** folding. This preference stays in this browser for this Gateway.
+If the trail cannot load, grouped commands remain available. Turn the option off
+and on to retry; the error’s details retain the technical failure.
+
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.

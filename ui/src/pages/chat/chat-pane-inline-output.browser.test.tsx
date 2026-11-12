@@ -384,6 +384,9 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   await expect.poll(previews).toEqual(["Parked stdout line.", "Second stdout line."]);
   // Reveal restarts the roster owner; its delayed startup is independent of stdout.
   await expect.poll(() => runtime.swarm.hydrator?.childrenRead).toBe(true);
+  // The new invocation also adds a measured row; settle its viewport before stdout-only work.
+  await settleViewport();
+  await expect.poll(() => pane.transcript.isPositionSettled).toBe(true);
   await pane.updateComplete;
   const commandRows = Array.from(pane.querySelectorAll(".chat-tool-row"));
   const commandPreviews = Array.from(pane.querySelectorAll(".chat-command-trail__preview pre"));

@@ -10,4 +10,5 @@
 # Pane-owned global identity bootstrap and lifecycle table coverage: 13 net lines.
 # Delayed inline admission preserves a newer independent preference: 3 lines.
 # Publication-fact caller migration: 13 lines; direct replacement invalidation: 9 lines.
-487
+# Credit trimmed to the current net regression growth after retired-proof removal.
+423

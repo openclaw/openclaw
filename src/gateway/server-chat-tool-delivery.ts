@@ -1,7 +1,13 @@
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
 import { liveTextDelivery } from "./server-chat-live-text.js";
-import type { AgentEventHandlerOptions } from "./server-chat.js";
+import type {
+  ChatRunState,
+  SessionEventSubscriberRegistry,
+  SessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
+import type { ToolEventRecipientRegistry } from "./server-chat-tool-recipients.js";
 
 /** Stateless delivery adapter; admission, sequencing and recovery remain with the chat owner. */
 export function createAgentToolEventDelivery({
@@ -13,14 +19,12 @@ export function createAgentToolEventDelivery({
   resolveSessionDeliveryKeys,
   buildSessionEventSnapshot,
   sendAgentPayload,
-}: Pick<
-  AgentEventHandlerOptions,
-  | "broadcastToConnIds"
-  | "chatRunState"
-  | "toolEventRecipients"
-  | "sessionEventSubscribers"
-  | "sessionMessageSubscribers"
-> & {
+}: {
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  chatRunState: ChatRunState;
+  toolEventRecipients: ToolEventRecipientRegistry;
+  sessionEventSubscribers: SessionEventSubscriberRegistry;
+  sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   resolveSessionDeliveryKeys: (sessionKey: string, agentId?: string) => string[];
   buildSessionEventSnapshot: ReturnType<typeof createSessionLifecyclePublisher>["buildSnapshot"];
   sendAgentPayload: (

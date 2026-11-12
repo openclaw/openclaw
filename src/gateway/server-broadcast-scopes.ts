@@ -132,6 +132,7 @@ export function resolveBroadcastSessionScope(
       ...(explicitAgentId ? { agentId: explicitAgentId } : {}),
     };
   }
+  // SAFETY: Internal event envelopes supply these optional fields; consumed values are checked below.
   const record = payload as {
     sessionKey?: unknown;
     agentId?: unknown;

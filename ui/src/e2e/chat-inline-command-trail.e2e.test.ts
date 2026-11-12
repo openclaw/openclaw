@@ -531,7 +531,7 @@ suite.define(() => {
         await gateway.setMethodResponse("chat.abort", { ok: true, aborted: true, runIds: [runId] });
         await stop.click();
         const abort = await gateway.waitForRequest("chat.abort");
-        expect(abort.params).toEqual({ sessionKey, runId });
+        expect(abort.params).toEqual({ sessionKey, runId, userInitiated: true });
         await stop.waitFor({ state: "detached" });
         expect(await pane.locator(".chat-tool-row--running").count()).toBe(0);
         await running.getByText("Outcome unknown", { exact: true }).waitFor();
