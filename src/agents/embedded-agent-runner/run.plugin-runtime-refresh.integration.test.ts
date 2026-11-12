@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
 import { expectCallCount as expectCalls } from "../../test-utils/mock-call-assertions.js";
@@ -21,6 +22,7 @@ import {
   createFreshRunIntegrationState,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import type { CompactionAccountingFact } from "./run/internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
@@ -167,6 +169,51 @@ it.each([false, true])(
     expectCalls(committed ? 1 : 0, onAttemptStart, attempt);
   },
 );
+
+it("publishes the persisted writer before initial model admission can fail", async () => {
+  const { loadSessionEntry, replaceSessionEntry } =
+    await import("../../config/sessions/session-accessor.js");
+  const target = {
+    agentId: "main",
+    sessionId: "initial-model-refusal",
+    sessionKey: "agent:main:initial-model-refusal",
+    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+  };
+  await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  const params = {
+    ...fixtureRunParams(),
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+  };
+  const observe = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
+  const refusal = new OwnerNotPublishedError("Model runtime replacement is in progress", {
+    admissionBlocked: true,
+  });
+  acquire.mockImplementationOnce(async () => {
+    const entry = loadSessionEntry({
+      ...target,
+      readConsistency: "latest",
+    });
+    expect(entry?.activeWriterRunId).toBe(params.runId);
+    expect(observe).toHaveBeenCalledExactlyOnceWith({
+      kind: "durable",
+      count: 0,
+      target: {
+        ...target,
+        lifecycleRevision: entry?.lifecycleRevision,
+        activeWriterRunId: params.runId,
+      },
+    });
+    throw refusal;
+  });
+  await expect(run({ ...params, onCompactionAccounting: observe })).rejects.toMatchObject({
+    admissionBlocked: true,
+    cause: refusal,
+  });
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(attempt).not.toHaveBeenCalled();
+});
 
 it("retains settled native work from an overloaded attempt through a later plugin refresh", async () => {
   useOpenAIPlatformAuthFixture();
