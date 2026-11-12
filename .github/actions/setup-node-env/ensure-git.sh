@@ -68,8 +68,16 @@ printf 'deb [signed-by=/etc/apt/keyrings/openclaw-git-core-ppa.asc] https://ppa.
 apt_options=(-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=0 -o DPkg::Lock::Timeout=30)
 timeout --signal=TERM --kill-after=5s 120s "${install_command[@]}" \
   apt-get "${apt_options[@]}" update
-timeout --signal=TERM --kill-after=5s 120s "${install_command[@]}" \
-  apt-get "${apt_options[@]}" install -y --no-install-recommends git
+# Fresh processes tolerate transient mirrors without enabling the native APT
+# retries affected by CVE-2026-109518. All attempts share the existing deadline.
+timeout --signal=TERM --kill-after=5s 120s bash -c '
+  for attempt in 1 2 3; do
+    if "$@"; then exit 0; else status=$?; fi
+    if (( attempt == 3 )); then exit "$status"; fi
+    echo "Git package install failed ($status); retrying after 2s." >&2
+    sleep 2
+  done
+' -- "${install_command[@]}" apt-get "${apt_options[@]}" install -y --no-install-recommends git
 
 git --version
 if ! git --no-lazy-fetch --version >/dev/null 2>&1; then

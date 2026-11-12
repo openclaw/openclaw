@@ -97,10 +97,16 @@ exec /usr/bin/install "\${args[@]}"`,
       `
 printf 'apt %s noninteractive=%s\\n' "$*" "$DEBIAN_FRONTEND" >> "$FIXTURE_LOG"
 [[ "\${FIXTURE_INSTALL_FAIL:-}" != true ]] || exit 100
-if [[ "$*" == *'--no-install-recommends git' && "\${FIXTURE_POST_FAIL:-}" != true ]]; then
-  : > "$FIXTURE_CAPABLE"
+if [[ "$*" == *'--no-install-recommends git' ]]; then
+  attempt=0
+  [[ ! -f "$FIXTURE_CAPABLE.attempts" ]] || read -r attempt < "$FIXTURE_CAPABLE.attempts"
+  attempt=$((attempt + 1))
+  printf '%s\\n' "$attempt" > "$FIXTURE_CAPABLE.attempts"
+  (( attempt > \${FIXTURE_INSTALL_FAILURES:-0} )) || exit 100
+  [[ "\${FIXTURE_POST_FAIL:-}" == true ]] || : > "$FIXTURE_CAPABLE"
 fi`,
     );
+    shell(path.join(bin, "sleep"), `printf 'sleep %s\\n' "$*" >> "$FIXTURE_LOG"`);
     for (const [command, executable] of [
       ["env", "/usr/bin/env"],
       ["grep", "/usr/bin/grep"],
@@ -184,6 +190,24 @@ fi`,
     expect(readFileSync(setup.source, "utf8")).toContain("noble main\n");
     expect(readFileSync(setup.unrelatedSource, "utf8")).toBe("existing source\n");
   });
+
+  it.each([
+    { failures: "1", status: 0, installs: 2 },
+    { failures: "3", status: 100, installs: 3 },
+  ])(
+    "settles Git installation after $failures package failures",
+    ({ failures, status, installs }) => {
+      const setup = fixture();
+      const result = setup.run({ FIXTURE_INSTALL_FAILURES: failures });
+      expect(result.status, result.stderr).toBe(status);
+      expect(existsSync(setup.capable)).toBe(status === 0);
+      const commands = setup.commands();
+      expect(commands.match(/^apt .* update /gm)).toHaveLength(1);
+      expect(commands.match(/^apt .* install /gm)).toHaveLength(installs);
+      expect(commands.match(/^sleep 2$/gm)).toHaveLength(installs - 1);
+      expect(commands.match(/^timeout /gm)).toHaveLength(2);
+    },
+  );
 
   it.each(["", "noble extra", "../noble"])(
     "rejects invalid codename %j before privileged writes",
