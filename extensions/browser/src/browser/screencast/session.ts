@@ -4,7 +4,8 @@ import { getPwAiModule } from "../pw-ai-module.js";
 import { clearBrowserScreencastTokens, type BrowserScreencastTokenParams } from "./tokens.js";
 
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
-const FRAME_INTERVAL_MS = 50;
+// Ack retry delay while every viewer socket is congested.
+const CONGESTED_ACK_DELAY_MS = 50;
 const sessions = new Map<string, BrowserScreencastSession>();
 
 type ScreencastFrame = {
@@ -252,7 +253,7 @@ class BrowserScreencastSession {
     }
   }
 
-  private send(ws: WebSocket, data: string | Buffer): boolean {
+  private send(ws: WebSocket, data: string | Buffer, onWritten?: () => void): boolean {
     if (!this.isViewerCurrent(ws) || ws.readyState !== 1) {
       return false;
     }
@@ -264,6 +265,7 @@ class BrowserScreencastSession {
         if (error) {
           ws.terminate();
         }
+        onWritten?.();
       });
       return true;
     } catch {
@@ -286,25 +288,6 @@ class BrowserScreencastSession {
     if (url === undefined) {
       return;
     }
-    // Chrome retains one unacked frame; delayed acks bound work without a frame queue.
-    const timer = setTimeout(() => {
-      this.acknowledgements.delete(timer);
-      if (this.capture?.cdp !== cdp || !this.isCurrent()) {
-        return;
-      }
-      void this.trackWork(
-        cdp
-          .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
-          .then(() => undefined)
-          .catch(() => {
-            if (this.capture?.cdp === cdp) {
-              this.onTargetClosed();
-            }
-          }),
-      );
-    }, FRAME_INTERVAL_MS);
-    timer.unref();
-    this.acknowledgements.add(timer);
     const header = Buffer.from(
       JSON.stringify({
         url,
@@ -321,9 +304,51 @@ class BrowserScreencastSession {
     wire.writeUInt32BE(header.length, 0);
     header.copy(wire, 4);
     jpeg.copy(wire, 4 + header.length);
+    // Chrome retains one unacked frame, so acking once viewers took this frame paces
+    // capture to delivery without a frame queue. Congested viewers skip frames instead.
+    const ack = () => {
+      if (this.capture?.cdp !== cdp || !this.isCurrent()) {
+        return;
+      }
+      void this.trackWork(
+        cdp
+          .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+          .then(() => undefined)
+          .catch(() => {
+            if (this.capture?.cdp === cdp) {
+              this.onTargetClosed();
+            }
+          }),
+      );
+    };
+    // The extra count holds the ack until every accepted write is registered.
+    let unwritten = 1;
+    let accepted = 0;
+    const written = () => {
+      unwritten -= 1;
+      if (unwritten === 0) {
+        ack();
+      }
+    };
     for (const ws of this.readyViewers) {
-      this.send(ws, wire);
+      unwritten += 1;
+      if (this.send(ws, wire, written)) {
+        accepted += 1;
+      } else {
+        unwritten -= 1;
+      }
     }
+    if (accepted > 0) {
+      written();
+      return;
+    }
+    // No viewer took the frame: back off before asking Chrome for another.
+    const timer = setTimeout(() => {
+      this.acknowledgements.delete(timer);
+      ack();
+    }, CONGESTED_ACK_DELAY_MS);
+    timer.unref();
+    this.acknowledgements.add(timer);
   }
 
   close(code?: number, reason?: string): Promise<void> {

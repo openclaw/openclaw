@@ -163,7 +163,7 @@ describe("browser screencast sessions", () => {
     expect(page.newCDPSession).not.toHaveBeenCalled();
   });
 
-  it("shares one JPEG message across viewers, skips congestion, and ack-paces every frame", async () => {
+  it("shares one JPEG message across viewers, acks once written, and backs off when congested", async () => {
     const first = await attach();
     const second = await attach();
     expect(page.cdp.send).toHaveBeenCalledWith("Page.startScreencast", {
@@ -173,18 +173,28 @@ describe("browser screencast sessions", () => {
       maxHeight: 1280,
       everyNthFrame: 1,
     });
+    const writes: Array<() => void> = [];
+    for (const viewer of [first, second]) {
+      viewer.send.mockImplementation((_data, callback) => writes.push(() => callback?.()));
+    }
     page.paint(1);
     expect(first.frames()[0]).toBe(second.frames()[0]);
     expect(first.frames().map(parseScreencastFrame)).toEqual([expectedFrame()]);
-    await vi.advanceTimersByTimeAsync(49);
+    writes.shift()?.();
     expect(page.cdp.acks()).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(1);
+    writes.shift()?.();
+    expect(page.cdp.acks()).toHaveLength(1);
+    for (const viewer of [first, second]) {
+      viewer.send.mockImplementation((_data, callback) => callback?.());
+    }
     second.bufferedAmount = 2 * 1024 * 1024;
     page.paint(2);
-    await vi.advanceTimersByTimeAsync(50);
+    expect(page.cdp.acks()).toHaveLength(2);
     first.bufferedAmount = 2 * 1024 * 1024;
     page.paint(3);
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(page.cdp.acks()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
     expect([first.frames().length, second.frames().length]).toEqual([2, 1]);
     expect(page.cdp.acks()).toEqual(
       [1, 2, 3].map((sessionId) => ["Page.screencastFrameAck", { sessionId }]),
