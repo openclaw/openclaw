@@ -1,7 +1,8 @@
 // Owner-only synthetic safe-bin IO proof; no Gateway or persisted user state.
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/exec-safe-bin-io-measure.mjs
 // Run baseline/candidate checkouts in A/A/B order, five times, with --source-root.
-// Repeat with --allocation; sampled timings are not performance evidence.
+// Repeat separately with --allocation and --counts; only default mode measures time.
+// FS spies are installed only for --counts, never timing or allocation samples.
 // Acceptance: disabled-policy FS work disappears and enabled preparation/admission
 // makes zero main-thread sync FS calls, retaining the same wc trust verdict.
 // Async bookkeeping can cost CPU/allocation; report that tradeoff explicitly.
@@ -19,9 +20,11 @@ const { values } = parseArgs({
   options: {
     "source-root": { type: "string", default: fileURLToPath(new URL("../../", import.meta.url)) },
     allocation: { type: "boolean", default: false },
+    counts: { type: "boolean", default: false },
   },
 });
 assert(global.gc, "Run with --expose-gc");
+assert(!(values.counts && values.allocation), "Run --counts and --allocation separately");
 assert(process.platform !== "win32", "This fixture requires /usr/bin/wc");
 const ownerUrl = (name) =>
   pathToFileURL(path.resolve(values["source-root"], "src/infra", `${name}.ts`));
@@ -35,20 +38,29 @@ if (values.allocation) {
 }
 const counts = {};
 const restorers = [];
-for (const { owner, methods, prefix } of [
-  { owner: fs, methods: ["statSync", "accessSync", "realpathSync"], prefix: "main" },
-  { owner: fsp, methods: ["stat", "access", "realpath"], prefix: "async" },
-]) {
-  for (const method of methods) {
-    const original = owner[method];
-    const key = `${prefix}.${method}`;
-    owner[method] = function (...args) {
-      counts[key] = (counts[key] ?? 0) + 1;
-      return original.apply(this, args);
-    };
-    restorers.push(() => {
-      owner[method] = original;
-    });
+function counted(original, key) {
+  return Object.assign(function (...args) {
+    counts[key] = (counts[key] ?? 0) + 1;
+    return original.apply(this, args);
+  }, original);
+}
+if (values.counts) {
+  for (const { owner, methods, prefix } of [
+    { owner: fs, methods: ["statSync", "accessSync", "realpathSync"], prefix: "main" },
+    { owner: fsp, methods: ["stat", "access", "realpath"], prefix: "async" },
+  ]) {
+    for (const method of methods) {
+      const original = owner[method];
+      const key = `${prefix}.${method}`;
+      const observed = counted(original, key);
+      if (method === "realpathSync") {
+        observed.native = counted(original.native, `${key}.native`);
+      }
+      owner[method] = observed;
+      restorers.push(() => {
+        owner[method] = original;
+      });
+    }
   }
 }
 try {
@@ -99,13 +111,23 @@ try {
         scenario: disabled ? "disabled" : "default-wc-admission",
         phase: "warm-process",
         operations: 18,
-        allocation: values.allocation,
+        mode: values.counts ? "counts" : values.allocation ? "allocation" : "timing",
+        runtime: { node: process.version, bun: process.versions.bun ?? null },
         hostLoad,
-        calls,
-        wallMs,
-        mainCpuUs: mainCpu.user + mainCpu.system,
-        processCpuUs: processCpu.user + processCpu.system,
-        sampledAllocatedBytes: profile?.samples.reduce((sum, sample) => sum + sample.size, 0),
+        ...(values.counts
+          ? { calls }
+          : values.allocation
+            ? {
+                sampledAllocatedBytes: profile.samples.reduce(
+                  (sum, sample) => sum + sample.size,
+                  0,
+                ),
+              }
+            : {
+                wallMs,
+                mainCpuUs: mainCpu.user + mainCpu.system,
+                processCpuUs: processCpu.user + processCpu.system,
+              }),
       }),
     );
   }
