@@ -76,6 +76,25 @@ it.each([
   });
 });
 
+it("falls back to the configured agent name before the default name", async () => {
+  // Template Add records only `name`: no identity block and no IDENTITY.md.
+  const read = vi.spyOn(identityFiles, "loadAgentIdentityFromWorkspaceAsync");
+  read.mockResolvedValue(null);
+  const entry: Pick<AgentConfig, "name" | "identity"> = { name: "Incident Lead" };
+  const params = { cfg: { agents: { entries: { main: entry } } }, workspaceDir: "/w" };
+  expect(await resolveAssistantIdentity(params)).toMatchObject({ name: "Incident Lead" });
+  expect(await resolveAssistantIdentityName(params)).toEqual({ agentId: "main", name: entry.name });
+  entry.name = "Renamed";
+  expect(await resolveAssistantIdentity(params)).toMatchObject({
+    name: "Renamed",
+    nameSource: "agent",
+  });
+  read.mockResolvedValue({ name: "Workspace" });
+  expect(await resolveAssistantIdentity(params)).toMatchObject({ name: "Workspace" });
+  entry.identity = { name: "Configured" };
+  expect(await resolveAssistantIdentity(params)).toMatchObject({ name: "Configured" });
+});
+
 it("drops sentence-like avatar placeholders", async () => {
   const cfg = configured({ avatar: "workspace-relative path, http(s) URL, or data URI" });
   expect((await resolve(cfg)).avatar).toBe(DEFAULT_ASSISTANT_IDENTITY.avatar);
