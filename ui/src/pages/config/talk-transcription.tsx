@@ -7,7 +7,7 @@
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readTrimmedString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsRow,
@@ -99,28 +99,7 @@ function changeTranscriptionModel(
   return true;
 }
 
-/**
- * The provider whose credentials decide readiness: the preferred model's
- * provider, else the catalog's active pick, else the first audio entry.
- */
-function chosenProvider(
-  catalog: TalkTranscriptionCatalog,
-  selection: ReturnType<typeof resolveTalkTranscriptionSelection>,
-) {
-  const id =
-    (selection.preferredModel && splitModelRef(selection.preferredModel)?.provider) ??
-    catalog.activeProvider ??
-    selection.entries[0]?.provider;
-  return id
-    ? catalog.providers.find((entry) => entry.id === id || entry.aliases?.includes(id))
-    : undefined;
-}
-
-function TranscriptionStatusRow(props: {
-  catalog: TranscriptionProps["catalog"];
-  selection: ReturnType<typeof resolveTalkTranscriptionSelection>;
-}) {
-  const context = useApplication();
+function TranscriptionStatusRow(props: { catalog: TranscriptionProps["catalog"] }) {
   const status = () => {
     const catalog = props.catalog;
     if (catalog === "loading" || catalog === "unavailable") {
@@ -138,20 +117,6 @@ function TranscriptionStatusRow(props: {
         description: formatUiError(catalog.failed, t("talkPage.transcription.failedHint")),
       };
     }
-    const provider = chosenProvider(catalog, props.selection);
-    // `configured: false` covers a missing credential and a provider with no
-    // transcription support alike; the catalog carries no reason, so the copy
-    // names both instead of diagnosing a missing key.
-    if (provider && !provider.configured) {
-      return {
-        kind: "warn" as const,
-        label: t("talkPage.transcription.providerNotReady"),
-        description: t("talkPage.transcription.providerNotReadyDescription", {
-          provider: provider.label,
-        }),
-        notReadyProvider: provider.id,
-      };
-    }
     return {
       kind: catalog.ready ? ("ok" as const) : ("warn" as const),
       label: t(catalog.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
@@ -160,32 +125,35 @@ function TranscriptionStatusRow(props: {
         : t("talkPage.transcription.noProvider"),
     };
   };
-  const notReadyProvider = () => {
-    const current = status();
-    return "notReadyProvider" in current ? current.notReadyProvider : null;
-  };
   return (
     <SettingsRow
       title={t("talkPage.status.title")}
       description={status().description}
-      control={
-        <>
-          <SettingsStatus kind={status().kind} label={status().label} />
-          {notReadyProvider() && (
-            <button
-              type="button"
-              class="btn"
-              onClick={() =>
-                navigateToModelProvider(context, props.selection.talkAgentId, notReadyProvider()!)
-              }
-            >
-              {t("talkPage.transcription.openModels")}
-            </button>
-          )}
-        </>
-      }
+      control={<SettingsStatus kind={status().kind} label={status().label} />}
     />
   );
+}
+
+/**
+ * The preferred model's provider when the catalog lists it as not ready.
+ * `configured: false` covers a missing credential and a provider with no
+ * transcription support alike, so the warning names both causes. With a
+ * streaming override the catalog lists streaming providers instead; a
+ * preferred provider that shares an id with one of them is reported against
+ * that entry, which is an accepted, visible imprecision.
+ */
+function preferredProviderNotReady(
+  catalog: TranscriptionProps["catalog"],
+  preferredModel: string | null,
+) {
+  if (typeof catalog === "string" || "failed" in catalog || !preferredModel) {
+    return undefined;
+  }
+  const id = splitModelRef(preferredModel)?.provider;
+  const provider = id
+    ? catalog.providers.find((entry) => entry.id === id || entry.aliases?.includes(id))
+    : undefined;
+  return provider && !provider.configured ? provider : undefined;
 }
 
 export function TalkTranscriptionSection(props: TranscriptionProps) {
@@ -212,7 +180,7 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
       title={t("talkPage.transcription.title")}
       description={t("talkPage.transcription.description")}
     >
-      <TranscriptionStatusRow catalog={props.catalog} selection={selection()} />
+      <TranscriptionStatusRow catalog={props.catalog} />
       <SettingsRow
         title={t("talkPage.transcription.modelTitle")}
         description={
@@ -243,6 +211,30 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
           />
         }
       />
+      <Show when={preferredProviderNotReady(props.catalog, selection().preferredModel)}>
+        {(provider) => (
+          <SettingsRow
+            title={t("talkPage.transcription.preferredNotReadyTitle")}
+            description={t("talkPage.transcription.providerNotReadyDescription", {
+              provider: provider().label,
+            })}
+            control={
+              <>
+                <SettingsStatus kind="warn" label={t("talkPage.transcription.providerNotReady")} />
+                <button
+                  type="button"
+                  class="btn"
+                  onClick={() =>
+                    navigateToModelProvider(context, selection().talkAgentId, provider().id)
+                  }
+                >
+                  {t("talkPage.transcription.openModels")}
+                </button>
+              </>
+            }
+          />
+        )}
+      </Show>
     </SettingsSection>
   );
 }
