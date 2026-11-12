@@ -66,16 +66,6 @@ export async function extractFilename(url: string): Promise<string> {
   }
 }
 
-export function isLocalPath(url: string): boolean {
-  return (
-    /^file:\/\//iu.test(url) ||
-    url.startsWith("/") ||
-    url.startsWith("~") ||
-    url.startsWith("\\") ||
-    /^[a-zA-Z]:[\\/]/.test(url)
-  );
-}
-
 export function extractMessageId(response: unknown): string | null {
   if (!response || typeof response !== "object" || !("id" in response)) {
     return null;

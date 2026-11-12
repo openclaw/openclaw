@@ -126,6 +126,16 @@ Authorization headers are only attached for hosts in `channels.msteams.mediaAuth
 
 ## Sending files in group chats
 
+Remote reply attachments are downloaded by OpenClaw before delivery, using the
+shared media destination checks and the existing `channels.msteams.mediaMaxMb`
+limit (falling back to `agents.defaults.mediaMaxMb`). Private/internal sources,
+redirects to blocked destinations, and oversized files fail before attachment
+delivery. Use an accessible public source or an allowed local file instead.
+Downloaded reply images stay inline, except personal-chat images at or above
+4 MiB require file consent. Other files use the personal-chat consent or
+group/channel SharePoint flows below, including their existing permissions and
+site requirements.
+
 Bots can send files in DMs using the built-in FileConsentCard flow. **Sending files in group chats/channels** requires additional setup:
 
 | Context                  | How files are sent                           | Setup needed                                              |
