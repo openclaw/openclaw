@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 
-vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: vi.fn(),
+}));
 const { logWarn: logWarnMock } = vi.mocked(await import("../logger.js"));
 
 describe("buildMcpToolSchema", () => {
