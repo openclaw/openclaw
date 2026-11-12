@@ -19,6 +19,7 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../config/sessions.js";
 import { buildGroupDisplayName, buildGroupDisplayTitle } from "../config/sessions/group-display.js";
+import { projectedRunIdentity } from "../infra/agent-run-projection.js";
 import {
   type prepareProjectedAgentRunProgressState,
   resolveProjectedAgentRunProgressState,
@@ -163,6 +164,12 @@ export function projectGatewaySessionRunState(params: {
   const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
   // Follow-up turns retain the child session while owning a different run from its original spawn.
   const hasActiveSubagentRun =
+    (entry?.sessionId !== undefined &&
+      rowContext?.projectedAgentRuns?.subagentSessionKeys
+        ?.get(
+          projectedRunIdentity((params.parsedKey ?? parseAgentSessionKey(key))?.agentId ?? "", key),
+        )
+        ?.has(JSON.stringify([entry.sessionId, entry.lifecycleRevision ?? null])) === true) ||
     liveSubagentRunActive ||
     subagentRuns.countActiveDescendantRuns(key) > 0 ||
     ((subagentRun !== null || entry?.spawnedBy !== undefined) &&
