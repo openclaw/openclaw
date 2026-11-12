@@ -178,7 +178,7 @@ function sanitizeHistoryMessage(
       const visibleText = isAssistantTextContentBlockType(rawContent.type);
       // Reuse the display owner for non-prose, including nested tool-result content.
       const preview = visibleText ? undefined : sanitizeChatHistoryContentBlock(rawContent);
-      const content = { ...((preview?.block ?? rawContent) as Record<string, unknown>) };
+      const content = { ...asOptionalRecord(preview?.block ?? rawContent) };
       if (preview?.truncated) {
         const meta = asOptionalRecord(entry["__openclaw"]);
         entry["__openclaw"] = { ...meta, truncated: true, reason: meta?.reason ?? "display-cap" };
