@@ -144,6 +144,7 @@ export function RailRow(props: {
   /** Session files can render as tiles; tree rows and search results stay rows. */
   view?: "list" | "grid";
   onToggle?: (instant: boolean) => void;
+  onDownloadStart?: () => () => void;
 }) {
   // Default session rows retain selection when a read publishes its canonical ID.
   const selected = createMemo(() =>
@@ -308,6 +309,7 @@ export function RailRow(props: {
                       ])}
                       download={(signal) => download()(props.file.path, props.file.origin, signal)}
                       disabled={props.file.missing}
+                      onDownloadStart={props.onDownloadStart}
                       class="workspace-desktop__action"
                     />
                   )}
@@ -360,6 +362,16 @@ export function WorkspaceRows(props: {
   let list: HTMLDivElement;
   const mountedRows = new Set<HTMLDivElement>();
   const [focusedKey, setFocusedKey] = createSignal<string>();
+  const [downloads, setDownloads] = createSignal<ReadonlySet<string>>(new Set());
+  const retainDownload = (key: string) => {
+    setDownloads((keys) => new Set([...keys, key]));
+    return () =>
+      setDownloads((keys) => {
+        const next = new Set(keys);
+        next.delete(key);
+        return next;
+      });
+  };
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>();
   const rowsActive = createMemo(() => props.active);
   // Keep a 250 -> 125 Changed filter windowed; small and mixed lists stay eager.
@@ -393,6 +405,11 @@ export function WorkspaceRows(props: {
     // Endpoints admit native Tab from either direction; neighbors let it keep
     // advancing without intercepting keys or creating a second focus owner.
     const indexes = [0, props.rows.length - 1, selected];
+    // Pending actions pin only authoritative current rows; an admitted removal
+    // still disposes the button and cancels its request.
+    for (const key of downloads()) {
+      indexes.push(rowIndexes().get(key));
+    }
     if (focused !== undefined) {
       indexes.push(focused - 1, focused, focused + 1);
     }
@@ -555,6 +572,7 @@ export function WorkspaceRows(props: {
               workspace={props.workspace}
               depth={props.depth}
               directory={childProps.row.directory}
+              onDownloadStart={() => retainDownload(childProps.row.key)}
               onToggle={() =>
                 props.workspace.onBrowsePath(childProps.row.workspacePath ?? childProps.row.path)
               }
