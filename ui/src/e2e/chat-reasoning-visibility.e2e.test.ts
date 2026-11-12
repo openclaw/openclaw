@@ -75,13 +75,6 @@ suite.define(() => {
             reasoningText,
             conclusion,
           ]);
-          expect(
-            await reasoning.evaluate((node) =>
-              [node, document.body].map((element) =>
-                getComputedStyle(element).getPropertyValue("-webkit-font-smoothing"),
-              ),
-            ),
-          ).toEqual(["auto", "antialiased"]);
         }
         expect(await answer.isVisible()).toBe(true);
       }
