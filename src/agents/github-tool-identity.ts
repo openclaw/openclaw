@@ -16,10 +16,9 @@ import {
   composeSessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
-import { resolveAgentEntry, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
+import { resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import {
   prepareAppGitHubIdentity,
   configuredAppGitHubIdentityFacts,
@@ -50,6 +49,11 @@ import {
 } from "./github-read-identity.js";
 import { managedGitHubHosts, type GitHubToolAccount } from "./github-tool-account.js";
 import {
+  resolveGitHubToolIdentity,
+  resolveScopedGitHubToolIdentity,
+  resolveSystemGitHubToolIdentity,
+} from "./github-tool-identity-config.js";
+import {
   githubCredentialEnvironmentExclusions,
   managedGitHubIdentityEnvironment,
 } from "./github-tool-identity-env.js";
@@ -69,6 +73,7 @@ import {
 } from "./github-tool-profile-files.js";
 import { resolveManagedGitHubProfileDir } from "./github-tool-profile-path.js";
 
+export { resolveConfiguredGitHubToolIdentity } from "./github-tool-identity-config.js";
 export {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileDir,
@@ -85,46 +90,6 @@ export class GitHubAccountMismatchError extends Error {}
 
 export function createManagedGitHubProfileId(): string {
   return `ghp_${randomBytes(16).toString("hex")}`;
-}
-
-export function resolveConfiguredGitHubToolIdentity(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  scope: "system" | "agent";
-}): GitHubToolIdentityConfig | undefined {
-  return params.scope === "agent"
-    ? resolveAgentEntry(params.config, params.agentId)?.tools?.github
-    : params.config.tools?.github;
-}
-
-function resolveSystemGitHubToolIdentity(params: Pick<GitHubIdentityPreparation, "config">) {
-  return (
-    resolveScopedGitHubToolIdentity({ ...params, agentId: "", scope: "system" }) ?? {
-      source: "system-detected" as const,
-    }
-  );
-}
-
-function resolveGitHubToolIdentity(params: Pick<GitHubIdentityPreparation, "config" | "agentId">) {
-  return (
-    resolveScopedGitHubToolIdentity({ ...params, scope: "agent" }) ??
-    resolveSystemGitHubToolIdentity(params)
-  );
-}
-
-function resolveScopedGitHubToolIdentity(params: {
-  config: OpenClawConfig;
-  agentId: string;
-  scope: "system" | "agent";
-}) {
-  const config = resolveConfiguredGitHubToolIdentity(params);
-  return config
-    ? {
-        source:
-          params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const),
-        config,
-      }
-    : undefined;
 }
 
 type ResolvedGitHubToolIdentity = ReturnType<typeof resolveGitHubToolIdentity>;
