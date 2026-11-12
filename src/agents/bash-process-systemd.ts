@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { parseKeyValueOutput } from "../daemon/runtime-parse.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
 import { getHostExecMemoryBudget } from "../process/child-memory.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
+import {
+  runDurableControlCommand,
+  type DurableControlOptions as ControlOptions,
+} from "./bash-process-durable-command.js";
 
-type ControlOptions = Pick<SpawnInput, "env" | "assertCurrent" | "initiateSpawn">;
 type StopOptions = Pick<ControlOptions, "assertCurrent">;
-type LaunchOptions = ControlOptions &
+export type DurableLaunchOptions = ControlOptions &
   Pick<SpawnInput, "cwd" | "timeoutMs"> & {
     id: string;
     argv: string[];
@@ -21,15 +22,18 @@ export type DurableProcessObservation =
   | {
       state: "exited";
       exitCode: number | null;
-      exitSignal: number | null;
+      exitSignal: NodeJS.Signals | number | null;
       reason: TerminationReason;
       result: string;
+      /** Supervisor-measured run time, when the supervisor records one. */
+      durationMs?: number;
+      /** Explains an exit whose outcome the supervisor could not record. */
+      note?: string;
     };
 
 const REQUIREMENT =
   "Durable exec requires Gateway-host execution on Linux, systemd 250 or newer, and a reachable Gateway user's systemd manager (XDG_RUNTIME_DIR or DBUS_SESSION_BUS_ADDRESS). Use ordinary background exec on unsupported hosts.";
 const MANAGER_KEYS = ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"] as const;
-const MAX_OUTPUT = 256_000;
 const EXIT_REASONS: Record<string, TerminationReason> = {
   timeout: "overall-timeout",
   "oom-kill": "memory-limit",
@@ -40,32 +44,8 @@ const failure = () =>
     "Durable process control was not confirmed; inspect process status and the systemd user manager before retrying.",
   );
 
-async function command(argv: string[], options: ControlOptions = {}): Promise<RunExit> {
-  try {
-    const executable = resolveExecutablePath(argv[0]!, { env: process.env, cwd: process.cwd() });
-    if (!executable) {
-      throw failure();
-    }
-    const run = await getProcessSupervisor().spawn({
-      mode: "child",
-      argv: [executable, ...argv.slice(1)],
-      env: process.env,
-      exactEnv: true,
-      cleanupOwnership: "external",
-      stdinMode: "pipe-closed",
-      timeoutMs: 15_000,
-      maxCapturedOutputChars: MAX_OUTPUT,
-      ...options,
-    });
-    const result = await run.wait();
-    if (result.reason !== "exit" || result.stdout.length >= MAX_OUTPUT) {
-      throw failure();
-    }
-    return result;
-  } catch {
-    throw failure();
-  }
-}
+const command = (argv: string[], options: ControlOptions = {}): Promise<RunExit> =>
+  runDurableControlCommand(argv, options, failure);
 
 export function durableProcessUnitName(id: string): string {
   return `openclaw-proc-${createHash("sha256").update(id).digest("hex")}.service`;
@@ -104,7 +84,9 @@ export async function requireDurableProcessHost(
   }
 }
 
-export async function launchDurableProcess(params: LaunchOptions): Promise<{ unitName: string }> {
+export async function launchDurableProcess(
+  params: DurableLaunchOptions,
+): Promise<{ unitName: string }> {
   const unitName = durableProcessUnitName(params.id);
   // The manager can retain credentials ordinary exec omitted; discard names absent from the launch env.
   const manager = await command(["systemctl", "--user", "show-environment"]);

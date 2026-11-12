@@ -87,7 +87,7 @@ export function assertDurableExecAvailable(
   }
   if (host !== "gateway" || !allowBackground) {
     throw new Error(
-      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer, a reachable user manager, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
+      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
     );
   }
 }

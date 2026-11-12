@@ -119,12 +119,15 @@ Gateway-hosted work alive across Gateway restarts:
 { "tool": "exec", "command": "npm run build", "background": true, "durable": true }
 ```
 
-This requires Linux, systemd 250 or newer, and a reachable user manager for the Gateway's user,
-with `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` available. The `process` tool
-must be enabled. Sandbox, remote `host=node`, worker, macOS, and Windows execution
+This requires either Linux, systemd 250 or newer, and a reachable user manager for the
+Gateway's user, with `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` available; or macOS
+with the Gateway running in a logged-in user's GUI session (`launchctl managername`
+reports `Aqua`; an SSH-only session does not qualify). The `process` tool
+must be enabled. Sandbox, remote `host=node`, worker, and Windows execution
 are unsupported. An unavailable requirement produces an error; durable execution
 never silently falls back to ordinary background execution. OpenClaw does not
-enable linger or keep the user manager alive after logout. A host reboot or user
+enable linger or keep the user manager alive after logout; on macOS, logging out
+ends the GUI session and its durable jobs. A host reboot or user
 manager shutdown still ends transient services; this is not a saved automation or
 an automatic command-restart policy.
 
@@ -133,6 +136,21 @@ The existing background-process registry remains the owner. It launches a transi
 `ExitType=cgroup`: descendants keep the service running after its initial shell
 exits, and completion waits until the cgroup is empty. `KillMode=control-group`
 lets `process kill` stop the entire tree through `systemctl --user stop`.
+On macOS, each durable command is a transient `ai.openclaw.durable-proc.<opaque id>` launchd job
+in the user's `gui/<uid>` domain, loaded from a plist under `$OPENCLAW_STATE_DIR/processes/`
+rather than `~/Library/LaunchAgents`, so it is never reloaded at login. launchd starts a
+small OpenClaw wrapper that runs the command in its own process group, records that
+group, waits until the group is empty, enforces `timeoutSeconds`, and records the exit
+status in a status file the returning Gateway reads. The registry reads job state from
+`launchctl list`; a failed or unreadable listing is retried, never treated as a finished
+or missing job. `process kill` signals the wrapper, which stops the group (SIGTERM, then
+SIGKILL after 10 seconds). macOS has no cgroups: a descendant that leaves the process
+group (for example `setsid`, `tmux new -d`, or a self-daemonizing program) is neither
+waited for nor stopped. If the wrapper itself is killed, the registry checks the recorded
+group and reports the outcome as unknown once it is empty. The job runs as its own
+process for macOS privacy permissions, so access the Gateway or app was granted (for
+example Full Disk Access) may not apply to a durable command.
+
 Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
