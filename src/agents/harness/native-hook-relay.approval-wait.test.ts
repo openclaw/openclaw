@@ -11,7 +11,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import { nativeHookRelayState } from "./native-hook-relay-state.js";
-import { invokeNativeHookRelay, registerNativeHookRelay } from "./native-hook-relay.js";
+import { invokeNativeHookRelay, registerNativeHookRelay, testing } from "./native-hook-relay.js";
 import {
   clearNativeHookRelaysForTests,
   registerTestNativeHookRelay as registerRelay,
@@ -60,6 +60,48 @@ async function invokePermissionRequest(
 }
 
 describe("native hook relay approval wait handling", () => {
+  it("keeps replacement pending PermissionRequest approvals when stale approvals settle", async () => {
+    const relayId = "codex-stale-pending-permission";
+    const firstRelay = registerRelay({ relayId });
+    const resolvers: Array<(decision: "allow") => void> = [];
+    const approvalRequester = vi.fn(
+      () =>
+        new Promise<"allow">((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+    const firstApproval = invokePermissionRequest(relayId, { command: "git push" });
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
+    expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(1);
+
+    firstRelay.unregister();
+    await expect(firstApproval).rejects.toThrow("registration is inactive");
+    registerRelay({ relayId });
+    const secondApproval = invokePermissionRequest(relayId, { command: "git push" });
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
+    expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(1);
+
+    resolvers[0]?.("allow");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(1);
+
+    const duplicateSecondApproval = invokePermissionRequest(relayId, { command: "git push" });
+    // File binding preparation yields before the duplicate can join the pending approval.
+    await vi.waitFor(() =>
+      expect([...nativeHookRelayState.pendingPermissionApprovals.values()]).toEqual([
+        expect.objectContaining({ waiters: 2 }),
+      ]),
+    );
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
+
+    resolvers[1]?.("allow");
+    await expect(Promise.all([secondApproval, duplicateSecondApproval])).resolves.toHaveLength(2);
+    expect(nativeHookRelayState.pendingPermissionApprovals.size).toBe(0);
+  });
+
   it.each([
     {
       decision: "allow-once",

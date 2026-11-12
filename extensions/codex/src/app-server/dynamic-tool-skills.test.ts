@@ -22,11 +22,12 @@ beforeEach(async () => {
 
 afterEach(() => cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers));
 
-it.each(["allowed", "denied", "oversized"])(
+it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
   "delivers whole skills or refuses %s reads",
   async (mode) => {
     const denied = mode === "denied";
-    const oversized = mode === "oversized";
+    const multiline = mode === "oversized-multiline";
+    const oversized = mode === "oversized" || multiline;
     const workspaceDir = tempDir;
     const params = createParams(path.join(tempDir, "skills-session.jsonl"), workspaceDir, {
       runtimePlan: createCodexRuntimePlanFixture(),
@@ -44,7 +45,7 @@ it.each(["allowed", "denied", "oversized"])(
       sourceInfo: { source: "test", scope: "temporary", origin: "top-level", path: "/s" } as const,
       disableModelInvocation: false,
       readContent: oversized
-        ? `# Release\n\n${"Complete instructions. ".repeat(5_000)}\nEND OF SKILL`
+        ? `# Release\n\n${(multiline ? "Complete instructions.\n" : "Complete instructions. ").repeat(5_000)}\nEND OF SKILL`
         : "# Release\n\nComplete instructions.\n",
     };
     params.skillsSnapshot = {
@@ -59,7 +60,12 @@ it.each(["allowed", "denied", "oversized"])(
       tools,
       signal: new AbortController().signal,
       loading: "direct",
-      hookContext: { sessionKey: params.sessionKey, runId: params.runId, workspaceDir },
+      hookContext: {
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        workspaceDir,
+        contextWindowTokens: multiline ? params.model.contextWindow : undefined,
+      },
     });
     const guidance = renderCodexSkillsInstructions({
       attempt: params,

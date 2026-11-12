@@ -14,6 +14,7 @@ import path from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { createHostWorkspaceEditTool } from "../agents/agent-tools.read.js";
+import * as sessionSlugs from "../agents/session-slug.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -280,6 +281,12 @@ describe("local checkout publication", () => {
   });
 
   it.each(LOCAL_CHECKOUT_OUTCOMES)("local checkout outcome: %s", async (outcome) => {
+    // Separate clones share one remote, so their publication branches must not collide.
+    const names = vi
+      .spyOn(sessionSlugs, "createCrustaceanSlug")
+      .mockReturnValueOnce("first-publication")
+      .mockReturnValueOnce("next-publication");
+    onTestFinished(() => names.mockRestore());
     const f = await createFixture();
     await useRealSessionReads();
     const source = f.local!;

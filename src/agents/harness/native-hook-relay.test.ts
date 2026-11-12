@@ -2391,52 +2391,6 @@ describe("native hook relay registry", () => {
     expect(approvalRequester).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps replacement pending PermissionRequest approvals when stale approvals settle", async () => {
-    const relayId = "codex-stale-pending-permission";
-    const firstRelay = registerRelay({ relayId });
-    const resolvers: Array<(decision: "allow") => void> = [];
-    const approvalRequester = vi.fn(
-      () =>
-        new Promise<"allow">((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
-    testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
-    const payload = {
-      hook_event_name: "PermissionRequest",
-      tool_name: "Bash",
-      tool_use_id: "native-call-1",
-      tool_input: { command: "git push" },
-    };
-
-    const firstApproval = invokeRelay(relayId, "permission_request", payload);
-    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
-
-    firstRelay.unregister();
-    await expect(firstApproval).rejects.toThrow("registration is inactive");
-    registerRelay({ relayId });
-    const secondApproval = invokeRelay(relayId, "permission_request", payload);
-    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
-
-    resolvers[0]?.("allow");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
-
-    const duplicateSecondApproval = invokeRelay(relayId, "permission_request", payload);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
-
-    resolvers[1]?.("allow");
-    await expect(Promise.all([secondApproval, duplicateSecondApproval])).resolves.toHaveLength(2);
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(0);
-  });
-
   it("does not reuse pending PermissionRequest approvals when a tool call id is reused with different input", async () => {
     const relay = registerRelay();
     let resolveDecision: ((decision: "allow") => void) | undefined;

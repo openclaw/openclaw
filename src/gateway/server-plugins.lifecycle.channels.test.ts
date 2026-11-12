@@ -259,9 +259,20 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     });
     expect(committed.afterWrite.mode).toBe("auto");
     expect(application.claimed).toBe(true);
-    // Persistence schedules application; await its owner before probing the replacement.
-    await expect(application.result).resolves.toBe("applied");
-    expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
+    // A catalog build can retain this generation after config settlement; a deferred
+    // receipt is not application. Observe the installed configuration itself below.
+    const applicationStatus = await application.result;
+    if (typeof applicationStatus === "object") {
+      expect(applicationStatus).toMatchObject({
+        status: "deferred",
+        reason: expect.stringContaining("cold-chat-owner"),
+      });
+    } else {
+      expect(applicationStatus).toBe("applied");
+    }
+    await expect
+      .poll(async () => (await settledProbe("cold-chat")).captured?.label, { timeout: 10_000 })
+      .toBe("installed setup");
     expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
     expect(await settledProbe("sibling-chat")).toEqual(sibling);
     assert.ok(configWatcher);
