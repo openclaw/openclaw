@@ -12,6 +12,7 @@ import {
 } from "../cron/delivery-defaults.js";
 import { hasExplicitCronDeliveryTarget } from "../cron/delivery-target-validation.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
+import { shouldIncludeCronInspectLink } from "../cron/inspect-links.js";
 import { normalizeDirectCronDeliveryPayloads } from "../cron/isolated-agent/delivery-payload-normalization.js";
 import {
   resolveDeliveryTarget,
@@ -111,13 +112,15 @@ export async function finalizeCronCompletionAnnouncement(params: {
   }
 
   const { agentId, cfg } = resolveAgent();
-  const inspectUrl = resolveControlUiAutomationRunUrl(cfg, {
-    jobId: params.job.id,
-    runId:
-      params.runStartedAtMs === undefined
-        ? undefined
-        : createCronExecutionId(params.job.id, params.runStartedAtMs),
-  });
+  const inspectUrl = shouldIncludeCronInspectLink(cfg, "completion")
+    ? resolveControlUiAutomationRunUrl(cfg, {
+        jobId: params.job.id,
+        runId:
+          params.runStartedAtMs === undefined
+            ? undefined
+            : createCronExecutionId(params.job.id, params.runStartedAtMs),
+      })
+    : undefined;
   const abortSignal = params.abortSignal ?? new AbortController().signal;
   let mayHaveReachedRecipient = false;
   try {
