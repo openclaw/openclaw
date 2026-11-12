@@ -6,6 +6,8 @@ import {
   markAgentToolExecutionUnavailable,
 } from "../agent-tool-availability.js";
 import type { InstalledSkill } from "../installed-skill-catalog.js";
+import { fakeTool } from "../test-helpers/fake-tool.js";
+import { resolveLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
 const guideMetadata = {
@@ -205,4 +207,36 @@ it("bounds concurrent cold searches and retains metadata outside the body budget
   });
   expect(peak).toBeLessThanOrEqual(4);
   expect(reader).toHaveBeenCalledTimes(1_024);
+});
+
+it.each([
+  ["with read", true],
+  ["without read", false],
+] as const)("pages oversized instructions to the model budget %s", async (_name, withRead) => {
+  const contextWindowTokens = 128_000;
+  const lines = Array.from({ length: 6000 }, (_, index) => `step ${index}: "quoted" detail`);
+  const content = [...lines, "FINAL CANARY"].join("\n");
+  const tools = createInstalledSkillTools(
+    [skill({ source: { filePath: guideMetadata.location, readContent: content } })],
+    { modelContextWindowTokens: contextWindowTokens },
+  );
+  finalizeAgentToolAvailability(withRead ? [...tools, fakeTool("read", "Read files")] : tools);
+  const result = await expectDefined(tools[1], "read").execute("oversized", { name: "guide" });
+  const text = (result.content[0] as { text: string }).text;
+  const shown = Number(/showing lines 1-(\d+) of 6001/u.exec(text)?.[1]);
+  expect(shown).toBeGreaterThan(100);
+  expect(text).toContain(`\n${lines[shown - 1]}\n\n[Skill instructions incomplete:`);
+  expect(text).not.toContain("FINAL CANARY");
+  // Deferred dispatch wraps this text as a JSON string; that form must still fit.
+  expect(JSON.stringify(text).length).toBeLessThan(
+    resolveLiveToolResultMaxChars({ contextWindowTokens }),
+  );
+  if (withRead) {
+    expect(text).toContain(
+      `read({"path":"/skills/guide/SKILL.md","offset":${shown + 1}}) and follow each continuation`,
+    );
+  } else {
+    expect(text).toContain(`read the rest of /skills/guide/SKILL.md from line ${shown + 1}`);
+  }
+  expect(result.details).toMatchObject({ content });
 });

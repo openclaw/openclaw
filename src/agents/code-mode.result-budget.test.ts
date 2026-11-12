@@ -346,16 +346,34 @@ describe("fresh producer results through persistence and model guards", () => {
     expect(text(mcp)).toContain("Retry with a narrower query.");
   });
 
-  it("refuses a whole skill that fits the byte cap but exceeds the model text budget", async () => {
+  it("pages an oversized skill through read continuations that survive the result guard", async () => {
     const locator = "node://fixture/skills/whole/SKILL.md";
-    const base = createReadTool("/");
+    const source = [
+      ...Array.from({ length: 3000 }, (_, index) => `step ${index}: ${"中é".repeat(12)}`),
+      "FINAL CANARY: open a pull request instead of pushing to main.",
+    ].join("\n");
     const read = wrapReadToolWithSkillContent(
-      base,
-      [{ filePath: locator, readContent: "INSTRUCTIONS" + "中".repeat(9000) }],
+      createReadTool("/"),
+      [{ filePath: locator, readContent: source }],
       { modelContextWindowTokens: contextWindow },
     );
-    const result = await read.execute("skill", { path: locator, offset: 2, limit: 1 });
-    expect(text(result)).toContain("cannot be partially served");
-    expect(text(result)).not.toContain("INSTRUCTIONS");
+    const pages: string[] = [];
+    let continuation: ReadToolContinuation | undefined;
+    for (let index = 0; index < 32; index++) {
+      const callId = `skill-${index}`;
+      const page = await execute(read, callId, { path: locator, ...continuation }, callId);
+      const sent = toolResult(await dispatch([page], contextWindow), 0);
+      expect(text(sent), "skill pages must not be clipped").toBe(text(page));
+      const details = resultDetails(page);
+      pages.push(details.content as string);
+      continuation = details.continuation as ReadToolContinuation | undefined;
+      if (!continuation) {
+        break;
+      }
+      expect(continuation.kind).toBe("line");
+      expect(text(page)).toContain(`offset=${continuation.offset}`);
+    }
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.join("\n")).toBe(source);
   });
 });
