@@ -1,266 +1,111 @@
-name: Retained CLI composition proof
+name: Required Backports Generated Patch
 
-# Composition only: neither junctions nor a complete self-update qualification.
 on:
-  push:
-    branches: [diagnostic/release-2026.11.4-cli-composition-20261111]
   workflow_dispatch:
     inputs:
-      fixture_only:
-        description: Replay the Windows composition and changed Linux fixture without repeating proven type graphs or unchanged owner tests.
-        type: boolean
-        default: false
+      target_ref:
+        description: Reviewed four-backport candidate full commit SHA (not a branch or tag)
+        required: true
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: required-backports-generated-patch-${{ inputs.target_ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  BASE_SHA: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
+  EXPECTED_PATHS_SHA256: d3e7d95f86730273c8d8df822b34488842f92ba09c18d333cd72397a8abb870c
+
 jobs:
-  composition:
-    runs-on: windows-2025
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        node: ["24.22.1", "26.12.1"]
-    env:
-      BASELINE_OWNER: 9303386795597b59c8bc02ca5d8a4a5c12ae3694
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ matrix.node }}
-          install-bun: "false"
-          cache-mode: "off"
-      - name: Record exact source and proof limits
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force .artifacts/cli-composition | Out-Null
-          git rev-parse HEAD | Tee-Object .artifacts/cli-composition/head.txt
-          node --version | Tee-Object .artifacts/cli-composition/node.txt
-          "CLI cleanup/retained-update composition; dispatch substituted. Junction and complete self-update unproved; immutable 2026.11.3 unchanged." | Set-Content .artifacts/cli-composition/scope.txt
-      - name: Prove repaired canonical and short-path composition
-        shell: pwsh
-        env:
-          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/cli-composition/repaired-graph
-        run: |
-          node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "drains real CLI resources" 2>&1 | Tee-Object .artifacts/cli-composition/repaired.log
-          exit $LASTEXITCODE
-      - name: Install exact pre-fix owner only
-        shell: bash
-        run: |
-          git fetch --no-tags --depth=1 origin "$BASELINE_OWNER"
-          for file in src/infra/update-retained-runtime.ts src/infra/update-retained-runtime-imports.ts; do
-            git show "$BASELINE_OWNER:$file" > "$file"
-          done
-          printf '%s\n' "$BASELINE_OWNER" > .artifacts/cli-composition/baseline-owner.txt
-          git diff -- src/infra/update-retained-runtime.ts src/infra/update-retained-runtime-imports.ts > .artifacts/cli-composition/baseline-owner.diff
-      - name: Preserve pre-fix canonical control
-        shell: pwsh
-        env:
-          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/cli-composition/baseline-canonical-graph
-        run: |
-          node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "after node retained-update composition" 2>&1 | Tee-Object .artifacts/cli-composition/baseline-canonical.log
-          exit $LASTEXITCODE
-      - name: Require pre-fix admitted alias cleanup failure
-        shell: pwsh
-        env:
-          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/cli-composition/baseline-alias-graph
-        run: |
-          node scripts/run-vitest.mjs src/cli/runtime-cleanup-scope.retirement.test.ts --maxWorkers=1 -t "after node-short-path retained-update composition" 2>&1 | Tee-Object .artifacts/cli-composition/baseline-alias.log
-          $status = $LASTEXITCODE
-          if ($status -eq 0) { throw "Pre-fix short-path composition unexpectedly passed" }
-          $lines = @(Get-Content .artifacts/cli-composition/baseline-alias.log | ForEach-Object { $_ -replace '\x1b\[[0-9;]*m', '' })
-          $proofLines = @($lines | Where-Object { $_.StartsWith('RETAINED_CLI_PROOF ') } | ForEach-Object { $_.Substring('RETAINED_CLI_PROOF '.Length) })
-          $admissions = @($proofLines | Where-Object { $_.StartsWith('{"phase":"cli-composition-admitted"') } | ForEach-Object { $_ | ConvertFrom-Json })
-          if ($admissions.Count -ne 1) { throw "Expected exactly one parsed alias admission" }
-          $admission = $admissions[0]
-          if ($admission.requested -isnot [string] -or $admission.observed -isnot [string] -or $admission.physical -isnot [string] -or
-              $admission.requested -cne $admission.observed -or $admission.observed -ceq $admission.physical) {
-            throw "Pre-fix failure did not admit the requested nonphysical alias"
-          }
-          $cleanupUri = [uri]$admission.observed
-          if (-not $cleanupUri.IsFile -or $cleanupUri.AbsolutePath -cnotmatch '/cli/runtime-cleanup\.js$') {
-            throw "Alias admission did not identify the cleanup module"
-          }
-          $resolutionFailures = @($proofLines | Where-Object { $_.StartsWith('{"phase":"cli-composition-resolution-failed"') } | ForEach-Object { $_ | ConvertFrom-Json })
-          $disposalFailures = @($proofLines | Where-Object { $_.StartsWith('{"phase":"cli-composition-disposal-failed"') } | ForEach-Object { $_ | ConvertFrom-Json })
-          if ($resolutionFailures.Count -ne 1 -or $disposalFailures.Count -ne 1) {
-            throw "Expected one reporter resolution failure and one disposal assertion receipt"
-          }
-          $resolution = $resolutionFailures[0]
-          $disposal = $disposalFailures[0]
-          $missingUri = [uri]$resolution.requested
-          $expectedMissingUri = [uri]::new($cleanupUri, '../infra/errors.js')
-          if ($resolution.parent -cne $admission.observed -or $resolution.code -cne 'ERR_MODULE_NOT_FOUND' -or
-              $missingUri.AbsoluteUri -cne $expectedMissingUri.AbsoluteUri -or
-              $disposal.actual -ne 0 -or $disposal.expected -ne 1) {
-            throw "Pre-fix failure lacked the admitted cleanup reporter import and exact zero-disposal assertion"
-          }
-          # The resolution hook rethrows unchanged; the disposal receipt precedes its assertion.
-          # Neither receipt identifies the original error masked by the failed reporter import.
-          "Expected admitted alias cleanup reporter failure and zero disposal; original disposer error/name unobserved; exit=$status" | Set-Content .artifacts/cli-composition/baseline-disposition.txt
-          exit 0
-      - name: Upload source-bound proof including failures
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: retained-cli-composition-node-${{ matrix.node }}-${{ github.run_attempt }}
-          path: .artifacts/cli-composition/
-          if-no-files-found: warn
-          retention-days: 7
-
-  static-plan:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix || '{"include":[{"graph":"not-requested"}]}' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: &static_source
-          persist-credentials: false
-      - name: Bind exact source
-        run: |
-          mkdir -p .artifacts/composition-static
-          git rev-parse HEAD > .artifacts/composition-static/source.txt
-      - uses: ./.github/actions/setup-node-env
-        with:
-          semantic-checks: "true"
-          cache-mode: "off"
-      - name: Materialize canonical formatting and exact bytes
-        run: |
-          files=(scripts/lib/vitest-worker-compiler.mts scripts/lib/vitest-worker-artifacts.mts scripts/lib/vitest-worker-cache.mts scripts/lib/vitest-worker-fixture-graph.mts test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml)
-          pnpm exec oxfmt --write --threads=1 "${files[@]}"
-          git diff --binary -- "${files[@]}" > .artifacts/composition-static/formatted.patch
-          sha256sum "${files[@]}" > .artifacts/composition-static/formatted.sha256
-          node --version > .artifacts/composition-static/node.txt
-          bun --version > .artifacts/composition-static/bun.txt
-      - name: Plan canonical production and test graphs once
-        if: ${{ !inputs.fixture_only }}
-        id: plan
-        run: |
-          node --import ./scripts/tsx.mjs --input-type=module <<'NODE'
-          import fs from "node:fs";
-          import { createChangedCiTypeCheckPlan } from "./scripts/run-tsgo-core-test-shards.mts";
-          // Only changed TypeScript selects compiler consumers; the workflow cannot widen it.
-          const paths = ["scripts/lib/vitest-worker-compiler.mts", "scripts/lib/vitest-worker-artifacts.mts", "scripts/lib/vitest-worker-cache.mts", "scripts/lib/vitest-worker-fixture-graph.mts", "test/scripts/vitest-worker-cache.test.ts", "test/scripts/vitest-worker-fixture-graph.test.ts", "scripts/lib/vitest-worker-build-entries.mts", "src/cli/cli-entrypoint.test-support.ts", "src/cli/runtime-cleanup-scope.retirement.test.ts", "src/cli/runtime-cleanup-retained.test-support.ts", "src/infra/update-retained-runtime-imports.process.test.ts", "src/infra/update-retained-runtime-alias.test-support.ts", "src/infra/update-retained-runtime.ts", "src/infra/update-candidate-plugin-hash.ts", "src/infra/update-candidate-io.ts", "src/infra/update-retained-runtime-tree.ts"];
-          const plan = await createChangedCiTypeCheckPlan(paths);
-          if (!plan.graphs.length) throw new Error("Missing compiler ownership for changed TypeScript");
-          fs.writeFileSync(".artifacts/composition-static/type-plan.json", JSON.stringify({ paths, ...plan }, null, 2) + "\n");
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, "matrix=" + JSON.stringify({ include: plan.graphs.map(graph => ({ graph: graph.name })) }) + "\n");
-          NODE
-      - name: Upload formatted source and compiler plan even on failure
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: composition-static-input-${{ github.run_attempt }}
-          path: .artifacts/composition-static/
-          if-no-files-found: error
-          retention-days: 7
-
-  static-checks:
-    needs: static-plan
+  generate:
+    if: github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    steps: &static_consumer_steps
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: *static_source
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: composition-static-input-${{ github.run_attempt }}
-          path: .artifacts/composition-static
-      - name: Apply and verify exact formatted inputs
-        run: |
-          test "$(git rev-parse HEAD)" = "$(cat .artifacts/composition-static/source.txt)"
-          if test -s .artifacts/composition-static/formatted.patch; then
-            git apply .artifacts/composition-static/formatted.patch
-          fi
-          sha256sum -c .artifacts/composition-static/formatted.sha256
-      - uses: ./.github/actions/setup-node-env
-        with:
-          semantic-checks: "true"
-          install-bun: ${{ github.job == 'static-tests' && 'false' || 'true' }}
-          cache-mode: "off"
-      - uses: ./.github/actions/setup-test-bun
-        if: github.job == 'static-tests'
-      - name: Record exact pinned test runtime
-        if: github.job == 'static-tests'
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from "node:assert/strict";
-          import { execFileSync } from "node:child_process";
-          import { createHash } from "node:crypto";
-          import fs from "node:fs";
-          const pin = JSON.parse(fs.readFileSync("scripts/lib/openclaw-bun.json", "utf8"));
-          const query = (...args) => execFileSync("bun", args, { encoding: "utf8" }).trim();
-          const executable = query("-p", "process.execPath");
-          const observed = {
-            version: query("--version"),
-            revision: query("--revision"),
-            commit: query("-p", "Bun.revision"),
-            executableSha256: createHash("sha256").update(fs.readFileSync(executable)).digest("hex"),
-          };
-          const artifact = pin.artifacts["linux-x64"];
-          assert.equal(observed.revision, pin.revision);
-          assert.equal(observed.commit, pin.commit);
-          assert.equal(observed.executableSha256, artifact.executableSha256);
-          fs.writeFileSync(".artifacts/composition-static/bun-runtime.json",
-            JSON.stringify({ pin: { tag: pin.tag, commit: pin.commit, revision: pin.revision, artifact }, observed }, null, 2) + "\n");
-          NODE
-      - name: Run selected proof
+    steps:
+      - name: Require exact candidate identity
         env:
-          LANE: ${{ github.job }}
-          FIXTURE_ONLY: ${{ inputs.fixture_only }}
-          OPENCLAW_RETAINED_CLI_PROOF_DIR: .artifacts/composition-static/fixture-graph
+          TARGET_SHA: ${{ inputs.target_ref }}
+        run: |
+          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+
+      - name: Checkout reviewed candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify bounded source and record identity
+        id: source
+        env:
+          TARGET_SHA: ${{ inputs.target_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          case "$LANE" in
-            static-types)
-              node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "[\"$GRAPH\"]" --concurrency 1 2>&1 | tee .artifacts/composition-static/result.log
-              ;;
-            static-tests)
-              files=(src/cli/runtime-cleanup-scope.retirement.test.ts test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts)
-              if test "$FIXTURE_ONLY" != "true"; then
-                files+=(src/infra/update-retained-runtime-imports.process.test.ts)
-              fi
-              node scripts/run-vitest.mjs "${files[@]}" --maxWorkers=1 --reporter=verbose 2>&1 | tee .artifacts/composition-static/result.log
-              ;;
-            static-checks)
-              {
-                pnpm exec oxfmt --check scripts/lib/vitest-worker-compiler.mts scripts/lib/vitest-worker-artifacts.mts scripts/lib/vitest-worker-cache.mts scripts/lib/vitest-worker-fixture-graph.mts test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts scripts/lib/vitest-worker-build-entries.mts src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts .github/workflows/retained-cli-composition-proof.yml
-                node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/lib/vitest-worker-compiler.mts scripts/lib/vitest-worker-artifacts.mts scripts/lib/vitest-worker-cache.mts scripts/lib/vitest-worker-fixture-graph.mts scripts/lib/vitest-worker-build-entries.mts
-                node scripts/run-oxlint.mjs --tsconfig test/tsconfig.json test/scripts/vitest-worker-cache.test.ts test/scripts/vitest-worker-fixture-graph.test.ts
-                node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/cli/cli-entrypoint.test-support.ts src/cli/runtime-cleanup-scope.retirement.test.ts src/cli/runtime-cleanup-retained.test-support.ts src/infra/update-retained-runtime-imports.process.test.ts src/infra/update-retained-runtime-alias.test-support.ts src/infra/update-retained-runtime.ts src/infra/update-candidate-plugin-hash.ts src/infra/update-candidate-io.ts src/infra/update-retained-runtime-tree.ts
-                pnpm check:workflows
-                git diff --check
-              } 2>&1 | tee .artifacts/composition-static/result.log
-              ;;
-          esac
-      - name: Upload selected proof log
-        if: ${{ always() }}
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ -z "$(git status --porcelain)" ]]
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          mkdir -p "$RUNNER_TEMP/backport-generated"
+          git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > "$RUNNER_TEMP/backport-generated/source-paths.txt"
+          echo "$EXPECTED_PATHS_SHA256  $RUNNER_TEMP/backport-generated/source-paths.txt" | sha256sum -c -
+          git diff --binary "$BASE_SHA" HEAD > "$RUNNER_TEMP/backport-generated/source.patch"
+          printf 'base=%s\ncandidate=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' \
+            "$BASE_SHA" "$TARGET_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            > "$RUNNER_TEMP/backport-generated/identity.txt"
+
+      - name: Setup canonical Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Generate canonical config docs and format only the reviewed scope
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/backport-generated"
+          pnpm config:docs:gen
+          git diff --binary HEAD -- docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256 > "$out/config-docs.patch"
+          mapfile -t paths < "$out/source-paths.txt"
+          pnpm format --no-error-on-unmatched-pattern -- "${paths[@]}" \
+            docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256
+
+      - name: Export generated delta and content hashes
+        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/backport-generated"
+          [[ -f "$out/source.patch" ]]
+          git diff --binary HEAD > "$out/generated-format.patch"
+          cp docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256 "$out/"
+          { cat "$out/source-paths.txt"; printf '%s\n' docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256; } | LC_ALL=C sort -u > "$out/allowed-output-paths.txt"
+          git diff --name-only HEAD | LC_ALL=C sort > "$out/generated-paths.txt"
+          comm -23 "$out/generated-paths.txt" "$out/allowed-output-paths.txt" > "$out/unexpected-paths.txt"
+          [[ ! -s "$out/unexpected-paths.txt" ]]
+          (cd "$out" && sha256sum source.patch config-docs.patch generated-format.patch config-baseline.counts.json config-baseline.sha256 > SHA256SUMS)
+
+      - name: Verify generated baseline and scoped formatting
+        run: |
+          set -euo pipefail
+          pnpm config:docs:check
+          mapfile -t paths < "$RUNNER_TEMP/backport-generated/source-paths.txt"
+          pnpm format:check --no-error-on-unmatched-pattern -- "${paths[@]}" \
+            docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256
+          git diff --check
+
+      - name: Record owner-selected check plan for next exact candidate
+        run: |
+          pnpm check:changed --base "$BASE_SHA" --head HEAD --dry-run \
+            > "$RUNNER_TEMP/backport-generated/check-plan.log" 2>&1
+
+      - name: Upload generated patch for review, never commit or publish it
+        if: ${{ always() && steps.source.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: composition-${{ github.job }}-${{ env.GRAPH || 'all' }}-${{ github.run_attempt }}
-          path: .artifacts/composition-static/
-          if-no-files-found: warn
-          retention-days: 7
-
-  static-types:
-    if: ${{ !inputs.fixture_only }}
-    needs: static-plan
-    env:
-      GRAPH: ${{ matrix.graph }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix: ${{ fromJSON(needs.static-plan.outputs.matrix) }}
-    steps: *static_consumer_steps
-
-  static-tests:
-    needs: static-plan
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps: *static_consumer_steps
+          name: required-backports-generated-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-generated/
+          if-no-files-found: error
+          retention-days: 14
