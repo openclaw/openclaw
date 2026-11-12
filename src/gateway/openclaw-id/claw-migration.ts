@@ -58,6 +58,20 @@ export function needsAllowlistUpgrade(record: StoredClaw): boolean {
   );
 }
 
+/** Initializes unsigned node collections once before runtime authority is exposed. */
+export function upgradeNodeCollections(record: StoredClaw): StoredClaw {
+  const state = record.authority;
+  if (!state || (state.nodes !== undefined && state.node_invites !== undefined)) {
+    return record;
+  }
+  return {
+    ...record,
+    authority: { ...state, nodes: state.nodes ?? {}, node_invites: state.node_invites ?? {} },
+    // Publish a newly signed snapshot; never patch the fields of an old signed envelope.
+    discovery: { ...record.discovery, publish_pending: true },
+  };
+}
+
 // A statement without the retired `chain` member (signatures never covered it).
 function withoutChain<T extends SignedStatement>(statement: T): T {
   // SAFETY: a legacy statement may carry `chain`; reading an absent optional member is harmless.

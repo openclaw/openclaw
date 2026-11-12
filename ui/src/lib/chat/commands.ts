@@ -156,6 +156,14 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
 const COMMAND_OVERRIDES: Partial<
   Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
 > = {
+  agents: {
+    description: registerChatCommandsEnglish.catalog.chat.commands.agentsDescription,
+    descriptionKey: "chat.commands.agentsDescription",
+  },
+  usage: {
+    description: registerChatCommandsEnglish.catalog.chat.commands.usageDescription,
+    descriptionKey: "chat.commands.usageDescription",
+  },
   steer: {
     description: registerChatCommandsEnglish.catalog.chat.commands.steerDescription,
     descriptionKey: "chat.commands.steerDescription",
@@ -392,7 +400,11 @@ export type InlineSlashCompletion = {
   argumentStart?: number;
 };
 
-/** Finds the slash token being edited at the caret, including inside normal prose. */
+/**
+ * Finds the slash token being edited at the caret, including inside normal prose.
+ * A leading token is the draft's own command even when prose follows it; only
+ * tokens after other text (or an explicit `:` skill reference) are inline.
+ */
 export function findInlineSlashCompletion(
   text: string,
   caret = text.length,
@@ -413,14 +425,19 @@ export function findInlineSlashCompletion(
     end += 1;
   }
   const query = match[1] ?? "";
+  // Text typed in front of existing prose (`/loo|Apply`) stays: the token only
+  // extends past the caret while the whole word can still name a command.
+  if (end > boundedCaret) {
+    const word = normalizeLowercaseStringOrEmpty(text.slice(start + 1, end).replace(/:$/u, ""));
+    if (!SLASH_COMMANDS.some((command) => getSlashCommandRelevance(command, word) <= 1)) {
+      end = boundedCaret;
+    }
+  }
   return {
     query,
     start,
     end,
-    inline:
-      text.slice(0, start).trim().length > 0 ||
-      text.slice(end).trim().length > 0 ||
-      match[2] === ":",
+    inline: text.slice(0, start).trim().length > 0 || match[2] === ":",
     ...(match[2] === ":" ? { skillOnly: true } : {}),
   };
 }

@@ -11,7 +11,7 @@ import { formatDurationCompact, formatDurationHuman } from "../../lib/format-dur
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   formatRelativeTimestamp,
-  createMsFormatter,
+  createCompactMsFormatter,
   formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -193,7 +193,7 @@ function FilterDropdown<T extends string>(props: {
   );
 }
 export function RunsSection(props: CronRunsSectionProps) {
-  const formatTimestamp = createMemo(() => createMsFormatter(undefined, t("common.na")));
+  const formatTimestamp = createMemo(() => createCompactMsFormatter(undefined, t("common.na")));
   const runs = createMemo(() => {
     const ascending = props.runsSortDir === "asc";
     return props.runs.toSorted((a, b) => (ascending ? a.ts - b.ts : b.ts - a.ts));
@@ -396,7 +396,7 @@ function RunError(props: { error: CronRunLogEntry["error"] }) {
 }
 function Run(props: {
   entry: CronRunLogEntry;
-  formatTimestamp: ReturnType<typeof createMsFormatter>;
+  formatTimestamp: ReturnType<typeof createCompactMsFormatter>;
   highlightedRunId?: string | null;
   onViewRunTranscript?: CronProps["onViewRunTranscript"];
   onRunMount?: (

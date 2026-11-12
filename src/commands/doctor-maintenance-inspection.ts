@@ -214,9 +214,6 @@ export async function assertDoctorMaintenanceReady(
   }
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   await assertConfiguredWorkspaceStateReady({ cfg, operation: "doctor" });
-  const { assertNoPendingLegacyExecApprovals } =
-    await import("../infra/exec-approvals-migration-gate.js");
-  assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
   if (!schemaPublicationDeferred && databaseTargets) {
     const { completeDoctorMigrationBackups } =
       await import("./doctor-migration-backup-artifacts.js");

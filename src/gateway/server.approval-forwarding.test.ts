@@ -30,6 +30,8 @@ installGatewayTestHooks({ scope: "suite" });
 type Delivery = Pick<ChannelOutboundContext, "to" | "text" | "accountId">;
 
 async function checkApprovalForwarding() {
+  const forwardingRuntime = await import("../infra/exec-approval-forwarder.runtime.js");
+  using forwardingSends = vi.spyOn(forwardingRuntime, "sendDurableMessageBatchCore");
   const capturedRuntime = createDeferred<GatewayNativeApprovalRuntime>();
   const deliveries: Delivery[] = [];
   const plugin: ChannelPlugin = {
@@ -147,6 +149,12 @@ async function checkApprovalForwarding() {
         expect(status).toBe("accepted");
         if (forwarded) {
           await vi.waitFor(() => expect(prompts()).not.toHaveLength(0), { timeout: 5_000 });
+          // Destination-history writes can change access while cleanup resolves the approval.
+          await withTestTimeout(
+            Promise.all(forwardingSends.mock.results.map(({ value }) => value)),
+            5_000,
+            "approval delivery did not settle",
+          );
         }
       } finally {
         const resolved = await rpcReq(ws, "plugin.approval.resolve", {

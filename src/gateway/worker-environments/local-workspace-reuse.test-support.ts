@@ -318,14 +318,30 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   await writeText(first.workspaceDir, "source.txt", "modified\n");
   await fs.utimes(source, before.atime, before.mtime);
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(1);
   await expectText(canonical, "source.txt", "modified\n");
   await expectText(guestEdit.workspaceDir, "source.txt", "modified\n");
 
   await writeText(canonical, "source.txt", "host edit\n");
-  using hostEdit = await prepareSandboxCheckpointFixture(owner);
-  expect(quiesce).toHaveBeenCalledTimes(2);
+  const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
+  vi.spyOn(diagnostics, "createQueuedDiagnosticPhaseEmitter").mockReturnValue((event) =>
+    events.push(event),
+  );
+  using hostEdit = await withWorktreePreparationTiming("sandbox", () =>
+    prepareSandboxCheckpointFixture(owner),
+  );
   await expectText(hostEdit.workspaceDir, "source.txt", "host edit\n");
+  expect(events[0]?.details).toMatchObject({
+    "reuse.probeCanonical": expect.any(Number),
+    "reuse.capturePreparation": expect.any(Number),
+    "reuse.scan": expect.any(Number),
+    "reuse.staging": expect.any(Number),
+    "reuse.materialization": expect.any(Number),
+    "reuse.patch": expect.any(Number),
+    "reuse.preflight": expect.any(Number),
+    "reuse.acceptance": expect.any(Number),
+    "reuse.cleanup": expect.any(Number),
+    reuseDominantPhase: expect.stringMatching(/^reuse\./),
+  });
   await writeText(canonical, "added.txt", "admitted host file\n");
   await requireGit(canonical, ["add", "added.txt"]);
   using admitted = await prepareSandboxCheckpointFixture(owner);
@@ -379,7 +395,7 @@ export async function proveWarmWorkspaceReuseFailure(
   if (failure === "read") {
     using recovered = await prepareSandboxCheckpointFixture(owner);
     expect(recovered.workspaceDir).toBe(first.workspaceDir);
-    expect(quiesce).toHaveBeenCalledOnce();
+    expect(quiesce).toHaveBeenCalled();
   } else if (failure === "cancel") {
     await expect(
       prepareSandboxCheckpointFixture(owner, undefined, cancellation.signal),

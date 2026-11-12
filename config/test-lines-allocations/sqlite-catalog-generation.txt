@@ -1,0 +1,2 @@
+# Cold lazy-catalog reads after runtime replacement, through retained import hooks.
+19

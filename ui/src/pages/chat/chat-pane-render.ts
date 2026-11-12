@@ -30,7 +30,7 @@ import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
   createChatPanePendingInputControls,
-  readChatPaneMutationAccess,
+  readChatPaneRouteMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import {
@@ -87,9 +87,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const cachedSessionStatePending = Boolean(this.cachedSessionStatePending());
     const cachedSession = cachedSessionStatePending ? this.cachedSessionState() : undefined;
     const selectedSessionArchived = cachedSession?.archived ?? this.isCurrentSessionArchived(state);
-    const mutationAccess = readChatPaneMutationAccess(
+    const mutationAccess = readChatPaneRouteMutationAccess(
       this.context.gateway.snapshot,
-      state.sessionKey,
+      state,
       selectedSession,
     );
     const observerDigest = pickFreshestObserverDigest(
@@ -314,7 +314,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const canWriteProgressCard = state.connected && !sessionParticipationBlocked && hasWriteScope;
     const typingEnabled =
       multiIdentity &&
-      hasWriteScope &&
+      composerAccess &&
       !catalog &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
       hasSessionPresenceViewers(

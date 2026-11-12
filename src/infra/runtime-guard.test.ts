@@ -471,7 +471,7 @@ describe("sealed worker runtime", () => {
     state.error.mockClear();
     state.run.mockClear();
     process.argv = [process.execPath, "worker.mjs"];
-    process.exitCode = undefined;
+    process.exitCode = 0;
     state.releaseStdin.mockClear();
     // The executable owns IPC, not the test runner's real transport.
     disconnect = vi.spyOn(process, "disconnect").mockImplementation(() => {});
@@ -484,7 +484,7 @@ describe("sealed worker runtime", () => {
       globals[warningKey] = priorWarning;
     }
     process.argv = originalArgv;
-    process.exitCode = originalExitCode;
+    process.exitCode = originalExitCode ?? 0;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -501,7 +501,7 @@ describe("sealed worker runtime", () => {
     state.lossless = supported;
     const stderr = supported ? undefined : vi.spyOn(process.stderr, "write").mockReturnValue(true);
     await expect(import("../worker/worker-deploy-entry.js")).resolves.toBeDefined();
-    expect(process.exitCode).toBe(supported ? undefined : 1);
+    expect(process.exitCode).toBe(supported ? 0 : 1);
     expect(state.releaseStdin).toHaveBeenCalledOnce();
     expect(disconnect).toHaveBeenCalledOnce();
     expect(state.run).toHaveBeenCalledTimes(supported ? 1 : 0);

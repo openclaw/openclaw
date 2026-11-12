@@ -105,7 +105,7 @@ function PluginSettingsRow(props: FieldProps) {
           id={configFieldId(props.field.path, "actions")}
           placement="bottom-start"
           label={t("pluginsPage.editor.actions", { name: props.field.label })}
-          triggerClass="btn btn--icon btn--ghost"
+          triggerClass="oc-icon-button oc-icon-button--28"
           trigger={<Icon name="moreHorizontal" />}
           items={[
             {

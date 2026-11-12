@@ -37,7 +37,9 @@ struct DashboardExperienceTests {
             await manager.show(
                 atPath: DashboardRouteMap.custodianPagePath,
                 search: DashboardRouteMap.custodianOnboardingSearch,
-                target: .primary, waitForLoad: true, reportErrors: false)
+                target: .primary,
+                waitForLoad: true,
+                reportErrors: false)
         }
         do {
             await gate.waitUntilRequested()
@@ -57,7 +59,8 @@ struct DashboardExperienceTests {
                 await gate.release()
                 try await opening.value.get()
                 try await DashboardTestWait.document(replacement, "onboarding route after replacement") {
-                    try await replacement.webView.evaluateJavaScript("location.pathname === '/custodian'") as? Bool == true
+                    try await replacement.webView
+                        .evaluateJavaScript("location.pathname === '/custodian'") as? Bool == true
                 }
                 #expect(manager.openWindowCount(for: .primary) == 1)
             }
@@ -219,6 +222,48 @@ struct DashboardExperienceTests {
         #expect(manager.frontmostDashboard()?.controller === focused)
         #expect(manager._testController() === main)
         #expect(manager.openWindowCount(for: .primary) == 2)
+    }
+
+    @Test(arguments: [true, false])
+    func `reopening preserves a manually refocused Gateway after backgrounding`(
+        _ automaticGatewayProfileRefreshEnabled: Bool) async throws
+    {
+        try await AppKitTestSupport.startApplication()
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let endpoint = GatewayConnection.EndpointSnapshot(
+            config: (url: server.websocketURL(), token: "fixture", password: nil), routeAuthority: nil)
+        let manager = DashboardManager._testMake(
+            observeGatewayChanges: true,
+            automaticGatewayProfileRefreshEnabled: automaticGatewayProfileRefreshEnabled,
+            primaryEndpointProvider: { _ in endpoint },
+            profileEndpointProvider: { _ in endpoint })
+        defer { manager.close() }
+        try await manager.show()
+        await manager.openNewDashboardWindow(for: .profile("earlier")).value
+        let earlier = try #require(manager.dashboardController(for: .profile("earlier")))
+        await manager.openNewDashboardWindow(for: .profile("latest")).value
+        let window = try #require(earlier.window)
+        try await AppKitTestSupport.performWindowTransition(window, notification: NSWindow.didBecomeKeyNotification) {
+            // The user clicks an existing window, without going through a manager presentation.
+            window.makeKeyAndOrderFront(nil)
+        }
+        try #require(window.isKeyWindow)
+        #expect(manager.lastFrontmostWindow === window)
+        let activationChanges = AsyncTestSignal()
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification, object: NSApp, queue: .main)
+        { _ in activationChanges.notify() }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let finder = try #require(NSRunningApplication.runningApplications(
+            withBundleIdentifier: "com.apple.finder").first)
+        try #require(finder.activate(options: []))
+        try await activationChanges.wait("Dashboard app backgrounded") { !NSApp.isActive }
+        manager.presentDashboard()
+        try await manager.show()
+        #expect(manager.frontmostDashboard()?.target == .profile("earlier"))
+        #expect(manager.frontmostDashboard()?.controller === earlier)
+        #expect(manager.openWindowCount(for: .profile("earlier")) == 1)
     }
 
     @Test(arguments: ["navigation", "new-window", "focus", "picker"])

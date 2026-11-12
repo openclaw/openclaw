@@ -187,6 +187,10 @@ export function prepareMessageGroupFrame(
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
+  const turnDurationMs =
+    normalizedRole === "assistant" && !group.isStreaming && group.runId && !forwardedSource
+      ? opts.turnDurations?.get(group.runId)
+      : undefined;
 
   const ownsRunFrame = opts.frameContent !== undefined;
   // Tool activity and live narration are blocks of the turn whose answer follows:
@@ -210,15 +214,18 @@ export function prepareMessageGroupFrame(
   // Footer copy stays available (e.g. a commentary search hit); reply was already dropped for non-owners.
   const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
+  const pendingSteer =
+    normalizedRole === "user" ? opts.pendingSteer?.(group.messages.at(-1)?.message) : undefined;
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
   // Source sessions share stable sender hues; the shared participant palette owns contrast
-  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
+  // in each theme. Only peers (left side) take their identity hue: a right-side user turn is
+  // the viewer's, so it keeps the accent skin even when the viewer has no profile to match.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender && !isOwnGroup
+      : isPeerGroup && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
   const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
@@ -258,6 +265,11 @@ export function prepareMessageGroupFrame(
     who,
     avatarPlacement,
     meta,
+    turnDurationMs,
+    footerTimestamp:
+      normalizedRole === "user"
+        ? (preparedMessages.at(-1)?.source.normalizedMessage.timestamp ?? group.timestamp)
+        : group.timestamp,
     ownsRunFrame,
     isTurnBlock,
     preparedMessages,
@@ -265,6 +277,10 @@ export function prepareMessageGroupFrame(
     footerActionDetails,
     footerActionMessageKey,
     hasUserFooterActions,
+    // An undelivered steer's footer slot holds only its steer row; identity, time and
+    // actions follow delivery.
+    pendingSteer,
+    statusFooter: Boolean(sendStatus || pendingSteer),
     sendStatus,
     inlineUserAvatar,
     hasAvatar,

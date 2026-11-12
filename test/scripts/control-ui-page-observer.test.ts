@@ -9,6 +9,13 @@ import {
   resetControlUiPageObserver,
 } from "../../scripts/lib/control-ui-page-observer.ts";
 
+// SAFETY: Run the exact serialized observer and its callbacks in this DOM realm.
+const page = {
+  addInitScript: async () => {},
+  evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
+    typeof expression === "string" ? runInThisContext(expression) : expression(value),
+} as unknown as Page;
+
 class TaskObserver {
   static supportedEntryTypes = ["longtask"];
   static current: TaskObserver;
@@ -41,13 +48,6 @@ afterEach(() => {
 it("excludes measurement setup from action long tasks without moving the initial DOM census", async () => {
   vi.stubGlobal("PerformanceObserver", TaskObserver);
   const clock = vi.spyOn(performance, "now").mockReturnValue(100);
-  // SAFETY: This adapter runs the exact serialized browser observer and its
-  // evaluate callbacks in jsdom; these are the only Page methods the API uses.
-  const page = {
-    addInitScript: async () => {},
-    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
-      typeof expression === "string" ? runInThisContext(expression) : expression(value),
-  } as unknown as Page;
   await installControlUiPageObserver(page);
   const before = document.querySelectorAll("*").length;
   await resetControlUiPageObserver(page);
@@ -97,12 +97,6 @@ it("counts only interval assets completed by route readiness and retains the lat
     resource("image.png", 240, 270),
     resource("after.js", 420, 450),
   ]);
-  // SAFETY: Execute the serialized observer and its evaluate callbacks in this test realm.
-  const page = {
-    addInitScript: async () => {},
-    evaluate: async (expression: string | ((value?: unknown) => unknown), value?: unknown) =>
-      typeof expression === "string" ? runInThisContext(expression) : expression(value),
-  } as unknown as Page;
   await installControlUiPageObserver(page);
   await resetControlUiPageObserver(page);
   // A navigation task begins before its own browser-local asset timestamp.
@@ -129,5 +123,54 @@ it("counts only interval assets completed by route readiness and retains the lat
     encodedBodyBytes: 10,
     transferBytes: 310,
     completedByReady: false,
+  });
+});
+
+it("retains a shifted text node's row identity after virtualization removes it", async () => {
+  let deliver: ((entries: unknown[]) => void) | undefined;
+  class LayoutObserver extends TaskObserver {
+    static override supportedEntryTypes = ["layout-shift"];
+    constructor(callback: (list: { getEntries(): unknown[] }) => void) {
+      super();
+      deliver = (entries) => callback({ getEntries: () => entries });
+    }
+  }
+  vi.stubGlobal("PerformanceObserver", LayoutObserver);
+  const clock = vi.spyOn(performance, "now").mockReturnValue(100);
+  await installControlUiPageObserver(page);
+  await resetControlUiPageObserver(page);
+  const row = document.createElement("div");
+  row.dataset.virtualRowKey = "synthetic-row";
+  row.className = "chat-virtual-row";
+  const paragraph = document.createElement("p");
+  paragraph.textContent = "Synthetic reply";
+  row.append(paragraph);
+  document.body.append(row);
+  deliver!([
+    {
+      startTime: 150,
+      value: 0.01,
+      hadRecentInput: false,
+      sources: [
+        {
+          node: paragraph.firstChild,
+          previousRect: new DOMRect(10, 20, 100, 18),
+          currentRect: new DOMRect(10, 41, 100, 18),
+        },
+      ],
+    },
+  ]);
+  row.remove();
+  paragraph.remove();
+  clock.mockReturnValue(200);
+  await finishControlUiPageObserver(page);
+  const result = await readControlUiPageObserver(page);
+  expect(result.cls).toBe(0.01);
+  expect(result.layoutShiftSources[0]?.nodes[0]).toMatchObject({
+    tag: "#text",
+    rowKey: "synthetic-row",
+    ancestors: ["p.", "div.chat-virtual-row", "body.", "html."],
+    before: [10, 20, 100, 18],
+    after: [10, 41, 100, 18],
   });
 });

@@ -65,7 +65,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "a refusal after the launch frame was written keeps the supervisor fenced",
+  "a refusal after the launch frame was written reports cleanup failure before later shutdown",
   async () => {
     const cwd = tempDirs.make("openclaw-postlaunch-initiation-");
     const supervisor = createProcessSupervisor();
@@ -79,7 +79,7 @@ it.skipIf(process.platform === "win32")(
         }),
       ),
     ).rejects.toThrow("service child cleanup identity lost: TimeoutError: request timed out");
-    await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
+    await expect(supervisor.shutdown()).resolves.toBeUndefined();
   },
   15_000,
 );

@@ -121,7 +121,10 @@ it("reports a best-effort generation verification failure for its actual sources
   const stateDir = fs.realpathSync(dirs.make("update-generation-unstable-"));
   const file = agentFile(stateDir);
   const missing = agentFile(stateDir, "ops");
-  createDatabase(file, "PRAGMA user_version=3;");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  using db = openNodeSqliteDatabase(file);
+  db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version=3;");
+  expect(fs.statSync(`${file}-wal`).size).toBeGreaterThan(32);
   const preload = path.join(stateDir, "write-between-reads.cjs");
   // Wait for the private image to close, then commit between the final generation
   // reads. A write during provisional capture can instead fail snapshot acquisition.

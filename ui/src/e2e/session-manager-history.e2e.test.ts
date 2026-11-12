@@ -121,13 +121,15 @@ suite.define(() =>
       await support.activateSelfRemovingControl(
         ui.menuItem(page.locator("openclaw-session-menu"), "Archive session", false),
       );
-      await ui.sessionPatch(gateway, research.key, { archived: true });
       const toast = page
         .locator("openclaw-toast-host .app-toast")
         .filter({ hasText: "Session archived" });
       await toast.waitFor({ state: "visible", timeout: 10_000 });
       await ui.visible(ui.button(toast, "Undo", false));
       await captureUiProof(page, "03-session-archive-feedback.png");
+      expect(await ui.requestCount(gateway, "sessions.patch")).toBe(0);
+      await ui.closeArchiveUndoToast(page);
+      await ui.sessionPatch(gateway, research.key, { archived: true });
     });
   }),
 );
