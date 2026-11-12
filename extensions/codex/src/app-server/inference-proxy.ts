@@ -204,6 +204,7 @@ export async function createCodexInferenceProxy(
     return {
       target,
       path: incoming.pathname,
+      query: incoming.searchParams,
     };
   };
   const { prepare, prepareHttp } = createCodexInferenceDispatch({
@@ -231,9 +232,29 @@ export async function createCodexInferenceProxy(
     // A fresh request owns its admission, not the listener's closed startup lease.
     void runInDetachedAsyncContext(async () => {
       try {
-        const { target, path } = resolveTarget(req);
-        if (req.method !== "POST") {
-          throw new Error(FAILURE);
+        const { target, path, query } = resolveTarget(req);
+        // Discovery uses native account headers, but has no model execution or turn body.
+        // Keep it separate from inference admission and host-held OAuth funding.
+        const catalog =
+          !params.oauth &&
+          req.method === "GET" &&
+          path === "/models" &&
+          [...query.keys()].every((key) => key === "client_version") &&
+          query.getAll("client_version").length <= 1 &&
+          !req.headers["transfer-encoding"] &&
+          (!req.headers["content-length"] || req.headers["content-length"] === "0");
+        if (!catalog && req.method !== "POST") {
+          // Native retries transport failures; unsupported operations cannot be fixed by retrying.
+          res.writeHead(400, { "content-type": "application/json" }).end(
+            JSON.stringify({
+              error: {
+                type: "invalid_request_error",
+                code: "unsupported_relay_operation",
+                message: "This operation is not supported by the Codex inference relay.",
+              },
+            }),
+          );
+          return;
         }
         stage = "admission";
         resident = reserveResident(socket, signal, deadlineAtMs);
@@ -242,6 +263,32 @@ export async function createCodexInferenceProxy(
         assertCurrent();
         if (!admitted) {
           res.writeHead(503, OVERLOAD_HEADERS).end(OVERLOAD_BODY);
+          return;
+        }
+        if (catalog) {
+          stage = "upstream";
+          const catalogSignal = AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+          guarded = await fetchWithSsrFGuard({
+            url: target.toString(),
+            init: { method: "GET", headers: relayHeaders(req.headers), signal: catalogSignal },
+            signal: catalogSignal,
+            beforeRequest: assertCurrent,
+            requireHttps: true,
+            maxRedirects: 0,
+            capture: false,
+            mode: "trusted_env_proxy",
+            policy: upstreamPolicy,
+            auditContext: "codex-parent-local-catalog",
+          });
+          assertCurrent();
+          const headers = Object.fromEntries(guarded.response.headers);
+          delete headers["content-encoding"];
+          res.writeHead(guarded.response.status, relayHeaders(headers));
+          if (guarded.response.body) {
+            await guarded.response.body.pipeTo(Writable.toWeb(res), { signal: catalogSignal });
+          } else {
+            res.end();
+          }
           return;
         }
         releasePermit = await acquireUpload(signal, deadlineAtMs);
