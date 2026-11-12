@@ -414,7 +414,8 @@ export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
   String.raw`(1//0[0-9A-Za-z_\-./+=]{10,})`,
   String.raw`(GOCSPX-[A-Za-z0-9_-]{20,})`,
   String.raw`(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})`,
-  String.raw`(pplx-[A-Za-z0-9_-]{10,})`,
+  // The published Perplexity decision model id (pplx-decider-v1.2) shares the API key prefix.
+  String.raw`(pplx-(?!decider-v)[A-Za-z0-9_-]{10,})`,
   String.raw`(fal_[A-Za-z0-9_-]{10,})`,
   String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fc-[A-Za-z0-9]{10,})`,
   String.raw`(bb_live_[A-Za-z0-9_-]{10,})`,
