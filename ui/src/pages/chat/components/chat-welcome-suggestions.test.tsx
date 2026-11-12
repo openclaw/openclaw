@@ -66,22 +66,23 @@ it("uses selected-agent copy and keeps custom starters beside recents without se
   const onDraftChange = vi.fn();
   const onSend = vi.fn();
   const [agentId, selectAgent] = createSignal("briefing");
+  const agents = [
+    {
+      id: "briefing",
+      description: "Follows your repositories.",
+      conversationStarters: ["Set up a repository", "Show my tracked projects"],
+    },
+    {
+      id: "research",
+      description: "Researches questions.",
+      conversationStarters: ["Explore a topic"],
+    },
+    { id: "plain" },
+  ];
   const view = mountSolid(() => (
     <ChatWelcome
       currentAgentId={agentId()}
-      agents={[
-        {
-          id: "briefing",
-          description: "Follows your repositories.",
-          conversationStarters: ["Set up a repository", "Show my tracked projects"],
-        },
-        {
-          id: "research",
-          description: "Researches questions.",
-          conversationStarters: ["Explore a topic"],
-        },
-        { id: "plain" },
-      ]}
+      {...agents.find((agent) => agent.id === agentId())}
       assistantName="Assistant"
       assistantAvatar={null}
       hint="Choose where to work."
@@ -125,9 +126,8 @@ it.each(["incognito", "model setup"])("preserves %s behavior with agent metadata
   const view = mountSolid(() => (
     <ChatWelcome
       currentAgentId="briefing"
-      agents={[
-        { id: "briefing", description: "Tracks repositories.", conversationStarters: ["Brief me"] },
-      ]}
+      description="Tracks repositories."
+      conversationStarters={["Brief me"]}
       assistantName="Briefing"
       assistantAvatar={null}
       hideSecondaryContent={variant === "incognito"}

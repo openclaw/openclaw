@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import type { AgentsListResult } from "../../../api/types.ts";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
@@ -46,15 +46,15 @@ export type ChatWelcomeProps = {
   hideSecondaryContent?: boolean;
   /** Visually retire secondary content while the new-session draft is active. */
   fadeSecondaryContent?: boolean;
-} & ChatWelcomeIdentityProps;
+} & ChatWelcomeIdentityProps &
+  Pick<AgentsListResult["agents"][number], "description" | "conversationStarters">;
 
 /** The new-session draft's welcome block. */
 export function ChatWelcome(
   props: ChatWelcomeProps & { preparedRecents?: readonly WelcomeRecentSession[] },
 ) {
   const welcomeRef = createBackgroundLayoutRef("welcome");
-  const agent = createMemo(() => props.agents?.find((entry) => entry.id === props.currentAgentId));
-  const customStarters = () => agent()?.conversationStarters ?? [];
+  const customStarters = () => props.conversationStarters ?? [];
   return (
     <Show
       when={!props.modelSetupRequired}
@@ -89,7 +89,7 @@ export function ChatWelcome(
             <Show when={props.assistantNameControl}>
               <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>
             </Show>
-            <Show when={agent()?.description}>
+            <Show when={props.description}>
               {(description) => <p class="agent-chat__description muted">{description()}</p>}
             </Show>
             <Show when={props.hint}>
