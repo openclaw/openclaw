@@ -1,0 +1,4 @@
+# PR #196953: exact net regression growth for same-scope tool-preview retention.
+# Covers pending empty/populated layouts and focus while preserving denial,
+# read-access loss, scope retirement, and current permission diagnostics.
+210

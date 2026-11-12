@@ -1,6 +1,10 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
-import { SettingsLoadingSkeleton, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsRow,
+  SettingsToggleRow,
+} from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
@@ -113,49 +117,64 @@ export function SessionSources(
                             )?.[source().key],
                           )?.enabled;
                         return (
-                          <SettingsToggleRow
-                            icon={
-                              <ModelProviderIcon
-                                provider={source().icon}
-                                class="session-source__icon"
+                          <Show
+                            when={
+                              !props.configLoaded ||
+                              props.schemaLoading ||
+                              typeof preference() === "boolean" ||
+                              source().enabledSchema
+                            }
+                            fallback={
+                              <SettingsRow
+                                title={t(source().labelKey)}
+                                description={t("configView.sessionSources.unavailable")}
                               />
                             }
-                            title={t(source().labelKey)}
-                            description={
-                              source().enabledSchema
-                                ? t("configView.sessionSources.sourceHint", {
-                                    plugin: source().plugin,
-                                  })
-                                : t(
-                                    props.schemaLoading
-                                      ? "common.loading"
-                                      : "configView.sessionSources.unavailable",
-                                  )
-                            }
-                            pending={
-                              !props.configLoaded ||
-                              (typeof preference() !== "boolean" && !source().enabledSchema)
-                            }
-                            checked={
-                              typeof preference() === "boolean"
-                                ? preference() === true
-                                : source().enabledSchema?.default === true
-                            }
-                            disabled={disabled() || !source().enabledSchema}
-                            onChange={(enabled) =>
-                              props.onFormPatch(
-                                [
-                                  "plugins",
-                                  "entries",
-                                  source().pluginId,
-                                  "config",
-                                  source().key,
-                                  "enabled",
-                                ],
-                                enabled,
-                              )
-                            }
-                          />
+                          >
+                            <SettingsToggleRow
+                              icon={
+                                <ModelProviderIcon
+                                  provider={source().icon}
+                                  class="session-source__icon"
+                                />
+                              }
+                              title={t(source().labelKey)}
+                              description={
+                                source().enabledSchema
+                                  ? t("configView.sessionSources.sourceHint", {
+                                      plugin: source().plugin,
+                                    })
+                                  : t(
+                                      props.schemaLoading
+                                        ? "common.loading"
+                                        : "configView.sessionSources.unavailable",
+                                    )
+                              }
+                              pending={
+                                !props.configLoaded ||
+                                (typeof preference() !== "boolean" && !source().enabledSchema)
+                              }
+                              checked={
+                                typeof preference() === "boolean"
+                                  ? preference() === true
+                                  : source().enabledSchema?.default === true
+                              }
+                              disabled={disabled() || !source().enabledSchema}
+                              onChange={(enabled) =>
+                                props.onFormPatch(
+                                  [
+                                    "plugins",
+                                    "entries",
+                                    source().pluginId,
+                                    "config",
+                                    source().key,
+                                    "enabled",
+                                  ],
+                                  enabled,
+                                )
+                              }
+                            />
+                          </Show>
                         );
                       }}
                     </For>
