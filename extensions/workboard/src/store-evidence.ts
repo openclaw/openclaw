@@ -14,7 +14,7 @@ import { definedFields } from "../record-fields.js";
 import { cardRunId } from "./store-card-helpers.js";
 import { MAX_CARD_METADATA_BYTES } from "./store-constants.js";
 import type { WorkboardUpdateCardOptions } from "./store-inputs.js";
-import { normalizeBoundedString } from "./store-normalizers.js";
+import { normalizeBoundedString, trimMetadataToBudget } from "./store-normalizers.js";
 
 // Evidence lives in automation JSON, outside the metadata trim loop, so it keeps its
 // own bounds: the newest few of each kind, then a byte cap on the whole list.
@@ -54,33 +54,31 @@ function attachEvidence(metadata: WorkboardMetadata, evidence: WorkboardResultEv
  * card write restores the stored list, or the replacement an evidence writer built,
  * here. Raw metadata therefore cannot add, edit, or drop evidence.
  *
- * Evidence only uses room the card's other records leave: it drops its own oldest
- * entries until the card fits and never makes the metadata trimmer evict anything.
+ * Runs on the finished card metadata: it trims the card's own records to budget
+ * first, then fits evidence into the room left, dropping its own oldest entries.
+ * Evidence never makes the trimmer evict attempts, proof, or anything else.
  */
 export function withStoredEvidence(
   metadata: WorkboardMetadata,
   existing: WorkboardCard,
   options: WorkboardUpdateCardOptions,
 ): WorkboardMetadata {
+  const trimmed = trimMetadataToBudget(metadata, options);
   const evidence = [
     ...(options.automationEvidence ?? existing.metadata?.automation?.evidence ?? []),
   ];
   for (; evidence.length > 0; evidence.shift()) {
-    const next = attachEvidence(metadata, evidence);
+    const next = attachEvidence(trimmed, evidence);
     if (fitsCardBudget(next)) {
       return next;
     }
   }
-  return metadata;
+  return trimmed;
 }
 
-/** A checker gets a visible refusal, rather than a silent drop, when its record cannot fit. */
-export function assertEvidenceFits(card: WorkboardCard, record: WorkboardResultEvidence): void {
-  if (!fitsCardBudget(attachEvidence(card.metadata ?? {}, [record]))) {
-    throw new Error(
-      "card metadata has no room for this verification; shorten scope, note, or url.",
-    );
-  }
+/** Whether one more evidence record fits beside the card's other records. */
+export function evidenceFits(card: WorkboardCard, record: WorkboardResultEvidence): boolean {
+  return fitsCardBudget(attachEvidence(card.metadata ?? {}, [record]));
 }
 
 function cardHasId(entries: readonly { id: string }[] | undefined, id: string | undefined) {

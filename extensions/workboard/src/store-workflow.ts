@@ -33,9 +33,9 @@ import {
 } from "./store-constants.js";
 import {
   appendEvidence,
-  assertEvidenceFits,
   buildCompletionClaims,
   buildVerification,
+  evidenceFits,
 } from "./store-evidence.js";
 import type {
   WorkboardBlockInput,
@@ -336,7 +336,12 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const verification = buildVerification(existing, input, checkerId, Date.now());
-      assertEvidenceFits(existing, verification);
+      if (!evidenceFits(existing, verification)) {
+        // A checker gets a visible refusal, as a tool input error, rather than a silent drop.
+        throw new WorkboardClaimRefusedError(
+          "card metadata has no room for this verification; shorten scope, note, or url.",
+        );
+      }
       return await this.updateCard(
         existing,
         {},

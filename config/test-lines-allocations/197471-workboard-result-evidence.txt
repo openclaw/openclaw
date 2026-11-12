@@ -1,4 +1,0 @@
-# PR #197471 (Workboard result evidence): one regression test for evidence displacing card records,
-# in its own file because store.test.ts is over its line cap. Covers the 9 lines past the ceiling;
-# the PR adds 27 test lines net.
-9

@@ -526,7 +526,6 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         options,
       );
     }
-    metadata = withStoredEvidence(metadata, existing, options);
     const next = definedFields<WorkboardCard>({
       ...existing,
       title:
@@ -563,8 +562,9 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       ...(startedAt ? { startedAt } : {}),
       ...(completedAt ? { completedAt } : {}),
     });
-    next.metadata = trimMetadataToBudget(
+    next.metadata = withStoredEvidence(
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+      existing,
       options,
     );
     next.events = appendEvent(
