@@ -8,6 +8,7 @@ const graph = createRuntimeImportGraph(
   [
     "src/gateway/method-scopes.ts",
     "src/gateway/server-cron.ts",
+    "src/gateway/worker-environments/worker-exec-approval.ts",
     "src/gateway/server-close.runtime.ts",
     "src/gateway/server-methods/sessions-create.ts",
     "src/gateway/server-methods/chat-send-external-entry.ts",
@@ -43,6 +44,12 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it("prepares worker exec approvals without loading model completion", () => {
+    expect(
+      collectStaticValueImports("src/gateway/worker-environments/worker-exec-approval.ts"),
+    ).not.toContain(path.normalize("src/agents/simple-completion-runtime.ts"));
+  });
+
   it("starts cron without loading agent turn execution", () => {
     const modules = collectStaticValueImports("src/gateway/server-cron.ts");
     expect(modules).not.toContain(path.normalize("src/cron/isolated-agent/run.ts"));

@@ -69,7 +69,7 @@ async function configureStartup(
 }
 
 function expectStartupCleanupError(failure: unknown, cause: unknown) {
-  assert(failure instanceof AggregateError, formatErrorMessage(failure));
+  assert(failure instanceof AggregateError);
   expect(failure.name).toBe("GatewayStartupCleanupError");
   expect(failure.cause).toBe(cause);
   expect(failure.errors).toHaveLength(2);
