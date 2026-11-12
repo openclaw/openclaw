@@ -348,9 +348,18 @@ describe("runDaemonRestart health checks", () => {
 
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
-    expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
-      /non-default state dir/,
-    );
+    const refusal = () => (restartParams.beforeServiceMutation as () => void)();
+    expect(refusal).toThrow(/non-default state dir/);
+    // The refusal carries its own remedy to the root renderer instead of a generic failure.
+    let caught: unknown;
+    try {
+      refusal();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toMatchObject({
+      humanOutput: expect.stringMatching(/^Gateway restart blocked: service management skipped/),
+    });
   });
 
   it("refreshes distinct caller and service config after restart repair", async () => {
