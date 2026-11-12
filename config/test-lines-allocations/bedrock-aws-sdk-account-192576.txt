@@ -1,0 +1,6 @@
+# Bedrock AWS SDK account identity: stored marker record, scheduled-run binding and
+# revocation (including removal while provider auth preparation awaits), multi-agent
+# Doctor creation/adoption and id-conflict preservation, plus the runtime registration
+# that non-interactive setup reads the choice from. Exact net growth of those
+# regressions after consolidating them into the existing suites.
+472

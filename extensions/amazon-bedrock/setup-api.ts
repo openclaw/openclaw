@@ -4,6 +4,7 @@
  */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { awsSdkAuthMethod } from "./aws-sdk-auth.js";
 import { migrateAmazonBedrockLegacyConfig } from "./config-api.js";
 
 export default definePluginEntry({
@@ -14,7 +15,7 @@ export default definePluginEntry({
     api.registerProvider({
       id: "amazon-bedrock",
       label: "Amazon Bedrock",
-      auth: [],
+      auth: [awsSdkAuthMethod],
       resolveConfigApiKey: ({ env }) => resolveAwsSdkEnvVarName(env),
     });
     api.registerConfigMigration((config) => migrateAmazonBedrockLegacyConfig(config));

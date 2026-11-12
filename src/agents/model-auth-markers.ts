@@ -28,6 +28,8 @@ export const CUSTOM_LOCAL_AUTH_MARKER = "custom-local";
 export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 /** Marker for Google Vertex credentials resolved outside plain API-key env vars. */
 export const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
+/** Marker for an account whose credentials resolve through the AWS SDK default chain. */
+export const AWS_SDK_CREDENTIALS_MARKER = "aws-sdk-credentials";
 /** Prefix for secret-ref header markers that name an env-backed source. */
 export const SECRETREF_ENV_HEADER_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 
@@ -37,6 +39,7 @@ const AWS_SDK_ENV_MARKERS = new Set([
   "AWS_PROFILE",
 ]);
 const CORE_NON_SECRET_API_KEY_MARKERS = [
+  AWS_SDK_CREDENTIALS_MARKER,
   CUSTOM_LOCAL_AUTH_MARKER,
   CODEX_APP_SERVER_AUTH_MARKER,
   GCP_VERTEX_CREDENTIALS_MARKER,
