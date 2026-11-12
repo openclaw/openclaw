@@ -320,6 +320,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   SenderId?: string;
   /** Trusted in-process creation provenance; never populated from channel payloads. */
   SessionCreation?: {
+    /** Host-attested direct profile operator; never derived from channel input. */
+    attendedProfileOperator?: boolean;
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;

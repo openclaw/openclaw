@@ -67,6 +67,7 @@ export const SessionSchema = z
         readOnly: z.boolean().optional(),
         suggest: z.boolean().optional(),
         drafts: z.boolean().optional(),
+        controlUiDefaultAccess: z.literal("creator").optional(),
         accessPolicy: z
           .strictObject({
             default: z.literal("creator"),

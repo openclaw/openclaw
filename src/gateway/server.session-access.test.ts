@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, test } from "vitest";
-import type { WebSocket } from "ws";
+import type { RawData, WebSocket } from "ws";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
@@ -18,6 +19,7 @@ import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { listActiveSessionRunIds } from "../sessions/session-controller.queries.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import {
   BROWSER_ORIGIN,
   browserProxyAuth,
@@ -290,6 +292,82 @@ test.each(["selected", "outsider"] as const)(
     expect(absent.payload?.session).toBeFalsy();
   },
 );
+
+test("applies the profile default before the first ordinary chat.send is published", async ({
+  signal,
+}) => {
+  testState.sessionConfig = { sharing: { controlUiDefaultAccess: "creator" } };
+  const key = "agent:main:dashboard:operator-default-chat-send";
+  const creator = await client("creator");
+  const other = await client("outsider");
+  for (const socket of [creator, other]) {
+    expect((await rpcReq(socket, "sessions.subscribe", {})).ok).toBe(true);
+  }
+  const seen = new Map<WebSocket, string[]>([
+    [creator, []],
+    [other, []],
+  ]);
+  const record = (socket: WebSocket) => (data: RawData) => {
+    const frame = JSON.parse(rawDataToString(data)) as { type?: string; event?: string };
+    if (frame.type === "event" && frame.event === "sessions.changed") {
+      seen.get(socket)?.push(JSON.stringify(frame));
+    }
+  };
+  const creatorRecord = record(creator);
+  const otherRecord = record(other);
+  creator.on("message", creatorRecord);
+  other.on("message", otherRecord);
+  await prepareGatewayReplyRuntimeForTest();
+  const completed = recordApprovedInput(key);
+  const accepted = await rpcReq(creator, "chat.send", {
+    sessionKey: key,
+    message: "new private chat",
+    idempotencyKey: randomUUID(),
+  });
+  expect(accepted, JSON.stringify(accepted.error)).toMatchObject({ ok: true });
+  await withinTest(completed.promise, signal);
+  expect(await withinTest(waitForGatewayActiveWork(), signal)).toMatchObject({ drained: true });
+  await flushPendingSessionsChangedEvents();
+  // Cross each socket after the publisher drains before checking absence.
+  for (const socket of [creator, other]) {
+    expect((await rpcReq(socket, "sessions.subscribe", {})).ok).toBe(true);
+  }
+  creator.off("message", creatorRecord);
+  other.off("message", otherRecord);
+  expect(seen.get(creator)?.some((frame) => frame.includes(key))).toBe(true);
+  expect(seen.get(other)?.some((frame) => frame.includes(key))).toBe(false);
+  expect((await describeSession(creator, key)).payload?.session?.accessMode).toBe("creator");
+  expect((await describeSession(other, key)).payload?.session?.key).not.toBe(key);
+});
+
+test("protects a dashboard session first materialized by sessions.patch", async () => {
+  testState.sessionConfig = { sharing: { controlUiDefaultAccess: "creator" } };
+  const key = "agent:main:dashboard:operator-default-patch";
+  const creator = await client("creator");
+  const outsider = await client("outsider");
+  const result = await rpcReq(creator, "sessions.patch", { key, label: "private-patch" });
+  expect(result.ok, JSON.stringify(result.error)).toBe(true);
+  expect((await describeSession(creator, key)).payload?.session?.accessMode).toBe("creator");
+  expect((await describeSession(outsider, key)).payload?.session?.key).not.toBe(key);
+});
+
+test("defaults only profiled operator dashboard creations to creator access", async () => {
+  testState.sessionConfig = { sharing: { controlUiDefaultAccess: "creator" } };
+  const creator = await client("creator");
+  const other = await client("outsider");
+  const key = "agent:main:dashboard:operator-default-private";
+  const created = await rpcReq(creator, "sessions.create", { key, visibility: "shared" });
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect((await describeSession(creator, key)).payload?.session?.accessMode).toBe("creator");
+  expect((await describeSession(other, key)).payload?.session?.key).not.toBe(key);
+  const legacy = "agent:main:dashboard:operator-default-legacy";
+  await seedEntry({ agentId: "main", sessionKey: legacy }, "operator-default-legacy");
+  expect((await describeSession(other, legacy)).payload?.session?.key).toBe(legacy);
+  const group = await seedGroup(887, false);
+  expect((await describeSession(other, group.sessionKey)).payload?.session?.key).toBe(
+    group.sessionKey,
+  );
+});
 
 test("publishes a web conversation privately without visual Draft", async () => {
   const key = "agent:main:dashboard:acl-web-created";

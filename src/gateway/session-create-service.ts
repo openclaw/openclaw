@@ -14,7 +14,6 @@ import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
-import { resolveSessionCreationVisibility } from "../config/sessions/creation-visibility.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   createSessionEntryWithTranscript,
@@ -100,6 +99,7 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
+import { resolveAttendedCreationAccess } from "./session-create-sharing.js";
 import { authorizeSessionSourceCreation } from "./session-create-source-access.js";
 import {
   readRequestedSessionCreateTarget,
@@ -138,7 +138,6 @@ export class SessionCreationNotCommittedError extends Error {
     super("session creation failed before write admission", { cause });
   }
 }
-
 export async function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
@@ -168,7 +167,6 @@ export async function createGatewaySession(
     throw error;
   }
 }
-
 async function createGatewaySessionInScope(
   params: CreateGatewaySessionParams,
   agentId: string,
@@ -724,13 +722,12 @@ async function createGatewaySessionInScope(
         if (!visibility.ok) {
           return visibility;
         }
-        const creationAccess =
-          params.access ??
-          resolveSessionCreationVisibility(
-            creationCfg,
-            target.canonicalKey,
-            currentParentSessionEntry,
-          ).access;
+        const creationAccess = resolveAttendedCreationAccess(
+          creationCfg,
+          target.canonicalKey,
+          currentParentSessionEntry,
+          params,
+        );
         if (!existingEntry) {
           validateCreationSharing = () => {
             const currentCfg = params.getCurrentConfig?.() ?? params.cfg;
@@ -747,13 +744,12 @@ async function createGatewaySessionInScope(
             if (!current.ok) {
               return current.error;
             }
-            const currentAccess =
-              params.access ??
-              resolveSessionCreationVisibility(
-                currentCfg,
-                target.canonicalKey,
-                currentParentSessionEntry,
-              ).access;
+            const currentAccess = resolveAttendedCreationAccess(
+              currentCfg,
+              target.canonicalKey,
+              currentParentSessionEntry,
+              params,
+            );
             // Reject a stale prepared audience before the writer can publish the row.
             return current.value === visibility.value &&
               isDeepStrictEqual(currentAccess, creationAccess)

@@ -165,6 +165,8 @@ export type CreateGatewaySessionParams = {
   permissionMode?: SessionEntry["permissionMode"];
   /** Direct profiled operator creation only; never inherited by autonomous callers. */
   applyAgentPermissionDefault?: boolean;
+  /** Host-attested direct Control UI profile, never accepted from public params. */
+  attendedControlUiProfile?: boolean;
   toolOverrides?: SessionToolOverrides;
   communication?: SessionEntry["communication"];
   /** Prepares session-owned resources while the target lifecycle fence is held. */

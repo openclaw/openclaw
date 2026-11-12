@@ -79,6 +79,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Allows suggest visibility. In this phase it enforces the same admission policy as read-only; suggestion queues are configured by a later feature. Default: true.",
   "session.sharing.drafts":
     "Allows draft visibility, which hides sessions from non-owner, non-admin operators. Default: true.",
+  "session.sharing.controlUiDefaultAccess":
+    "Default access for a new dashboard session created by a directly authenticated Control UI profile. Existing sessions and channel, agent, and system creation are unchanged.",
   "session.sharing.accessPolicy":
     "Confidential source-aware read/write audience, separate from Draft visibility. New sessions persist a source binding before publication; existing unset sessions keep role/visibility behavior. Explicit source bindings follow live named-profile rules and fail closed to creator/admin for missing or unknown groups.",
   "session.sharing.accessPolicy.default": "Creator/admin-only fallback; never an all-staff grant.",

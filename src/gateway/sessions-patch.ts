@@ -46,7 +46,6 @@ import {
   resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { resolveSessionCreationVisibility } from "../config/sessions/creation-visibility.js";
 import {
   buildSessionCreationStamp,
   type SessionCreatedVia,
@@ -88,6 +87,7 @@ import {
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 import { validateSessionPatchAdmission } from "./sessions-patch-admission.js";
 import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
+import { resolvePatchCreationVisibility } from "./sessions-patch-creation.js";
 import {
   applySessionsPatchDisplayMetadata,
   isSessionIconColorOnlyPatch,
@@ -114,7 +114,7 @@ type SessionPatchProjectionParams = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
-};
+} & { attendedProfileOperator?: boolean };
 
 type SessionPatchProjectionResult =
   | { ok: true; entry: SessionEntry; validateModelSelection?: () => ErrorShape | undefined }
@@ -285,7 +285,7 @@ function* projectSessionPatchSteps(
     ...(params.preparedSessionRoot ? { sessionRoot: params.preparedSessionRoot } : {}),
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
     ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
-    ...(params.existingEntry === undefined ? resolveSessionCreationVisibility(cfg, storeKey) : {}),
+    ...resolvePatchCreationVisibility(params),
     ...(patch.access ? { access: patch.access } : {}),
   };
   if (existing && !existing.sessionId) {

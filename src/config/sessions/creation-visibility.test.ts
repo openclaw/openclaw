@@ -106,3 +106,44 @@ it("keeps a Draft parent's copied context confidential without a global access p
   expect(child.access).toEqual({ mode: "creator" });
   expect(canReadSessionAccess({}, "agent:main:dashboard:fork", child, () => false)).toBe(false);
 });
+
+describe("operator-only confidentiality default", () => {
+  const operatorCfg: OpenClawConfig = {
+    session: { sharing: { controlUiDefaultAccess: "creator" } },
+  };
+  it("limits the default to an attended profile operator on dashboard keys", () => {
+    const operator = { attendedProfileOperator: true };
+    expect(
+      resolveSessionCreationVisibility(
+        operatorCfg,
+        "agent:main:dashboard:new",
+        undefined,
+        operator,
+      ),
+    ).toEqual({ access: { mode: "creator" } });
+    for (const key of [
+      "agent:main:telegram:direct:123",
+      "agent:main:telegram:group:-1001",
+      "agent:main:subagent:child",
+      "agent:main:main",
+    ]) {
+      expect(resolveSessionCreationVisibility(operatorCfg, key, undefined, operator)).toEqual({});
+    }
+    expect(resolveSessionCreationVisibility(operatorCfg, "agent:main:dashboard:new")).toEqual({});
+    expect(
+      resolveSessionCreationVisibility({}, "agent:main:dashboard:new", undefined, operator),
+    ).toEqual({});
+  });
+  it("preserves inherited confidentiality and the existing source policy", () => {
+    const parent = { access: { mode: "audience" as const, profileIds: ["person"] } };
+    expect(
+      resolveSessionCreationVisibility(operatorCfg, "agent:main:subagent:child", parent),
+    ).toEqual({ access: { mode: "creator" } });
+    expect(
+      resolveSessionCreationVisibility(cfg, "agent:main:dashboard:new", undefined, {
+        attendedProfileOperator: true,
+      }),
+    ).toEqual({ access: { mode: "source" } });
+    expect(SessionSchema.safeParse(operatorCfg.session).success).toBe(true);
+  });
+});

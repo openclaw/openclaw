@@ -81,6 +81,7 @@ export function createChatSendSessionInitialization(params: {
   sessionKey: string;
   agentId: string;
   needsCreationBinding: boolean;
+  assertCreationDefaultCurrent?: () => void;
   authorization: GatewayRequestHandlerOptions["sessionMutationAuthorization"];
   getSessionInitializationOptions: () => Pick<
     InternalGetReplyOptions,
@@ -103,13 +104,17 @@ export function createChatSendSessionInitialization(params: {
     onDatabaseRegistration: authorization?.followRegistration
       ? (change) => authorization.followRegistration?.(target, change)
       : undefined,
-    ...(params.needsCreationBinding && authorization?.bindCreation
+    ...(params.needsCreationBinding &&
+    (authorization?.bindCreation || params.assertCreationDefaultCurrent)
       ? {
           bindSessionCreation: (operation) => {
-            authorization.bindCreation?.(target, operation);
-            return authorization.assertCurrent;
+            authorization?.bindCreation?.(target, operation);
+            return () => {
+              authorization?.assertCurrent?.();
+              params.assertCreationDefaultCurrent?.();
+            };
           },
-          onSessionCreated: authorization.recordCreatedSession,
+          onSessionCreated: authorization?.recordCreatedSession,
         }
       : {}),
   });
