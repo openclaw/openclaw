@@ -2,4 +2,4 @@
 # Route absence, final child/cron capture and quarantine, stable source prefixes,
 # configured/offline/modern sender facts, pending sync config and payload-only eligibility.
 # Existing reaction/scheduled fixtures follow the real prompt producer. Shared scalar unchanged.
-455
+523

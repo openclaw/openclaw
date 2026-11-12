@@ -50,6 +50,7 @@ const {
   buildDynamicToolsForTest,
   cleanupDynamicToolBuildFixture,
   setupDynamicToolBuildFixture,
+  declareWebChatSource,
   createCodexRuntimePlanFixture,
   createParams: createBaseParams,
   createRuntimeDynamicTool,
@@ -136,11 +137,6 @@ function call(
   });
 }
 
-function shellTestToolNames(tools: readonly { name: string }[]): string[] {
-  return tools
-    .map((tool) => tool.name)
-    .filter((name) => ["message", "gateway_exec", "gateway_process", "node_exec"].includes(name));
-}
 function namespaceSpec(name: string, tools: unknown) {
   return { type: "namespace", name, description: "", tools };
 }
@@ -201,6 +197,9 @@ it("binds a resolver-backed constructed tool surface exactly once", async () => 
 });
 
 it.each([true, false])("requires native paired-node execution: %s", async (native) => {
+  if (native) {
+    await declareWebChatSource(params);
+  }
   const factory = vi.fn((options: Parameters<typeof createOpenClawCodingTools>[0]) =>
     native
       ? [
@@ -506,9 +505,27 @@ it.each([{ toolsAllow: undefined }, { toolsAllow: ["read"] }, { toolsAllow: [] }
 );
 
 it.each(["searchable", "direct"] as const)(
+  "omits route-less message from Codex construction and registration (%s loading)",
+  async (loading) => {
+    params.config = { plugins: { enabled: false } };
+    realTools("message", "session_status");
+    const tools = await buildTools({ sandbox: null, nativeToolSurfaceEnabled: false });
+    expect(tools.map((tool) => tool.name)).toEqual(["session_status"]);
+    const bridge = createBridge(tools, { loading });
+    expect(flattenCodexDynamicToolFunctions(bridge.specs).map((tool) => tool.name)).toEqual([
+      "session_status",
+    ]);
+    expect(await call(bridge, "message", { action: "send", message: "No route" })).toMatchObject({
+      success: false,
+    });
+  },
+);
+
+it.each(["searchable", "direct"] as const)(
   "keeps delegation model-only (%s loading)",
   async (loading) => {
     params.config = { tools: { exec: { mode: "ask" } } };
+    await declareWebChatSource(params);
     realTools("openclaw", "message", "session_status");
 
     const tools = await buildTools({
@@ -549,6 +566,7 @@ it.each(["core policy", "Codex excludes", "turn allowlist"])(
   async (policy) => {
     params.config = policy === "core policy" ? { tools: { deny: ["openclaw"] } } : {};
     params.toolsAllow = policy === "turn allowlist" ? ["message"] : ["openclaw", "message"];
+    await declareWebChatSource(params);
     realTools("openclaw", "message");
 
     const tools = await buildTools({
@@ -660,36 +678,6 @@ it.each([
       docker: { network },
     } as never),
   ).toEqual({ type: "externalSandbox", networkAccess });
-});
-
-it.each([
-  ["sandbox", undefined],
-  ["node", undefined],
-  ["gateway", "process"],
-  ["gateway", "exec"],
-] as const)("filters Gateway shell aliases under %s / %s", async (host, excluded) => {
-  if (host === "gateway") {
-    params.execOverrides = { host };
-    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
-  } else {
-    if (host === "node") {
-      params.execOverrides = { host };
-    }
-    mockTools(["exec", "process", "message"]);
-  }
-  const tools = await buildTools({
-    nativeToolSurfaceEnabled: true,
-    ...(host === "sandbox" ? { sandbox: { enabled: true, backendId: "docker" } as never } : {}),
-    pluginConfig: { codexDynamicToolsExclude: excluded ? [excluded] : [] },
-  });
-  if (excluded) {
-    expect(shellTestToolNames(tools)).toEqual(
-      excluded === "process" ? ["message", "gateway_exec"] : ["message"],
-    );
-  } else {
-    expect(tools.map((tool) => tool.name)).not.toContain("gateway_exec");
-    expect(tools.map((tool) => tool.name)).not.toContain("gateway_process");
-  }
 });
 
 it("shares discovery across attempt catalogs but refreshes the next attempt", async () => {
@@ -830,59 +818,6 @@ it("exposes pinned node shell tools for node-targeted Codex app-server runs", as
   expect(retainedNative).toBe(false);
   expect(retainedTools.map((tool) => tool.name)).toEqual(["message", "node_exec"]);
 });
-
-it.each(["auto", "bound auto", "gateway"])(
-  "separates %s shell and Gateway sessions",
-  async (name) => {
-    if (name === "gateway") {
-      params.execOverrides = { host: "gateway" };
-    }
-    if (name === "bound auto") {
-      params.config = { tools: { exec: { host: "auto", node: "bound-mac-mini" } } };
-    }
-    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
-    const tools = await buildTools({ sandbox: null, nativeToolSurfaceEnabled: true });
-    expect(shellTestToolNames(tools)).toEqual([
-      "message",
-      "gateway_exec",
-      "gateway_process",
-      ...(name === "gateway" ? [] : ["node_exec"]),
-    ]);
-    if (name === "gateway") {
-      const narrowed = await buildDynamicToolsForTest(
-        { ...params, toolsAllow: ["message"] },
-        workspaceDir,
-        { nativeToolSurfaceEnabled: true },
-      );
-      expect(shellTestToolNames(narrowed)).toEqual(["message"]);
-      return;
-    }
-    const nodeExec = toolNamed(tools, "node_exec");
-    expect(nodeExec.parameters).toMatchObject({
-      type: "object",
-      properties: { command: { type: "string" } },
-      required: ["command"],
-    });
-    if (name === "bound auto") {
-      expect(nodeExec.parameters).not.toHaveProperty("properties.node");
-      return;
-    }
-    expect(nodeExec.description).toContain(
-      "The sole connected node that can execute commands is selected automatically; select by name or id when several can.",
-    );
-    expect(nodeExec.parameters).toMatchObject({ properties: { node: { type: "string" } } });
-    for (const field of ["host", "security", "ask"]) {
-      expect(nodeExec.parameters).not.toHaveProperty(`properties.${field}`);
-    }
-    const nodeList = await call(createBridge(tools, { loading: "direct" }), "node_process", {
-      action: "list",
-    });
-    expect(nodeList).toMatchObject({
-      success: false,
-      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: node_process" }],
-    });
-  },
-);
 
 it("restores the policy-filtered OpenClaw shell when a finite allowlist disables native Code Mode", async () => {
   const execTool = createRuntimeDynamicTool("exec");

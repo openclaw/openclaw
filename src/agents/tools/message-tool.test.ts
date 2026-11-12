@@ -1351,18 +1351,6 @@ it.each<{
   expect(firstAction()).toMatchObject(expected);
 });
 
-it("keeps the tool definition stable through createOpenClawTools", () => {
-  registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
-  const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
-    createOpenClawTools({ config: {}, agentChannel: "slack", sourceReplyDeliveryMode }).find(
-      (candidate) => candidate.name === "message",
-    ),
-  );
-  expect(tools[0]).toBeDefined();
-  expect(tools[1]?.description).toBe(tools[0]?.description);
-  expect(tools[1]?.parameters).toEqual(tools[0]?.parameters);
-  expect(getToolProperties(tools[1]!).final).toMatchObject({ type: "boolean" });
-});
 describe("message tool explicit target guard", () => {
   async function collectDecisions(
     scope: string,

@@ -67,14 +67,24 @@ it("retains a configured offline outbound-only adapter without an inbound channe
       (tool) => tool.name === "message",
     ),
   ).toBe(true);
-  const render = (sourceReplyOnly: boolean) =>
-    createOpenClawTools({ config: cfg, agentSessionKey: sessionKey, sourceReplyOnly }).find(
-      (tool) => tool.name === "message",
-    );
+  const render = (
+    sourceReplyOnly: boolean,
+    sourceReplyDeliveryMode: "automatic" | "message_tool_only" = "automatic",
+  ) =>
+    createOpenClawTools({
+      config: cfg,
+      agentSessionKey: sessionKey,
+      sourceReplyOnly,
+      sourceReplyDeliveryMode,
+    }).find((tool) => tool.name === "message");
   const normal = render(false);
   expect(normal).toBeDefined();
   expect(render(true)?.parameters).toEqual(normal?.parameters);
   expect(render(false)?.parameters).toEqual(normal?.parameters);
+  const toolOnly = render(false, "message_tool_only");
+  expect(toolOnly?.description).toBe(normal?.description);
+  expect(toolOnly?.parameters).toEqual(normal?.parameters);
+  expect(toolOnly?.parameters).toMatchObject({ properties: { final: { type: "boolean" } } });
   const result = await normal!.execute("synthetic-send", {
     action: "send",
     channel: "signal",
