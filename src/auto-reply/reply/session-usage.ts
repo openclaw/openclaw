@@ -4,13 +4,9 @@ import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { hasBillableUsage, hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { SessionEntryUsageUpdate } from "../../config/sessions/session-entry-usage.js";
 import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
-import {
-  estimateAggregateUsageCost,
-  type CapturedModelCostPricing,
-} from "../../utils/usage-format.js";
 
 type SessionUsageUpdateParams = {
-  pricing: CapturedModelCostPricing;
+  estimatedCostUsd?: number;
   usage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated). Supplies context
@@ -34,7 +30,7 @@ type SessionUsageUpdateParams = {
   preserveUserFacingSessionModelState?: boolean;
 };
 
-/** Prepare host-owned pricing without choosing a persistence envelope. */
+/** Prepare usage facts without choosing a persistence envelope. */
 export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
   const modelSelection = params.runtimeModelSelection ?? {
     provider: params.providerUsed,
@@ -65,6 +61,10 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
   const currentContextTokens = asNonNegativeFiniteNumber(params.currentContextSnapshot?.tokens);
   const update: SessionEntryUsageUpdate = {
     usage: params.usage,
+    estimatedCostUsd:
+      preserveUserFacingRunState || !hasBilling
+        ? undefined
+        : asNonNegativeFiniteNumber(params.estimatedCostUsd),
     lastCallUsage: params.lastCallUsage,
     modelSelection,
     agentHarnessId: normalizeOptionalString(params.agentHarnessId),
@@ -82,17 +82,5 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
     preserveUserFacingRunState,
     preserveFreshTotalTokensOnStaleUsage: params.preserveFreshTotalTokensOnStaleUsage,
   };
-  const estimateCost = (entry?: SessionEntry) =>
-    preserveUserFacingRunState || !hasBilling
-      ? undefined
-      : asNonNegativeFiniteNumber(
-          estimateAggregateUsageCost({
-            usage: params.usage,
-            cost: params.pricing.resolve(
-              params.providerUsed ?? entry?.modelProvider,
-              params.modelUsed ?? entry?.model,
-            ),
-          }),
-        );
-  return { update, estimateCost };
+  return update;
 }

@@ -109,6 +109,7 @@ describe("usage-format", () => {
     await fs.mkdir(emptyAgentDir, { recursive: true });
 
     const config = sourceConfig("demo-scoped", [pricedModel(30)]);
+    using reads = vi.spyOn(fs, "readFile");
     const resolveInputPrice = async (scopedAgentDir?: string) =>
       (await resolveCost("demo-scoped", "demo-model", config, scopedAgentDir))?.input;
 
@@ -117,6 +118,9 @@ describe("usage-format", () => {
         [agentDir, secondAgentDir, emptyAgentDir, undefined].map(resolveInputPrice),
       ),
     ).toEqual([10, 20, 30, 10]);
+    expect(
+      reads.mock.calls.filter(([file]) => file === path.join(agentDir, "models.json")),
+    ).toHaveLength(1);
   });
 
   const firstRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };

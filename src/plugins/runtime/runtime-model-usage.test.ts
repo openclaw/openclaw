@@ -7,7 +7,6 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
-import { captureModelCostPricing } from "../../utils/usage-format.js";
 import { finalizePluginModelUsage } from "./runtime-model-usage.js";
 
 afterEach(resetDiagnosticEventsForTest);
@@ -48,9 +47,9 @@ it.each(["direct", "aggregate"] as const)(
         },
       },
     };
-    const usage = finalizePluginModelUsage({
+    const usage = await finalizePluginModelUsage({
       cfg,
-      pricing: await captureModelCostPricing(cfg),
+      assertCurrent: () => undefined,
       estimate,
       target,
       rawUsage: { input: 100 },

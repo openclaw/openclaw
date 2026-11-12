@@ -10,10 +10,6 @@ import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work
 import { createDeferredCore } from "../../shared/deferred.js";
 import { modelKey } from "../../shared/model-key.js";
 import {
-  captureModelCostPricing,
-  type CapturedModelCostPricing,
-} from "../../utils/usage-format.js";
-import {
   createLlmCompleteError as completionError,
   isLlmOperatorAuthorizationError,
   withLlmRuntimeLifecycleErrors,
@@ -121,17 +117,17 @@ function buildMessages(params: {
     );
 }
 
-export function finalizePluginLlmCompletion(params: {
+export async function finalizePluginLlmCompletion(params: {
   cfg: OpenClawConfig;
-  pricing: CapturedModelCostPricing;
+  assertCurrent: () => void;
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
   result: Omit<LlmCompleteResult, "usage">;
-}): LlmCompleteResult {
-  const usage = finalizePluginModelUsage({
+}): Promise<LlmCompleteResult> {
+  const usage = await finalizePluginModelUsage({
     cfg: params.cfg,
-    pricing: params.pricing,
+    assertCurrent: params.assertCurrent,
     hostPluginId: params.hostPluginId,
     suppressUsage: params.suppressUsage,
     rawUsage: params.rawUsage,
@@ -155,6 +151,7 @@ export function finalizePluginLlmCompletion(params: {
         usage: recordedUsage,
       }),
   });
+  params.assertCurrent();
   return { ...params.result, usage };
 }
 
@@ -280,11 +277,9 @@ export function createRuntimeLlm(
           operatorAuthority,
           assertCurrent,
         });
-        const pricing = await captureModelCostPricing(cfg);
-        assertCurrent();
         return finalizePluginLlmCompletion({
           cfg,
-          pricing,
+          assertCurrent,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
           result: {
@@ -344,7 +339,6 @@ export function createRuntimeLlm(
           throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
         await using prepared = preparation;
-        const pricing = await captureModelCostPricing(cfg);
         assertCurrent();
         let assertPreparedCurrent = assertCurrent;
 
@@ -428,7 +422,7 @@ export function createRuntimeLlm(
                 .join("");
               return finalizePluginLlmCompletion({
                 cfg,
-                pricing,
+                assertCurrent: assertPreparedCurrent,
                 hostPluginId: pluginPolicyId,
                 // Provider failures resolve as messages; only visible successful output owns usage.
                 suppressUsage:

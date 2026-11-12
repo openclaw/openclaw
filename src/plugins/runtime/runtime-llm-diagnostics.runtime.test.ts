@@ -1,6 +1,7 @@
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as modelsConfigState from "../../agents/models-config-state.js";
 import {
   publishModelsJsonCostSource,
   MODELS_JSON_STATE,
@@ -256,6 +257,7 @@ describe("runtime.llm.complete diagnostics", () => {
 
   it.each([
     ["absent", undefined, true, undefined, undefined],
+    ["unavailable usage", { usageReport: { state: "unavailable" } }, true, undefined, undefined],
     [
       "all-zero",
       { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -297,6 +299,11 @@ describe("runtime.llm.complete diagnostics", () => {
   ] as const)(
     "emits usage only for positive enabled tokens or cost: %s",
     async (_name, rawUsage, enabled, expectedEventUsage, expectedCostUsd) => {
+      using pricing = vi.spyOn(modelsConfigState, "captureModelsJsonCostSource");
+      const needsNoPricing = _name === "absent" || _name === "unavailable usage";
+      if (needsNoPricing) {
+        pricing.mockRejectedValue(new Error("Unavailable usage must not prepare pricing"));
+      }
       hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
         content: [{ type: "text", text: "done" }],
         usage: rawUsage,
@@ -310,6 +317,9 @@ describe("runtime.llm.complete diagnostics", () => {
 
       await llm.complete({ messages: [{ role: "user", content: "Ping" }] });
       usageEvents.stop();
+      if (needsNoPricing) {
+        expect(pricing).not.toHaveBeenCalled();
+      }
 
       if (expectedEventUsage) {
         expect(usageEvents.events).toEqual([

@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyUsageState } from "../../auto-reply/reply/reply-usage-state.js";
 import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.js";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureModelCostPricing, estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import {
+  resolveModelCostConfig,
+  estimateAggregateUsageCostAsync,
+} from "../../utils/usage-format.js";
+import * as modelsConfig from "../models-config-state.js";
 import type { NormalizedUsage } from "../usage.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
@@ -51,12 +55,19 @@ const diagnosticUsage = [
 ] as const;
 
 async function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
-  const pricing = await captureModelCostPricing(cfg, "/nonexistent-fallback-accounting");
+  const prepareCost = () =>
+    resolveModelCostConfig({
+      config: cfg,
+      agentDir: "/nonexistent-fallback-accounting",
+      provider: meta.provider,
+      model: meta.model,
+    });
+  const turnUsd = await estimateAggregateUsageCostAsync({ usage: meta.usage, prepareCost });
   return {
     reply: buildReplyUsageState({
       ...meta,
       config: cfg,
-      pricing,
+      turnUsd,
       agentId: "main",
       sessionId: "session-1",
       winnerProvider: meta.provider,
@@ -64,14 +75,14 @@ async function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
     }),
     session: prepareSessionUsageUpdate({
       ...meta,
-      pricing,
+      estimatedCostUsd: turnUsd,
       providerUsed: meta.provider,
       modelUsed: meta.model,
     }),
-    diagnosticCost: estimateAggregateUsageCost({
+    diagnosticCost: await estimateAggregateUsageCostAsync({
       ...meta,
       usage: meta.diagnosticUsage,
-      cost: pricing.resolve(meta.provider, meta.model),
+      prepareCost,
     }),
   };
 }
@@ -143,6 +154,7 @@ it.each([
 ] as const)(
   "retains discarded work and %s across reply and session accounting",
   async (_name, primary, fallback, expected, diagnostics) => {
+    using preparation = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
     const unknown = expected === undefined;
     const meta = await runAccountedEntry(
       { input: 100, output: diagnostics ? undefined : 10, cost: primary },
@@ -150,6 +162,9 @@ it.each([
       unknown ? {} : cfg,
       diagnostics,
     );
+    if (_name === "provider-billed zero" || _name === "separate diagnostic totals") {
+      expect(preparation).not.toHaveBeenCalled();
+    }
     const output = diagnostics ? {} : { output: 30, total: 330 };
     expect(meta).toMatchObject({
       usage: { input: 300, ...output },
@@ -163,7 +178,7 @@ it.each([
     expect(reply.usage).toMatchObject({ input: 300, ...(diagnostics ? {} : { output: 30 }) });
     expect(reply.contextUsedTokens).toBe(unknown ? undefined : 20);
     const cost = unknown ? undefined : expect.closeTo(expected, 9);
-    const costs = [reply.turnUsd, session?.estimateCost(), diagnosticCost];
+    const costs = [reply.turnUsd, session?.estimatedCostUsd, diagnosticCost];
     expect(costs).toEqual([cost, cost, diagnostics ? expect.closeTo(1.4, 9) : cost]);
     if (diagnostics) {
       expect(meta).toMatchObject({

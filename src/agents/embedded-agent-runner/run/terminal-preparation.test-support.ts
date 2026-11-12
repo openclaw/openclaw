@@ -1,5 +1,4 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { captureModelCostPricing } from "../../../utils/usage-format.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeEmbeddedRunnerAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -91,8 +90,5 @@ export function createTerminalPreparationInput(input: PreparationOverrides): Pre
 export async function prepareAttempt(input: PreparationOverrides) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
   const prepared = createTerminalPreparationInput(input);
-  return prepareEmbeddedRunTerminal({
-    ...prepared,
-    pricing: await captureModelCostPricing(prepared.runParams.config, prepared.runParams.agentDir),
-  });
+  return prepareEmbeddedRunTerminal(prepared);
 }

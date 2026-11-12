@@ -21,8 +21,7 @@ import {
   tryResolveDefaultAgentId,
 } from "../agents/agent-scope-config.js";
 import {
-  captureModelsJsonSource,
-  MODELS_JSON_STATE,
+  captureModelsJsonCostSource,
   type ModelKeyNormalizer,
 } from "../agents/models-config-state.js";
 import { normalizeProviderMapKeys } from "../agents/models-config.merge.js";
@@ -139,9 +138,7 @@ async function loadModelsJsonCostSource(agentDir: string | undefined) {
     return undefined;
   }
   try {
-    return (
-      MODELS_JSON_STATE.costCache.get(agentDir) ?? (await captureModelsJsonSource(agentDir)).pricing
-    ).providers;
+    return (await captureModelsJsonCostSource(agentDir)).providers;
   } catch {
     return undefined;
   }
@@ -407,7 +404,25 @@ export function estimateAggregateUsageCost(params: {
   usage?: NormalizedUsage | null;
   cost?: ModelCostConfig;
 }): number | undefined {
-  const usage = params.usage;
+  return resolveAggregateUsageCost(params.usage, (usage) =>
+    estimateUnpricedAggregateUsageCost(usage, params.cost),
+  );
+}
+
+/** Recorded totals and final unknowns settle before optional rate preparation. */
+export async function estimateAggregateUsageCostAsync(params: {
+  usage?: NormalizedUsage | null;
+  prepareCost: () => Promise<ModelCostConfig | undefined>;
+}): Promise<number | undefined> {
+  return resolveAggregateUsageCost(params.usage, async (usage) =>
+    estimateUnpricedAggregateUsageCost(usage, await params.prepareCost()),
+  );
+}
+
+function resolveAggregateUsageCost<T>(
+  usage: NormalizedUsage | null | undefined,
+  estimate: (usage: NormalizedUsage) => T,
+): number | undefined | T {
   if (usage?.usageReport?.state === "unavailable") {
     return undefined;
   }
@@ -426,9 +441,14 @@ export function estimateAggregateUsageCost(params: {
   if (!hasBillableBuckets) {
     return usage?.cost?.total;
   }
-  // Recorded totals own billing; discover fallback prices only for unpriced usage.
-  const cost = params.cost;
-  if (usage?.cost && cost) {
+  return estimate(usage);
+}
+
+function estimateUnpricedAggregateUsageCost(
+  usage: NormalizedUsage,
+  cost: ModelCostConfig | undefined,
+): number | undefined {
+  if (usage.cost && cost) {
     return usage.cost.total;
   }
   return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });

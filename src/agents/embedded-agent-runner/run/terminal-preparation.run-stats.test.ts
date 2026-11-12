@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { captureModelCostPricing } from "../../../utils/usage-format.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
+import { createSettledFinalizationTestInput } from "./settled-turn-finalization.test-support.js";
 import {
   assistantMessage,
   attemptResult,
@@ -16,9 +17,9 @@ vi.mock("./payloads.js", async (importOriginal) => ({
   buildEmbeddedRunPayloads: () => [],
 }));
 
-describe("prepareEmbeddedRunTerminal run stats", () => {
+describe("settled terminal run stats", () => {
   async function prepareStats(statsInput: TerminalStatsInput = {}) {
-    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+    const admittedRunContext = createTestAdmittedRunContext("run-1");
     const provider = statsInput.provider ?? "cost-test-provider";
     const model = statsInput.model ?? "cost-model";
     const assistant = {
@@ -35,10 +36,11 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
     const input = createTerminalPreparationInput({
-      admittedRunContext: createTestAdmittedRunContext("run-1"),
+      admittedRunContext,
       runParams: {
         sessionId: "session-1",
         runId: "run-1",
+        resolveReplyDelivery: async () => "delivered",
         ...(statsInput.config ? { config: statsInput.config as never } : {}),
       },
       attempt: attemptResult({
@@ -54,10 +56,20 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
       usageAccumulator,
     });
-    return prepareEmbeddedRunTerminal({
-      ...input,
-      pricing: await captureModelCostPricing(input.runParams.config, input.runParams.agentDir),
-    });
+    const settled = createSettledFinalizationTestInput(input.attempt, admittedRunContext);
+    return (
+      await prepareTerminalWithSettledTurnFinalization({
+        ...settled,
+        terminalBase: input,
+        initial: {
+          ...settled.initial,
+          currentAttemptCompletedAssistant: assistant,
+          sessionIdUsed: input.sessionIdUsed,
+          terminalState: input.terminalState,
+        },
+        lastRunPromptUsage: input.lastRunPromptUsage,
+      })
+    ).prepared;
   }
 
   const modelConfig = <T extends object>(fields: T) => ({

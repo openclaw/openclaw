@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureModelCostPricing } from "../../utils/usage-format.js";
@@ -22,8 +22,8 @@ it("renders a full footer from a reply usage snapshot", async () => {
   };
   const text =
     "{model.display_name}|{model.reasoning}|{state.fast_mode}|{model.is_fallback}|{context.pct_used}|{context.max_tokens}|{cost.turn_usd}";
-  const line = resolveResponseUsageLine({
-    pricing: await captureModelCostPricing({}, "/synthetic/usage-contract-agent"),
+  const line = await resolveResponseUsageLine({
+    preparePricing: () => captureModelCostPricing({}, "/synthetic/usage-contract-agent"),
     config: {
       messages: {
         responseUsage: "full",
@@ -49,17 +49,19 @@ it("marks a standalone usage footer as non-terminal status", () => {
 });
 
 const completeUsage = { input: 1_000_000, output: 0 };
-it.each<[name: string, usage: Usage, tiered: boolean, expected: string | undefined]>([
-  ["costless flat-price runtime", completeUsage, false, "est $1.00"],
-  ["explicit zero total", { ...completeUsage, cost: { total: 0 } }, true, "est $0.0000"],
-  ["incomplete tiered cost", completeUsage, true, undefined],
-  ["input-only usage without a price", { input: 1_000_000 }, false, undefined],
-  ["output-only usage without a price", { output: 50 }, false, undefined],
-  ["priced partial usage", { input: 1000, cost: { total: 0.25 } }, true, "est $0.25"],
-  ["cost-only zero total", { cost: { total: 0 } }, true, "Usage: ? in / ? out · est $0.0000"],
+it.each<
+  [name: string, usage: Usage, tiered: boolean, expected: string | undefined, preparations: number]
+>([
+  ["costless flat-price runtime", completeUsage, false, "est $1.00", 1],
+  ["explicit zero total", { ...completeUsage, cost: { total: 0 } }, true, "est $0.0000", 1],
+  ["incomplete tiered cost", completeUsage, true, undefined, 1],
+  ["input-only usage without a price", { input: 1_000_000 }, false, undefined, 0],
+  ["output-only usage without a price", { output: 50 }, false, undefined, 0],
+  ["priced partial usage", { input: 1000, cost: { total: 0.25 } }, true, "est $0.25", 0],
+  ["cost-only zero total", { cost: { total: 0 } }, true, "Usage: ? in / ? out · est $0.0000", 0],
 ])(
   "formats %s for the selected agent in an explicit fleet",
-  async (_name, usage, tiered, expected) => {
+  async (_name, usage, tiered, expected, preparations) => {
     const cost = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 };
     const model = modelDefinition("priced", {
       cost: {
@@ -72,14 +74,16 @@ it.each<[name: string, usage: Usage, tiered: boolean, expected: string | undefin
       messages: { responseUsage: "full" },
       models: { providers: { fixture: { baseUrl: "https://fixture.invalid", models: [model] } } },
     } satisfies OpenClawConfig;
-    const line = resolveResponseUsageLine({
+    const preparePricing = vi.fn(() => captureModelCostPricing(config, "/tmp/openclaw-main-agent"));
+    const line = await resolveResponseUsageLine({
       config,
-      pricing: await captureModelCostPricing(config, "/tmp/openclaw-main-agent"),
+      preparePricing,
       usage,
       provider: "fixture",
       model: "priced",
     });
 
+    expect(preparePricing).toHaveBeenCalledTimes(preparations);
     expect(line).toContain("Usage:");
     if (expected) {
       expect(line).toContain(expected);
@@ -91,8 +95,8 @@ it.each<[name: string, usage: Usage, tiered: boolean, expected: string | undefin
 
 it.each(["off", "tokens"] as const)("hides cost-only usage in %s mode", async (mode) => {
   expect(
-    resolveResponseUsageLine({
-      pricing: await captureModelCostPricing({}, "/tmp/openclaw-main-agent"),
+    await resolveResponseUsageLine({
+      preparePricing: () => captureModelCostPricing({}, "/tmp/openclaw-main-agent"),
       config: { messages: { responseUsage: mode } },
       usage: { cost: { total: 0.25 } },
     }),

@@ -32,8 +32,9 @@ describe.runIf(process.platform === "win32")("usage footer Windows home paths", 
         JSON.stringify({ segments: [{ text: "WINDOWS CUSTOM FOOTER" }] }),
       );
 
-      const rendered = resolveResponseUsageLine({
-        pricing: await captureModelCostPricing({}, "C:\\openclaw\\agents\\main\\agent", false),
+      const rendered = await resolveResponseUsageLine({
+        preparePricing: () =>
+          captureModelCostPricing({}, "C:\\openclaw\\agents\\main\\agent", false),
         config: {
           messages: {
             responseUsage: "full",

@@ -4,7 +4,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { estimateAggregateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { hasBillableUsage, toDiagnosticUsage } from "./usage.js";
 
@@ -51,14 +51,15 @@ export async function emitInternalRunUsageDiagnostic(
       limit: meta?.contextTokens,
       ...(meta?.promptTokens !== undefined ? { used: meta.promptTokens } : {}),
     },
-    costUsd: estimateAggregateUsageCost({
+    costUsd: await estimateAggregateUsageCostAsync({
       usage,
-      cost: await resolveModelCostConfig({
-        provider,
-        model,
-        config: params.config,
-        agentDir: params.agentDir,
-      }),
+      prepareCost: () =>
+        resolveModelCostConfig({
+          provider,
+          model,
+          config: params.config,
+          agentDir: params.agentDir,
+        }),
     }),
     durationMs: result.meta?.durationMs,
   });

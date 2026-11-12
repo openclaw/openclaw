@@ -1,19 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import {
-  buildReplyUsageState,
-  recordReplyUsageState,
-} from "../auto-reply/reply/reply-usage-state.js";
 import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
-import type { Message, Model } from "../llm/types.js";
+import type { Message } from "../llm/types.js";
 import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import { captureModelCostPricing } from "../utils/usage-format.js";
 import {
   assertOperatorModelAllowed,
   prepareSystemAgentRunAdmission,
@@ -30,7 +24,7 @@ import {
   withBtwPreparedRuntime,
   type RunBtwSideQuestionParams,
 } from "./btw-runtime.js";
-import { runBtwSessionFork, runLightweightBtwStream } from "./btw-stream.js";
+import { recordBtwUsage, runBtwSessionFork, runLightweightBtwStream } from "./btw-stream.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
@@ -61,7 +55,6 @@ import { resolveSandboxContext } from "./sandbox/context.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
-import { hasBillableUsage, toDiagnosticUsage, type NormalizedUsage } from "./usage.js";
 
 /** Answers a side question using sanitized session context and no tool execution. */
 export async function runBtwSideQuestion(
@@ -191,41 +184,6 @@ export async function runBtwSideQuestion(
         });
       }
       return runtimeSelection;
-    };
-    const pricing = await captureModelCostPricing(params.cfg, params.agentDir);
-    const recordBtwUsage = (runtimeModel: Model, usage?: NormalizedUsage) => {
-      params.onUsage?.(usage);
-      if (params.onUsage) {
-        return;
-      }
-      if (!hasBillableUsage(usage)) {
-        return;
-      }
-      const usageState = buildReplyUsageState({
-        config: params.cfg,
-        pricing,
-        agentId: sessionAgentId,
-        sessionId,
-        provider: runtimeModel.provider,
-        model: runtimeModel.id,
-        chatType: params.chatType,
-        usage,
-      });
-      // Delivery hooks use the reply correlation ID, not the side run's authority ID.
-      recordReplyUsageState(params.opts?.runId, usageState);
-      if (isDiagnosticsEnabled(params.cfg)) {
-        emitTrustedDiagnosticEvent({
-          type: "model.usage",
-          sessionKey: params.sessionKey,
-          sessionId,
-          channel: params.messageChannel,
-          agentId: sessionAgentId,
-          provider: runtimeModel.provider,
-          model: runtimeModel.id,
-          usage: toDiagnosticUsage(usage),
-          costUsd: usageState.turnUsd,
-        });
-      }
     };
     type BtwHarnessSideQuestionDispatch =
       | { kind: "handled"; payload: ReplyPayload }
@@ -458,7 +416,17 @@ export async function runBtwSideQuestion(
         } finally {
           host.close();
         }
-        recordBtwUsage(runtimeModel, result.usage);
+        await recordBtwUsage(
+          { params, runtimeModel, agentId: sessionAgentId, sessionId },
+          result.usage,
+        );
+        placement.assertCurrent();
+        params.assertCurrent?.();
+        params.opts?.abortSignal?.throwIfAborted();
+        assertOperatorModelAllowed(params.operatorAuthority, {
+          provider: runtimeModel.provider,
+          model: runtimeModel.id,
+        });
         return { kind: "handled", payload: { text: result.text } };
       } finally {
         preparedRunAdmission.close();
@@ -706,7 +674,7 @@ export async function runBtwSideQuestion(
       imageLimits,
       messages,
       inFlightPrompt,
-      recordBtwUsage,
+      agentId: sessionAgentId,
     });
   });
 }

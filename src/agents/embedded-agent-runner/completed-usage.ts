@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { captureModelCostPricing, estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import {
+  captureModelCostPricing,
+  estimateAggregateUsageCostAsync,
+} from "../../utils/usage-format.js";
 import type { NormalizedUsage } from "../usage.js";
 import type { EmbeddedAgentMeta } from "./types.js";
 import {
@@ -17,12 +20,16 @@ export async function mergeCompletedAgentUsage(params: {
   config: OpenClawConfig;
   agentDir?: string;
 }) {
-  const pricing = await captureModelCostPricing(params.config, params.agentDir);
+  let pricing: ReturnType<typeof captureModelCostPricing> | undefined;
   for (const candidate of params.agentMetas) {
-    const priceUsage = (usage: NormalizedUsage | undefined): NormalizedUsage => {
-      const costUsd = estimateAggregateUsageCost({
+    const priceUsage = async (usage: NormalizedUsage | undefined): Promise<NormalizedUsage> => {
+      const costUsd = await estimateAggregateUsageCostAsync({
         usage,
-        cost: pricing.resolve(candidate?.provider, candidate?.model),
+        prepareCost: async () =>
+          (await (pricing ??= captureModelCostPricing(params.config, params.agentDir))).resolve(
+            candidate?.provider,
+            candidate?.model,
+          ),
       });
       return {
         ...usage,
@@ -30,12 +37,12 @@ export async function mergeCompletedAgentUsage(params: {
         costStatus: costUsd === undefined ? "unavailable" : "complete",
       };
     };
-    const usage = priceUsage(candidate?.usage);
+    const usage = await priceUsage(candidate?.usage);
     mergeUsageIntoAccumulator(params.usage, usage);
     mergeUsageIntoAccumulator(
       params.diagnosticUsage,
       candidate?.diagnosticUsage && candidate.diagnosticUsage !== candidate.usage
-        ? priceUsage(candidate.diagnosticUsage)
+        ? await priceUsage(candidate.diagnosticUsage)
         : usage,
     );
     mergeAttemptRunStatsIntoAccumulator(params.usage, candidate ?? {});

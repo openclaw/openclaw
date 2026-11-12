@@ -43,21 +43,39 @@ export function publishModelsJsonCostSource(agentDir: string, contents: string |
   return source;
 }
 
-/** Capture once before synchronous catalog and pricing consumers use the same source. */
+async function readModelsJsonSource(agentDir: string, targetPath: string) {
+  let contents: string | null;
+  try {
+    contents = await fs.readFile(targetPath, "utf8");
+  } catch (error) {
+    // SAFETY: readFile rejects with Node filesystem errors carrying an optional errno code.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+    contents = null;
+  }
+  return { contents, pricing: publishModelsJsonCostSource(agentDir, contents) };
+}
+
+/** Fresh catalog captures publish in the same order as owning writes. */
 export async function captureModelsJsonSource(agentDir: string) {
   const targetPath = path.join(agentDir, "models.json");
-  // A delayed read must not publish older prices after the owning writer commits.
-  return MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
-    let contents: string | null;
-    try {
-      contents = await fs.readFile(targetPath, "utf8");
-    } catch (error) {
-      // SAFETY: readFile rejects with Node filesystem errors carrying an optional errno code.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-      contents = null;
-    }
-    return { contents, pricing: publishModelsJsonCostSource(agentDir, contents) };
-  });
+  return MODELS_JSON_STATE.writeQueue.enqueue(targetPath, () =>
+    readModelsJsonSource(agentDir, targetPath),
+  );
+}
+
+/** Pricing consumes any source published while its cold request waited on the owner. */
+export async function captureModelsJsonCostSource(agentDir: string) {
+  const cached = MODELS_JSON_STATE.costCache.get(agentDir);
+  if (cached) {
+    return cached;
+  }
+  const targetPath = path.join(agentDir, "models.json");
+  return MODELS_JSON_STATE.writeQueue.enqueue(
+    targetPath,
+    async () =>
+      MODELS_JSON_STATE.costCache.get(agentDir) ??
+      (await readModelsJsonSource(agentDir, targetPath)).pricing,
+  );
 }

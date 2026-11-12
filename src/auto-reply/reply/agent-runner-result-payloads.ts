@@ -29,7 +29,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
   buildFallbackNotice,
@@ -513,9 +513,9 @@ export async function prepareReplyAgentPayloads(state: {
       promptTokens,
       usage,
     });
-    const costUsd = estimateAggregateUsageCost({
+    const costUsd = await estimateAggregateUsageCostAsync({
       usage: diagnosticUsage,
-      cost: accounting.pricing.resolve(providerUsed, modelUsed),
+      prepareCost: async () => (await accounting.preparePricing()).resolve(providerUsed, modelUsed),
     });
     emitTrustedDiagnosticEvent({
       type: "model.usage",
@@ -685,8 +685,8 @@ export async function prepareReplyAgentPayloads(state: {
   const responseUsageSessionRaw =
     activeSessionEntry?.responseUsage ??
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-  const responseUsageLine = resolveResponseUsageLine({
-    pricing: accounting.pricing,
+  const responseUsageLine = await resolveResponseUsageLine({
+    preparePricing: accounting.preparePricing,
     config: cfg,
     sessionRaw: responseUsageSessionRaw,
     channel: replyToChannel,

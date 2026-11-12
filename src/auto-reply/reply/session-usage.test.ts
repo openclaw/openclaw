@@ -24,7 +24,10 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import { captureModelCostPricing } from "../../utils/usage-format.js";
+import {
+  estimateAggregateUsageCostAsync,
+  resolveModelCostConfig,
+} from "../../utils/usage-format.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
@@ -36,7 +39,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("session actor usage accounting", () => {
-  type UsageUpdate = Omit<Parameters<typeof prepareSessionUsageUpdate>[0], "pricing"> & {
+  type UsageUpdate = Omit<Parameters<typeof prepareSessionUsageUpdate>[0], "estimatedCostUsd"> & {
     cfg?: OpenClawConfig;
     agentDir?: string;
   };
@@ -74,12 +77,21 @@ describe("session actor usage accounting", () => {
               const { cfg, agentDir, ...usage } = update;
               const prepared = prepareSessionUsageUpdate({
                 ...usage,
-                pricing: await captureModelCostPricing(cfg ?? {}, agentDir),
+                estimatedCostUsd: await estimateAggregateUsageCostAsync({
+                  usage: usage.usage,
+                  prepareCost: () =>
+                    resolveModelCostConfig({
+                      config: cfg ?? {},
+                      agentDir,
+                      provider: usage.providerUsed ?? entry.modelProvider,
+                      model: usage.modelUsed ?? entry.model,
+                    }),
+                }),
               });
               if (prepared) {
-                completion.patch((current) => ({
+                completion.patch(() => ({
                   kind: "usage",
-                  update: { ...prepared.update, estimatedCostUsd: prepared.estimateCost(current) },
+                  update: prepared,
                   updatedAt: Date.now(),
                 }));
               }

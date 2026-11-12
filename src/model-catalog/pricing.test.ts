@@ -437,10 +437,10 @@ describe("hosted model pricing", () => {
         }
         expect
           .soft(
-            resolveResponseUsageLine({
+            await resolveResponseUsageLine({
               ...params,
               usage,
-              pricing: await captureModelCostPricing(config, agentDir, false),
+              preparePricing: () => captureModelCostPricing(config, agentDir, false),
             }),
           )
           .toBe(
@@ -451,7 +451,7 @@ describe("hosted model pricing", () => {
           spy.mockRestore();
         }
         const status = buildStatusMessageParts({
-          pricing: await captureModelCostPricing(config, agentDir, false),
+          estimatedCostUsd: estimate,
           modelRefs: statusModelRefs({ provider: "openai", model: "gpt-authored" }),
           config,
           agent: { model: "openai/gpt-authored" },
