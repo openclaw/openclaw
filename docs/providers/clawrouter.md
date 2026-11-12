@@ -457,7 +457,7 @@ different key or silently replacing the configured search provider.
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,
-`image_generate` tool, and `openclaw infer image generate` CLI. This is **JSON
+`image_generate` tool, and `openclaw infer image generate` CLI. OpenAI models use **JSON
 generation only** through `/v1/images/generations`: edits, masks, variations, and
 streaming are not supported. The ClawRouter deployment must support this route.
 Plugin readiness alone does not mean the current key can generate images.
@@ -491,6 +491,36 @@ downloads and private-network checks. Cancellation and the request deadline
 cover catalog lookup, generation, and result downloads. Prompt, image-count, and
 explicit size bounds come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
+
+### Native Google images
+
+The exact `google/gemini-3.1-flash-image` and `google/gemini-3-pro-image`
+identities require a fresh, same-key catalog offer from `google-gemini` with
+`image.generate`, request `google.image_generate` and response `google.image`.
+Native offers call `/v1/native/google-gemini/v1beta/models/{upstream}:generateContent`.
+Manifest offers call the advertised `image_generate` endpoint with
+`{ body, pathParams: { model: selectedUpstream } }`. No generic Chat route or
+unqualified Interactions operation substitutes for this contract.
+
+The actual image runtime shares Google's native request and image decoder with
+the direct provider. It accepts a prompt and at most five inline PNG/JPEG/WebP
+references, the frozen aspect ratios, and `1K`/`2K`/`4K` geometry.
+One call performs one generation; a four-image output bound is not a request for
+four images. Count overrides above one, HEIC/HEIF, provider-specific options,
+file references and remote assets are not supported by this qualified wrapper.
+
+Request and response JSON are each bounded to 8 MiB. Complete STOP output,
+explicit supported MIME types and valid image siblings are required; up to four
+outputs share a 4 MiB decoded limit. Cancellation remains active through EOF.
+The client neither follows generation redirects nor repeats a paid POST.
+Only the selected ClawRouter key is sent; native Google credentials and
+credential-header overrides are rejected.
+
+Catalog eligibility is required for every request; stale, foreign, revoked or
+unsupported offers fail before generation. Missing pricing stays unknown.
+ClawRouter's upstream-dollar hard-budget guard and explicit policy-fixed billing
+remain distinct. Client support does not activate the source-owned declaration
+or certify Worker integration; those require the matching runtime and snapshot.
 
 ## Native Gradium speech
 
