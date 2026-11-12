@@ -547,7 +547,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
       : false;
   }
 
-  const finish = async (generation: Promise<string | null>) => {
+  const finish = async (generation: Promise<string | null>, sourceText: string) => {
     const displayName = await generation;
     if (!displayName) {
       return false;
@@ -583,7 +583,9 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
                       ? { lifecycleRevision: entry.lifecycleRevision }
                       : {}),
                     remainingMessages: 6,
-                    ...(params.awaitingFirstMessage ? { awaitingFirstMessage: true } : {}),
+                    ...(params.awaitingFirstMessage
+                      ? { awaitingFirstMessage: true }
+                      : { inputMessages: [sourceText] }),
                     ...(params.messageId ? { lastMessageId: params.messageId } : {}),
                   },
                 }
@@ -645,7 +647,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
     const withSource = params.withSource;
     if (!withSource) {
       params.commitGuard?.();
-      return await finish(generate());
+      return await finish(generate(), sourceText);
     }
     return await runWithAsyncWorkResources(
       async () => {
@@ -660,7 +662,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           void completion.catch(() => undefined);
           return { completion };
         });
-        return await finish(pending.completion);
+        return await finish(pending.completion, sourceText);
       },
       { cancelOnError: true },
     );

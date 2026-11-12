@@ -289,7 +289,23 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       conversationLabelRefinement: {
         sessionId: "session-1",
         remainingMessages: 6,
+        inputMessages: ["Help me plan the release"],
       },
+    });
+  });
+
+  it("waits for the actual first input after a prepared title", async () => {
+    await expect(
+      maybeGenerateSessionTitle({
+        ...titleParams(),
+        allowReassessment: true,
+        awaitingFirstMessage: true,
+      }),
+    ).resolves.toBe(true);
+    expect(mocks.load().conversationLabelRefinement).toEqual({
+      sessionId: "session-1",
+      remainingMessages: 6,
+      awaitingFirstMessage: true,
     });
   });
 

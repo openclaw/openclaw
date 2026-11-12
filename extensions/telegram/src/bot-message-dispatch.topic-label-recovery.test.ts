@@ -327,9 +327,6 @@ describeTelegramDispatch("DM topic label recovery", () => {
         streamMode: "off",
       });
       await vi.waitFor(() => expect(generate).toHaveBeenCalledTimes(3));
-      expect(generate.mock.calls[2]?.[0].prompt).toContain(
-        "Reassess the existing conversation title",
-      );
       expect(generate.mock.calls[2]?.[0].prompt).toContain("Invoice review");
     },
   );

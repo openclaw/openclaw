@@ -8,6 +8,7 @@ import { addChannelAllowFromStoreEntry } from "openclaw/plugin-sdk/plugin-state-
 import * as replyRuntime from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
   getSessionEntry,
+  getSessionEntryAsync,
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -551,6 +552,22 @@ it("names an implicitly named DM topic from its first text while its reply is he
     await pending;
     generated.mockRestore();
   }
+  const sessionKey = harness.replySpy.mock.calls[0]?.[0].SessionKey;
+  assert(sessionKey);
+  await handleMessage(bot, 2802, {
+    ...messageBase,
+    message_id: 2802,
+    message_thread_id: 99,
+    is_topic_message: true,
+    forum_topic_edited: { name: "Manual invoice review" },
+  });
+  const entry = await getSessionEntryAsync({
+    storePath: resolveStorePath(undefined, { agentId: "main" }),
+    sessionKey,
+  });
+  expect(entry?.topicName).toBe("Manual invoice review");
+  expect(entry?.label).toBeUndefined();
+  expect(harness.replySpy).toHaveBeenCalledTimes(1);
 });
 
 it("commits a first sticker description before model admission and never describes a supplemental image as that sticker", async () => {

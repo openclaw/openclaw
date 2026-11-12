@@ -407,6 +407,7 @@ describe("Telegram prompt composition", () => {
       options: { bufferedMessages: burst },
     });
     expect(context?.ctxPayload.MessageSids).toEqual(burst.map((item) => String(item.message_id)));
+    expect(context?.bufferedMessages).toEqual(burst);
     expect(context?.ctxPayload.ReplyChain?.map((entry) => entry.messageId)).toEqual([
       "510",
       "509",

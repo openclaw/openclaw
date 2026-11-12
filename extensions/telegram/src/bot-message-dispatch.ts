@@ -307,6 +307,7 @@ export const dispatchTelegramMessage = async (
     void statusReactionController.setThinking();
   }
   const scheduleTopicLabelAfterRecord = createDmTopicLabelScheduler({
+    context,
     cfg,
     bot,
     telegramCfg,

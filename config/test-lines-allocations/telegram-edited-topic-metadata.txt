@@ -1,0 +1,2 @@
+# Verify authorized Telegram title edits update topic metadata without replaying message bodies.
+104

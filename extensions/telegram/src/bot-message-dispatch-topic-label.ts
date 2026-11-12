@@ -20,6 +20,7 @@ import { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 import type { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
 import type { createFreshTelegramSessionEntryLoader } from "./bot-message-dispatch-session.js";
 import type { DispatchTelegramMessageParams } from "./bot-message-dispatch.types.js";
+import { getTelegramTextParts, resolveTelegramPrimaryMedia } from "./bot/helpers.js";
 import { getTopicLabelMetadata, updateTopicName } from "./topic-name-cache.js";
 
 const topicLabelQueue = new KeyedAsyncQueue();
@@ -27,7 +28,7 @@ const topicLabelLogger = createSubsystemLogger("telegram/topic-label");
 
 type TopicLabelSchedulerParams = Pick<
   DispatchTelegramMessageParams,
-  "cfg" | "bot" | "telegramCfg" | "turnAdoptionLifecycle"
+  "context" | "cfg" | "bot" | "telegramCfg" | "turnAdoptionLifecycle"
 > & {
   dispatchContext: Awaited<ReturnType<typeof resolveDispatchTelegramContext>>;
   loadFreshSessionEntry: ReturnType<typeof createFreshTelegramSessionEntryLoader>;
@@ -42,6 +43,7 @@ type TopicLabelSchedulerParams = Pick<
 /** Queue recorded topic input independently of slow reply delivery. */
 export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
   const {
+    context,
     cfg,
     bot,
     telegramCfg,
@@ -132,6 +134,13 @@ export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
       sessionId,
       lifecycleRevision: snapshot.entry.lifecycleRevision,
       userMessage,
+      userMessages: context.bufferedMessages?.map((message) => {
+        const primaryMedia = resolveTelegramPrimaryMedia(message);
+        return (
+          getTelegramTextParts(message).text ||
+          formatMediaPlaceholderText(primaryMedia ? [primaryMedia] : [])
+        );
+      }),
       isControlCommand: Boolean(CommandSource),
       messageId:
         dispatchContext.ctxPayload.MessageSids?.at(-1) ??
@@ -185,6 +194,8 @@ export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
                 storePath: snapshot.storePath,
               },
               userMessage,
+              [],
+              plan.state,
             )
           : userMessage;
       let label = await generateTopicLabel({
@@ -210,6 +221,8 @@ export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
             storePath: snapshot.storePath,
           },
           userMessage,
+          [],
+          plan.state,
         ).catch((error: unknown) => {
           logVerbose(`auto-topic-label: transcript read failed: ${String(error)}`);
           return userMessage;
@@ -246,6 +259,11 @@ export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
         logVerbose("auto-topic-label: stale naming result skipped");
         return;
       }
+      // Generated presentation names must not become explicit labels that shadow later topic edits.
+      const shouldClaim =
+        Boolean(previousSessionLabel?.trim()) &&
+        (previousSessionLabel === currentName ||
+          (plan.kind === "initial" && isPlaceholder(previousSessionLabel)));
       const prepare = (
         entry: Parameters<Parameters<typeof prepareSessionEntryPatch>[0]["prepare"]>[0],
       ) => {
@@ -260,10 +278,7 @@ export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
         }
         return {
           topicName: label,
-          ...(entry.label === currentName ||
-          (plan.kind === "initial" && entry.label && isPlaceholder(entry.label))
-            ? { label }
-            : {}),
+          ...(shouldClaim ? { label } : {}),
           ...(entry.displayName === currentName ||
           (plan.kind === "initial" && isPlaceholder(entry.displayName))
             ? { displayName: label }
@@ -276,11 +291,6 @@ export function createDmTopicLabelScheduler(params: TopicLabelSchedulerParams) {
           turnAdoptionLifecycle?.abortSignal?.throwIfAborted();
         },
       } as const;
-      const shouldClaim =
-        previousSessionLabel === currentName ||
-        (plan.kind === "initial" &&
-          Boolean(previousSessionLabel) &&
-          isPlaceholder(previousSessionLabel));
       const patched = shouldClaim
         ? await prepareSessionEntryLabelClaim({
             agentId: dispatchContext.route.agentId,

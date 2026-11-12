@@ -165,6 +165,7 @@ export async function maybeReassessDashboardSessionTitle(params: {
               { ...scope, sessionId: params.sessionId, sessionEntry: before },
               params.userMessage,
               params.skillCommands,
+              plan.state,
             )
           : params.userMessage;
       params.assertCurrent();
