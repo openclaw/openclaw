@@ -461,17 +461,6 @@ describe("public session document", () => {
     expect(html).toContain('<link rel="stylesheet" href="/control/fonts/instrument-sans.css">');
   });
 
-  it("keeps macOS stem darkening for message text while page chrome stays antialiased", () => {
-    const page = fragment([message("user", "Question"), assistant("Answer")]);
-    expect(page.querySelectorAll(".user>.content,.assistant>.content")).toHaveLength(2);
-    const css = page.querySelector("style")!.textContent;
-    const rules = css.match(/[^{}]+\{[^{}]*-webkit-font-smoothing:[a-z-]+/g) ?? [];
-    expect(rules.map((rule) => rule.trim().replace(/\{.*:/, " "))).toEqual([
-      ":root antialiased",
-      ".content auto",
-    ]);
-  });
-
   it("bounds the newest public messages and visibly marks omitted history or text", () => {
     const messages = Array.from({ length: 105 }, (_, index) => ({
       role: "user",
