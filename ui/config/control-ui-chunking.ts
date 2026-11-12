@@ -403,7 +403,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-composer-skill-menu.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
     case "ui/src/pages/chat/components/chat-composer-slash-menu-dom.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-values.ts":
     case "ui/src/pages/chat/components/chat-composer-slash-menu.tsx":
+    case "ui/src/i18n/locales/en-session-menu.ts":
+    case "ui/src/i18n/locales/en-session-organization.ts":
       // Share interaction-only rows without four separate preload-map entries.
       return "composer-invocation-menus";
     case "ui/src/app/app-root-focus.ts":

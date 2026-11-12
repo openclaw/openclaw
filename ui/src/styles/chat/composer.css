@@ -1480,6 +1480,14 @@
     padding-left: 8px;
   }
 
+  .slash-menu-value {
+    color: var(--muted);
+  }
+
+  .slash-menu-item--current {
+    background: var(--surface-hover);
+  }
+
   .slash-menu-chevron {
     width: 14px;
     height: 14px;
@@ -1498,6 +1506,10 @@
   .slash-menu-desc .skeleton {
     border-radius: 6px;
   }
+}
+
+.slash-menu--args .slash-menu-name {
+  max-width: none;
 }
 
 @media (max-width: 640px) {
