@@ -96,4 +96,16 @@ describe("transcribeFirstAudio", () => {
       format: "Heard: {transcript}",
     });
   });
+
+  it("keeps global echo disabled even when the channel policy allows it", async () => {
+    transcriptOutput("voice transcript");
+    const ctx: MsgContext = { ...voiceContext(), AudioTranscriptEchoEnabled: true };
+    await expect(
+      transcribeFirstAudio({
+        ctx,
+        cfg: { tools: { media: { audio: { echoTranscript: false } } } },
+      }),
+    ).resolves.toBe("voice transcript");
+    expect(sendTranscriptEchoMock).not.toHaveBeenCalled();
+  });
 });

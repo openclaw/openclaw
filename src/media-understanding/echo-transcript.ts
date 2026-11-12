@@ -34,6 +34,9 @@ export async function sendTranscriptEcho(params: {
   failureLogPrefix?: string;
 }): Promise<void> {
   const { ctx, cfg, transcript } = params;
+  if (ctx.AudioTranscriptEchoEnabled === false) {
+    return;
+  }
   const channel = ctx.Provider ?? ctx.Surface ?? "";
   const to = ctx.OriginatingTo ?? ctx.From ?? "";
 

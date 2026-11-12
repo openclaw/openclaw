@@ -358,6 +358,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   WasMentioned?: boolean;
   /** Effective channel-owned mention policy before any plugin-binding bypass. */
   GroupRequireMention?: boolean;
+  /** Channel-resolved per-turn restriction on audio transcript echo. */
+  AudioTranscriptEchoEnabled?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */

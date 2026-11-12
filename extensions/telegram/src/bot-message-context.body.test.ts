@@ -532,6 +532,58 @@ it("preserves named-account DM topic voice echo routing without a group mention"
   );
 });
 
+it.each([
+  { group: { requireMention: true, echoTranscript: false }, expected: false },
+  {
+    group: {
+      requireMention: true,
+      echoTranscript: false,
+      topics: { "99": { echoTranscript: true } },
+    },
+    expected: true,
+  },
+  {
+    group: {
+      requireMention: true,
+      echoTranscript: true,
+      topics: { "99": { echoTranscript: false } },
+    },
+    expected: false,
+  },
+  { group: { requireMention: true }, expected: undefined },
+])(
+  "passes chat and topic echo policy to preflight and agent context: $expected",
+  async ({ group, expected }) => {
+    const cfg = audioConfig(config(group));
+    transcribe.mockResolvedValue("assistant please help");
+    mentionConfig(["assistant"], cfg);
+    await receive(await inputBot(cfg), voiceMessage());
+    expect(transcribe.mock.calls[0]?.[0].ctx.AudioTranscriptEchoEnabled).toBe(expected);
+    expect(agentInput()?.AudioTranscriptEchoEnabled).toBe(expected);
+    expect(agentInput()?.BodyForAgent).toContain("assistant please help");
+  },
+);
+
+it.each([
+  { direct: { echoTranscript: false }, expected: false },
+  { direct: { echoTranscript: false, topics: { "77": { echoTranscript: true } } }, expected: true },
+  {
+    direct: { echoTranscript: true, topics: { "77": { echoTranscript: false } } },
+    expected: false,
+  },
+])(
+  "passes DM echo policy to preflight and agent context: $expected",
+  async ({ direct, expected }) => {
+    const cfg = audioConfig();
+    cfg.channels!.telegram!.direct = { "42001": direct };
+    transcribe.mockResolvedValue("hello from a voice note");
+    await receive(await inputBot(cfg, true), { ...voiceMessage(false), message_thread_id: 77 });
+    expect(transcribe.mock.calls[0]?.[0].ctx.AudioTranscriptEchoEnabled).toBe(expected);
+    expect(agentInput()?.AudioTranscriptEchoEnabled).toBe(expected);
+    expect(agentInput()?.BodyForAgent).toContain("hello from a voice note");
+  },
+);
+
 it("inherits disabled group audio preflight when the topic leaves it unset", async () => {
   const cfg = config({
     requireMention: true,

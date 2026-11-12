@@ -142,6 +142,8 @@ export type TelegramTopicConfig = Omit<CommonChannelGroupConfig, "tools" | "tool
   groupPolicy?: GroupPolicy;
   /** If true, skip automatic voice-note transcription for mention detection in this topic. */
   disableAudioPreflight?: boolean;
+  /** Override transcript echo for this group or topic; transcription remains enabled. */
+  echoTranscript?: boolean;
   /** Route this topic to a specific agent (overrides group-level and binding routing). */
   agentId?: string;
   /** Controls outbound error reporting for this topic. */
@@ -164,6 +166,8 @@ export type AutoTopicLabelConfig =
     };
 
 export type TelegramDirectConfig = Omit<CommonChannelGroupConfig, "requireMention"> & {
+  /** Override transcript echo for this DM; transcription remains enabled. */
+  echoTranscript?: boolean;
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
   /** Per-topic configuration for DM topics (key is message_thread_id as string, or "*" for topic defaults). */

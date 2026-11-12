@@ -608,6 +608,7 @@ export async function buildTelegramInboundContextPayload(
     contextVisibility: contextVisibilityMode,
     extra: {
       GroupThread: groupThread,
+      AudioTranscriptEchoEnabled: topicConfig?.echoTranscript ?? groupConfig?.echoTranscript,
       BotUsername: primaryCtx.me?.username ?? undefined,
       AmbientTranscriptWatermarkKey: ambientTranscriptWatermarkKey,
       AmbientTranscriptBody: options?.ambientTranscriptBody,
