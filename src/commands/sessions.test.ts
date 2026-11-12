@@ -293,7 +293,7 @@ describe("sessionsCommand", () => {
       } else if (gatewayState !== "absent") {
         catalogState.readActiveGatewayLockIdentity.mockResolvedValue(gatewayOwner);
         if (gatewayState === "interrupted") {
-          catalogState.callGateway.mockImplementation(() => Promise.reject(work.beginClose()));
+          catalogState.callGateway.mockImplementation(async () => work.beginClose() as never);
         } else if (gatewayState === "unreachable") {
           catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
         } else {
