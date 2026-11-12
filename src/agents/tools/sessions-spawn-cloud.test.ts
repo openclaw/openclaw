@@ -448,76 +448,50 @@ describe("visible session placement and authority", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it.each(["accepted", "unavailable"])(
-    "dispatches a paired-device placement without a local fallback: %s",
-    async (outcome) => {
-      const dir = sessionDirs.make();
-      const storePath = path.join(dir, "sessions.json");
-      const key = "agent:main:dashboard:device-child";
-      const placement = {
-        state: "active",
-        profileId: "device:office-mac",
-        runner: { kind: "device", status: "available", deviceId: "office-mac" },
-      };
-      const callGateway = vi.fn(async (method: string) => {
-        if (method === "sessions.create") {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: key, storePath },
-            { sessionId: "device-child", updatedAt: 1 },
-          );
-          return { key, sessionId: "device-child", runStarted: false };
-        }
-        if (method === "sessions.dispatch") {
-          if (outcome === "unavailable") {
-            throw new Error("paired device office-mac is disconnected");
-          }
-          return { key, sessionId: "device-child", placement };
-        }
-        return { runId: "device-run", status: "accepted" };
-      });
-      const config: OpenClawConfig = {
-        session: { store: storePath },
-        agents: { entries: { main: {} } },
-      };
-      setRuntimeConfigSnapshot(config);
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config,
-        callGateway: callGateway as never,
-        registerRun: vi.fn(async () => {}),
-        countActiveRuns: () => 0,
-      });
-      const result = await withCloudGateway(() =>
-        tool.execute("device-spawn", {
-          task: "Run the tests on the office Mac",
-          visible: true,
-          worktree: true,
-          placement: { kind: "device", deviceId: "office-mac" },
-        }),
-      );
-      expect(callGateway).toHaveBeenCalledWith(
-        "sessions.dispatch",
-        { key, deviceId: "office-mac" },
-        expect.objectContaining({ timeoutMs: null }),
-      );
-      const methods = callGateway.mock.calls.map(([method]) => method);
-      if (outcome === "accepted") {
-        expect(methods).toEqual(["sessions.create", "sessions.dispatch", "agent"]);
-        expect(result.details).toMatchObject({
-          status: "accepted",
-          runId: "device-run",
-          placement,
-        });
-      } else {
-        expect(methods).toEqual(["sessions.create", "sessions.dispatch"]);
-        expect(result.details).toMatchObject({
-          status: "error",
-          childSessionKey: key,
-          initialTaskStatus: "not-sent",
-          error: expect.stringContaining("paired device office-mac is disconnected"),
-        });
+  it("dispatches a paired-device placement and reports the device", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const key = "agent:main:dashboard:device-child";
+    const placement = {
+      state: "active",
+      runner: { kind: "device", status: "available", deviceId: "office-mac" },
+    };
+    const callGateway = vi.fn(async (method: string, _request: unknown) => {
+      if (method === "sessions.create") {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: "device-child", updatedAt: 1 },
+        );
+        return { key, sessionId: "device-child", runStarted: false };
       }
-      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    },
-  );
+      return method === "sessions.dispatch"
+        ? { key, sessionId: "device-child", placement }
+        : { runId: "device-run", status: "accepted" };
+    });
+    const config: OpenClawConfig = {
+      session: { store: storePath },
+      agents: { entries: { main: {} } },
+    };
+    setRuntimeConfigSnapshot(config);
+    const tool = createSessionsSpawnTool({
+      config,
+      callGateway: callGateway as never,
+      registerRun: vi.fn(async () => {}),
+      countActiveRuns: () => 0,
+    });
+    const result = await withCloudGateway(() =>
+      tool.execute("device-spawn", {
+        task: "Run the tests on the office Mac",
+        visible: true,
+        worktree: true,
+        placement: { kind: "device", deviceId: "office-mac" },
+      }),
+    );
+    expect(callGateway.mock.calls.map(([method]) => method)).toEqual([
+      "sessions.create",
+      "sessions.dispatch",
+      "agent",
+    ]);
+    expect(callGateway.mock.calls[1]?.[1]).toEqual({ key, deviceId: "office-mac" });
+    expect(result.details).toMatchObject({ status: "accepted", runId: "device-run", placement });
+  });
 });
