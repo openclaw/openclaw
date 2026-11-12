@@ -39,7 +39,14 @@ import {
 
 // Style modules live for the document lifetime, not an individual editor mount.
 const mentionTheme = EditorView.theme({
-  ".chat-composer-mention": { whiteSpace: "nowrap" },
+  // One box per chip: it moves to the next line whole, and only a name wider than
+  // the line wraps inside it. A normal line height keeps the sent-reference shape.
+  ".chat-composer-mention": {
+    display: "inline-block",
+    boxSizing: "border-box",
+    maxWidth: "100%",
+    lineHeight: "normal",
+  },
   ".chat-composer-mention .markdown-person-reference__avatar": {
     userSelect: "text",
     WebkitUserSelect: "text",

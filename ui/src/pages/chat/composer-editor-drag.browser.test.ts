@@ -1,6 +1,7 @@
 import { redo, undo } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { expect, it, onTestFinished } from "vitest";
+import { userEvent } from "vitest/browser";
 import "../../test-helpers/load-styles.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -100,6 +101,45 @@ it("carries recipient metadata to another rich composer without moving the sourc
   expect(target.mentions()).toEqual([{ profileId: "alex-three", start: 3, end: 8 }]);
   expect(redo(target.view)).toBe(true);
   expect(target.mentions().map((mention) => mention.profileId)).toEqual(["alex-three", "alex-one"]);
+});
+
+it("drags the grabbed selection when a fast first pointer move precedes dragstart", () => {
+  const f = editor("@Alex + @Alex done ", initial);
+  focusComposerInput(f.input);
+  selectComposerInput(f.input, 0, 7);
+  const grab = f.view.coordsAtPos(6)!;
+  const pointer = { bubbles: true, cancelable: true, clientY: (grab.top + grab.bottom) / 2 };
+  // WebKit's order for a quick drag: mousedown, a mousemove past CodeMirror's
+  // selection threshold, and only then dragstart.
+  f.content.dispatchEvent(
+    new MouseEvent("mousedown", { ...pointer, clientX: grab.left + 1, detail: 1 }),
+  );
+  document.dispatchEvent(
+    new MouseEvent("mousemove", { ...pointer, clientX: grab.left + 60, buttons: 1 }),
+  );
+  expect(f.view.state.selection.main.from).toBe(6);
+  const dataTransfer = new DataTransfer();
+  f.content.dispatchEvent(new DragEvent("dragstart", { ...pointer, dataTransfer }));
+  const end = f.view.coordsAtPos(f.view.state.doc.length)!;
+  f.content.dispatchEvent(
+    new DragEvent("drop", { ...pointer, dataTransfer, clientX: end.left + 1 }),
+  );
+  document.dispatchEvent(new MouseEvent("mouseup", pointer));
+  expect(f.input.value).toBe(" @Alex done @Alex +");
+  expect(f.mentions()).toEqual([
+    { profileId: "alex-two", start: 1, end: 6 },
+    { profileId: "alex-one", start: 12, end: 17 },
+  ]);
+});
+
+it("moves focus one stop when Tab leaves the rich editor", async () => {
+  const f = editor("@Alex ", [{ profileId: "alex-one", start: 0, end: 5 }]);
+  const stops = [document.createElement("button"), document.createElement("button")];
+  f.input.parentElement!.append(...stops);
+  focusComposerInput(f.input);
+  // WebKit ran a second default Tab for the copy forwarded to the hidden port.
+  await userEvent.tab();
+  expect(document.activeElement).toBe(stops[0]);
 });
 
 it("keeps an internal drop onto its own selection unchanged", () => {

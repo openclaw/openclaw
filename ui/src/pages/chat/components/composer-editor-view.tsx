@@ -6,6 +6,7 @@ import {
   Prec,
   Transaction,
   type Extension,
+  type SelectionRange,
   type StateEffect,
 } from "@codemirror/state";
 import { drawSelection, EditorView, keymap, placeholder, type ViewUpdate } from "@codemirror/view";
@@ -130,7 +131,26 @@ export function mountComposerEditor(
     } else if (event instanceof MouseEvent) {
       forwarded = new MouseEvent(event.type, event);
     } else if (event instanceof KeyboardEvent) {
-      forwarded = new KeyboardEvent(event.type, event);
+      // Copy named fields, never the event: WebKit also copies its legacy
+      // keyIdentifier, and an untrusted keydown carrying it runs default actions
+      // on the port (Backspace history navigation, Tab focus, page scrolling).
+      forwarded = new KeyboardEvent(event.type, {
+        bubbles: true,
+        cancelable: event.cancelable,
+        composed: event.composed,
+        key: event.key,
+        code: event.code,
+        location: event.location,
+        repeat: event.repeat,
+        isComposing: event.isComposing,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+        keyCode: event.keyCode,
+        charCode: event.charCode,
+        which: event.which,
+      });
     } else if (event instanceof InputEvent) {
       forwarded = new InputEvent(event.type, event);
     } else if (event instanceof CompositionEvent) {
@@ -147,6 +167,8 @@ export function mountComposerEditor(
     return forwarded.defaultPrevented;
   }
 
+  // A pointer press inside the selection may become a drag of that selection.
+  let grabbed: SelectionRange | undefined;
   const view = new EditorView({
     parent: input.parentElement!,
     state: EditorState.create({
@@ -196,6 +218,29 @@ export function mountComposerEditor(
             },
             blur(event) {
               forward(event);
+              return false;
+            },
+            mousedown(event) {
+              const { main } = view.state.selection;
+              const position = view.posAtCoords({ x: event.clientX, y: event.clientY }, false);
+              grabbed =
+                event.button === 0 &&
+                event.detail <= 1 &&
+                !main.empty &&
+                position >= main.from &&
+                position <= main.to
+                  ? main
+                  : undefined;
+              return false;
+            },
+            dragstart() {
+              // WebKit delivers a fast first mousemove before dragstart, so CodeMirror
+              // has already replaced the grabbed selection with a new one. Drag what
+              // the user grabbed; later handlers read the selection for the payload.
+              if (grabbed && !view.state.selection.main.eq(grabbed)) {
+                view.dispatch({ selection: grabbed });
+              }
+              grabbed = undefined;
               return false;
             },
             drop(event) {

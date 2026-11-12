@@ -593,6 +593,32 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
   });
 });
 
+it("wraps a name wider than the composer and keeps a short chip on the text line", async () => {
+  const name = "@Alexandra Beatriz de Albuquerque Monteiro-Silva";
+  const long = fixture("chat", name + " ", 230, [
+    { profileId: "alex", start: 0, end: name.length },
+  ]);
+  await layout();
+  const chip = long.content.querySelector<HTMLElement>(".chat-composer-mention")!;
+  expect(chip.textContent).toBe(name);
+  expect(chip.getBoundingClientRect().right).toBeLessThanOrEqual(
+    long.content.getBoundingClientRect().right + 1,
+  );
+  expect(chip.getBoundingClientRect().height).toBeGreaterThan(30);
+  expect(long.view.scrollDOM.scrollWidth).toBeLessThanOrEqual(long.view.scrollDOM.clientWidth + 1);
+  const short = fixture("chat");
+  await layout();
+  const line = short.content.querySelector<HTMLElement>(".cm-line")!;
+  const textBottom = (node: Node) => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    return range.getBoundingClientRect().bottom;
+  };
+  const inside = short.content.querySelector(".chat-composer-mention")!.lastChild!;
+  expect(Math.abs(textBottom(inside) - textBottom(line.firstChild!))).toBeLessThan(1);
+  expect(line.getBoundingClientRect().height).toBe(20);
+});
+
 it("retains one mention theme across Chat and New editor lifetimes", async () => {
   const styles = () =>
     Array.from(document.head.querySelectorAll("style"))
@@ -609,7 +635,7 @@ it("retains one mention theme across Chat and New editor lifetimes", async () =>
     await layout();
     const chip = f.content.querySelector<HTMLElement>(".chat-composer-mention")!;
     const avatar = chip.querySelector<HTMLElement>(".markdown-person-reference__avatar")!;
-    expect(getComputedStyle(chip).whiteSpace).toBe("nowrap");
+    expect(getComputedStyle(chip).display).toBe("inline-block");
     expect(getComputedStyle(avatar).userSelect).toBe("text");
     expect(styles()).toBe(initial);
     cleanups.pop()!();
