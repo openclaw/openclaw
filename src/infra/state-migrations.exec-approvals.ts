@@ -140,7 +140,7 @@ function decideAndRecordMigration(params: {
   sourcePath: string;
   snapshot: LegacySourceSnapshot;
   emptyStub?: ArchivedEmptyLegacy;
-}): { message: string; removeSource: boolean; sourceKey: string } {
+}): { message: string; removeSource: boolean; sourceKey: string; canonicalPolicyValid: boolean } {
   const sourceKey = resolveLegacyMigrationSourceKey("exec-approvals-json", params.sourcePath);
   const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
   const now = Date.now();
@@ -249,7 +249,12 @@ function decideAndRecordMigration(params: {
         : legacy.ok
           ? "Conflicting legacy exec approvals remain"
           : `Invalid legacy exec approvals (${legacy.error})`;
-      return { message, removeSource, sourceKey };
+      return {
+        message,
+        removeSource,
+        sourceKey,
+        canonicalPolicyValid: Boolean(canonical && tryParsePersistedExecApprovals(canonical.raw_json)),
+      };
     },
     { env: params.env },
     { operationLabel: "state-migration.exec-approvals" },
@@ -371,10 +376,23 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
 
+  // Advisory disposition requires a valid policy and unchanged, successfully restored input.
   if (!result.removeSource) {
-    const restoreError = await source.restore();
+    let restoreError = await source.restore();
+    if (!restoreError && result.canonicalPolicyValid) {
+      try {
+        if (!snapshotsMatch(await source.read(), snapshot)) {
+          throw new Error("retained legacy exec approvals changed during restoration");
+        }
+      } catch (error) {
+        restoreError = String(error);
+      }
+    }
     return {
       changes: [],
+      ...(result.canonicalPolicyValid && !restoreError
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
       warnings: [
         `${result.message}${restoreError ? ` Claim restore failed: ${restoreError}` : ""}`,
       ],

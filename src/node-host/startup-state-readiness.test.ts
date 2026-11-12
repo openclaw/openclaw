@@ -10,8 +10,10 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
-import { resetExecApprovalsMigrationGateForTest } from "../infra/exec-approvals-migration-gate.js";
-import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
+import {
+  readExecApprovalsConfigRow,
+  writeExecApprovalsConfigRow,
+} from "../infra/exec-approvals-sqlite.js";
 import {
   detectLegacyDeviceAuth,
   migrateLegacyDeviceAuth,
@@ -110,7 +112,6 @@ describe("node-host state readiness", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       closeOpenClawStateDatabaseForTest();
-      resetExecApprovalsMigrationGateForTest();
       vi.unstubAllEnvs();
       vi.restoreAllMocks();
       cleanup();
@@ -137,6 +138,21 @@ describe("node-host state readiness", () => {
     fs.writeFileSync(sourcePath, raw);
     return { sourcePath, raw };
   }
+
+  it.each(entrypoints)("$name admits canonical denial with a retained legacy claim", async ({ run: start }) => {
+    const { env, stateDir } = useStateDir();
+    const { db } = openOpenClawStateDatabase({ env });
+    const file = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
+    const raw = JSON.stringify(file);
+    writeExecApprovalsConfigRow({ db, file, raw });
+    const { sourcePath, raw: legacy } = writeSource(stateDir, "exec-approvals.json.doctor-importing", {
+      version: 1, defaults: { security: "full" }, agents: {},
+    });
+    await expect(start()).rejects.toBe(fixture.admitted);
+    expect(fixture.prepare).toHaveBeenCalledOnce();
+    expect(readExecApprovalsConfigRow(db)?.raw_json).toBe(raw);
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(legacy);
+  });
 
   it.each(entrypoints)(
     "$name awaits SQLite admission without creating identity or exec authority",

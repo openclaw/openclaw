@@ -1,0 +1,2 @@
+# Release canonical approval precedence: store, Node/Doctor readiness, retained-input disposition, Gateway startup.
+262

@@ -3,8 +3,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  deleteExecApprovalsConfigRow,
+  writeExecApprovalsConfigRow,
+} from "../infra/exec-approvals-sqlite.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { recordAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -152,5 +157,38 @@ it.each([
         empty ? [] : [{ actor_id: "cli" }],
       );
     }
+  });
+});
+
+it("rechecks canonical approvals before Doctor completion after policy removal", async () => {
+  await withOpenClawTestState({ scenario: "empty" }, async (state) => {
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      plugins: { enabled: false },
+    };
+    await state.writeConfig(cfg);
+    openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    const file = { version: 1 as const, defaults: { security: "deny" as const }, agents: {} };
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        writeExecApprovalsConfigRow({ db, file });
+      },
+      { env: state.env },
+    );
+    const sourcePath = state.statePath("exec-approvals.json");
+    fs.writeFileSync(sourcePath, "{retained-legacy");
+    await expect(assertDoctorMaintenanceReady(cfg, state.env, () => {})).resolves.toEqual({
+      schemaPublicationDeferred: false,
+    });
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        deleteExecApprovalsConfigRow(db);
+      },
+      { env: state.env },
+    );
+    await expect(assertDoctorMaintenanceReady(cfg, state.env, () => {})).rejects.toThrow(
+      "reconcile this file",
+    );
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe("{retained-legacy");
   });
 });

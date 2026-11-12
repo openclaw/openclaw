@@ -1,13 +1,10 @@
-// Blocks runtime use while retired exec approval state still awaits Doctor import.
+// Blocks missing canonical policy while retired approval state awaits Doctor import.
 import path from "node:path";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 import { pathMayExistSync } from "./path-existence.js";
 import { formatDoctorStateRepairFailure } from "./state-repair-message.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-// Doctor usually runs in another process, so cache only the steady-state absence;
-// a present verdict must be re-probed on the next attempt after Doctor finishes.
-const legacyAbsenceCache = new Set<string>();
 
 /**
  * Doctor repairs whichever state directory its own environment resolves to, so a bare
@@ -53,9 +50,7 @@ export function assertNoPendingLegacyExecApprovals(
   } = {},
 ): void {
   const sourcePath = resolveExecApprovalsPath(options.env);
-  if (legacyAbsenceCache.has(sourcePath)) {
-    return;
-  }
+  // Missing policy cannot cache absence: legacy files have no database publication.
   const probe = options.pathMayExist ?? pathMayExistSync;
   // Bound both Doctor rename directions: source -> claim and claim -> source.
   const sourceBefore = probe(sourcePath);
@@ -71,9 +66,4 @@ export function assertNoPendingLegacyExecApprovals(
       options.env,
     );
   }
-  legacyAbsenceCache.add(sourcePath);
-}
-
-export function resetExecApprovalsMigrationGateForTest(): void {
-  legacyAbsenceCache.clear();
 }

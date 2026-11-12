@@ -3,10 +3,12 @@ import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../co
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
+import { resolveExecApprovalsPath } from "../infra/exec-approvals-config.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
+import { legacyMigrationSourceOrClaimMayExist } from "../infra/state-migrations.source-snapshot.js";
 import {
   getPluginCache,
   getPluginMetadataSnapshotCache,
@@ -73,12 +75,19 @@ export async function runStartupConfigPreflight(
 }
 
 function readStartupStateWarnings(env: NodeJS.ProcessEnv): string[] {
+  const warnings: string[] = [];
+  if (legacyMigrationSourceOrClaimMayExist(resolveExecApprovalsPath(env))) {
+    warnings.push(
+      "Retained legacy exec approvals were left unchanged. Canonical SQLite approvals remain authoritative; without canonical policy, exec approvals are blocked. Stop old writers and reconcile the retained source or Doctor claim with the intended policy using openclaw doctor --fix.",
+    );
+  }
   try {
     assertNoRetiredRuntimeStateFiles(resolveStateDir(env), env);
-    return [];
+    return warnings;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return [
+      ...warnings,
       error instanceof RetiredStateFormatError && error.cause === undefined
         ? `Retired runtime state was left unchanged for Doctor; no import was attempted. ${message}`
         : `Could not inspect retired runtime state: ${message}; run openclaw doctor`,

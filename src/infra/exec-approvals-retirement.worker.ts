@@ -7,9 +7,7 @@ import type {
   WorkerOperationHandlers,
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
-import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type { ExecApprovalsAgent } from "./exec-approvals-core.js";
-import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import { execApprovalsPublication } from "./exec-approvals-publication.js";
 import {
   ExecApprovalsMutationFencedError,
@@ -30,7 +28,6 @@ function retireAgentPolicies(
   input: RetirementInput,
   context: WorkerWriteOperationContext,
 ): RemovedExecApprovalPolicies {
-  assertNoPendingLegacyExecApprovals({ env: context.stateOptions().env });
   const { guard } = input;
   const agentId = guard.predicate.agentId;
   if (guard.lease.scope !== "core:agent-deletion" || guard.lease.key !== agentId) {
@@ -43,7 +40,7 @@ function retireAgentPolicies(
       const captured = execApprovalsPublication.capture(database.db, () => {
         const current = snapshotFromExecApprovalsDatabase(
           database.db,
-          resolveExecApprovalsDisplayPath(context.stateOptions().env),
+          context.stateOptions().env,
         );
         const matches = (key: string) => {
           const normalized = normalizeAgentIdStrict(key);

@@ -47,6 +47,8 @@ import {
   loadExecApprovalsReadOnly,
   loadExecApprovalsReadOnlyAsync,
   readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
+  updateExecApprovalsForMaintenance,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
@@ -147,6 +149,132 @@ const readOnlyLoaders = [
 ];
 
 describe("exec approvals SQLite store", () => {
+  it.each([
+    { name: "conflicting source", suffix: "", legacy: "full", malformed: false },
+    { name: "malformed source", suffix: "", legacy: "malformed", malformed: false },
+    { name: "unreadable directory source", suffix: "", legacy: "directory", malformed: false },
+    { name: "interrupted claim", suffix: ".doctor-importing", legacy: "full", malformed: false },
+    { name: "malformed canonical row", suffix: "", legacy: "full", malformed: true },
+  ])("keeps canonical denial authoritative over $name", async ({ suffix, legacy, malformed }) => {
+    const file: ExecApprovalsFile = { version: 1, defaults: { security: "deny" }, agents: {} };
+    const raw = malformed ? "{invalid-canonical" : serializeExecApprovals(file);
+    writeExecApprovalsConfigRow({ db: openOpenClawStateDatabase().db, file, raw });
+    const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR!, "exec-approvals.json") + suffix;
+    const source =
+      legacy === "full"
+        ? JSON.stringify({ version: 1, defaults: { security: "full" } })
+        : "{private-marker";
+    if (legacy === "directory") {
+      fs.mkdirSync(legacyPath);
+    } else {
+      fs.writeFileSync(legacyPath, source);
+    }
+    const before = fs.statSync(legacyPath);
+    for (const load of [loadExecApprovals, loadExecApprovalsReadOnly, loadExecApprovalsReadOnlyAsync]) {
+      expect((await load()).defaults?.security).toBe("deny");
+    }
+    expect((await readExecApprovalsSnapshotAsync()).raw).toBe(raw);
+    expect(row()?.raw_json).toBe(raw);
+    await expect(
+      commitExecAuthorizations({
+        agentId: "main",
+        matches: [],
+        command: "echo must-not-run",
+        authorization: {
+          source: "current-policy",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: true,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+    if (legacy === "directory") {
+      expect(fs.statSync(legacyPath).isDirectory()).toBe(true);
+    } else {
+      expect(fs.readFileSync(legacyPath, "utf8")).toBe(source);
+    }
+    expect(fs.statSync(legacyPath)).toMatchObject({
+      ino: before.ino,
+      size: before.size,
+      mtimeMs: before.mtimeMs,
+    });
+  });
+
+  it.each(["", ".doctor-importing"])(
+    "refuses missing canonical policy with retained legacy %s",
+    async (suffix) => {
+      openOpenClawStateDatabase();
+      expect((await readExecApprovalsSnapshotAsync()).exists).toBe(false);
+      const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR!, "exec-approvals.json") + suffix;
+      fs.writeFileSync(legacyPath, "{retained-source");
+      expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+      await expect(loadExecApprovalsReadOnlyAsync()).rejects.toThrow(ExecApprovalsMigrationRequiredError);
+      await expect(ensureExecApprovalsSnapshot()).rejects.toThrow(/Legacy exec approvals/);
+      await expect(
+        updateExecApprovals({ update: { kind: "replace", file: { version: 1 } } }),
+      ).rejects.toThrow(/Legacy exec approvals/);
+      await expect(
+        commitExecAuthorizations({
+          agentId: "main",
+          matches: [],
+          command: "echo blocked",
+          authorization: {
+            source: "current-policy",
+            security: "full",
+            ask: "off",
+            allowlistSatisfied: true,
+          },
+        }),
+      ).rejects.toThrow(/Legacy exec approvals/);
+      expect(readExecApprovalsConfigRow(openOpenClawStateDatabase().db)).toBeUndefined();
+      expect(fs.readFileSync(legacyPath, "utf8")).toBe("{retained-source");
+    },
+  );
+
+  it("permits canonical mutations but rolls back restore-to-absent with retained legacy", async () => {
+    const absent = readExecApprovalsSnapshot();
+    const initial = await ensureExecApprovalsSnapshot();
+    const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR!, "exec-approvals.json");
+    fs.writeFileSync(legacyPath, "{retained-source");
+    execApprovalsStoreTesting.reset();
+    const current = await updateExecApprovals({
+      baseHash: initial.hash,
+      update: { kind: "replace", file: { ...initial.file, defaults: { security: "deny" } } },
+    });
+    expect(current?.file.defaults?.security).toBe("deny");
+    expect((await ensureExecApprovalsSnapshot()).hash).toBe(current?.hash);
+    await expect(
+      prepareCronExecHostPolicyUse(captureOpenClawStateWorkerContext(), {
+        agentId: "main",
+        security: "full",
+        ask: "off",
+      }),
+    ).rejects.toThrow("Exec approval policy changed before cron execution");
+    await expect(restoreExecApprovalsSnapshotLocked(absent, current!.hash)).rejects.toThrow(
+      /Legacy exec approvals/,
+    );
+    expect(readExecApprovalsSnapshot().raw).toBe(current?.raw);
+    expect(fs.readFileSync(legacyPath, "utf8")).toBe("{retained-source");
+  });
+
+  it("uses the selected policy environment for native and worker reads and mutations", async () => {
+    const selected = createStateDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: selected };
+    saveExecApprovals({ version: 1, defaults: { security: "deny" } });
+    fs.writeFileSync(path.join(selected, "exec-approvals.json"), "{retained-selected");
+    const context = captureOpenClawStateWorkerContext({ env });
+    createStateDir();
+    fs.writeFileSync(path.join(process.env.OPENCLAW_STATE_DIR!, "exec-approvals.json"), "{other-owner");
+    expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
+    const native = updateExecApprovalsForMaintenance({ update: (file) => file }, { env });
+    expect(native?.file.defaults?.security).toBe("deny");
+    const updated = await updateExecApprovals({
+      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
+    }, context);
+    expect(updated?.file.defaults?.security).toBe("deny");
+    expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+  });
+
   it.each(readOnlyLoaders)(
     "does not create shared state for a $name read-only load",
     async ({ load }) => {

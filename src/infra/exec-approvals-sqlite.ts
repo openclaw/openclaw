@@ -14,8 +14,8 @@ import {
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import {
+  assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
-  resetExecApprovalsMigrationGateForTest,
 } from "./exec-approvals-migration-gate.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
 import { execApprovalsPublication } from "./exec-approvals-publication.js";
@@ -94,11 +94,14 @@ export function readExecApprovalsConfigRow(
 
 export function snapshotFromExecApprovalsRow(params: {
   path: string;
+  env?: NodeJS.ProcessEnv;
   row?: ExecApprovalsConfigRow;
   onMalformed?: () => void;
 }): ExecApprovalsSnapshot {
   const raw = params.row?.raw_json ?? null;
   if (raw === null) {
+    // A retained legacy file is not policy authority when a canonical row exists.
+    assertNoPendingLegacyExecApprovals({ env: params.env });
     return {
       path: params.path,
       exists: false,
@@ -109,7 +112,7 @@ export function snapshotFromExecApprovalsRow(params: {
   }
   const result = parsePersistedExecApprovals(raw);
   if (!result.ok && result.error === LEGACY_EXEC_APPROVALS_DIAGNOSTIC) {
-    throw new ExecApprovalsMigrationRequiredError(params.path, undefined, result.error);
+    throw new ExecApprovalsMigrationRequiredError(params.path, undefined, result.error, params.env);
   }
   const parsed = result.ok ? result.value : null;
   if (!parsed) {
@@ -248,10 +251,11 @@ export function warnFailClosed(message: string, error?: unknown): void {
 
 export function snapshotFromExecApprovalsDatabase(
   db: EngineConnection,
-  displayPath = resolveExecApprovalsDisplayPath(),
+  env: NodeJS.ProcessEnv = process.env,
 ): ExecApprovalsSnapshot {
   return snapshotFromExecApprovalsRow({
-    path: displayPath,
+    path: resolveExecApprovalsDisplayPath(env),
+    env,
     row: readExecApprovalsConfigRow(db),
     onMalformed: () =>
       warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
@@ -262,7 +266,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   Object.assign(globalThis, {
     [Symbol.for("openclaw.execApprovalsStoreTestApi")]: {
       reset(): void {
-        resetExecApprovalsMigrationGateForTest();
         lastWarnAt = undefined;
       },
     },

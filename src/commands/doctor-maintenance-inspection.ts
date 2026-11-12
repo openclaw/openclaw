@@ -185,9 +185,26 @@ export async function assertDoctorMaintenanceReady(
   }
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   await assertConfiguredWorkspaceStateReady({ cfg, operation: "doctor" });
-  const { assertNoPendingLegacyExecApprovals } =
+  const { ExecApprovalsMigrationRequiredError } =
     await import("../infra/exec-approvals-migration-gate.js");
-  assertNoPendingLegacyExecApprovals({ operation: "doctor", env });
+  const { readExecApprovalsPolicyReadOnlyAsync } = await import("../infra/exec-approvals-store.js");
+  try {
+    const policy = await readExecApprovalsPolicyReadOnlyAsync({ env });
+    if (!policy.revision) {
+      throw new Error("Exec approvals policy could not be verified for Doctor completion.");
+    }
+  } catch (error) {
+    if (!(error instanceof ExecApprovalsMigrationRequiredError)) {
+      throw error;
+    }
+    const { resolveExecApprovalsDisplayPath } = await import("../infra/exec-approvals-config.js");
+    throw new ExecApprovalsMigrationRequiredError(
+      resolveExecApprovalsDisplayPath(env),
+      "doctor",
+      "Exec approvals require reconciliation",
+      env,
+    );
+  }
   if (!schemaPublicationDeferred && databaseTargets) {
     const { completeDoctorMigrationBackups } =
       await import("./doctor-migration-backup-artifacts.js");

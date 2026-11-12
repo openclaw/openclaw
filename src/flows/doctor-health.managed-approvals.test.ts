@@ -4,6 +4,7 @@ import { registerDoctorManagedRepairTests } from "./doctor-health.managed.test-s
 describe("runDoctorHealthFlow managed approval migration", () => {
   registerDoctorManagedRepairTests([
     "approvals-malformed",
+    "approvals-malformed-canonical",
     "approvals-conflicting",
     "approvals-migrated",
   ]);
