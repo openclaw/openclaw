@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SystemRunApprovalFileOperand } from "./exec-approvals-core.js";
+import { resolveFilesystemPathCandidate, tryResolveFilesystemRealPath } from "./executable-path.js";
 
 export function snapshotFileOperandAtPath(params: {
   argvIndex: number;
@@ -10,7 +10,11 @@ export function snapshotFileOperandAtPath(params: {
   let realPath: string;
   let stat: fs.Stats;
   try {
-    realPath = fs.realpathSync(params.filePath);
+    const resolved = tryResolveFilesystemRealPath(params.filePath);
+    if (!resolved) {
+      throw new Error("script operand unavailable");
+    }
+    realPath = resolved;
     stat = fs.statSync(realPath);
   } catch {
     return {
@@ -47,13 +51,10 @@ export function revalidateApprovedMutableFileOperand(params: {
   if (!operand) {
     return false;
   }
-  let realPath: string;
-  try {
-    realPath = fs.realpathSync(path.resolve(params.cwd ?? process.cwd(), operand));
-  } catch {
-    return false;
-  }
-  if (realPath !== params.snapshot.path) {
+  const realPath = tryResolveFilesystemRealPath(
+    resolveFilesystemPathCandidate(operand, params.cwd),
+  );
+  if (!realPath || realPath !== params.snapshot.path) {
     return false;
   }
   try {

@@ -1,7 +1,7 @@
 // Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
 import path from "node:path";
-import { safeStatSync } from "@openclaw/fs-safe/path";
+import { safeRealpathSync, safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
 import { pruneMapToMaxSize } from "./map-size.js";
@@ -24,11 +24,38 @@ export function resolveExecutablePathCandidate(
   if (!hasPathSeparator) {
     return expanded;
   }
-  if (path.isAbsolute(expanded)) {
-    return path.resolve(expanded);
+  const cwd = options?.cwd && options.cwd.trim() ? options.cwd : undefined;
+  return resolveFilesystemPathCandidate(expanded, cwd);
+}
+
+/** Preserve kernel parent traversal when constructing an absolute filesystem path. */
+export function resolveFilesystemPathCandidate(rawPath: string, cwd?: string): string {
+  if (path.isAbsolute(rawPath)) {
+    return process.platform !== "win32" && rawPath.split("/").includes("..")
+      ? rawPath
+      : path.resolve(rawPath);
   }
-  const base = options?.cwd && options.cwd.trim() ? options.cwd : process.cwd();
-  return path.resolve(base, expanded);
+  const base = cwd ?? process.cwd();
+  // POSIX resolves parents after following symlinks, so lexical folding can select another file.
+  if (process.platform !== "win32") {
+    const candidate = `${path.isAbsolute(base) ? base : `${process.cwd()}/${base}`}/${rawPath}`;
+    if (candidate.split("/").includes("..")) {
+      return candidate;
+    }
+  }
+  return path.resolve(base, rawPath);
+}
+
+/** Canonicalize the OS target without folding parents across a directory symlink. */
+export function tryResolveFilesystemRealPath(filePath: string | undefined): string | undefined {
+  if (filePath && process.platform !== "win32" && filePath.split("/").includes("..")) {
+    try {
+      return fs.realpathSync.native(filePath);
+    } catch {
+      return undefined;
+    }
+  }
+  return filePath ? (safeRealpathSync(filePath) ?? undefined) : undefined;
 }
 
 function resolveWindowsExecutableExtensions(
