@@ -464,7 +464,9 @@ describe("ChatGPT token-sharing authorization", () => {
     });
     expect(result.profiles[0]?.credential).toHaveProperty("accountId", accountId(identity.sub));
     expect(await (await callbackResponse!).text()).toContain("token sharing is connected");
-    expect(result.notes?.[0]).toContain("Eligible Responses requests use your Codex allowance.");
+    expect(result.notes?.[0]).toContain(
+      "Account connected. Eligible Responses API requests with this account use your ChatGPT plan.",
+    );
   });
 
   it("retains identity when sharing is declined without choosing a model or another funding source", async () => {

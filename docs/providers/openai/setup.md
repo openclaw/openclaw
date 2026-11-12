@@ -466,9 +466,8 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 Use Sign in with ChatGPT (SIWC) to authorize OpenClaw to use your eligible
 ChatGPT plan for Responses API requests. Your account and workspace must support
 token sharing. On ChatGPT Business, your workspace admin controls whether
-OpenClaw can use the workspace plan and sets usage limits. If you reach a limit,
-see [OpenAI authentication](/providers/openai/authentication#compare-capabilities)
-for the next step.
+OpenClaw can use the workspace plan. See [SIWC usage limits](/providers/openai/authentication#sign-in-with-chatgpt-usage-limits)
+to check your own app limit or the workspace sharing cap.
 
 SIWC does not support OpenAI-hosted plugins or connected apps yet. Those require
 a Codex credential with connector invocation scope, which device-code login does

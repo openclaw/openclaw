@@ -13,9 +13,8 @@ Choose your OpenAI authentication method based on the access you need:
 - **Codex login:** use your ChatGPT account for Codex models. Choose browser
   OAuth locally or device code on a remote machine. OpenAI-hosted plugins require
   a grant with connector scopes.
-- **Sign in with ChatGPT** (SIWC): authorize OpenClaw as an app to use your Codex
-  allowance for eligible Responses API calls. Check shared allowance usage in
-  ChatGPT. OpenAI-hosted plugins are not supported yet.
+- **Sign in with ChatGPT** (SIWC): use your ChatGPT plan for eligible Responses API
+  requests in OpenClaw. OpenAI-hosted plugins are not supported yet.
 - **API key:** use OpenAI Platform models with your project's permissions and
   API billing.
 
@@ -26,8 +25,8 @@ Choose your OpenAI authentication method based on the access you need:
 | Identity                                               | Your ChatGPT account and workspace authorizing OpenClaw   | Your ChatGPT account and workspace using the Codex product  | The API key's Platform project and permissions             |
 | Credential refresh                                     | OpenClaw refreshes its SIWC profile for this app          | OpenClaw refreshes its Codex OAuth profile                  | No OAuth refresh; rotate the key with its owner            |
 | Model access                                           | Eligible Responses models when token sharing is granted   | Models available to your Codex account                      | Models permitted for your Platform project                 |
-| Usage allowance                                        | Your Codex allowance                                      | Your Codex allowance                                        | Platform API billing                                       |
-| Usage limits                                           | Personal plan controls or limits set by a workspace admin | —                                                           | —                                                          |
+| Usage allowance                                        | Included ChatGPT plan usage or applicable credits         | Your Codex allowance                                        | Platform API billing                                       |
+| Usage limits                                           | Weekly app limits and a workspace sharing cap on Business | —                                                           | —                                                          |
 | OpenAI-hosted plugins and connected apps through Codex | Not supported yet                                         | Requires a connector-scoped grant outside OpenClaw login    | Not provided by API-key authentication                     |
 | OpenClaw tools and locally configured plugins          | Supported                                                 | Supported                                                   | Supported                                                  |
 | Web search                                             | Supported when the model and account allow it             | Supported where enabled                                     | Supported where enabled                                    |
@@ -51,25 +50,13 @@ it refreshes the selected SIWC profile and retries the same model once before
 using normal fallback. A failed refresh or an unauthorized retry keeps the
 existing fallback behavior.
 
-ChatGPT Business workspace admins choose which apps can use the workspace plan
-and manage limits in the [OpenAI Admin Console](https://admin.openai.com) under
-**Workspace → Usage limits**. If you reach your limit, ask your workspace admin
-to raise it. When the Control UI offers **Copy request for admin**, select it
-and send the copied message to your admin.
-
-For a personal plan, open [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage)
-to review usage and any app-specific limits. **Manage usage** in the Control UI
-opens the same page.
-
 Image and file input support depends on the selected model and is separate from
 image generation and Files API permissions. Realtime voice varies by route; see
 [OpenAI coverage and cost](/providers/openai/coverage-and-cost#openclaw-feature-coverage).
 
 **Choose SIWC for app-specific authorization.** You authorize OpenClaw as its
-own application, with consent for basic identity and eligible model use. Check
-your shared allowance in
-[ChatGPT Settings → Usage](https://chatgpt.com/settings/usage), and manage the
-connection in [ChatGPT login connections](https://chatgpt.com/#settings/Security/linked-apps).
+own application, with consent for basic identity and eligible model use. Manage
+the connection in [ChatGPT login connections](https://chatgpt.com/#settings/Security/linked-apps).
 OpenClaw does not display SIWC quota or per-app usage.
 
 **OpenAI-hosted plugins through Codex require a grant with connector scopes.**
@@ -104,6 +91,27 @@ During [agent bootstrapping](/start/bootstrapping), OpenClaw generates avatar
 choices only when image generation is available. With only SIWC connected, it
 continues with the agent's emoji; no generated avatar is required to finish.
 A separately configured image provider can still generate the avatar.
+
+### Sign in with ChatGPT usage limits
+
+Open [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage) to review
+OpenClaw's usage or change your weekly per-app limit. **Manage usage** in the
+Control UI opens the same page. Business members can set a lower limit for
+OpenClaw within their workspace's sharing cap.
+
+Business admins manage app access and the sharing cap in the [OpenAI Admin Console](https://admin.openai.com).
+
+- To allow an app, open **Tenant settings → External access**, select the app,
+  and set **Use ChatGPT plan** to **Allowed**.
+- To set the sharing cap, select the Business workspace and open
+  **Usage limits → ChatGPT plan → Usage in other services**. The percentage
+  applies to each Standard or Premium member's included allowance across approved
+  apps. Usage-based members use workspace credits when permitted.
+
+If the workspace sharing cap blocks a request, ask your admin to review it.
+When OpenClaw offers **Copy request for admin**, copy the message and send it
+to your admin. For credit permissions and plan-specific limits, see
+[Using your ChatGPT plan in other apps and sites](https://help.openai.com/en/articles/20001542-using-your-chatgpt-plan-in-other-apps-and-sites).
 
 ### Choose model access and harness separately
 

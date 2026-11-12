@@ -439,7 +439,7 @@
       "appGuidedAuth": "oauth",
       "credentialOnly": true,
       "choiceLabel": "Sign in with ChatGPT",
-      "choiceHint": "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+      "choiceHint": "Use your ChatGPT plan for eligible Responses API requests",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": 0,
       "groupId": "openai",

@@ -120,7 +120,7 @@ it("labels and orders OpenAI authentication choices", () => {
     [
       "openai-token-sharing",
       "Sign in with ChatGPT",
-      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
+      "Use your ChatGPT plan for eligible Responses API requests",
     ],
   ] as const) {
     expect(choice(id)).toMatchObject({ choiceLabel, choiceHint, ...group });
