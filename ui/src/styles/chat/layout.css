@@ -2875,6 +2875,12 @@ openclaw-chat-ci-details {
 /* Live Talk captions render as .chat-group message bubbles (startup-layout.css,
    grouped.css own the look). Only what a caption lacks is styled here. */
 
+/* A caption has no footer row: reserve it so saving the caption does not pull
+   the rows below it up. */
+.agent-chat__voice-turn {
+  padding-block-end: calc(var(--chat-footer-row) + var(--chat-footer-offset));
+}
+
 /* A caption has no avatar element: reserve the assistant's leading column so it
    lines up with saved replies in threads that show avatars. */
 .agent-chat__voice-turn--assistant {
