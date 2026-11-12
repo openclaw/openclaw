@@ -238,6 +238,7 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
     public func shutdown() async {}
 }
 
+// periphery:ignore - Used only by the opt-in native iroh build (OPENCLAW_IROH_NATIVE), which the Periphery scans do not compile.
 public enum OpenClawIDNodeNativePackagingError: Error, LocalizedError {
     case notPackaged
 

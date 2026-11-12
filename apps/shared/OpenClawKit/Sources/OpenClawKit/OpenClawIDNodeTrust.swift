@@ -82,6 +82,7 @@ public struct OpenClawIDNodeTrustAssessment: Sendable {
     public let verdict: Result<OpenClawIDNodeTrustTarget, OpenClawIDNodeEnrollmentError>
 }
 
+// periphery:ignore - Verification namespace used through its static members by enrollment and the native trust store.
 /// Strict schema, signature, pin and snapshot verification for the node descriptor response.
 public enum OpenClawIDNodeTrust {
     /// Separates verified nonfuture high-water facts from permission to install a dialable target.
