@@ -153,14 +153,6 @@ function openAgentDatabaseBackend(
           admittedFileIdentity,
           admittedFileBirthtime,
         );
-        const operation = currentSqliteWorkerOperationAdmission.getStore();
-        if (operation) {
-          operation.owner.databaseIdentity ??= {
-            databasePath: input.databasePath,
-            key: admittedFileIdentity,
-            birthtime: admittedFileBirthtime,
-          };
-        }
       }
     } catch (error) {
       // Only factory preparation can certify that no agent handle was opened.
@@ -340,7 +332,6 @@ function openAgentDatabaseBackend(
         nativeLocation: nativeIdentity.filename,
       };
       validation = getOpenClawAgentDatabaseValidation(opened);
-      assertFileIdentity();
     }
     if (!database || !database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options) !== database) {
       throw new Error("Agent execution lost its retained native database");
@@ -415,6 +406,17 @@ function openAgentDatabaseBackend(
     transferList?: Transferable[],
     requestAdmission?: AgentDatabaseAdmissionRestriction,
   ) => {
+    // Admitted reads finish on their retained file; mutations must still own the pathname.
+    if (stage !== "prepare") {
+      const operation = currentSqliteWorkerOperationAdmission.getStore();
+      if (operation) {
+        operation.owner.databaseIdentity ??= {
+          databasePath: input.databasePath,
+          key: admittedFileIdentity,
+          birthtime: admittedFileBirthtime,
+        };
+      }
+    }
     const request: SqliteWorkerAdmissionRequest = {
       stage,
       facts: {

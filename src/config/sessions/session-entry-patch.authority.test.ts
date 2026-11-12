@@ -104,7 +104,8 @@ it.each([false, true])(
   },
 );
 
-it.each(["transaction", "commit"] as const)(
+// Windows SQLite handles do not permit renaming an open database.
+it.skipIf(process.platform === "win32").each(["transaction", "commit"] as const)(
   "refuses physical replacement while awaiting the native %s grant",
   async (replaceAt) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
