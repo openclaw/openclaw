@@ -20,12 +20,13 @@ it("omits invalid restart metadata and normalizes the reason", () => {
   });
 });
 
-it.for(["optional", "fatal", "required", "required-close"])(
+it.for(["optional", "fatal", "required", "required-close", "late-joined", "late-joined-fatal"])(
   "joins required work and preserves fatal close status (%s)",
   async (mode) => {
-    const fatal = mode === "fatal";
+    const fatal = mode === "fatal" || mode === "late-joined-fatal";
     const required = mode.startsWith("required");
     const requiredClose = mode === "required-close";
+    const lateJoined = mode.startsWith("late-joined");
     vi.useFakeTimers();
     const sidecar = createDeferredCore();
     const sidecars = createGatewaySidecarStopOwner();
@@ -47,7 +48,7 @@ it.for(["optional", "fatal", "required", "required-close"])(
         stopRegisteredGatewayLifetimeSidecars: required ? noWork : sidecars.stop,
         stopRegisteredPostReadySidecars: noWork,
         runClosePrelude: noWork,
-        sealAndJoinRegisteredSidecarStops: noWork,
+        sealAndJoinRegisteredSidecarStops: lateJoined ? sidecars.sealAndJoin : noWork,
       },
       exitAfterClose: true,
       close,
@@ -55,10 +56,16 @@ it.for(["optional", "fatal", "required", "required-close"])(
     }).catch((error: unknown) => error);
     try {
       await vi.advanceTimersByTimeAsync(requiredClose ? 10_000 : 5_000);
-      expect(close).toHaveBeenCalledTimes(required && !requiredClose ? 0 : 1);
+      expect(close).toHaveBeenCalledTimes((required && !requiredClose) || lateJoined ? 0 : 1);
       sidecar.resolve();
       const failure = await closing;
-      if (required) {
+      if (lateJoined && fatal) {
+        expect(hasGatewayCleanupRetainedError(failure)).toBe(false);
+        expect(failure).toHaveProperty(
+          "message",
+          expect.stringContaining("synthetic persistence failure"),
+        );
+      } else if (required || lateJoined) {
         expect(failure).toBeUndefined();
         expect(close).toHaveBeenCalledOnce();
       } else {
