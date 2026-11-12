@@ -53,6 +53,10 @@ import {
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import {
+  recallNativeSessionSystemPrompt,
+  rememberNativeSessionSystemPrompt,
+} from "./native-session-system-prompt.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import { resolveCliNoOutputTimeoutMs, resolveCliRunTimeoutOverrideMs } from "./reliability.js";
 import { recordCliModelCompleted, recordCliTrajectoryEvent } from "./trajectory.js";
@@ -121,7 +125,12 @@ export async function executePreparedCliRun(
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
     isNewSession: isNew || resendSystemPromptForSoftResume,
-    systemPrompt: context.systemPrompt,
+    // A control operation resends the exact prompt the session's turns cached.
+    systemPrompt:
+      (params.controlOperation &&
+        resolvedSessionId &&
+        recallNativeSessionSystemPrompt(context.backendResolved.id, resolvedSessionId)) ||
+      context.systemPrompt,
   });
   const shouldSendSystemPrompt =
     systemPromptArg &&
@@ -280,6 +289,13 @@ export async function executePreparedCliRun(
         backend,
         systemPrompt: systemPromptArg,
       });
+    }
+    if (!nodePlacement && shouldSendSystemPrompt && resolvedSessionId && !params.controlOperation) {
+      rememberNativeSessionSystemPrompt(
+        context.backendResolved.id,
+        resolvedSessionId,
+        systemPromptArg,
+      );
     }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
