@@ -5210,6 +5210,7 @@ jobs:
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
       NATIVE_RUNTIME_ARTIFACT_ID: ${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}
+      BUNDLED_RECOVERY_RUNTIME: ${{ needs.build-artifacts.outputs.bundled_recovery_runtime }}
       HISTORICAL_TARGET: *historical_target
       MACOS_PRIMARY_PHASE: &macos_primary_phase ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
       OPENCLAWKIT_TEST_EXECUTION: &openclawkit_test_execution ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
@@ -5681,7 +5682,6 @@ jobs:
         if: ${{ !cancelled() && steps.recovery-runtime-setup.outcome == 'success' }}
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-          BUNDLED_RECOVERY_RUNTIME: ${{ needs.build-artifacts.outputs.bundled_recovery_runtime }}
           NATIVE_RUNTIME_PREPARED: ${{ steps.native-test-cli.outcome }}
         run: |
           set -euo pipefail

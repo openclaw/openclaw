@@ -4896,6 +4896,10 @@ ${buildScript}`,
       "needs.preflight.outputs.run_mlx_native_proof",
     );
     expect(packages.steps).toEqual(native.steps);
+    for (const job of [native, packages]) {
+      expect(JSON.stringify(job.steps)).not.toContain("needs.build-artifacts");
+    }
+    expect(JSON.stringify(packages.env)).not.toContain("needs.build-artifacts");
     expect(packages["timeout-minutes"]).toBe(30);
     for (const result of ["success", "skipped", "failure", "cancelled"] as const) {
       const context = {
@@ -5062,10 +5066,12 @@ ${buildScript}`,
     ).toBe(
       "${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && hashFiles('scripts/test-macos-app-host.sh') != '' }}",
     );
-    const steps = workflow.jobs["macos-swift"].steps;
-    const prepare = requiredWorkflowStep(steps, "Build bundled recovery runtime");
+    const native = workflow.jobs["macos-swift"];
+    expect(native.env.BUNDLED_RECOVERY_RUNTIME).toBe(
+      "${{ needs.build-artifacts.outputs.bundled_recovery_runtime }}",
+    );
+    const prepare = requiredWorkflowStep(native.steps, "Build bundled recovery runtime");
     expect(prepare.env).toMatchObject({
-      BUNDLED_RECOVERY_RUNTIME: "${{ needs.build-artifacts.outputs.bundled_recovery_runtime }}",
       NATIVE_RUNTIME_PREPARED: "${{ steps.native-test-cli.outcome }}",
     });
     const root = tempDirs.make("native-recovery-reuse-");
