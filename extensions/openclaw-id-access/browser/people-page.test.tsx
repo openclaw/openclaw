@@ -262,7 +262,7 @@ describe("Access page", () => {
     expect(container.textContent).toContain(
       "Anyone with it can request access, but only you can approve them.",
     );
-    expect(onCreate).toHaveBeenCalledWith("friend@example.test", "viewer");
+    expect(onCreate).toHaveBeenCalledWith("friend@example.test", "viewer", false);
     expect(container.querySelector("form")).toBeNull();
     expect(container.textContent).toContain("Viewer invite · expires");
     button(container, "Invite someone")!.click();
@@ -396,6 +396,55 @@ describe("Access page", () => {
       statement: { signed: { op: "set_role", account_id: "blocked", role: "viewer" } },
     });
   });
+
+  it.each(["invite", "change"] as const)(
+    "reconfirms a freshly administrative role before signing %s",
+    async (action) => {
+      const member = { accountId: "blocked", role: "deleted", roleDefined: false, peerKeys: [] };
+      const initial = linked({ rootPub: pendingInvite.pending!.devicePub, members: [member] });
+      const { container, request } = await mountPage([initial]);
+      await vi.waitFor(() => expect(container.querySelector("select")?.value).toBe("operator"));
+      const fresh = linked({
+        ...initial.link,
+        roles: initial.link.roles!.map((role) =>
+          role.name === "operator" ? Object.assign({}, role, { admin: true }) : role,
+        ),
+      });
+      request.mockImplementation(async (method) =>
+        method === "openclawId.people"
+          ? { link: fresh.link }
+          : method === "openclawId.status"
+            ? fresh
+            : {},
+      );
+      if (action === "invite") {
+        const input = container.querySelector("input")!;
+        input.value = "friend@example.test";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      } else {
+        button(container, "Change role")!.click();
+      }
+      flush();
+      const { signAsOwner, signMembershipChange } = await import("./owner-signing.js");
+      vi.mocked(signAsOwner).mockClear();
+      vi.mocked(signMembershipChange).mockClear();
+      button(container, action === "invite" ? "Create invite link" : "Save role")!.click();
+      const confirmLabel =
+        action === "invite" ? "Confirm administrator invite" : "Confirm administrator role";
+      await vi.waitFor(() => expect(button(container, confirmLabel)).toBeDefined());
+      expect(container.textContent).toContain("change Gateway settings");
+      expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+      expect(signAsOwner).not.toHaveBeenCalled();
+      expect(signMembershipChange).not.toHaveBeenCalled();
+      button(container, confirmLabel)!.click();
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "openclawId.authority",
+          expect.objectContaining({ action: action === "invite" ? "register_invite" : "submit" }),
+        ),
+      );
+    },
+  );
 
   it("shows a member their own role without requesting people or exposing controls", async () => {
     const { container, request } = await mountPage([

@@ -28,7 +28,6 @@ import {
   registerInvite,
   ROOT_EPOCH,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
@@ -55,7 +54,11 @@ import {
   retainMemberProfiles,
   type OpenClawIdMemberProfiles,
 } from "./member-profiles.js";
-import { roleChangeDisconnects } from "./member-role-change.js";
+import {
+  assertMemberRoleDefined,
+  roleChangeDisconnects,
+  refuseUndefinedMemberRole,
+} from "./member-role-change.js";
 import { readMemberView, readOwnerView } from "./membership-views.js";
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
@@ -410,7 +413,7 @@ export function createOpenClawIdAuthority(
 
     /** Applies an owner-signed statement that arrived on `channel`. */
     submit(input: unknown, channel: Channel): Promise<AuthorityAccepted | AuthorityRefusal> {
-      return serialize(async () => {
+      return serialize<AuthorityAccepted | AuthorityRefusal>(async () => {
         const stored = await load();
         if (!stored?.authority) {
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
@@ -429,38 +432,35 @@ export function createOpenClawIdAuthority(
           return { ok: false, code: result.code, detail: result.detail };
         }
         const change = parseStatement(input, "MembershipChange");
-        if (change.ok && change.statement.body.target.op === "set_role") {
-          const role = change.statement.body.target.role;
-          if (!Object.hasOwn(getRuntimeConfigSnapshot()?.gateway?.roles?.definitions ?? {}, role)) {
-            return {
-              ok: false,
-              code: "role_undefined",
-              detail: `The role ${role} is not defined on this claw. Choose another role on the Access page.`,
-            };
-          }
-        }
+        const role =
+          change.ok && change.statement.body.target.op === "set_role"
+            ? change.statement.body.target.role
+            : undefined;
         const resolved = resolvedInvite(input);
-        await commit({
-          ...current,
-          authority: result.state,
-          ...(resolved
-            ? {
-                invite_reports: resolveReport(
-                  current.invite_reports,
-                  resolved.inviteId,
-                  resolved.resolution,
-                  now,
-                ),
-              }
-            : {}),
-        });
+        await commit(
+          {
+            ...current,
+            authority: result.state,
+            ...(resolved
+              ? {
+                  invite_reports: resolveReport(
+                    current.invite_reports,
+                    resolved.inviteId,
+                    resolved.resolution,
+                    now,
+                  ),
+                }
+              : {}),
+          },
+          () => assertMemberRoleDefined(role),
+        );
         const reconnect = roleChangeDisconnects(current.authority, result.state);
         return {
           ok: true,
           status: result.status,
           events: [...expiry, ...result.events, ...reconnect],
         };
-      });
+      }).catch(refuseUndefinedMemberRole);
     },
 
     /**

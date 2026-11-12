@@ -17,6 +17,8 @@ import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
+import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -82,7 +84,7 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
         await claw.sign({
           op: "add",
           account_id: "role-member",
-          role: "guest",
+          role: "viewer",
           peer_keys: [peer],
           invite_id: null,
         }),
@@ -130,16 +132,18 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       scopes: ["operator.admin"],
     };
     await apply(config);
-    const connectMember = async () => {
+    const connectMember = async (memberDeviceToken?: string) => {
       const closed = createDeferredCore<number>();
       let hello: HelloOk | undefined;
       const client = await connectGatewayClient({
         url: `ws://127.0.0.1:${port}`,
         origin: memberOrigin,
+        deviceToken: memberDeviceToken,
+        timeoutMs: 6000,
         clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
         mode: GATEWAY_CLIENT_MODES.WEBCHAT,
         platform: "web",
-        scopes: ["operator.admin", "operator.pairing"],
+        scopes: ["operator.admin"],
         onHelloOk: (value) => {
           hello = value;
         },
@@ -151,10 +155,12 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       clients.push(client);
       return { client, hello, closed };
     };
-    const member = await connectMember();
-    expect(member.hello?.auth.roleAllowsAdmin).toBe(true);
-    expect(member.hello?.auth.scopes).toContain("operator.admin");
-    await member.client.request("device.pair.list", {});
+    const firstViewer = await connectMember();
+    expect(firstViewer.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
+    const memberPairing = (await listDevicePairing()).paired.find(
+      (device) => device.tokens?.operator?.token === firstViewer.hello?.auth.deviceToken,
+    )!;
+    expect(memberPairing.approvedScopes).toEqual(["operator.sessions.read"]);
     // The real owner RPC accepts a device signature; a member cannot sign this change.
     const changeRole = async (role: string) => {
       const { link } = await reconnect.request<{ link: { seq: number } }>("openclawId.people", {});
@@ -170,10 +176,28 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
       );
       await reconnect.request("openclawId.authority", { action: "submit", statement });
     };
+    await changeRole("guest");
+    expect(await withinTest(firstViewer.closed.promise, signal)).toBe(1008);
+    await firstViewer.client.stopAndWait();
+    const member = await connectMember();
+    expect(member.hello?.auth.scopes).toEqual(["operator.admin"]);
+    expect(member.hello?.auth.roleAllowsAdmin).toBe(true);
+    await member.client.request("device.pair.list", {});
+    expect((await listDevicePairing()).pending).toEqual([]);
+    const oldAdminToken = member.hello?.auth.deviceToken;
+    expect(oldAdminToken).toBeTruthy();
     await changeRole("viewer");
     expect(await withinTest(member.closed.promise, signal)).toBe(1008);
     await member.client.stopAndWait();
-    const reassigned = await connectMember();
+    expect(
+      await verifyDeviceToken({
+        deviceId: memberPairing.deviceId,
+        token: oldAdminToken!,
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).toMatchObject({ ok: false });
+    const reassigned = await connectMember(oldAdminToken);
     expect(reassigned.hello?.auth.scopes).toEqual(["operator.sessions.read"]);
     await reassigned.client.request("sessions.list", {});
     await expect(reassigned.client.request("device.pair.list", {})).rejects.toThrow();
