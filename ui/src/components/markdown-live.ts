@@ -97,19 +97,26 @@ export function toStreamingMarkdownDomParts(
         !previous.html.includes('class="markdown-block-art"') &&
         (renderOptions.mode === "document" || boundary <= MARKDOWN_PARSE_LIMIT)));
   let stableHtml = incremental ? previous.html : "";
+  const mathBudget = { rendered: incremental ? previous.mathExpressions : 0 };
   const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
   if (stableAppend) {
     const appendedHtml = markdownContentHtml(
-      renderSanitizedMarkdown(stableAppend, { ...renderOptions }),
+      renderSanitizedMarkdown(stableAppend, { ...renderOptions, mathBudget }),
     );
     // File-label collisions and standalone block art depend on the whole prefix.
-    stableHtml =
+    if (
       (stableHtml.length > 0 && isMarkdownBlockArtText(stableAppend)) ||
       (renderOptions.fileLinks &&
         stableHtml.includes('class="markdown-file-link"') &&
         appendedHtml.includes('class="markdown-file-link"'))
-        ? markdownContentHtml(renderSanitizedMarkdown(stableMarkdown, { ...renderOptions }))
-        : stableHtml + appendedHtml;
+    ) {
+      mathBudget.rendered = 0;
+      stableHtml = markdownContentHtml(
+        renderSanitizedMarkdown(stableMarkdown, { ...renderOptions, mathBudget }),
+      );
+    } else {
+      stableHtml += appendedHtml;
+    }
   }
   if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {
     // Keep provisional code in the mutable tail so highlighting can arrive
@@ -117,9 +124,16 @@ export function toStreamingMarkdownDomParts(
     const retained = previous?.options === renderKey && append ? previous : undefined;
     boundary = retained?.markdown.length ?? 0;
     stableHtml = retained?.html ?? "";
+    mathBudget.rendered = retained?.mathExpressions ?? 0;
     streamingTail = input.slice(boundary);
   } else if (state) {
-    state.rendered = { options: renderKey, markdown: stableMarkdown, html: stableHtml, hasHtml };
+    state.rendered = {
+      options: renderKey,
+      markdown: stableMarkdown,
+      html: stableHtml,
+      hasHtml,
+      mathExpressions: mathBudget.rendered,
+    };
   }
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
@@ -131,7 +145,11 @@ export function toStreamingMarkdownDomParts(
     tailRepairStart === null
       ? streamingTail
       : repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
-    tailRepairStart === null ? { ...renderOptions, streamingOpenFence: true } : renderOptions,
+    {
+      ...renderOptions,
+      mathBudget: { rendered: mathBudget.rendered },
+      streamingOpenFence: tailRepairStart === null,
+    },
     false,
     renderMarkdownTokens,
   );

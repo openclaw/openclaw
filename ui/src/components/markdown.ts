@@ -16,6 +16,7 @@ import {
   restoreMarkdownHumanMentions,
 } from "./markdown-human-mentions.ts";
 import type { MarkdownJson } from "./markdown-json.ts";
+import type { MarkdownMathBudget } from "./markdown-math.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { stripProgressCardRawContentBlocks } from "./markdown-raw-content.ts";
 import {
@@ -151,7 +152,7 @@ const markdownParser = createMarkdownParser();
 // The live entry supplies token rendering so settled history does not load it.
 export function renderSanitizedMarkdown(
   renderInput: string,
-  renderOptions: MarkdownRenderEnv,
+  renderOptions: MarkdownRenderEnv & { mathBudget?: MarkdownMathBudget },
   blockArt?: boolean,
   renderTokens?: typeof import("./markdown-tokens.ts").renderMarkdownTokens,
   returnFragment = false,
