@@ -47,6 +47,7 @@ const repositoryScriptEntries = [
   "scripts/perf/decision-tool-catalog-measure.ts!",
   "scripts/perf/clickclack-account-snapshot.ts!",
   "scripts/perf/github-managed-profile-read.ts!",
+  "scripts/perf/github-managed-profile-write.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
