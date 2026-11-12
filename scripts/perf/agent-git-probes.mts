@@ -325,7 +325,7 @@ try {
     };
     rows.push(row);
     report(
-      `${lane}: ${wallMs.toFixed(1)} ms; ${row.cpuMs.toFixed(1)} CPU ms; ${row.newPacks} packs; ${row.offeredObjects} objects; ${row.packBytes} pack bytes`,
+      `${lane}: ${wallMs.toFixed(1)} ms; ${row.cpuMs.toFixed(1)} reported CPU ms; ${row.newPacks} packs; ${row.offeredObjects} objects; ${row.packBytes} pack bytes`,
     );
     rmSync(metadata, { recursive: true });
     return row;
@@ -493,6 +493,10 @@ try {
             : undefined,
         shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
         platform: process.platform,
+        cpuScope:
+          process.platform === "darwin"
+            ? "post-exec command CPU; pre-exec shim children excluded by Darwin time"
+            : "command tree CPU",
         historyRepository,
         files: historyRepository ? undefined : files + 1,
         workingTreeBytes: historyRepository ? 0 : files * content.length + history.length,
