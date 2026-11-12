@@ -485,7 +485,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         };
         // The refusal floor makes no model call, including a server-side compaction.
         const skipServerCompaction = params.seedCompaction || params.summaryRefusal === "floor";
-        const serverResult = skipServerCompaction
+        const serverAttempt = skipServerCompaction
           ? undefined
           : await attemptServerEndpointCompaction({
               trigger,
@@ -495,6 +495,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               sessionManager,
               extraParams: effectiveExtraParams,
               requestBudget: accountingRecorder?.requestBudget,
+              estimatedInputTokens: observedTokenCount,
               customInstructions: params.customInstructions,
               onUsage: recordUsage,
               onCompactionCommitted: recordServerCompaction,
@@ -507,6 +508,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                 signal: params.abortSignal,
               },
             });
+        const serverResult = serverAttempt === "context-overflow" ? undefined : serverAttempt;
         const activeSession = session;
         // The resolved session budget can be smaller than the summarizer's model
         // window. Carry it into manual fitting when allowing larger replay artifacts.
@@ -574,7 +576,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             // The client watchdog starts here; refresh the delegated host watchdog with it.
             refreshCompactionWatchdogs();
             const outcome = await compactClient(
-              params.summaryRefusal === "floor"
+              params.summaryRefusal === "floor" || serverAttempt === "context-overflow"
                 ? "deterministic"
                 : resolveEffectiveCompactionMode(params.config) === "default"
                   ? undefined

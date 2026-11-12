@@ -3,7 +3,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
-import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+  resolveMessageRole,
+} from "../../lib/chat/message-normalizer.ts";
 import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
@@ -152,6 +156,15 @@ function groupHasFailedResult(group: MessageGroup): boolean {
 }
 
 function groupHasVisibleReplyContent(group: MessageGroup, includeText: boolean): boolean {
+  if (group.role.toLowerCase() === "tool") {
+    // Inspection media stays with its activity. Explicit inline widgets instead
+    // own a visible output surface, even when their source is a tool result.
+    return group.messages.some(({ message }) =>
+      normalizeMessage(message).content.some(
+        (part) => part.type === "canvas" && part.preview.surface === "assistant_message",
+      ),
+    );
+  }
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 
@@ -222,27 +235,18 @@ export function resolveTurnRunDurations(
       }
     }
   }
-  // Historical timing is prompt-to-last-persisted-write, not message creation
-  // or lifecycle runtime. Missing either same-run endpoint leaves it unavailable.
+  // Use the same persisted endpoints for newest and historical replies. Switching
+  // to lifecycle runtime here changes the clock when the session moves on.
+  // Missing either same-run endpoint leaves the elapsed duration unavailable.
   for (const [runId, startedAt] of starts) {
     const endedAt = ends.get(runId);
     if (endedAt !== undefined && endedAt >= startedAt) {
       durations.set(runId, endedAt - startedAt);
     }
   }
-  // The lifecycle owner takes precedence, including clearing an active or invalid
-  // current run instead of falling back to a partial transcript interval.
-  if (session?.lastRunId) {
+  // The live run has only a partial interval, not a completed duration.
+  if (session?.lastRunId && !TERMINAL_WORK_STATUSES.has(session.status ?? "")) {
     durations.delete(session.lastRunId);
-    const runtimeMs = session.runtimeMs;
-    if (
-      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
-      typeof runtimeMs === "number" &&
-      Number.isFinite(runtimeMs) &&
-      runtimeMs >= 0
-    ) {
-      durations.set(session.lastRunId, runtimeMs);
-    }
   }
   return durations;
 }

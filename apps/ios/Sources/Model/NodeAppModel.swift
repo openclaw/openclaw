@@ -77,7 +77,8 @@ enum GatewaySessionPhase: Equatable {
     /// Not attempting: no route, background-suspended, or stopped.
     case idle
     /// An attempt is in flight, the socket dropped, or a non-pausing failure is being retried.
-    case connecting
+    /// `reconnect` is false only for the first attempt after a stop or a new connect.
+    case connecting(reconnect: Bool)
     case connected(GatewaySessionInfo)
     /// Stops both reconnect loops until the user resumes, connects, or disconnects.
     case paused(GatewayConnectionProblem)
@@ -103,12 +104,14 @@ enum GatewaySessionPhase: Equatable {
                 serverName: info.serverName,
                 remoteAddress: address,
                 hasAdminScope: info.hasAdminScope))
-        case (_, .addressResolved), (.idle, .dropped):
+        case (_, .addressResolved), (.idle, .dropped), (.connecting, .attemptStarted):
             self
         case let (_, .failed(problem?)) where problem.pauseReconnect || problem.needsPairingApproval:
             .paused(problem)
+        case (.idle, .attemptStarted):
+            .connecting(reconnect: false)
         case (_, .attemptStarted), (_, .dropped), (_, .failed):
-            .connecting
+            .connecting(reconnect: true)
         case (_, .stopped):
             .idle
         }
@@ -129,7 +132,11 @@ struct GatewayConnection: Equatable {
     var `operator` = GatewaySessionPhase.idle
 
     var isPaused: Bool {
-        self.node.pausedProblem != nil || self.operator.pausedProblem != nil
+        self.pausedProblem != nil
+    }
+
+    var pausedProblem: GatewayConnectionProblem? {
+        self.node.pausedProblem ?? self.operator.pausedProblem
     }
 
     /// Automatic pairing retries may run only when every pause is a pairing-approval pause; a rate
@@ -394,18 +401,24 @@ final class NodeAppModel {
     private let camera: any CameraServicing
     private(set) var preferredCameraFacing: OpenClawCameraFacing
     private let screenRecorder: any ScreenRecordingServicing
+    /// Preconnect work before a route commits; session phases own every state after it.
     private(set) var gatewayConnectionProgress: GatewayConnectionProgress?
-    var gatewayStatusText: String = "Offline" {
+    /// Free-form result of a one-off action (a failed save, a reset). Nothing parses it, and a new
+    /// notice ends any preconnect progress. Session condition text derives from `connection`.
+    var gatewayStatusText: String? {
         didSet {
             self.gatewayConnectionProgress = nil
         }
     }
 
     var nodeStatusText: String {
-        self.gatewayConnected ? "Connected" : "Offline"
+        GatewayStatusBuilder.statusText(self.connection.node)
     }
 
-    var operatorStatusText: String = "Offline"
+    var operatorStatusText: String {
+        GatewayStatusBuilder.statusText(self.connection.operator)
+    }
+
     private(set) var isAppleReviewDemoModeEnabled: Bool = false
     private(set) var isScreenshotFixtureModeEnabled: Bool = false
     var isOperatorGatewayConnected: Bool {
@@ -444,12 +457,14 @@ final class NodeAppModel {
     }
 
     var connectedGatewayID: String?
-    var gatewayAutoReconnectEnabled: Bool = true
+    /// Whether the app may reconnect on its own. Written by user connect/disconnect, fixtures,
+    /// and target review or ingress retirement; pauses live in the session phases.
+    private var reconnectAllowed: Bool = true
 
     /// Rate limits and rejected credentials are per device, so either session's pause stops both
     /// reconnect loops and every automatic reconnect.
     var canAutoReconnect: Bool {
-        self.gatewayAutoReconnectEnabled && !self.connection.isPaused &&
+        self.reconnectAllowed && !self.connection.isPaused &&
             self.gatewayPreconnectProblem?.problem.pauseReconnect != true
     }
 
@@ -467,7 +482,7 @@ final class NodeAppModel {
 
     private var gatewayPreconnectProblem: (stableID: String, problem: GatewayConnectionProblem)?
     var gatewayDisplayStatusText: String {
-        self.lastGatewayProblem?.localizedStatusText ?? self.gatewayStatusText
+        GatewayStatusBuilder.source(for: self.connection.node, appModel: self).statusText
     }
 
     var gatewayProblemForToast: GatewayConnectionProblem? {
@@ -1447,7 +1462,6 @@ final class NodeAppModel {
                 self.apply(.stopped, to: .node, route: nil)
                 self.talkMode.updateGatewayConnected(false)
                 if self.isBackgrounded {
-                    self.gatewayStatusText = "Background idle"
                     LiveActivityManager.shared.endActivity(reason: "background_idle")
                 }
             }
@@ -1540,7 +1554,6 @@ final class NodeAppModel {
         self.talkMode.gatewayTalkPermissionState = .requestingUpgrade
         self.talkMode.statusText = "Requesting Talk approval"
         self.forceOperatorTalkPermissionUpgradeRequest = true
-        self.gatewayAutoReconnectEnabled = true
         self.resumeAfterUserAction()
         self.lastGatewayProblem = nil
         self.lastTalkPermissionReconnectAttemptAt = Date()
@@ -1620,7 +1633,6 @@ final class NodeAppModel {
 
         // A scope-upgrade attempt can pause the shared operator reconnect loop for approval.
         // Cancelling Talk must replace that attempt with the normal stored-auth connection.
-        self.gatewayAutoReconnectEnabled = true
         if let operatorProblem = self.operatorGatewayProblem, self.lastGatewayProblem == operatorProblem {
             self.lastGatewayProblem = nil
         }
@@ -1653,7 +1665,6 @@ final class NodeAppModel {
         else { return }
         GatewayDiagnostics.log("talk permission approval poll reconnect")
         self.lastTalkPermissionReconnectAttemptAt = now
-        self.gatewayAutoReconnectEnabled = true
         // The problem stays readable until the retried attempt succeeds or pauses again.
         self.resumeAfterUserAction(only: .operator)
         self.restartOperatorGatewayForTalkPermissionUpgrade(config)
@@ -2296,7 +2307,6 @@ final class NodeAppModel {
                     guard !self.isLocalGatewayFixtureEnabled else { return }
                     self.apply(.dropped, to: .operator, route: nil)
                     self.apply(.dropped, to: .node, route: nil)
-                    self.setGatewayConnectionProgress(reconnecting: true)
                     self.talkMode.updateGatewayConnected(false)
                 }
             })
@@ -3469,10 +3479,11 @@ extension NodeAppModel {
             preconnectProblem?.stableID,
             effectiveStableID)
         self.gatewayPreconnectProblem = nil
+        // The route commits here; its sessions report every state after this point.
+        self.setGatewayConnectionProgress(nil)
         if targetChanged || preconnectProblem != nil {
             // A new target cannot inherit the previous route's problem; the connect below resets the pause.
             self.lastGatewayProblem = nil
-            self.setGatewayConnectionProgress(reconnecting: false)
         }
         if let preconnectProblem, preservesPreconnectProblem {
             // A preflight failure owns its snapshot. Late callbacks from the old route must not
@@ -3504,15 +3515,18 @@ extension NodeAppModel {
            !self.connection.isPaused,
            !forceReconnect
         {
-            self.gatewayAutoReconnectEnabled = true
             return
         }
 
         self.gatewayRouteGeneration &+= 1
         self.stopNodeHostStatsPublisher()
         self.activeGatewayConnectConfig = nextConfig
+        // Each started loop is attempting from here. Without an operator loop (bootstrap pairing)
+        // the operator stays idle, and chat follows the node. A same-target restart reconnects.
+        let attempting = GatewaySessionPhase.connecting(reconnect: isSameGatewayTarget)
         prepareForGatewayConnect(
             stableID: effectiveStableID,
+            connection: GatewayConnection(node: attempting, operator: operatorLoopRequired ? attempting : .idle),
             preservingGatewayProblem: isSameGatewayTarget || preservesPreconnectProblem,
             preservingFocusedChatSession: isSameGatewayTarget)
         if operatorLoopRequired {
@@ -3630,12 +3644,13 @@ extension NodeAppModel {
         self.activeGatewayConnectConfig = nil
         ShareGatewayRelaySettings.clearConfig()
         await self.resetGatewaySessionsForForcedReconnect()
-        guard !self.gatewayAutoReconnectEnabled, self.activeGatewayConnectConfig == nil else { return }
-        // A canceled loop may have persisted its reconnect flag and relay config while teardown was in flight.
+        guard self.activeGatewayConnectConfig == nil else { return }
+        // A connect during teardown owns the route. Otherwise a canceled loop may have persisted
+        // the launch toggle and relay config while teardown was in flight.
         self.disableGatewayAutoReconnect()
         ShareGatewayRelaySettings.clearConfig()
         self.gatewayHealthMonitor.stop()
-        self.gatewayStatusText = "Offline"
+        self.setGatewayConnectionProgress(nil)
         self.connectedGatewayID = nil
         self.connection = GatewayConnection()
         self.talkMode.updateGatewayConnected(false)
@@ -3660,7 +3675,6 @@ extension NodeAppModel {
               self.operatorGatewayTask == nil
         else { return }
         guard !self.isLocalGatewayFixtureEnabled else { return }
-        self.setGatewayConnectionProgress(reconnecting: true)
         self.talkMode.updateGatewayConnected(false)
         self.applyGatewayConnectConfig(
             cfg,
@@ -3697,8 +3711,9 @@ extension NodeAppModel {
         self.isScreenshotFixtureModeEnabled = false
         if disablePersistedAutoConnect {
             self.disableGatewayAutoReconnect()
-        } else {
-            self.gatewayAutoReconnectEnabled = false
+        } else if self.activeGatewayConnectConfig != nil {
+            // Suspend only a live route. With nothing to suspend, resume would have nothing to undo.
+            self.reconnectAllowed = false
         }
         self.lastGatewayProblem = nil
         self.gatewayPreconnectProblem = nil
@@ -3710,7 +3725,7 @@ extension NodeAppModel {
         self.voiceWakeSyncTask = nil
         LiveActivityManager.shared.endActivity(reason: "manual_disconnect")
         self.gatewayHealthMonitor.stop()
-        self.gatewayStatusText = "Offline"
+        self.setGatewayConnectionProgress(nil)
         self.connectedGatewayID = nil
         self.activeGatewayConnectConfig = nil
         self.connection = GatewayConnection()
@@ -3725,7 +3740,7 @@ extension NodeAppModel {
     private func disableGatewayAutoReconnect() {
         // Runtime teardown and persisted startup routing must move together. Otherwise a relaunch
         // during target review silently reconnects the gateway the user just left.
-        self.gatewayAutoReconnectEnabled = false
+        self.reconnectAllowed = false
         UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
     }
 }
@@ -3733,7 +3748,7 @@ extension NodeAppModel {
 extension NodeAppModel {
     func resumeGatewayAfterTargetReview(_ config: GatewayConnectConfig) {
         let generation = self.beginGatewayConnectAttempt()
-        self.setGatewayConnectionProgress(reconnecting: false)
+        self.setGatewayConnectionProgress(.connecting)
         // Reapply the exact suspended route only after teardown; a newer target invalidates the generation.
         Task { [weak self] in
             guard let self else { return }
@@ -3745,6 +3760,7 @@ extension NodeAppModel {
 
     func prepareForGatewayConnect(
         stableID: String,
+        connection: GatewayConnection = GatewayConnection(),
         preservingGatewayProblem: Bool = false,
         preservingFocusedChatSession: Bool = false)
     {
@@ -3754,9 +3770,9 @@ extension NodeAppModel {
         self.chatSessionRoutingRestoreTask?.cancel()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
-        self.gatewayAutoReconnectEnabled = true
+        self.reconnectAllowed = true
         // A new connect leaves any pause. A retained error is presentation history, not live control.
-        self.connection = GatewayConnection()
+        self.connection = connection
         if !preservingGatewayProblem {
             // Same-target reconnects keep the prior failure readable until success or a new failure.
             // Initial connects and target changes must not inherit another gateway's problem state.
@@ -3807,7 +3823,12 @@ extension NodeAppModel {
         switch role {
         case .node:
             let next = self.connection.node.applying(event)
-            if next != self.connection.node { self.connection.node = next }
+            if next != self.connection.node {
+                self.connection.node = next
+                // A later node transition supersedes a one-off notice. A notice and preconnect
+                // progress never coexist, so clearing it leaves progress alone.
+                if self.gatewayStatusText != nil { self.gatewayStatusText = nil }
+            }
         case .operator:
             let next = self.connection.operator.applying(event)
             if next != self.connection.operator { self.connection.operator = next }
@@ -3817,7 +3838,6 @@ extension NodeAppModel {
                problem != self.gatewayPreconnectProblem?.problem
             {
                 self.lastGatewayProblem = nil
-                self.gatewayStatusText = "Connected"
                 LiveActivityManager.shared.handleReconnect()
             }
         }
@@ -3857,7 +3877,7 @@ extension NodeAppModel {
         self.lastGatewayProblem = self.operatorGatewayProblem
     }
 
-    func beginGatewayPreconnectVerification(stableID: String, statusText: String) {
+    func beginGatewayPreconnectVerification(stableID: String) {
         if let preconnectProblem = self.gatewayPreconnectProblem,
            GatewayStableIdentifier.matches(preconnectProblem.stableID, stableID)
         {
@@ -3869,8 +3889,7 @@ extension NodeAppModel {
             }
             self.gatewayPreconnectProblem = nil
         }
-        self.gatewayStatusText = statusText
-        self.gatewayConnectionProgress = .verifyingTLS
+        self.setGatewayConnectionProgress(.verifyingTLS)
     }
 
     func failGatewayPreconnectVerification(
@@ -3884,7 +3903,7 @@ extension NodeAppModel {
         self.gatewayPreconnectProblem = (stableID: stableID, problem: problem)
         // The failure belongs to a target that has not committed, so no session phase changes.
         self.lastGatewayProblem = problem
-        self.gatewayStatusText = problem.statusText
+        self.setGatewayConnectionProgress(nil)
         self.showGatewayConnectionProblemAttention(problem)
     }
 
@@ -3910,7 +3929,6 @@ extension NodeAppModel {
     {
         guard self.apply(.failed(problem), to: .node, route: route) else { return }
         self.lastGatewayProblem = problem
-        self.gatewayStatusText = problem.statusText
         self.showGatewayConnectionProblemAttention(problem)
     }
 
@@ -3923,7 +3941,6 @@ extension NodeAppModel {
             host: self.activeGatewayConnectConfig?.url.host)
         guard self.apply(.failed(problem), to: .operator, route: route) else { return }
         self.lastGatewayProblem = problem
-        self.gatewayStatusText = problem.statusText
         self.showGatewayConnectionProblemAttention(problem)
     }
 
@@ -3936,16 +3953,6 @@ extension NodeAppModel {
                 agentName: self.activeAgentName,
                 sessionKey: self.mainSessionKey)
         }
-    }
-
-    private func currentGatewayProblemToKeep(forDisconnectReason reason: String) -> GatewayConnectionProblem? {
-        guard let lastGatewayProblem,
-              lastGatewayProblem == self.nodeGatewayProblem || lastGatewayProblem == self.operatorGatewayProblem,
-              GatewayConnectionProblemMapper.shouldPreserve(
-                  previousProblem: lastGatewayProblem,
-                  overDisconnectReason: reason)
-        else { return nil }
-        return lastGatewayProblem
     }
 
     private func shouldStartOperatorGatewayLoop(
@@ -4189,7 +4196,8 @@ extension NodeAppModel {
                 technicalDetails: technicalDetails)
         }
         GatewayDiagnostics.log(technicalDetails)
-        self.disableGatewayAutoReconnect()
+        // The pause stops reconnects in this run; relaunch must not dial the failed handoff either.
+        UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
         // Pause before cancelling the loops so their exit keeps this problem.
         self.applyGatewayConnectionProblem(problem, route: (routeGeneration, stableID))
         self.nodeGatewayTask?.cancel()
@@ -4391,7 +4399,6 @@ extension NodeAppModel {
             route: (routeGeneration, stableID))
         else { return }
         self.clearGatewayConnectionProblem()
-        self.gatewayStatusText = "Connected"
         _ = GatewaySettingsStore.markGatewayConnected(
             stableID: stableID,
             atMs: Int(Date().timeIntervalSince1970 * 1000))
@@ -4781,12 +4788,9 @@ extension NodeAppModel {
                     continue
                 }
                 if !self.isLocalGatewayFixtureEnabled {
-                    self.setGatewayConnectionProgress(reconnecting: attempt != 0)
                     self.apply(.attemptStarted, to: .node, route: (routeGeneration, stableID))
                     LiveActivityManager.shared.showConnecting(
-                        statusText: attempt == 0
-                            ? String(localized: "Connecting...")
-                            : String(localized: "Reconnecting..."),
+                        reconnect: self.connection.node == .connecting(reconnect: true),
                         agentName: self.activeAgentName,
                         sessionKey: self.mainSessionKey)
                 }
@@ -4825,13 +4829,8 @@ extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
-                                guard self.apply(.dropped, to: .node, route: (routeGeneration, stableID))
-                                else { return }
-                                if let problem = self.currentGatewayProblemToKeep(forDisconnectReason: reason) {
-                                    self.gatewayStatusText = problem.statusText
-                                } else {
-                                    self.gatewayStatusText = "Disconnected: \(reason)"
-                                }
+                                // GatewayChannel reconnects a dropped socket itself: the node reads as reconnecting.
+                                _ = self.apply(.dropped, to: .node, route: (routeGeneration, stableID))
                             }
                             GatewayDiagnostics.log("gateway disconnected reason: \(reason)")
                         },
@@ -4868,15 +4867,14 @@ extension NodeAppModel {
                           self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID)
                     else { break }
                     attempt += 1
-                    let mappedProblem = self.mapNodeGatewayConnectionError(error)
-                    let problem = self.isLocalGatewayFixtureEnabled ? nil : mappedProblem
-                    self.recordNodeGatewayConnectionError(
-                        problem,
-                        error: error,
-                        route: (routeGeneration, stableID))
+                    let problem = self.mapNodeGatewayConnectionError(error)
+                    // Fixture mode drops every live event, so the record below is a no-op there.
+                    self.recordNodeGatewayConnectionError(problem, route: (routeGeneration, stableID))
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
                     // Both loops wait on the pause at the top; apply stopped the unconnected watchdogs.
-                    if problem?.pauseReconnect == true || problem?.needsPairingApproval == true { continue }
+                    if !self.isLocalGatewayFixtureEnabled, problem.pauseReconnect || problem.needsPairingApproval {
+                        continue
+                    }
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
                 }
@@ -4886,34 +4884,28 @@ extension NodeAppModel {
     }
 
     private func recordNodeGatewayConnectionError(
-        _ nextProblem: GatewayConnectionProblem?,
-        error: Error,
+        _ nextProblem: GatewayConnectionProblem,
         route: (generation: UInt64, stableID: String)?)
     {
-        if let nextProblem, nextProblem != self.operatorGatewayProblem {
+        if nextProblem != self.operatorGatewayProblem {
             self.applyGatewayConnectionProblem(nextProblem, route: route)
             return
         }
-        // An unmapped error, or a node cancellation echoing the operator's pause, does not pause the
-        // node: the operator session owns that pause, so resolving the operator clears it.
+        // A node cancellation echoing the operator's pause does not pause the node: the operator
+        // session owns that pause, so resolving the operator clears it.
         guard self.apply(.failed(nil), to: .node, route: route) else { return }
-        if let problem = nextProblem ?? self.operatorGatewayProblem {
-            self.lastGatewayProblem = problem
-            self.gatewayStatusText = problem.statusText
-        } else {
-            self.lastGatewayProblem = nil
-            self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
-        }
+        self.lastGatewayProblem = nextProblem
     }
 
-    func mapNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem? {
-        GatewayConnectionProblemMapper.map(
+    /// Every node connect error yields a problem; one the mapper does not know retries without pausing.
+    func mapNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem {
+        let problem = GatewayConnectionProblemMapper.map(
             error: error,
-            preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem).map {
-            GatewayConnectionIssue.addingEndpointGuidance(
-                to: $0,
-                host: self.activeGatewayConnectConfig?.url.host)
-        }
+            preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem)
+            ?? GatewayConnectionProblem.unmapped(error)
+        return GatewayConnectionIssue.addingEndpointGuidance(
+            to: problem,
+            host: self.activeGatewayConnectConfig?.url.host)
     }
 
     private func resetNodeGatewayLoopStatusIfCurrent(routeGeneration: UInt64, stableID: String) {
@@ -4924,7 +4916,6 @@ extension NodeAppModel {
         // A pause keeps its problem and target through loop exit until the user resumes or reconnects.
         guard !self.connection.isPaused else { return }
         self.lastGatewayProblem = nil
-        self.gatewayStatusText = "Offline"
         LiveActivityManager.shared.endActivity(reason: "gateway_loop_stopped")
         self.connectedGatewayID = nil
         // Retain the last verified routing contract for offline capture; reconnect compares it
@@ -5055,7 +5046,6 @@ extension NodeAppModel {
         self.operatorAuthorityGeneration &+= 1
         let connected = current != nil
         guard connected != (previous != nil) else { return }
-        self.operatorStatusText = connected ? "Connected" : "Offline"
         guard connected else {
             self.isDesktopObserveAvailable = false
             Task { [weak self] in
@@ -5111,7 +5101,7 @@ extension NodeAppModel {
         self.invalidateGatewayConnectAttempts()
         self.isAppleReviewDemoModeEnabled = !screenshot
         self.isScreenshotFixtureModeEnabled = screenshot
-        self.gatewayAutoReconnectEnabled = false
+        self.reconnectAllowed = false
         self.lastGatewayProblem = nil
         self.nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
@@ -5128,7 +5118,7 @@ extension NodeAppModel {
             await self.nodeGateway.disconnect()
         }
 
-        self.gatewayStatusText = "Connected"
+        self.setGatewayConnectionProgress(nil)
     }
 
     private func configureLocalGatewayFixtureSession(_ fixture: LocalChatFixture) {
@@ -6224,13 +6214,14 @@ extension NodeAppModel {
         self.pruneExpiredWatchExecApprovalPrompts()
         let watchGatewayConnected = self.isAppleReviewDemoModeEnabled
             || (self.gatewayConnected && self.operatorConnected)
-        let displayStatusText = self.gatewayDisplayStatusText
-        let watchGatewayStatusText = watchGatewayConnected || displayStatusText != "Connected"
-            ? displayStatusText
-            : self.operatorStatusText
+        // The Watch needs both sessions; once the node is up, the operator is the one holding it back.
+        let session = watchGatewayConnected || !self.gatewayConnected ? self.connection.node : self.connection.operator
+        let source = GatewayStatusBuilder.source(for: session, appModel: self)
         return OpenClawWatchAppSnapshotMessage(
-            gatewayStatus: self.makeWatchGatewayStatus(connected: watchGatewayConnected),
-            gatewayStatusText: watchGatewayStatusText,
+            gatewayStatus: watchGatewayConnected
+                ? OpenClawWatchAppStatus(code: .gatewayConnected)
+                : Self.makeWatchGatewayStatus(source),
+            gatewayStatusText: source.statusText,
             gatewayConnected: watchGatewayConnected,
             agentName: self.chatAgentName,
             agentAvatarURL: self.chatAgentAvatarURL,
@@ -6251,38 +6242,29 @@ extension NodeAppModel {
             chatDeliveryContext: chatDeliveryContext)
     }
 
-    private func makeWatchGatewayStatus(connected: Bool) -> OpenClawWatchAppStatus {
-        if connected {
-            return OpenClawWatchAppStatus(code: .gatewayConnected)
+    private static func makeWatchGatewayStatus(_ source: GatewayStatusSource) -> OpenClawWatchAppStatus {
+        switch source {
+        case let .problem(problem), let .phase(.paused(problem)):
+            self.makeWatchGatewayProblemStatus(problem)
+        case .progress(.awaitingTrust):
+            OpenClawWatchAppStatus(code: .legacy, verbatim: source.statusText)
+        case .progress(.connecting), .progress(.verifyingTLS):
+            OpenClawWatchAppStatus(code: .gatewayConnecting)
+        case let .notice(notice, _):
+            OpenClawWatchAppStatus(code: .legacy, verbatim: notice)
+        case .phase(.idle):
+            OpenClawWatchAppStatus(code: .gatewayOffline)
+        case let .phase(.connecting(reconnect)):
+            OpenClawWatchAppStatus(code: reconnect ? .gatewayReconnecting : .gatewayConnecting)
+        case .phase(.connected):
+            OpenClawWatchAppStatus(code: .gatewayConnected)
         }
-        if let problem = self.lastGatewayProblem {
-            return Self.makeWatchGatewayProblemStatus(problem)
-        }
-        switch self.gatewayConnectionProgress {
-        case .connecting, .verifyingTLS:
-            return OpenClawWatchAppStatus(code: .gatewayConnecting)
-        case .reconnecting:
-            return OpenClawWatchAppStatus(code: .gatewayReconnecting)
-        case .awaitingTrust, nil:
-            break
-        }
-        let statusText = self.gatewayStatusText == "Connected"
-            ? self.operatorStatusText
-            : self.gatewayStatusText
-        if statusText == "Offline" {
-            return OpenClawWatchAppStatus(code: .gatewayOffline)
-        }
-        return OpenClawWatchAppStatus(code: .legacy, verbatim: statusText)
     }
 
-    func setGatewayConnectionProgress(reconnecting: Bool) {
-        self.gatewayStatusText = reconnecting ? "Reconnecting…" : "Connecting…"
-        self.gatewayConnectionProgress = reconnecting ? .reconnecting : .connecting
-    }
-
-    func awaitGatewayTrustDecision() {
-        self.gatewayStatusText = "Verify gateway TLS fingerprint"
-        self.gatewayConnectionProgress = .awaitingTrust
+    /// Starting or ending preconnect work supersedes any earlier notice.
+    func setGatewayConnectionProgress(_ progress: GatewayConnectionProgress?) {
+        self.gatewayStatusText = nil
+        self.gatewayConnectionProgress = progress
     }
 
     private static func makeWatchGatewayProblemStatus(
@@ -7502,7 +7484,7 @@ extension NodeAppModel {
             "Silent push received wakeId=\(wakeId) "
                 + "kind=\(pushKind) "
                 + "backgrounded=\(isBackgrounded) "
-                + "autoReconnect=\(gatewayAutoReconnectEnabled)"
+                + "reconnectAllowed=\(reconnectAllowed)"
         self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
 
         if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
@@ -7554,7 +7536,7 @@ extension NodeAppModel {
             "Background refresh wake received wakeId=\(wakeId) "
                 + "trigger=\(normalizedTrigger.rawValue) "
                 + "backgrounded=\(self.isBackgrounded) "
-                + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
+                + "reconnectAllowed=\(self.reconnectAllowed)"
         self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
@@ -7633,7 +7615,7 @@ extension NodeAppModel {
         let beginMessage =
             "Location wake begin wakeId=\(wakeId) "
                 + "backgrounded=\(isBackgrounded) "
-                + "autoReconnect=\(gatewayAutoReconnectEnabled)"
+                + "reconnectAllowed=\(reconnectAllowed)"
         self.locationWakeLogger.info("\(beginMessage, privacy: .public)")
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
@@ -9203,7 +9185,6 @@ extension NodeAppModel {
             else {
                 return makeResult(false, .unhandled, "reconnect_superseded")
             }
-            self.setGatewayConnectionProgress(reconnecting: true)
             self.talkMode.updateGatewayConnected(false)
             self.applyGatewayConnectConfig(cfg, expectedGeneration: generation)
             appliedReconnect = true
@@ -9580,9 +9561,9 @@ extension NodeAppModel {
         self.presentFetchedExecApprovalPrompt(prompt)
     }
 
-    func _test_applyNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem? {
+    func _test_applyNodeGatewayConnectionError(_ error: Error) -> GatewayConnectionProblem {
         let nextProblem = self.mapNodeGatewayConnectionError(error)
-        self.recordNodeGatewayConnectionError(nextProblem, error: error, route: nil)
+        self.recordNodeGatewayConnectionError(nextProblem, route: nil)
         return nextProblem
     }
 

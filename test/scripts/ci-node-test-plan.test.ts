@@ -2821,8 +2821,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(planFiles(selected)).toEqual([fast]);
   });
 
-  it("retains recovery contracts in their main, PR, and manual Node tiers", () => {
-    const proofFiles = ["src/gateway/server.codex-failure-recovery.test.ts"];
+  it("retains recovery and feature transport contracts in their main, PR, and manual Node tiers", () => {
+    const proofFiles = [
+      "src/gateway/server.codex-failure-recovery.test.ts",
+      "src/gateway/server.feature-session-actions.test.ts",
+    ];
     const files = (mode: "push" | "pull-request") => planFiles(committedPlan(mode));
     const mainFiles = files("push");
     const prFiles = files("pull-request");
@@ -2832,6 +2835,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(prFiles.filter((target) => target === file)).toHaveLength(1);
       const rawConfig = required(buildVitestRunPlans([file])[0]?.config);
       const config = resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig;
+      expect(config).toBe(configPath("gateway-server-isolated"));
       expect(
         manual.filter(
           (shard) =>

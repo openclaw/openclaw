@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import CLIENT_TOOL_DISPLAY from "../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
+import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 import {
   hasShellCompoundCommand,
   scanTopLevelChars,
@@ -16,6 +18,23 @@ import {
 function detailFor(name: string, args: unknown) {
   return formatToolDetail(resolveToolDisplay({ name, args }));
 }
+
+it("ships client display fields without Gateway-only progress metadata", () => {
+  const clientTools: Record<string, unknown> = CLIENT_TOOL_DISPLAY.tools;
+  for (const [name, source] of Object.entries(TOOL_DISPLAY_CONFIG.tools)) {
+    const { progress: _progress, actions, ...display } = source;
+    const clientActions =
+      actions &&
+      Object.fromEntries(
+        Object.entries(actions).map(([action, { progress: _actionProgress, ...actionDisplay }]) => [
+          action,
+          actionDisplay,
+        ]),
+      );
+    expect(clientTools[name]).toEqual(actions ? { ...display, actions: clientActions } : display);
+  }
+  expect(CLIENT_TOOL_DISPLAY.fallback).toEqual(TOOL_DISPLAY_CONFIG.fallback);
+});
 
 function execDetail(command: string, detailMode?: "explain", workdir?: string, name = "exec") {
   return formatToolDetail(resolveToolDisplay({ name, args: { command, workdir }, detailMode }));
@@ -43,6 +62,22 @@ describe("tool display details", () => {
       label: "Web Search",
       detail: 'for "OpenClaw release notes"',
     });
+  });
+
+  it("shortens only subagent progress references, retaining labels and full diagnostics", () => {
+    for (const [id, suffix] of [
+      ["00000000-0000-4000-8000-000000002633", "…2633"],
+      ["00000000-0000-4000-8000-00000000a4f0", "…a4f0"],
+    ]) {
+      const args = { sessionKey: `agent:demo:subagent:${id}`, label: "Check streaming" };
+      const display = resolveToolDisplay({ name: "sessions_send", args });
+      expect(display.progress).toEqual({
+        label: "Send to session",
+        detail: `Check streaming ${suffix}`,
+      });
+      expect(display.detail).toContain(args.sessionKey);
+      expect(args.sessionKey).toBe(`agent:demo:subagent:${id}`);
+    }
   });
 
   it("keeps sessions_yield private context out of tool status", () => {

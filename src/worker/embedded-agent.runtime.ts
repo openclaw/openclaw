@@ -336,7 +336,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           os: resolveRuntimeOsLabel(),
           arch: os.arch(),
           node: process.version,
-          shell: detectRuntimeShell() ?? path.basename(getShellConfig().shell),
+          shell: detectRuntimeShell() ?? path.basename((await getShellConfig()).shell),
           repoRoot: await resolveSystemPromptRepoRoot({
             workspaceDir: params.cwd,
             cwd: params.cwd,
