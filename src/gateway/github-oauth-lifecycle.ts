@@ -65,6 +65,7 @@ import {
   identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   nextGitHubOAuthMaintenanceAtMs,
+  maintainNativeGitHubConfig,
   pendingInitialOAuthIdentitySelected,
   REFRESH_SKEW_MS,
   SHUTDOWN_DRAIN_TIMEOUT_MS,
@@ -537,6 +538,7 @@ export function createGitHubOAuthLifecycle(params: {
       }
     }
     await reconcileRecords();
+    nextMaintenanceAtMs = await maintainNativeGitHubConfig(params.getConfig(), nextMaintenanceAtMs);
     for (const configured of configuredOAuthIdentities(params.getConfig())) {
       if (stopping) {
         break;

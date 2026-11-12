@@ -1,3 +1,0 @@
-# Bundled skill Add, archive, and consent regressions.
-# Retire 12 unused credits from the merged Template stack (2042 -> 2030).
-40

@@ -1,2 +1,0 @@
-# Grok native picker registration, disablement, real ACP catalog acquisition, and PDF admission.
-42

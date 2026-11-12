@@ -45,6 +45,7 @@ const repositoryScriptEntries = [
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/exec-safe-bin-io-measure.mjs!",
   "scripts/perf/clickclack-account-snapshot.ts!",
   "scripts/perf/clickclack-credential-read.ts!",
   "scripts/perf/github-managed-profile-read.ts!",

@@ -1,2 +1,0 @@
-# Gateway custody, reconnect, and successor start after completion/failure/cancellation.
-123

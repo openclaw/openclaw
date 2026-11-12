@@ -28,10 +28,19 @@ const doctorCommandFiles = [
 it.each([
   { name: "Doctor commands", config: commands, files: doctorCommandFiles, runtime: true },
   {
-    name: "Doctor update schema",
+    name: "Doctor update schema and managed settlement",
     config: "test/vitest/vitest.infra.config.ts",
-    files: ["src/flows/doctor-health.update-schema.test.ts"],
+    files: [
+      "src/flows/doctor-health.update-schema.test.ts",
+      "src/flows/doctor-health.managed-settlement.test.ts",
+    ],
     runtime: true,
+  },
+  {
+    name: "mixed Doctor infra",
+    config: "test/vitest/vitest.infra.config.ts",
+    files: ["src/flows/doctor-health.managed-settlement.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
   },
   { name: "broad Doctor commands", config: commands, files: [], runtime: false },
   {
