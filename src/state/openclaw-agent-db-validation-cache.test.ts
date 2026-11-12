@@ -3,8 +3,13 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assert, describe, expect, it as baseIt, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import * as nativeAdmission from "../infra/sqlite-database-admission-turn.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { cleanupSessionStateForTest as cleanupState } from "../test-utils/session-state-cleanup.js";
@@ -290,6 +295,7 @@ describe("canonical proof on physical database validation", () => {
 
   it("rejects a replaced file at receiver and queued write admission before observation", async ({
     empty: { database, options },
+    signal,
   }) => {
     const captured = (await captureReadValidation(database))!;
     closePath(database.path);
@@ -300,12 +306,32 @@ describe("canonical proof on physical database validation", () => {
       await resume.promise;
     });
     await entered.promise;
+    const writerCaptured = createDeferred();
+    const nativeTurn = nativeAdmission.runWithSqliteDatabaseAdmissionTurn;
+    const observeTurn = vi
+      .spyOn(nativeAdmission, "runWithSqliteDatabaseAdmissionTurn")
+      .mockImplementation((...args) => {
+        const pending = nativeTurn(...args);
+        if (args[0].includes(database.path)) {
+          writerCaptured.resolve();
+        }
+        return pending;
+      });
     let effect = false;
     const queued = admitWrite(options, () => {
       effect = true;
     });
     void queued.catch(() => undefined);
     try {
+      // Discovery is async; replace only after the queued writer captures its original source.
+      await withinTest(
+        awaitGateBeforeSettlement(
+          writerCaptured.promise,
+          queued,
+          "Writer did not capture admission",
+        ),
+        signal,
+      );
       replaceFile(database.path);
       {
         using opened = openTestReader(options);
@@ -320,6 +346,7 @@ describe("canonical proof on physical database validation", () => {
     } finally {
       resume.resolve();
       await Promise.allSettled([first, queued]);
+      observeTurn.mockRestore();
     }
   });
   it("shares republished schema proof with restart readers through a directory symlink", async ({
