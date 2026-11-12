@@ -290,6 +290,7 @@ export const worktreeTemplateOperations = {
           k
             .updateTable("worktree_templates")
             .set({
+              cache_key: `retired:${row.id}`,
               status: "preparing",
             })
             .where("id", "=", row.id),
