@@ -10,19 +10,64 @@
  * after a finished turn cannot restart it forever -- correct behavior for
  * "this turn is over", but it leaves no signal at all for legitimate work
  * that outlives the turn. This module is that second signal. It reuses the
- * same reusable channel typing primitive (`createTypingCallbacks` via
- * `createHeartbeatTypingCallbacks`) but always through a *fresh* instance
+ * same reusable channel typing primitive (`createTypingCallbacks` over the
+ * channel's `heartbeat.sendTyping` adapter) but always through a *fresh* instance
  * per activation, never the turn-bound controller's instance, so the two
  * can never observe or fight each other: each session key here owns its own
  * independent start/stop lifecycle, keyed apart from any turn-bound state.
  */
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { createTypingCallbacks, type TypingCallbacks } from "../channels/typing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
+
+const DEFAULT_BACKGROUND_ACTIVITY_TYPING_INTERVAL_SECONDS = 6;
+
+type BackgroundActivityChannelPlugin = Pick<ChannelPlugin, "heartbeat">;
+
+/** Typing start/stop/keepalive callbacks for one session's delivery target. */
+function createBackgroundActivityTypingCallbacks(params: {
+  cfg: OpenClawConfig;
+  target: {
+    channel: string;
+    to: string;
+    accountId?: string | null;
+    threadId?: string | number | null;
+  };
+  plugin: BackgroundActivityChannelPlugin;
+  typingIntervalSeconds?: number;
+  log?: (message: string) => void;
+}): TypingCallbacks | undefined {
+  const sendTyping = params.plugin.heartbeat?.sendTyping;
+  if (!sendTyping) {
+    return undefined;
+  }
+  const clearTyping = params.plugin.heartbeat?.clearTyping;
+  const intervalSeconds =
+    typeof params.typingIntervalSeconds === "number" && params.typingIntervalSeconds > 0
+      ? params.typingIntervalSeconds
+      : DEFAULT_BACKGROUND_ACTIVITY_TYPING_INTERVAL_SECONDS;
+  const target = {
+    cfg: params.cfg,
+    to: params.target.to,
+    ...(params.target.accountId !== undefined ? { accountId: params.target.accountId } : {}),
+    ...(params.target.threadId !== undefined ? { threadId: params.target.threadId } : {}),
+  };
+  return createTypingCallbacks({
+    start: async () => sendTyping(target),
+    ...(clearTyping ? { stop: async () => clearTyping(target) } : {}),
+    keepaliveIntervalMs: intervalSeconds * 1000,
+    onStartError: (err) => {
+      params.log?.(
+        `background activity typing failed for ${params.target.channel}: ${String(err)}`,
+      );
+    },
+  });
+}
 
 /** Poll cadence for re-evaluating which sessions still have armed background work.
  * Deliberately looser than the ~3-6s active-typing keepalive cadence
- * (createTypingKeepaliveLoop's default / DEFAULT_HEARTBEAT_TYPING_INTERVAL_SECONDS):
+ * (createTypingKeepaliveLoop's default / DEFAULT_BACKGROUND_ACTIVITY_TYPING_INTERVAL_SECONDS):
  * this indicator answers "is anything still happening at all", not "render every
  * keystroke", so a per-session indicator can lag reality by up to one interval
  * without materially misleading the operator. */
@@ -38,13 +83,16 @@ export type BackgroundActivitySources = {
 export type BackgroundActivityChannelTarget = {
   getConfig: () => OpenClawConfig;
   /** Resolve a session's current outbound delivery target, if it is routable at all. */
-  resolveDelivery: (sessionKey: string) => DeliveryContext | undefined;
+  resolveDelivery: (
+    sessionKey: string,
+  ) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Resolve the loaded channel plugin providing `heartbeat.sendTyping`/`clearTyping`. */
   resolveChannelPlugin: (
     channel: string,
   ) =>
-    | Parameters<typeof createHeartbeatTypingCallbacks>[0]["plugin"]
-    | Promise<Parameters<typeof createHeartbeatTypingCallbacks>[0]["plugin"]>;
+    | BackgroundActivityChannelPlugin
+    | undefined
+    | Promise<BackgroundActivityChannelPlugin | undefined>;
   /** Per-session/agent typing gate (e.g. `typingMode: "never"`); default true when omitted. */
   isTypingEnabled?: (sessionKey: string) => boolean;
   /** Per-session keepalive cadence override; channel default applies when omitted/undefined. */
@@ -104,7 +152,7 @@ export function createBackgroundActivityIndicator(
     if (options.target.isTypingEnabled && !options.target.isTypingEnabled(sessionKey)) {
       return;
     }
-    const delivery = options.target.resolveDelivery(sessionKey);
+    const delivery = await options.target.resolveDelivery(sessionKey);
     const channel = delivery?.channel?.trim();
     const to = delivery?.to?.trim();
     if (!channel || !to) {
@@ -122,7 +170,7 @@ export function createBackgroundActivityIndicator(
       // (and some accounts) simply do not implement typing.
       return;
     }
-    const callbacks = createHeartbeatTypingCallbacks({
+    const callbacks = createBackgroundActivityTypingCallbacks({
       cfg: options.target.getConfig(),
       target: {
         channel,
@@ -132,9 +180,7 @@ export function createBackgroundActivityIndicator(
       },
       plugin,
       typingIntervalSeconds: options.target.typingIntervalSeconds?.(sessionKey),
-      log: options.target.log
-        ? { debug: (message: string) => options.target.log?.(message) }
-        : undefined,
+      log: options.target.log,
     });
     if (!callbacks) {
       return;

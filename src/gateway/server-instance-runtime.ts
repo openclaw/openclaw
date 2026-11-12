@@ -20,7 +20,7 @@ import {
   listArmedCronWakeSessionKeys,
   listArmedSubagentWaitSessionKeys,
   resolveBackgroundActivitySessionDelivery,
-  resolveHeartbeatTypingIntervalSeconds,
+  resolveBackgroundActivityTypingIntervalSeconds,
 } from "../infra/background-activity-sources.js";
 import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -115,7 +115,7 @@ export function createGatewayInstanceRuntime(
       isTypingEnabled: (sessionKey) =>
         isBackgroundActivityTypingEnabled(sessionKey, options.getContext().getRuntimeConfig()),
       typingIntervalSeconds: () =>
-        resolveHeartbeatTypingIntervalSeconds(options.getContext().getRuntimeConfig()),
+        resolveBackgroundActivityTypingIntervalSeconds(options.getContext().getRuntimeConfig()),
     },
     onError: () =>
       options.logError?.("background activity indicator unavailable; no operator-visible effect"),

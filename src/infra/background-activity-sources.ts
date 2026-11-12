@@ -16,20 +16,17 @@
  * - Cron/automation wake: `GatewayCronServiceContract.list()` (src/cron/
  *   service-contract.ts), filtered to jobs with a defined, not-too-stale
  *   `state.nextRunAtMs`, resolved to session keys via
- *   `resolveCronJobBoundSessionKeys` (src/cron/job-session-bindings.ts).
+ *   `resolveCronJobSessionBindings` (src/cron/job-session-bindings.ts).
  */
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { isSubagentRunLive } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { resolveCronJobSessionBindings } from "../cron/job-session-bindings.js";
 import type { CronJob } from "../cron/types.js";
 import type { GatewayCronServiceContract } from "../gateway/server-cron-contract.js";
 import { resolveSessionStoreIdentity } from "../gateway/session-store-key.js";
-import {
-  isHeartbeatTypingEnabled,
-  resolveHeartbeatTypingIntervalSeconds,
-} from "./heartbeat-runner-config.js";
 
 /** A job whose next fire slipped into the very recent past still counts as
  * "armed": the scheduler tick that advances `nextRunAtMs` past the fire it
@@ -69,10 +66,10 @@ export async function listArmedCronWakeSessionKeys(params: {
     if (!hasArmedCronWake(job, now)) {
       continue;
     }
-    for (const sessionKey of resolveCronJobBoundSessionKeys(job, {
+    for (const sessionKey of resolveCronJobSessionBindings(job, {
       cfg: params.cfg,
       defaultAgentId,
-    })) {
+    }).keys()) {
       keys.add(sessionKey);
     }
   }
@@ -80,18 +77,29 @@ export async function listArmedCronWakeSessionKeys(params: {
 }
 
 /** Resolves a session's current routable channel delivery target, if any. */
-export function resolveBackgroundActivitySessionDelivery(sessionKey: string, cfg: OpenClawConfig) {
-  return extractDeliveryInfo(sessionKey, { cfg }).deliveryContext;
+export async function resolveBackgroundActivitySessionDelivery(
+  sessionKey: string,
+  cfg: OpenClawConfig,
+) {
+  return (await extractDeliveryInfo(sessionKey, { cfg })).deliveryContext;
 }
 
 /** Honors the same per-agent/global `typingMode: "never"` opt-out the turn-bound
- * and heartbeat typing paths already respect (see isHeartbeatTypingEnabled). */
+ * and lifecycle typing paths already respect. */
 export function isBackgroundActivityTypingEnabled(
   sessionKey: string,
   cfg: OpenClawConfig,
 ): boolean {
   const { agentId } = resolveSessionStoreIdentity({ cfg, sessionKey });
-  return isHeartbeatTypingEnabled({ cfg, agentId, hasChatDelivery: true });
+  const typingMode =
+    resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
+  return typingMode !== "never";
 }
 
-export { resolveHeartbeatTypingIntervalSeconds };
+/** The configured typing keepalive cadence, when one is set. */
+export function resolveBackgroundActivityTypingIntervalSeconds(
+  cfg: OpenClawConfig,
+): number | undefined {
+  const configured = cfg.agents?.defaults?.typingIntervalSeconds;
+  return typeof configured === "number" && configured > 0 ? configured : undefined;
+}
