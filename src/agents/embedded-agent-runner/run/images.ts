@@ -230,7 +230,7 @@ async function loadMediaFromRef(
       : gatewayAttachment
         ? [getMediaDir()]
         : ((typeof options.localRoots === "function" ? options.localRoots() : options.localRoots) ??
-          (options.workspaceOnly ? [options.workspaceDir] : undefined));
+          (options.workspaceOnly ? [options.workspaceDir, getMediaDir()] : undefined));
     const media = sandbox
       ? await loadWebMediaRaw(targetPath, {
           maxBytes: options.maxBytes,
