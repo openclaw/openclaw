@@ -2,6 +2,10 @@ name: Release Compiler Delegation Prerequisite Diagnostic
 on:
   workflow_dispatch:
     inputs:
+      static_only:
+        description: Recover only static checks for the same bound source
+        type: boolean
+        default: false
       target_ref:
         description: Exact reviewed release backport commit (must equal CANDIDATE_SHA)
         required: true
@@ -22,6 +26,7 @@ env:
   WORKFLOW_PATH: .github/workflows/retained-cli-composition-proof.yml
 jobs:
   tests:
+    if: ${{ !inputs.static_only }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -223,6 +228,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   types:
+    if: ${{ !inputs.static_only }}
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -281,7 +287,7 @@ jobs:
           trap 'code=$?; if (( code == 124 || code >= 128 )); then echo stopped=true >> "$GITHUB_OUTPUT"; fi; exit "$code"' EXIT
           source scripts/ci-collect-checks.sh
           {
-            run_check format node scripts/run-format.mts --check scripts/check-changed.mts scripts/ci-check-plan.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts test/scripts/ci-workflow-manifest.test-support.ts docs/ci/local-proof.md
+            run_check format pnpm exec oxfmt --check scripts/check-changed.mts scripts/ci-check-plan.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts test/scripts/ci-workflow-manifest.test-support.ts docs/ci/local-proof.md
             run_check script-lint node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/check-changed.mts scripts/ci-check-plan.mts
             run_check test-lint node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts test/scripts/ci-workflow-manifest.test-support.ts
             run_check script-erasability pnpm check:script-erasability
@@ -301,9 +307,9 @@ jobs:
           git diff --quiet
           mapfile -t files < "$evidence/expected-paths.txt"
           set +e
-          node scripts/run-format.mts --write "${files[@]}" 2>&1 | tee "$evidence/formatter-write.log"
+          pnpm exec oxfmt --write --threads=1 "${files[@]}" 2>&1 | tee "$evidence/formatter-write.log"
           write_status=("${PIPESTATUS[@]}")
-          node scripts/run-format.mts --check "${files[@]}" 2>&1 | tee "$evidence/formatter-parity.log"
+          pnpm exec oxfmt --check "${files[@]}" 2>&1 | tee "$evidence/formatter-parity.log"
           parity_status=("${PIPESTATUS[@]}")
           set -e
           printf 'write_exit=%s\nwrite_log_exit=%s\nparity_exit=%s\nparity_log_exit=%s\ninput_checks_outcome=%s\n' "${write_status[0]}" "${write_status[1]}" "${parity_status[0]}" "${parity_status[1]}" "$INPUT_CHECKS_OUTCOME" > "$evidence/formatter-status.txt"
