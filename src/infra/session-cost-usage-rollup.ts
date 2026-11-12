@@ -54,6 +54,7 @@ type SessionUsageUntimestampedRollup = {
 export type SessionUsageRollupData = {
   buckets: Record<string, SessionUsageRollupBucket>;
   lastUserTimestamp?: number;
+  lastUserMirrorKey?: string;
   untimestamped: SessionUsageUntimestampedRollup;
 };
 
@@ -64,6 +65,7 @@ type SessionUsageRollupContribution = {
   provider?: string;
   model?: string;
   stopReason?: string;
+  mirrorKey?: string;
   toolNames: string[];
   toolResultCounts: { total: number; errors: number };
   usageTotals?: CostUsageTotals;
@@ -173,6 +175,14 @@ export function appendSessionUsageRollupContribution(
   rollup: SessionUsageRollupData,
   contribution: SessionUsageRollupContribution,
 ): void {
+  if (contribution.role === "user") {
+    // Earlier Codex prompt mirroring appended a second row for an already admitted prompt
+    // under the same mirror identity, and retained transcripts still hold both rows.
+    if (contribution.mirrorKey && contribution.mirrorKey === rollup.lastUserMirrorKey) {
+      return;
+    }
+    rollup.lastUserMirrorKey = contribution.mirrorKey;
+  }
   const timestamp = contribution.timestamp;
   const timedBucket =
     timestamp === undefined

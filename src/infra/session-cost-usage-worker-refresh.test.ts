@@ -9,7 +9,14 @@ import {
 } from "../config/sessions/session-accessor.sqlite-parent-fork.js";
 import { planSessionMessageCut } from "../config/sessions/session-message-cut-plan.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
-import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
+import {
+  decodeUsageCostPartition,
+  partitionUsageCostRollup,
+} from "./session-cost-usage-partitions.js";
+import {
+  decodeUsageCostRollup,
+  type UsageCostRollupEntry,
+} from "./session-cost-usage-rollup-codec.js";
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
 const timestamp = Date.parse("2026-09-23T12:00:00.000Z");
@@ -319,3 +326,72 @@ it.each([
     ).toBe(expected);
   },
 );
+
+function mirroredPrompt(
+  seq: number,
+  id: string,
+  parentId: string | null,
+  turn: string,
+  idempotencyKey?: string,
+): Row {
+  return {
+    seq,
+    event: {
+      type: "message",
+      id,
+      parentId,
+      timestamp: new Date(timestamp).toISOString(),
+      message: {
+        role: "user",
+        content: "synthetic prompt",
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        __openclaw: {
+          mirrorIdentity: `${turn}:prompt`,
+          mirrorOrigin: "codex-app-server",
+          mirrorSourceFingerprint: "synthetic-fingerprint",
+        },
+      },
+    },
+  };
+}
+const mirroredTurn = [
+  mirroredPrompt(1, "admitted", null, "turn-1"),
+  mirroredPrompt(2, "mirrored", "admitted", "turn-1", "codex-app-server:thread:turn-1:prompt"),
+  makeRow(3, "answer", "mirrored", 3),
+];
+const userMessages = (entry: UsageCostRollupEntry) =>
+  Object.values(entry.rollup.buckets).reduce(
+    (total, bucket) => total + bucket.messageCounts.user,
+    entry.rollup.untimestamped.messageCounts.user,
+  );
+
+it("counts a prompt and its re-mirrored copy once", async () => {
+  expect(userMessages(await scan(mirroredTurn))).toBe(1);
+});
+
+it("counts the pair once when a cached refresh ends between its rows", async () => {
+  const first = await scan(mirroredTurn.slice(0, 1));
+  const persisted = partitionUsageCostRollup(first);
+  const cached = decodeUsageCostRollup(
+    persisted.valueJson,
+    first.pricingFingerprint,
+    persisted.blob,
+  )!;
+  for (const partition of persisted.partitions) {
+    Object.assign(
+      cached.rollup.buckets,
+      decodeUsageCostPartition(partition.valueJson, partition.blob)!.buckets,
+    );
+  }
+  expect(userMessages(await scan(mirroredTurn, cached))).toBe(1);
+});
+
+it("counts repeated prompt text from separate turns", async () => {
+  const result = await scan([
+    mirroredTurn[0]!,
+    makeRow(2, "first-answer", "admitted", 3),
+    mirroredPrompt(3, "again", "first-answer", "turn-2"),
+    makeRow(4, "second-answer", "again", 3),
+  ]);
+  expect(userMessages(result)).toBe(2);
+});
