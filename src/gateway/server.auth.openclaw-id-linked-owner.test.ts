@@ -124,6 +124,30 @@ test("a linked owner device keeps owner authority under its person's restricted 
     // Personal APIs select the person's data without applying the person's role to the owner.
     const github = await rpcReq(ws, "users.github.status", {});
     expect(github.error?.message ?? "").not.toMatch(/Personal profile requires/);
+    const background = await rpcReq(ws, "users.background.get", {});
+    expect(background.ok, JSON.stringify(background.error)).toBe(true);
+    const library = await rpcReq(ws, "skills.library.list", {});
+    expect(library.ok, JSON.stringify(library.error)).toBe(true);
+    // A committed, unrelated config change keeps the owner's admin grants and connection.
+    const closed = new Promise<boolean>((resolve) => {
+      ws.once("close", () => resolve(true));
+      setTimeout(() => resolve(false), 1_500);
+    });
+    await writeConfigFile({
+      gateway: {
+        auth: { mode: "token", token: "linked-owner-secret" },
+        controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+        roles: {
+          default: "talker",
+          definitions: {
+            talker: { scopes: ["operator.talk"], agents: [], sessions: { others: "none" } },
+            reader: { scopes: ["operator.read"], agents: [], sessions: { others: "none" } },
+          },
+        },
+      },
+    });
+    expect(await closed).toBe(false);
+    expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
   } finally {
     ws.close();
   }

@@ -357,6 +357,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
           current.identity.profile,
           current.currentConfig,
           operator.gatewayAccessGrant,
+          undefined,
+          principal,
         );
       }
       // Plugin callbacks may synchronously publish role, profile, session, or config changes.
@@ -437,6 +439,8 @@ export async function prepareCronStreamSandboxAuthority(params: {
         prepared.identity.profile,
         prepared.currentConfig,
         operator.gatewayAccessGrant,
+        undefined,
+        principal,
       );
       const originalAccess = access;
       const accessAborted = () => revoke(originalAccess?.signal.reason ?? unavailable());

@@ -24,7 +24,10 @@ import {
   readResidentUserProfileId,
   readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
-import { openclawIdSubjectRolePolicy } from "../openclaw-id/tunnel-principal.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
@@ -120,8 +123,11 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
     const cfg = context.getRuntimeConfig();
     const profile = readResidentUserProfileIdentity(canonicalId);
     // An owner device attributed to its linked profile keeps owner authority (OCF-510).
+    const principal = (operatorAuthority ?? client.internal)?.openclawIdPrincipal;
     const policy = openclawIdSubjectRolePolicy(
-      (operatorAuthority ?? client.internal)?.openclawIdPrincipal,
+      principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)
+        ? undefined
+        : principal,
       () =>
         resolveOperatorRolePolicyForAssignment(
           canonicalId,

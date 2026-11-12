@@ -325,6 +325,7 @@ async function restoreGatewayOperatorSnapshot(params: {
           cfg,
           snapshot.grant,
           accessAuthority,
+          principal,
         );
         if (access && !accessAuthority) {
           accessAuthority = access;

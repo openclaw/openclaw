@@ -218,6 +218,14 @@ export function resolveOperatorRolePolicy(
     if (authority.profileId !== actor.profileId) {
       throw new Error("Gateway requester profile changed");
     }
+    // A linked owner device's run keeps the owner's authority under its person's profile.
+    if (authority.openclawIdPrincipal?.kind === "owner") {
+      if (!isOpenClawIdTunnelPrincipalCurrent(authority.openclawIdPrincipal)) {
+        throw new Error("OpenClaw ID membership authority changed");
+      }
+      authority.assertCurrent();
+      return undefined;
+    }
     if (roleFacts?.policy) {
       return roleFacts.policy;
     }
