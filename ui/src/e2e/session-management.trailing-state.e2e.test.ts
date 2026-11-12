@@ -2,13 +2,18 @@ import type { Page } from "playwright";
 import { it, expect } from "vitest";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   actionOpacity,
+  controlUiSessionPath,
   createSessionManagementE2eSuite,
+  waitForMobileSidebarDrawerOpen,
 } from "./session-management.test-support.ts";
+import { seedSidebarSettings } from "./sidebar-contract.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -149,7 +154,7 @@ suite.define(() => {
       });
     }));
 
-  it("keeps fork provenance in the title above always-visible touch actions", () =>
+  it("keeps fork provenance and navigation clear of touch actions", () =>
     suite.withPage(touchOptions, async ({ page }) => {
       await ui.installSessionRows(
         page,
@@ -187,7 +192,43 @@ suite.define(() => {
       expect(ui.centerY(nameBounds)).toBeCloseTo(ui.centerY(pinBounds), 1);
       expect(ui.right(nameBounds)).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(ui.right(pinBounds)).toBeLessThanOrEqual(menuBounds.x);
+      expect(nameBounds.width).toBeGreaterThan(0);
+      await row.locator(".sidebar-recent-session__link").tap();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath("agent:main:touch-forked"));
     }));
+
+  it.each([1280, 390])("reserves team-row touch actions once at %s px", (width) =>
+    suite.withPage({ ...touchOptions, viewport: { width, height: 900 } }, async ({ page }) => {
+      await seedSidebarSettings(page, suite.server.baseUrl, {
+        sidebarAgentsMode: "roster",
+        railShortcuts: ["session:agent:main:team-touch"],
+      });
+      await ui.installSessionRows(page, [
+        sessionRow("agent:main:main", "Main", Date.now()),
+        sessionRow("agent:main:team-touch", "A long team session title", Date.now() - 1),
+      ]);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      if (width === 390) {
+        await navigationDrawerToggle(page).click();
+        await waitForMobileSidebarDrawerOpen(page);
+      }
+      const row = page.locator('[data-session-key="agent:main:team-touch"]');
+      await ui.visible(row, 10_000);
+      await ui.pollAttribute(row, "class").toContain("sidebar-recent-session--team");
+      const link = row.locator(".sidebar-recent-session__link");
+      const aside = row.locator(".sidebar-recent-session__aside");
+      const [linkBounds, asideBounds] = await Promise.all([ui.bounds(link), ui.bounds(aside)]);
+      await captureSidebarUiProof(suite, page, "team-touch-" + width + ".png");
+      // The drawer keeps an empty toggle column, so at most two 4px grid gaps remain.
+      expect(asideBounds.x - ui.right(linkBounds)).toBeLessThanOrEqual(8);
+      expect(ui.right(linkBounds)).toBeLessThanOrEqual(asideBounds.x);
+      expect(linkBounds.width).toBeGreaterThan(0);
+      await link.tap();
+      await ui.expectSessionPath(page, "agent:main:team-touch");
+    }),
+  );
 
   it("keeps unread glyph badges visible while PR icons yield to hover actions", () =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page, context }) => {
