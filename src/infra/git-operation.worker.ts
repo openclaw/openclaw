@@ -3,6 +3,7 @@ import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
 import { withWorkerFsSafeNativeMode } from "./worker-fs-safe.js";
+import { workerMutationAssertion } from "./worker-mutation-authority.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
@@ -26,6 +27,28 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
                   withWorkerFsSafeNativeMode(command.input.nativeMode, () =>
                     readManagedGitHubProfileToken(command.input.profileDir),
                   ),
+              );
+            case "github.profile-stage":
+            case "github.profile-refresh":
+              return control.runNativeSection(() =>
+                withWorkerFsSafeNativeMode(command.input.nativeMode, async () => {
+                  const { writeManagedGitHubProfileFiles, refreshManagedGitHubProfileFiles } =
+                    await import("../agents/github-tool-profile-files.js");
+                  const assertCurrent = command.mutationAuthority
+                    ? workerMutationAssertion(
+                        command.mutationAuthority,
+                        () => channel.notify("authority"),
+                        control.throwIfCancelled,
+                      )
+                    : control.throwIfCancelled;
+                  await (
+                    command.type === "github.profile-stage"
+                      ? writeManagedGitHubProfileFiles
+                      : refreshManagedGitHubProfileFiles
+                  )(command.input.profileDir, command.input.identity, {
+                    assertCurrent,
+                  });
+                }),
               );
             case "workspace.inventory.select":
             case "workspace.inventory.existing":

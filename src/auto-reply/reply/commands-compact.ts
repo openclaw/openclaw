@@ -342,6 +342,7 @@ export async function handleCompactCommand(
             conversationRoutePeerId: params.ctx.ConversationRoutePeerId,
             chatType: normalizeChatType(params.ctx.ChatType),
             skillsSnapshot: expectedSession.skillsSnapshot,
+            toolOverrides: expectedSession.toolOverrides,
             provider: params.provider,
             model: params.model,
             authProfileId:

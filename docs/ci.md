@@ -212,11 +212,12 @@ changed Node plan defers its boundary coverage to that producer. This opt-in doe
 not enable unrelated proof-tier checks.
 
 Full and runtime-only compiled workers reserve separate live/cache slots, so
-runtime checks cannot replace a retained full generation. The protected warmer
-also supplies runtime workers to current-target Control UI E2E rows. Worker-cache
-identity ignores the compiler's heap ceiling while preserving other Node options;
-the warmer and test job keep their own memory limits. Frozen targets and browser
-extension rows retain their existing preparation.
+runtime checks cannot replace a retained full generation. Control UI E2E rows
+compile workers locally: bundled Settings preparation can change their installed
+namespace after the source-only seed was captured. Do not restore that seed
+until reuse is qualified against the prepared UI topology. Worker-cache identity
+ignores the compiler's heap ceiling while preserving other Node options; the
+warmer and test job keep their own memory limits.
 
 The protected warmer keeps its prebuild full seed for source-only Node shards and publishes the full
 generation already prepared by postbuild collection separately. Only selected
