@@ -200,8 +200,8 @@ actor GatewayEndpointStore {
         return auth?["mode"] as? String
     }
 
-    // Match Gateway startup materialization: concrete competing credentials can leave
-    // a ref inactive; after materialization, implicit password auth wins over token.
+    /// Match Gateway startup materialization: concrete competing credentials can leave
+    /// a ref inactive; after materialization, implicit password auth wins over token.
     private static func localAuthSurface(
         root: [String: Any],
         env: [String: String],
