@@ -43,6 +43,7 @@ async function acceptHello(
     ok: true,
     payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, ...(auth ? { auth } : {}) },
   });
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   const subscription = socket.sent
     .map((value) => JSON.parse(value))
@@ -394,4 +395,36 @@ it("delivers a rejected early subscription to the existing read-retry owner", as
   expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ payload: 1 }));
   expect(wsInstances).toHaveLength(1);
   expect(takeEarlyGatewaySubscription(boot.client, key, { initialHistory })).toBeUndefined();
+});
+
+it("does not admit history after retirement while its runtime is loading", async () => {
+  const loading = Promise.withResolvers<void>();
+  vi.resetModules();
+  vi.doMock("../lib/sessions/session-message-subscriptions.runtime.ts", async (importOriginal) => {
+    await loading.promise;
+    return importOriginal();
+  });
+  try {
+    window.dispatchEvent = () => true;
+    const deferred = await import("./gateway-boot.ts");
+    boot.client.stop();
+    boot = new deferred.EarlyGateway(options, key, initialHistory, href);
+    const { socket, connect } = await handshake();
+    socket.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: true,
+      payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.stubGlobal("location", { href: `${href}-other` });
+    expect(boot.adopt(options)).toBeNull();
+    loading.resolve();
+    await vi.dynamicImportSettled();
+    expect(socket.sent.map((value) => JSON.parse(value).method)).toEqual(["connect"]);
+    expect(socket.readyState).toBe(3);
+  } finally {
+    loading.resolve();
+    vi.doUnmock("../lib/sessions/session-message-subscriptions.runtime.ts");
+  }
 });

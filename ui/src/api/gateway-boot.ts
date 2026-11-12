@@ -1,9 +1,6 @@
-import {
-  getGatewaySessionMessageSubscriptionCoordinator,
-  releaseGatewaySessionMessageSubscription,
-  resetGatewaySessionMessageSubscriptionCoordinator,
-  type GatewaySessionMessageSubscription,
-  type GatewaySessionMessageSubscriptionOptions,
+import type {
+  GatewaySessionMessageSubscription,
+  GatewaySessionMessageSubscriptionOptions,
 } from "@openclaw/gateway-client/browser";
 import { hasOperatorApprovalsAccess } from "../app/operator-access.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
@@ -28,6 +25,9 @@ export class EarlyGateway {
   private active = true;
   private draining = false;
   private subscription: Promise<GatewaySessionMessageSubscription> | undefined;
+  private subscriptionRuntime:
+    | typeof import("../lib/sessions/session-message-subscriptions.runtime.ts")
+    | undefined;
   private readonly timeout: ReturnType<typeof setTimeout>;
 
   constructor(
@@ -79,7 +79,7 @@ export class EarlyGateway {
           this.bytes = 0;
           this.subscription = undefined;
           this.history = undefined;
-          resetGatewaySessionMessageSubscriptionCoordinator(this.client);
+          this.subscriptionRuntime?.resetGatewaySessionMessageSubscriptionCoordinator(this.client);
           if (this.retain(info)) {
             this.closed = info;
           }
@@ -115,19 +115,34 @@ export class EarlyGateway {
       return;
     }
     this.history = history;
+    const hello = this.client.hello;
     if (
-      !this.client.hello ||
+      !hello ||
       (this.options.offlineRecoveryScope &&
         this.client.offlineRecoveryScope !== this.options.offlineRecoveryScope)
     ) {
       return;
     }
-    this.subscription = getGatewaySessionMessageSubscriptionCoordinator(this.client, {
-      keysEquivalent: areUiSessionKeysEquivalent,
-    })
-      .acquire(this.sessionKey, {
-        initialHistory: history,
-        includeApprovals: hasOperatorApprovalsAccess(this.client.auth),
+    this.subscription = import("../lib/sessions/session-message-subscriptions.runtime.ts")
+      .then((runtime) => {
+        // Loading code must not admit history for a retired hello or recovery scope.
+        if (
+          !this.active ||
+          this.client.hello !== hello ||
+          (this.options.offlineRecoveryScope &&
+            this.client.offlineRecoveryScope !== this.options.offlineRecoveryScope)
+        ) {
+          throw new Error("Early Gateway retired");
+        }
+        this.subscriptionRuntime = runtime;
+        return runtime
+          .getGatewaySessionMessageSubscriptionCoordinator(this.client, {
+            keysEquivalent: areUiSessionKeysEquivalent,
+          })
+          .acquire(this.sessionKey, {
+            initialHistory: history,
+            includeApprovals: hasOperatorApprovalsAccess(hello.auth ?? null),
+          });
       })
       .then((subscription) => {
         if (!this.active || !this.retain(subscription)) {
@@ -208,50 +223,38 @@ export class EarlyGateway {
     }
     const historyMatches = JSON.stringify(options.initialHistory) === JSON.stringify(this.history);
     try {
-      let subscription = await pending;
-      if (!this.active) {
+      const subscription = await pending;
+      const runtime = this.subscriptionRuntime;
+      if (!this.active || !runtime) {
         throw new Error("Early Gateway retired");
+      }
+      if (options.includeLiveToolOutput) {
+        // The early handle already owns approvals from this connection's hello.
+        // Stdout admission needs a current snapshot, never the early history.
+        const upgraded = await runtime
+          .getGatewaySessionMessageSubscriptionCoordinator(this.client)
+          .acquire(this.sessionKey, {
+            includeApprovals: subscription.includeApprovals,
+            includeLiveToolOutput: true,
+          });
+        if (
+          !this.active ||
+          (upgraded.approvalReplay !== undefined && !this.retain(upgraded.approvalReplay))
+        ) {
+          throw new Error("Early Gateway connection retired");
+        }
+        await runtime.releaseGatewaySessionMessageSubscription(subscription);
+        return upgraded;
       }
       if (!historyMatches) {
         // The pane may learn a recovery cursor or pending input during boot.
         // Keep live delivery; its history owner will request the correct snapshot.
         delete subscription.initialHistory;
       }
-      if (
-        (options.includeApprovals && !subscription.includeApprovals) ||
-        (options.includeLiveToolOutput && !subscription.includeLiveToolOutput)
-      ) {
-        subscription = await this.upgradeSubscription(subscription, options);
-      }
       return subscription;
     } finally {
       this.drain();
     }
-  }
-
-  private async upgradeSubscription(
-    subscription: GatewaySessionMessageSubscription,
-    options: GatewaySessionMessageSubscriptionOptions,
-  ) {
-    const upgraded = await getGatewaySessionMessageSubscriptionCoordinator(this.client, {
-      keysEquivalent: areUiSessionKeysEquivalent,
-    }).acquire(this.sessionKey, {
-      includeApprovals: options.includeApprovals || subscription.includeApprovals,
-      includeLiveToolOutput: options.includeLiveToolOutput || subscription.includeLiveToolOutput,
-    });
-    if (
-      !this.active ||
-      (upgraded.approvalReplay !== undefined && !this.retain(upgraded.approvalReplay))
-    ) {
-      throw new Error("Early Gateway connection retired");
-    }
-    // A quiet command may have emitted after the early snapshot but before
-    // output interest was admitted. Let the history owner read a current one.
-    if (!options.includeLiveToolOutput || subscription.includeLiveToolOutput) {
-      upgraded.initialHistory = subscription.initialHistory;
-    }
-    await releaseGatewaySessionMessageSubscription(subscription);
-    return upgraded;
   }
 
   private drain() {
@@ -303,7 +306,7 @@ export class EarlyGateway {
     this.subscription = undefined;
     clearTimeout(this.timeout);
     boots.delete(this.client);
-    resetGatewaySessionMessageSubscriptionCoordinator(this.client);
+    this.subscriptionRuntime?.resetGatewaySessionMessageSubscriptionCoordinator(this.client);
   }
 }
 
