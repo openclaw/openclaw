@@ -14,6 +14,8 @@ import type { gatherDaemonStatus } from "./status.gather.js";
 import {
   callGatewayStatusProbe,
   capturePrintedDaemonStatus,
+  freePort,
+  inspectPortUsages,
 } from "./status.gather.probes.test-support.js";
 
 export function createStatusCommand() {
@@ -48,7 +50,9 @@ export function registerServiceInspectionStatusTests(params: {
   serviceReadCommand: {
     mockResolvedValueOnce(command: null | { programArguments: string[] }): unknown;
   };
-  serviceReadRuntime: RejectOnce;
+  serviceReadRuntime: RejectOnce & {
+    mockResolvedValueOnce(runtime: { status: "running"; pid: number }): unknown;
+  };
   inspectGatewayRestart: () => unknown;
   gatherStatus: (
     overrides?: Partial<Parameters<typeof gatherDaemonStatus>[0]>,
@@ -249,6 +253,19 @@ export function registerServiceInspectionStatusTests(params: {
   it("keeps an unloaded service's build out of a comparison with whatever answers the port", async () =>
     await withServiceBuild("build-on-disk", async () => {
       params.serviceIsLoaded.mockImplementationOnce(async () => false);
+      const status = await params.gatherStatus();
+
+      expect(status.service.layout?.packageBuildId).toBe("build-on-disk");
+      expect(status.gateway?.installedBuildId).toBeUndefined();
+      expect(status.gateway?.restartRequired).toBeUndefined();
+    }));
+
+  it("keeps a running service's build out of a comparison when another process owns the port", async () =>
+    await withServiceBuild("build-on-disk", async () => {
+      params.serviceReadRuntime.mockResolvedValueOnce({ status: "running", pid: 8000 });
+      inspectPortUsages.mockResolvedValueOnce(
+        new Map([[19001, { ...freePort(19001), status: "busy", listeners: [{ pid: 9000 }] }]]),
+      );
       const status = await params.gatherStatus();
 
       expect(status.service.layout?.packageBuildId).toBe("build-on-disk");
