@@ -20,7 +20,6 @@ Bounded research with source-backed findings and explicit gaps.
 ## Surface
 
 - Contracts: `tools`
-- Skills
 
 ## Related docs
 

@@ -6,7 +6,6 @@
   "enabledByDefault": true,
   "activation": { "onStartup": true },
   "reload": { "turnHandover": true },
-  "skills": ["./skills"],
   "contracts": { "tools": ["deep_research"] },
   "toolMetadata": { "deep_research": {} },
   "configSchema": { "type": "object", "properties": {}, "additionalProperties": false }

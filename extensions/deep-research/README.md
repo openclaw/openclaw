@@ -1,10 +1,13 @@
 # Deep Research
 
 A default-enabled, lazy bundled research tool. Existing plugin allowlists and tool policy still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
-Select `$deep-research`, `/skill deep-research`, or `/deep_research` in chat to
-use the bundled manual workflow with the current conversation’s sources and budget.
-The workflow stays out of automatic skill selection; selecting it is not a job receipt.
-Existing skill allowlists and tool policy still apply.
+
+Ask in normal chat, such as “Do deep research comparing these documents, no web,
+with at most 8 model calls.” The agent can select `deep_research` directly using
+the conversation’s sources and budget; no skill, picker, or slash syntax is needed.
+Selection guidance excludes quick general answers, explanations, quoted/code
+mentions, and requests not to research. It is not a deterministic intent classifier
+or permission grant; only a returned job receipt establishes acceptance.
 
 Supply a question; the host selects its configured model and isolated agent runtime.
 An explicit model override requires the existing plugin LLM policy permission.

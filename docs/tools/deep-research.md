@@ -30,19 +30,23 @@ and ChatGPT plan-usage/token-sharing qualification are separate.
 
 ## Start and inspect research
 
-Select the bundled manual skill in the current chat with `$deep-research`,
-`/skill deep-research`, or `/deep_research`, followed by your question. For example:
+Ask in ordinary chat, for example:
 
 ```text
-$deep-research Compare the two documents in this chat. No web; at most 8 model calls.
+Do deep research comparing the two documents in this conversation. No web; use at most 8 model calls.
 ```
 
-The skill reuses the conversation’s supplied sources and constraints and calls the
-existing research tool. It is not automatically selected for ordinary questions
-that mention research. Selecting the skill is not a job receipt: the agent must
-report the tool’s returned job ID and state before claiming acceptance or execution.
-Plugin enablement, skill allowlists, and tool policy still apply. This is a
-model-routed skill invocation, not a deterministic `/research start` command.
+The agent can select `deep_research` directly; no skill, picker, or slash command
+is required. It should carry the conversation’s supplied sources and constraints
+into the request. Quick general questions, explanations of Deep Research, quoted
+or code examples, and instructions not to research are not research requests.
+This is model selection guidance, not a deterministic intent classifier or a new
+permission grant. Plugin enablement and tool policy still apply.
+
+For a retained job, ask the agent to check progress, retrieve the report, resume,
+or cancel it. The agent should use the existing job ID and report the returned
+state honestly: a selected tool is not acceptance, a queued job is not necessarily
+executing, and pending cancellation is not confirmed termination.
 
 Call the tool with a stable idempotency key for one request:
 

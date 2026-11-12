@@ -8,7 +8,6 @@ import { createFixtureSkillEntry } from "../test-support/test-helpers.js";
 import type { SkillCommandSpec } from "../types.js";
 import {
   expandExplicitSkillReferences,
-  hasSkillReferenceCandidate,
   resolveSkillCommandInvocation,
 } from "./chat-command-invocation.js";
 
@@ -116,24 +115,6 @@ describe("skill commands", () => {
         makeCommand("demo_skill", "demo-skill"),
       ]).skills.map((command) => command.name),
     ).toEqual(["demo_skill"]);
-  });
-  it.each([
-    "Explain `$demo_skill` without running it.",
-    "Explain ``a `$demo_skill` example``.",
-    "Example:\n```text\n$demo_skill\n```",
-    "Example:\n~~~text\n$demo_skill\n~~~",
-    "Example:\n\n    $demo_skill",
-    String.raw`Explain \$demo_skill without running it.`,
-  ])("keeps literal skill references unselected: %s", (text) => {
-    expect(hasSkillReferenceCandidate(text)).toBe(false);
-    expect(expand(text, [makeCommand("demo_skill")])).toEqual({ body: text, skills: [] });
-  });
-  it("selects a reference outside code while leaving code literal", () => {
-    const text = "Explain `$other_skill`, then use $demo_skill.";
-    expect(hasSkillReferenceCandidate(text)).toBe(true);
-    expect(expand(text, [makeCommand("demo_skill"), makeCommand("other_skill")]).skills).toEqual([
-      makeCommand("demo_skill"),
-    ]);
   });
   it("renders a leading bundle command template and leaves dollar-like bundle text literal", () => {
     const bundleCommand = {
