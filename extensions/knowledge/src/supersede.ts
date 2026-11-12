@@ -1,3 +1,4 @@
+import { hashMatches } from "./hash-fence.js";
 import { lifecycleImpact, lifecycleRecord } from "./lifecycle.js";
 import { mergeRedirects } from "./merge.js";
 import type { LoadedRecord } from "./model.js";
@@ -34,7 +35,7 @@ export function planSupersede(
       !r.valid ||
       r.kind !== "claim" ||
       r.revision !== fence.expectedRevision ||
-      r.hash !== fence.expectedHash
+      !hashMatches(r.hash, fence.expectedHash)
     ) {
       throw new Error(
         `${role} claim unavailable, not a claim, invalid or changed: ${fence.id}. Reread it with knowledge_record and retry with a new request. No publication accepted.`,

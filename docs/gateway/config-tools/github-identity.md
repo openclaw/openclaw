@@ -178,11 +178,16 @@ identity, and keeps current authority through any preparation handoff. The reque
 can be made in one message or established earlier in the conversation before the
 URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
-project first. Existing managed projects must match the PR's head or base
+project first. If it has no PR base history and an accessible registered project
+already provides that history, preparation asks you to start a session in that
+project before fetching. This preserves the empty workspace's files and avoids
+repeating a full-history download. Existing managed projects must match the PR's head or base
 repository.
 
 An ordinary conversation without a project ends its active turn, prepares a new
-session-owned workspace, and resumes in the same conversation. Existing files
+session-owned workspace, and resumes in the same conversation. When its PR base
+matches an accessible registered project, preparation uses that project's shared
+Git history, including for a PR whose head belongs to a fork. Existing files
 stay in their original source; earlier message links open them read-only,
 including downloads and relative HTML assets. The Files panel shows the current
 PR workspace. Sibling conversations keep their original source. Open editors
@@ -236,8 +241,12 @@ deleted.
 
 Content acquisition errors identify the failed Git stage and retain a bounded,
 redacted native reason. A fetch timeout, failed object inventory, and objects
-still missing after a successful fetch are reported separately. Use that reason
-to investigate before retrying `prepare_pr`.
+still missing after a successful fetch are reported separately. A commit-fetch
+timeout directs you to a new session in the PR's base project, where Git can reuse
+its history, instead of repeating the same full-history download. Successful
+commit acquisitions retain `refs/openclaw/fetched/<sha>` in the source repository
+so later fetches can advertise the acquired history even before PR preparation
+finishes. Content-only hydration does not create these refs.
 
 An interrupted preparation retains the same accepted source for retry while
 reconciling the current destination for its review comparison.

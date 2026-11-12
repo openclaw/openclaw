@@ -663,7 +663,7 @@ describe("Tool Search network error boundaries", () => {
       });
       expect(isolated.content[0]).toEqual({
         type: "text",
-        text: '{\n  "value": "local"\n}',
+        text: '{"value":"local"}',
       });
     },
   );

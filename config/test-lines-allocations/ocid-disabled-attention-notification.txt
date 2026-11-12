@@ -1,0 +1,2 @@
+10
+# Extend the existing Labs-disable regression to require one clear notification, no repeated disabled notifications or RPCs, and preserve pending-reply rejection.

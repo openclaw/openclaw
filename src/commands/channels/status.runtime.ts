@@ -202,8 +202,10 @@ export async function renderChannelsStatusFallback(params: {
   safeError: string;
   gatewayAuthUnavailable: boolean;
   expectedErrorOutput?: string;
+  signal?: AbortSignal;
 }): Promise<void> {
-  const { opts, runtime, safeError, gatewayAuthUnavailable, expectedErrorOutput } = params;
+  const { opts, runtime, safeError, gatewayAuthUnavailable, expectedErrorOutput, signal } = params;
+  signal?.throwIfAborted();
   const fallbackReason = gatewayAuthUnavailable
     ? "Gateway auth unavailable; showing config-only status."
     : "Gateway not reachable; showing config-only status.";
@@ -214,7 +216,9 @@ export async function renderChannelsStatusFallback(params: {
     );
   }
   await prepareCliGatewayStateAccess();
+  signal?.throwIfAborted();
   const snapshot = await requireValidConfigFileSnapshot(runtime, { observe: false });
+  signal?.throwIfAborted();
   if (!snapshot) {
     return;
   }
@@ -226,6 +230,7 @@ export async function renderChannelsStatusFallback(params: {
     mode: "read_only_status",
     runtime,
   });
+  signal?.throwIfAborted();
   const mode = sourceConfig.gateway?.mode === "remote" ? "remote" : "local";
   const requestedChannel = opts.channel
     ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))
@@ -264,7 +269,9 @@ export async function renderChannelsStatusFallback(params: {
         cfg: sourceConfig,
         accountId,
       });
+      signal?.throwIfAborted();
       const resolvedSnapshot = await resolveChannelAccountSnapshot({ plugin, cfg, accountId });
+      signal?.throwIfAborted();
       const accountSnapshot =
         sourceSnapshot &&
         hasConfiguredUnavailableCredentialStatus(sourceSnapshot) &&
