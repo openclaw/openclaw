@@ -209,7 +209,7 @@ export class MemoryIndexDatabase {
     hasVectorTable: false,
     vectorState: { state: "empty" },
   };
-  searchSchema: MemoryPublicationSchema = { fts: null, paths: null, vector: null };
+  searchSchema: MemoryPublicationSchema = { fts: null, paths: null, vector: null, cjk: null };
   vectorDegradedWriteWarningShown = false;
   closed = false;
 

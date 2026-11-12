@@ -5,6 +5,8 @@ import type { MemorySourceFilter } from "./source-filter.js";
 export type MemoryKeywordWorkerQuery = {
   body: {
     ftsTable: string;
+    /** Companion Han-bigram index table, when the feature is enabled. */
+    cjkBigramTable?: string;
     query: string;
     ftsTokenizer?: "unicode61" | "trigram";
     limit: number;
