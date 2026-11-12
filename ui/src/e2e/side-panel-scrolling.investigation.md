@@ -1,15 +1,16 @@
 # Side-panel scrolling candidate and investigation
 
-**Draft candidate fix. No verified iPad fix yet. Do not merge or deploy without the pending checks.**
+**Draft experiment. The first candidate improved the physical tall-page case; its grid control FAILED unchanged. The new touch-grid experiment still needs an iPad retest. No merge or deployment.**
 
 Operation: `side-panel-scrolling-20261110`.
 
 The reported iPad Pro Safari symptom is that the lower Mergebeat dashboard can
 be pulled into view in a side panel but returns when the finger is released.
 Expanded presentation works. The original investigation is retained below;
-the draft now includes a CSS candidate and a browser geometry regression.
-It is not a confirmed Safari fix, and it changes no saved widget data,
-configuration, permissions, height caps, or touch-input handlers.
+the draft retains the CSS page candidate and now tries larger bounded
+auto-height HTML widgets on touch layouts. This experiment was explicitly
+approved on November 12, including the pinning tradeoff below. It changes no
+saved widget data, configuration, permissions, or touch-input handlers.
 
 ## Source and ownership
 
@@ -24,21 +25,46 @@ configuration, permissions, height caps, or touch-input handlers.
 - Record the actual live build separately from the local checkout's commit.
   The published draft's exact head must be recorded with every local result.
 
-## Candidate for later testing
+## Approved touch-grid experiment (November 12)
+
+Use `6ddce47fac561860377eaaea68b094db3986c211` as the before revision
+for this experiment. On touch layouts, auto-height HTML widgets use the existing
+240-row document fitting bound instead of the ordinary 20-row bound. This
+lets ordinary long content scroll with the board rather than inside an iframe
+that extends below its visible panel. The same derived policy controls row
+allocation and exact card height. Explicit fixed-height widgets retain saved
+sizes, and fine-pointer layouts retain the ordinary limit.
+
+Switching a very tall auto widget to fixed height can shrink it to the existing
+20-row fixed-size limit. Switching pointer capability can also change auto
+height. The experiment changes no persisted schema or touch forwarding; fixed
+widgets and documents exceeding the larger bound can still have inner scrolling.
+The real Control UI regression covers a tall auto widget, a fixed-height
+control, final-row reachability using trusted Chromium touch input, and
+separate coarse- and fine-pointer contexts. It does not prove physical Safari
+or in-place pointer switching on an iPad.
+
+[Corrected physical report for the before revision](https://github.com/PollyBot13/openclaw/blob/3efa515bb14297f6e514c3cec088fd9580c44a7c/ui/src/e2e/side-panel-scrolling.physical-ipad-evidence.md).
+Its outcome is established: tall-page improvement and grid FAIL / unchanged.
+The original iPad tabs are closed; no further export from them is required.
+Preserve those results separately from the next candidate retest.
+
+## First page-mode candidate
 
 The candidate moves the existing page-mode viewport-fitting rule out of its
 main/focused-only styling branch. A single page-mode dashboard therefore fits
 the available side-panel height too, leaving its document to own scrolling.
-Side-panel card borders, padding and controls stay unchanged. Ordinary grids
-continue to use saved row sizing and outer-board scrolling. The same iframe
+Side-panel card borders, padding and controls stay unchanged. The original
+candidate left ordinary grid sizing unchanged; the touch-grid experiment above
+now changes auto-height sizing only. The same iframe
 is retained across expansion and restoration.
 
 The regression in `../components/board/board-view.browser.test.ts` checks
 viewport containment at 480×634 and 354×178, expanded/restored transitions,
 frame identity, and the ordinary-grid control. It tests layout, not native
-finger-release behavior. Baseline and candidate browser execution are blocked
-before assertions by unavailable Chromium/system-library prerequisites.
-Do not call this red/green proof or native Safari validation.
+finger-release behavior. Browser launch was initially blocked by missing
+system-library prerequisites; local execution was later recovered and all
+26 existing browser cases passed. That is not native Safari validation.
 
 When a browser-ready checkout is available, run the existing browser file:
 
@@ -51,8 +77,9 @@ dashboard content to the final chart and footer, then release the finger.
 The footer must remain reachable without dragging an outer gutter. Compare
 expanded mode and restored split, then verify that an ordinary multi-widget
 board still scrolls. Record the candidate build; the live server is not
-automatically updated by this draft. Before/after implementation screenshots
-and the iPad retest remain pending.
+automatically updated by this draft. The new touch-grid candidate still
+requires its own physical iPad before/after test; earlier recordings do not
+validate the new behavior.
 
 ## Established observations and open hypotheses
 

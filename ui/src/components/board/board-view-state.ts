@@ -273,8 +273,9 @@ export function createBoardViewState(
         t("board.announcement.resized", { title: widget.title || widget.name }),
       ),
     setHeightMode: async (widget, mode) => {
-      // Pinning keeps the currently rendered auto height, not the stale stored
-      // sizeH, so "fixed" freezes exactly what the user sees.
+      // Pin the content-derived height rather than stale stored sizeH, within
+      // the fixed grid bound. A taller touch/document auto card shrinks to that
+      // existing bound when switched to fixed height.
       const sizeH =
         mode === "fixed"
           ? effectiveBoardWidgetRows(

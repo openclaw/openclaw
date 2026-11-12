@@ -4,6 +4,7 @@ import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-docume
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
+  boardChromeRowPx,
   boardWidgetGridItems,
   FINE_POINTER_QUERY,
   layout,
@@ -69,6 +70,10 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     const widgets = (snapshot?.widgets ?? []).filter(
       (widget) => owner.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
+    // Touch layouts reserve a chrome row. Let ordinary long auto-height HTML
+    // use the existing document bound instead of requiring an inner-to-board
+    // scroll handoff; fixed-height widgets still use their saved rows.
+    const fitAutoContent = props.fitAutoContent || boardChromeRowPx() > 0;
     const positions = new Map<string, number>();
     const rects = tabs.flatMap((tab) => {
       const tabRects = layout(
@@ -76,10 +81,10 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           boardWidgetGridItems(
             widgets.filter((widget) => widget.tabId === tab.tabId),
             owner.contentHeights,
-            props.fitAutoContent,
+            fitAutoContent,
             props.pageWidgetName,
           ),
-        props.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+        fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
       );
       tabRects.forEach((rect, index) => positions.set(rect.name, index));
       return tabRects;
@@ -123,7 +128,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           boardRevision: snapshot?.revision ?? 0,
           rect: stableRect,
           contentHeightPx: owner.contentHeights.get(rect.name),
-          fitAutoContent: props.fitAutoContent,
+          fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
           tabs,
           session: props.session,

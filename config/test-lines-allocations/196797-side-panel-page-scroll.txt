@@ -1,2 +1,2 @@
-47
-# Page-dashboard viewport containment across side/expanded/restored layouts at desktop and dock sizes, with ordinary-grid and iframe-retention controls.
+200
+# Page viewport containment plus real sandboxed touch-grid scrolling and fixed-height/fine-pointer controls. Exact net regression growth for PR 196797.
