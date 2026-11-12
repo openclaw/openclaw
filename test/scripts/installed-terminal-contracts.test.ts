@@ -223,24 +223,30 @@ function dependencyFixture() {
   const prefix = fs.realpathSync(dirs.make("installed-contract-native-"));
   const root = path.join(prefix, "node_modules/openclaw");
   const modules = path.join(root, "node_modules");
-  const packageAt = (relative: string, manifest: Record<string, unknown>) => {
+  const packageAt = (relative: string, manifest: Record<string, unknown> = {}) => {
     const directory = path.join(root, relative);
     fs.mkdirSync(directory, { recursive: true });
-    writeJson(path.join(directory, "package.json"), manifest);
+    writeJson(path.join(directory, "package.json"), {
+      name: path.basename(directory),
+      version: "1.0.0",
+      ...manifest,
+    });
     fs.writeFileSync(path.join(directory, "index.js"), "module.exports = {};\n");
     return directory;
   };
-  packageAt("", { name: "openclaw", version: "1.0.0", dependencies: { demo: "1.0.0" } });
+  packageAt("", { dependencies: { demo: "1.0.0" } });
   packageAt("node_modules/demo", {
-    name: "demo",
-    version: "1.0.0",
-    dependencies: { leaf: "1.0.0" },
+    dependencies: { "brace-expansion": "^5.0.8" },
     optionalDependencies: { "demo-native": "1.0.0", "absent-platform-fixture": "1.0.0" },
     bin: { foo: "index.js", bar: "other.js" },
   });
   fs.writeFileSync(path.join(modules, "demo/other.js"), "module.exports = 1;\n");
-  packageAt("node_modules/demo/node_modules/leaf", { name: "leaf", version: "1.0.0" });
-  packageAt("node_modules/demo-native", { name: "demo-native", version: "1.0.0" });
+  const brace = (version: string) =>
+    packageAt("node_modules/demo/node_modules/brace-expansion", {
+      version,
+    });
+  brace("5.0.13");
+  packageAt("node_modules/demo-native");
   fs.mkdirSync(path.join(modules, ".bin"));
   fs.symlinkSync("../demo/index.js", path.join(modules, ".bin/foo"));
   fs.symlinkSync("../demo/other.js", path.join(modules, ".bin/bar"));
@@ -249,8 +255,8 @@ function dependencyFixture() {
     policy: { dependencies: { demo: "1.0.0" } },
     requiredPackages: { "demo-native": "1.0.0" },
     packages: Object.fromEntries(
-      ["demo", "leaf", "demo-native"].map((name) => [
-        `${name}@1.0.0`,
+      ["demo@1.0.0", "brace-expansion@5.0.13", "demo-native@1.0.0"].map((key) => [
+        key,
         { resolution: { integrity } },
       ]),
     ),
@@ -271,16 +277,16 @@ function dependencyFixture() {
     const { application, nodes } = await load();
     return inspectInstalledTerminalDependencyNodes(application, nodes, ["demo"], reference);
   };
-  return { root, modules, packageAt, reference, load, inspect };
+  return { root, modules, packageAt, brace, reference, load, inspect };
 }
 
 it("uses native global placements, retains direct specs and refuses changed root policy", async () => {
   const fixture = dependencyFixture();
   const result = await fixture.inspect();
   expect(result.packages.map((entry) => entry.key).toSorted()).toEqual([
+    "brace-expansion@5.0.13",
     "demo-native@1.0.0",
     "demo@1.0.0",
-    "leaf@1.0.0",
   ]);
   expect(result.edges).toContainEqual({
     from: ".",
@@ -293,11 +299,10 @@ it("uses native global placements, retains direct specs and refuses changed root
   expect(result.edges.find((edge) => edge.name === "absent-platform-fixture")?.optionalAbsent).toBe(
     true,
   );
-  writeJson(path.join(fixture.root, "package.json"), {
-    name: "openclaw",
-    version: "1.0.0",
-    dependencies: { demo: "^1.0.0" },
-  });
+  fixture.brace("5.0.14");
+  await expect(fixture.inspect()).rejects.toThrow("Dependency is outside the reviewed reference");
+  fixture.brace("5.0.13");
+  fixture.packageAt("", { dependencies: { demo: "^1.0.0" } });
   await expect(fixture.inspect()).rejects.toThrow("Selected direct dependency spec changed");
 });
 
@@ -305,15 +310,17 @@ it("refuses missing required native targets and invalid or omitted dependency ed
   const fixture = dependencyFixture();
   fs.rmSync(path.join(fixture.modules, "demo-native"), { recursive: true });
   await expect(fixture.inspect()).rejects.toThrow("Required selected platform package is absent");
-  fixture.packageAt("node_modules/demo-native", { name: "demo-native", version: "1.0.0" });
-  fixture.packageAt("node_modules/demo/node_modules/leaf", { name: "leaf", version: "2.0.0" });
+  fixture.packageAt("node_modules/demo-native");
+  fs.rmSync(path.join(fixture.modules, "demo/node_modules/brace-expansion"), { recursive: true });
   await expect(fixture.inspect()).rejects.toThrow("Invalid native dependency edge");
-  fixture.packageAt("node_modules/demo/node_modules/leaf", { name: "leaf", version: "1.0.0" });
+  fixture.brace("6.0.0");
+  await expect(fixture.inspect()).rejects.toThrow("Invalid native dependency edge");
+  fixture.brace("5.0.13");
   const { application, nodes } = await fixture.load();
   expect(() =>
     inspectInstalledTerminalDependencyNodes(
       application,
-      nodes.filter((node: { name: string }) => node.name !== "leaf"),
+      nodes.filter((node: { name: string }) => node.name !== "brace-expansion"),
       ["demo"],
       fixture.reference,
     ),
@@ -337,14 +344,10 @@ it("refuses swapped npm bin targets even when both executables belong to the pac
 it("requires the native addon to resolve from its owner, not another private placement", async () => {
   const fixture = dependencyFixture();
   fs.rmSync(path.join(fixture.modules, "demo-native"), { recursive: true });
-  fixture.packageAt("node_modules/demo/node_modules/leaf", {
-    name: "leaf",
-    version: "1.0.0",
+  fixture.packageAt("node_modules/demo/node_modules/brace-expansion", {
+    version: "5.0.13",
     dependencies: { "demo-native": "1.0.0" },
   });
-  fixture.packageAt("node_modules/demo/node_modules/leaf/node_modules/demo-native", {
-    name: "demo-native",
-    version: "1.0.0",
-  });
+  fixture.packageAt("node_modules/demo/node_modules/brace-expansion/node_modules/demo-native");
   await expect(fixture.inspect()).rejects.toThrow("Required platform edge does not resolve");
 });

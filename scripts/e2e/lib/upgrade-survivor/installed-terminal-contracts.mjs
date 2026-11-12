@@ -13,7 +13,7 @@ const inside = (root, file) => file === root || file.startsWith(`${root}${path.s
 const inputLimit = 32 * 1024 * 1024;
 const fileLimit = 4 * 1024 * 1024;
 const references = {
-  current: "9bdbd59d6ad656ac4f6a6a44bed09ff41c86f2e2ead4cd0ba867ae84e463ddb8",
+  current: "d84bf4590d9ebcf57958e75c66631ac98dac06c71c1d9d7b41935980d02313f0",
   historical: "5f2cc18f26292c6bcaf0cdaad22e25a872814865540d7e3a1311287b6812bca2",
 };
 
