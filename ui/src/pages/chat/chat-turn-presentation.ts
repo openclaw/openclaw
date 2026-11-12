@@ -196,27 +196,18 @@ export function resolveTurnRunDurations(
       }
     }
   }
-  // Historical timing is prompt-to-last-persisted-write, not message creation
-  // or lifecycle runtime. Missing either same-run endpoint leaves it unavailable.
+  // Use the same persisted endpoints for newest and historical replies. Switching
+  // to lifecycle runtime here changes the clock when the session moves on.
+  // Missing either same-run endpoint leaves the elapsed duration unavailable.
   for (const [runId, startedAt] of starts) {
     const endedAt = ends.get(runId);
     if (endedAt !== undefined && endedAt >= startedAt) {
       durations.set(runId, endedAt - startedAt);
     }
   }
-  // The lifecycle owner takes precedence, including clearing an active or invalid
-  // current run instead of falling back to a partial transcript interval.
-  if (session?.lastRunId) {
+  // The live run has only a partial interval, not a completed duration.
+  if (session?.lastRunId && !TERMINAL_WORK_STATUSES.has(session.status ?? "")) {
     durations.delete(session.lastRunId);
-    const runtimeMs = session.runtimeMs;
-    if (
-      TERMINAL_WORK_STATUSES.has(session.status ?? "") &&
-      typeof runtimeMs === "number" &&
-      Number.isFinite(runtimeMs) &&
-      runtimeMs >= 0
-    ) {
-      durations.set(session.lastRunId, runtimeMs);
-    }
   }
   return durations;
 }
