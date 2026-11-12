@@ -281,6 +281,7 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                   </h2>
                   <Show when={latest(ownDevicePub)}>
                     <InviteForm
+                      link={current().link}
                       motion={motion}
                       components={host.components}
                       disabled={!canManage() || latest(creatingInvite)}

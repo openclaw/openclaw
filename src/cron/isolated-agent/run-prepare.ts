@@ -228,8 +228,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
     const now = Date.now();
     // A child run never runs looser than its parent.
     const sandbox =
-      resolveCreatorSandbox(runtimeCfg, { actor: cronExecutionActor(input.job) }) ??
-      input.occurrence.childParent?.sandbox;
+      resolveCreatorSandbox(runtimeCfg, {
+        actor: cronExecutionActor(input.job),
+        openclawIdPrincipal: input.job.operatorSource?.source.snapshot.openclawIdPrincipal,
+      }) ?? input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession: MutableCronSession = await prepareCronSession({
       cfg: runtimeCfg,

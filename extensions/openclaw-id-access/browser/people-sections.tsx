@@ -4,6 +4,7 @@
 import type { MemberRole } from "@openclaw/openclaw-id-protocol";
 import type { ControlUiComponentHandle, ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createEffect, createSignal, For, latest, onSettled, Show } from "solid-js";
+import { InviteSandboxWarning } from "./invite-sandbox-warning.js";
 import type { CreatedInvite } from "./invites.js";
 import { MemberDevices } from "./member-devices.js";
 import type { PeopleError, PeopleOperationError } from "./people-error.js";
@@ -17,7 +18,7 @@ import {
   personInitials,
 } from "./people-format.js";
 import type { PeopleMotion } from "./people-motion.js";
-import type { Invite, Member, MemberDevice, OwnerDevice } from "./types.js";
+import type { Invite, Link, Member, MemberDevice, OwnerDevice } from "./types.js";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -114,6 +115,7 @@ function RolePicker(props: {
 
 /** Invite one person with an exact role; shows the link once. */
 export function InviteForm(props: {
+  link?: Link;
   motion: PeopleMotion;
   components: ControlUiHost["components"];
   disabled: boolean;
@@ -247,6 +249,7 @@ export function InviteForm(props: {
             </div>
           )}
         </Show>
+        <InviteSandboxWarning role={created() ? undefined : role()} link={props.link} />
         <OperationError error={props.error} />
       </div>
       <p class="ocid-access__hint" id="ocid-access-role-hint">

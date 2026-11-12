@@ -115,7 +115,7 @@ describe("OpenClaw ID tunnel principals", () => {
       kind: "member" as const,
       peerKey: `iroh:${"ab".repeat(32)}`,
       accountId: "acct-guest",
-      role: "guest",
+      role: "unconfigured-role",
       authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
     };
     setOpenClawIdTunnelPrincipalResolver(async () => principal);
@@ -146,7 +146,7 @@ describe("OpenClaw ID tunnel principals", () => {
       kind: "member",
       peerKey: `iroh:${"ab".repeat(32)}`,
       accountId: "acct-guest",
-      role: "guest",
+      role: "unconfigured-role",
       authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
     };
     expect(openClawIdRecoveryPrincipalSchema.parse(principal)).toEqual(principal);
@@ -162,7 +162,7 @@ describe("OpenClaw ID tunnel principals", () => {
         await claw.sign({
           op: "add",
           account_id: "acct-guest",
-          role: "guest",
+          role: "unconfigured-role",
           peer_keys: [peer],
           invite_id: null,
         }),
@@ -173,7 +173,7 @@ describe("OpenClaw ID tunnel principals", () => {
     await reloaded.load();
     setOpenClawIdTunnelPrincipalResolver((key) => reloaded.resolvePeer(key));
     setOpenClawIdTunnelPrincipalLookup((key) => reloaded.currentPeer(key));
-    expect(reloaded.currentPeer(peer)).toMatchObject({ kind: "member", role: "guest" });
+    expect(reloaded.currentPeer(peer)).toMatchObject({ kind: "member", role: "unconfigured-role" });
     expect(await resolveOpenClawIdTunnelPrincipal(peer)).toBeUndefined();
     const stored = openClawIdRecoveryPrincipalSchema.parse(reloaded.currentPeer(peer));
     expect(isOpenClawIdTunnelPrincipalCurrent(stored)).toBe(false);

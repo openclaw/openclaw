@@ -185,11 +185,23 @@ export function resolveOperatorRolePolicyForAssignment(
   );
 }
 
-/** Preserve human-derived restrictions, including ambiguous historical actors; this is not identity proof. */
+/** Resolve membership isolation first; historical human attribution only preserves named-role restrictions. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
-  creation: { actor?: SessionCreatedActor } | undefined,
+  creation:
+    | {
+        actor?: SessionCreatedActor;
+        openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+      }
+    | undefined,
 ): "required" | undefined {
+  const principal = creation?.openclawIdPrincipal;
+  if (principal?.kind === "member") {
+    if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new Error("OpenClaw ID membership authority changed");
+    }
+    return openclawIdTunnelRolePolicy(principal)?.sandbox === "required" ? "required" : undefined;
+  }
   const actor = creation?.actor;
   return actor?.type === "human" &&
     actor.id &&

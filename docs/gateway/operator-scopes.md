@@ -410,7 +410,7 @@ an OpenClaw ID member's profile and directs the owner to **Access**. Clearing a
 profile assignment with `role: null` remains allowed.
 
 Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
-`operator` and `viewer` presets. Existing definitions, defaults, and assignments
+`operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments
 are preserved. Installing presets rewrites the config file as JSON through the
 standard config writer and removes JSON5 comments. Startup installs them before
 publishing runtime policy, even with `gateway.reload.mode: "off"`. A saved
@@ -421,8 +421,21 @@ The operator preset grants read, write, approvals, questions, and
 talk scopes with all agents and writable shared sessions. The viewer preset
 allows all agents and viewable shared sessions but grants only
 `operator.sessions.read`: conversation browsing, not logs, `users.list`, or general
-Gateway diagnostics. These are editable definitions; custom member roles may
+Gateway diagnostics. The guest preset grants `operator.sessions.write`, all agents,
+viewable shared sessions, and `sandbox: "required"`. Operator remains the default
+invite role. These are editable definitions; custom member roles may
 include `operator.admin` and pairing scopes with no built-in ceiling.
+
+A member's sandbox requirement comes from the membership definition, even when
+`gateway.roles.default` is absent or their profile has a different named role
+through another sign-in. New sessions record that requirement before execution;
+forks, checkpoint branches, delegated children, and authorized cron and recovery
+work preserve isolation. A sandbox-required member cannot run in an existing
+host-execution session, even when invited. Missing or failed sandbox provisioning
+fails closed, never falling back to the Gateway host or a node. Required sandbox
+exec/file isolation and its limits are described below. **Access** warns when an
+invite's role requires sandboxing but the configured Docker or Podman backend is
+unavailable; set up [sandboxing](/gateway/sandboxing) before they start work.
 
 Missing role definitions deny member admission across WebSocket, HTTP, the tunnel
 API, and retained/recovered work. Definition changes apply through config reload;

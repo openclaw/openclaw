@@ -75,7 +75,12 @@ const PRINCIPALS: Record<string, OpenClawIdTunnelPrincipal> = {
   [OWNER_KEY]: { kind: "owner", peerKey: OWNER_KEY },
   [OPERATOR_KEY]: { kind: "member", peerKey: OPERATOR_KEY, accountId: "acct_op", role: "operator" },
   [VIEWER_KEY]: { kind: "member", peerKey: VIEWER_KEY, accountId: "acct_view", role: "viewer" },
-  [GUEST_KEY]: { kind: "member", peerKey: GUEST_KEY, accountId: "acct_guest", role: "guest" },
+  [GUEST_KEY]: {
+    kind: "member",
+    peerKey: GUEST_KEY,
+    accountId: "acct_guest",
+    role: "unconfigured-role",
+  },
 };
 
 let started: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;

@@ -57,9 +57,12 @@ export function prepareGatewayOperatorSessionRun(params: {
     operatorRoleActor: { kind: "operator", profileId: params.authority.profileId },
     operatorRunAuthority: params.authority,
     scopes: [...params.authority.scopes],
+    ...(params.authority.openclawIdPrincipal?.kind === "member"
+      ? { operatorRunAuthority: params.authority }
+      : {}),
   });
   const creation = resolveSandboxedSessionCreation(
-    { authenticatedUserProfile: { profileId: params.authority.profileId } },
+    { ...client, authenticatedUserProfile: { profileId: params.authority.profileId } },
     params.cfg,
   );
   return {
