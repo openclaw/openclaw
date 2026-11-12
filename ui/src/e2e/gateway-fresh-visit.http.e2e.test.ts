@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, inject, it } from "vitest";
+import { expect, inject, it, vi } from "vitest";
 import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
@@ -9,8 +9,24 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import { buildProductionControlUiE2e, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const startup = vi.hoisted(() => ({ starting: true }));
+
+// mock-isolation: Loading this unused test harness is the regression; no exports are consumed.
+vi.mock("../../../src/gateway/server-http.test-harness.ts", () => {
+  throw new Error("Fresh HTTP fixture loaded the unnecessary full Gateway test harness");
+});
+
+vi.mock("../../../src/gateway/control-ui.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/gateway/control-ui.ts")>();
+  if (!startup.starting) {
+    throw new Error(
+      "The Control UI HTTP owner must initialize before this fixture declares startup complete",
+    );
+  }
+  return actual;
+});
+
 const runtime = createDeferred();
-let starting = true;
 let requests = 0;
 // This suite exercises the asset-free fallback, not the preferred Web UI lane.
 const controlUiRoot: ControlUiRootState = { kind: "missing" };
@@ -37,61 +53,71 @@ const suite = createControlUiE2eSuite({
       applyEnv: true,
       prepareProfileCatalog: true,
     });
-    let harness: typeof import("../../../src/gateway/server-http.test-harness.ts");
+    let http: typeof import("../../../src/gateway/server-http.ts");
+    let configRuntime: typeof import("../../../src/config/runtime-snapshot.ts");
     try {
-      harness = await import("../../../src/gateway/server-http.test-harness.ts");
+      [http, configRuntime] = await Promise.all([
+        import("../../../src/gateway/server-http.ts"),
+        import("../../../src/config/runtime-snapshot.ts"),
+      ]);
     } catch (error) {
       await state.cleanup();
       throw error;
     }
-    const { AUTH_NONE, withGatewayServer } = harness;
+    const config = { gateway: { trustedProxies: [] } };
     const ready = createDeferred<{ baseUrl: string; close: () => Promise<void> }>();
     const done = createDeferred();
     const lifetime = runQaGatewayFixture(
-      () =>
-        withGatewayServer({
-          prefix: "fresh-browser-maintenance",
-          resolvedAuth: AUTH_NONE,
-          overrides: {
-            controlUiEnabled: true,
-            controlUiBasePath: "/console",
-            controlUiRoot,
-            getStartup: () =>
-              starting
-                ? { ok: false, status: "starting", uptimeMs: 1, pendingReason: "startup-sidecars" }
-                : { ok: true, status: "started", uptimeMs: 2 },
-            waitForRequestRuntime: () => runtime.promise,
-          },
-          async run(server) {
-            server.prependListener("request", (request) => {
-              if (request.headers.accept?.includes("text/html")) {
-                requests++;
-              }
-            });
-            server.listen(0, "127.0.0.1");
-            await once(server, "listening");
-            const address = server.address();
-            if (!address || typeof address === "string") {
-              throw new Error("Missing HTTP fixture port");
+      async () => {
+        await state.writeConfig(config);
+        configRuntime.setRuntimeConfigSnapshot(config, config);
+        // A ready fixture must not spend browser recovery deadlines initializing its HTTP owner.
+        const { getControlUiModule } = await import("../../../src/gateway/server-http-modules.ts");
+        await getControlUiModule();
+        const server = http.createGatewayHttpServer({
+          clients: new Set(),
+          handleHooksRequest: async () => false,
+          resolvedAuth: { mode: "none", allowTailscale: false },
+          getRuntimeConfig: () => config,
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          controlUiEnabled: true,
+          controlUiBasePath: "/console",
+          controlUiRoot,
+          getStartup: () =>
+            startup.starting
+              ? { ok: false, status: "starting", uptimeMs: 1, pendingReason: "startup-sidecars" }
+              : { ok: true, status: "started", uptimeMs: 2 },
+          waitForRequestRuntime: () => runtime.promise,
+        });
+        try {
+          server.prependListener("request", (request) => {
+            if (request.headers.accept?.includes("text/html")) {
+              requests++;
             }
-            ready.resolve({
-              baseUrl: "http://127.0.0.1:" + address.port + "/console/",
-              async close() {
-                done.resolve();
-                await lifetime;
-              },
-            });
-            try {
-              await done.promise;
-            } finally {
-              runtime.resolve();
-              server.closeAllConnections();
-              await new Promise<void>((resolve, reject) => {
-                server.close((error) => (error ? reject(error) : resolve()));
-              });
-            }
-          },
-        }),
+          });
+          server.listen(0, "127.0.0.1");
+          await once(server, "listening");
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Missing HTTP fixture port");
+          }
+          ready.resolve({
+            baseUrl: "http://127.0.0.1:" + address.port + "/console/",
+            async close() {
+              done.resolve();
+              await lifetime;
+            },
+          });
+          await done.promise;
+        } finally {
+          runtime.resolve();
+          server.closeAllConnections();
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      },
       () => state.cleanup(),
       () =>
         productionRoot ? Promise.resolve() : rm(currentUiRoot, { recursive: true, force: true }),
@@ -163,14 +189,14 @@ suite.define(() => {
           await expect.poll(() => requests).toBeGreaterThan(beforeRetry);
           expect(page.url()).toBe(target);
           Object.assign(controlUiRoot, { kind: "resolved", path: currentUiRoot });
-          starting = false;
+          startup.starting = false;
           runtime.resolve();
           await expect
             .poll(() => page.locator("#openclaw-maintenance").count(), { timeout: 20_000 })
             .toBe(0);
           expect(page.url()).toBe(target);
         } finally {
-          starting = false;
+          startup.starting = false;
           runtime.resolve();
           await page.clock.resume();
           await navigation;
@@ -181,7 +207,7 @@ suite.define(() => {
 
   it("does not call an unknown app-bundle failure an update or restart", async () => {
     Object.assign(controlUiRoot, { kind: "resolved", path: currentUiRoot });
-    starting = false;
+    startup.starting = false;
     runtime.resolve();
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },

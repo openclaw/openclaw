@@ -1,0 +1,14 @@
+# Read-only permission overview: guest denial/access loss, Gateway-resolved roles,
+# access-gain loading, canonical profile invalidation with stale replies, and
+# popover navigation plus production-browser capture/guest RPC boundaries.
+# Exact net LF growth for the current-base #162980 permission-view implementation.
+# Includes the shared People page-census integration regression.
+# Includes the two-line host catalog regression for lazy person-card copy.
+# Includes 15 LF for deterministic first-attempt connection fixture ownership.
+# Includes canonical saved-assignment/self-read lifecycle, concise full ceilings,
+# query disclosure retention and desktop/theme/phone long-label boundary proof.
+# Includes canonical self-profile ownership in the shared test Gateway and
+# exact self-mention response/privacy assertions; production behavior unchanged.
+# Includes 26 LF for the direct production-HTTP fixture, its no-full-harness
+# and HTTP-owner readiness regressions; the 77 LF diagnostic allocation is retired.
+1092

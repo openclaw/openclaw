@@ -145,8 +145,22 @@ suite.define(() => {
         loginModuleRequests.push(request.url());
       }
     });
-    const gateway = await connect(page, "#token=e2e-shared-token");
+    // Own first-attempt time before app timers exist; module loading must not consume it.
+    await page.clock.install();
+    await pauseVirtualClock(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+    await page.goto(suite.server.baseUrl + "#token=e2e-shared-token", {
+      waitUntil: "domcontentloaded",
+    });
     const connection = page.locator('.gateway-connection-view[data-connection-state="connecting"]');
+    await expect
+      .poll(async () => {
+        await page.clock.runFor(1);
+        return (
+          (await gateway.getRequests("connect")).length === 1 && (await connection.count()) === 1
+        );
+      })
+      .toBe(true);
     await connection.waitFor();
     await connection
       .getByRole("heading", { name: "Connecting to OpenClaw", exact: true })
@@ -202,6 +216,7 @@ suite.define(() => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
+    await page.clock.resume();
     await resolveConnect(page, gateway);
     expect(await shell!.evaluate((element) => element.isConnected)).toBe(true);
     expect(await page.locator(".connect-splash").count()).toBe(0);

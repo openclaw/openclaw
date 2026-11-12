@@ -2,10 +2,17 @@
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { UserProfile } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { i18n } from "../i18n/lib/translate.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { createSessionsListResult } from "../test-helpers/chat-model.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { updatePersonActivityCard } from "./person-activity-card.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
@@ -29,6 +36,20 @@ const alice = {
   identity: { type: "profile", id: "alice" } as const,
   watchedSessions: [],
 };
+function canonicalProfile(overrides: Partial<UserProfile> = {}): UserProfile {
+  return {
+    id: "alice",
+    displayName: "Alice",
+    avatarMime: null,
+    hasAvatar: false,
+    githubIdentity: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: [],
+    ...overrides,
+  };
+}
 function session(key: string, updatedAt: number): GatewaySessionRow {
   return {
     key: `agent:main:${key}`,
@@ -194,4 +215,136 @@ it("localizes connection and session labels without replacing the focused link",
     await restoreI18n();
     flush();
   }
+});
+
+it("limits permission links to broad readers or self and rechecks a retired link on click", () => {
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(async () => ({})),
+      hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+      selfUser: { id: "bob", name: "Bob", identity: { type: "profile", id: "bob" } },
+    }),
+  );
+  const openPermissions = vi.fn();
+  show({ gateway: source.gateway, openPermissions });
+  flush();
+  const link = getQueriesForElement(container).getByRole("link", {
+    name: "View permissions",
+  });
+  expect(link.getAttribute("href")).toBe("/ui/settings/people?person=alice");
+  link.click();
+  expect(openPermissions).toHaveBeenCalledWith("alice");
+  openPermissions.mockClear();
+  source.publish({
+    ...source.gateway.snapshot,
+    hello: gatewayHelloForMethods(["users.list"], ["operator.sessions.read"]),
+  });
+  flush();
+  expect(
+    getQueriesForElement(container).queryByRole("link", { name: "View permissions" }),
+  ).toBeNull();
+  link.click();
+  expect(openPermissions).not.toHaveBeenCalled();
+  source.publish({
+    ...source.gateway.snapshot,
+    selfUser: { id: "alice", name: "Alice", identity: alice.identity },
+  });
+  flush();
+  expect(
+    getQueriesForElement(container).getByRole("link", { name: "View permissions" }),
+  ).not.toBeNull();
+});
+
+it("shows canonical saved assignment and updates an open card after profile changes", async () => {
+  let profile = canonicalProfile({
+    displayName: "Canonical Alice",
+    role: "guest",
+    effectiveRole: "guest",
+    roleSource: "assigned",
+  });
+  const request = vi.fn(async () => ({ profiles: [profile] }));
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+    }),
+  );
+  show({ gateway: source.gateway, openPermissions: vi.fn() });
+  await waitForSolid(() => expect(card("role")?.textContent).toContain("guest"));
+  expect(card("role")?.getAttribute("title")).toBe("Saved role assignment");
+  expect(
+    getQueriesForElement(container).getByRole("heading", { name: "Canonical Alice" }),
+  ).not.toBeNull();
+  const link = getQueriesForElement(container).getByRole("link", { name: "View activity" });
+  profile = {
+    ...profile,
+    role: undefined,
+    effectiveRole: "maintainer",
+    displayName: "Renamed Alice",
+  };
+  source.publishEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { reason: "profile-identity" },
+  });
+  await waitForSolid(() => expect(card("role")?.textContent).toContain("No saved role"));
+  expect(card("role")?.textContent).not.toContain("maintainer");
+  expect(
+    getQueriesForElement(container).getByRole("heading", { name: "Renamed Alice" }),
+  ).not.toBeNull();
+  expect(getQueriesForElement(container).getByRole("link", { name: "View activity" })).toBe(link);
+});
+
+it("uses only canonical self reads for a guest and retires another person’s role", async () => {
+  const own = canonicalProfile();
+  const request = vi.fn(async () => ({}));
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      hello: gatewayHelloForMethods(["users.self", "users.list"], ["operator.sessions.read"]),
+      selfUser: { id: "alice", name: "Alice", identity: alice.identity },
+    }),
+  );
+  const loadSelf = vi.fn(async () => own);
+  source.gateway.loadSelfProfile = loadSelf;
+  show({ gateway: source.gateway, openPermissions: vi.fn() });
+  await waitForSolid(() => expect(card("role")?.textContent).toContain("No saved role"));
+  expect(loadSelf).toHaveBeenCalledTimes(1);
+  expect(card("role")?.textContent).not.toContain("operator");
+  show({
+    gateway: source.gateway,
+    openPermissions: vi.fn(),
+    user: { ...alice, id: "bob", name: "Bob", identity: { type: "profile", id: "bob" } },
+  });
+  flush();
+  expect(card("role")?.textContent).toContain("Not available with your access");
+  expect(loadSelf).toHaveBeenCalledTimes(1);
+  expect(
+    getQueriesForElement(container).queryByRole("link", { name: "View permissions" }),
+  ).toBeNull();
+  source.publish({ ...source.gateway.snapshot, hello: gatewayHelloForMethods(["users.self"], []) });
+  flush();
+  expect(card("role")?.textContent).toContain("Not available with your access");
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("keeps the Gateway owner distinct from a named role assignment", async () => {
+  const owner = canonicalProfile({ id: "gateway-owner", displayName: "Synthetic Gateway" });
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client: createTestGatewayClient(async () => ({ profiles: [owner] })),
+      hello: gatewayHelloForMethods(["users.list"], ["operator.read"]),
+    }),
+  );
+  show({
+    gateway: source.gateway,
+    user: { ...alice, id: owner.id, identity: { type: "profile", id: owner.id } },
+  });
+  await waitForSolid(() =>
+    expect(card("role")?.textContent).toContain("Gateway owner — no named role"),
+  );
 });

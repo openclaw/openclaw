@@ -24,6 +24,7 @@ import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { makeAgentAssistantMessage } from "../../src/agents/test-helpers/agent-message-fixtures.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
@@ -308,6 +309,7 @@ describe("control-ui-i18n generated ownership", () => {
       expect(source.get("chat.recovery." + key), key).toBe(value);
     }
     for (const fragment of [
+      { presence: registerChatComposerEnglish.catalog.presence },
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
       registerChatMessageMetadataEnglish.catalog,

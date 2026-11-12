@@ -382,9 +382,10 @@ async function mountPersonContext(options: {
   const harness = createSessionOwnerMenuHarness(options.handler);
   if (options.guest) {
     harness.publish({
-      hello: gatewayHelloForMethods(options.methods ?? ["users.mentionable", "sessions.create"], [
-        "operator.sessions.write",
-      ]),
+      hello: gatewayHelloForMethods(
+        options.methods ?? ["users.mentionable", "users.self", "sessions.create"],
+        ["operator.sessions.write"],
+      ),
       selfUser: {
         id: "profile-sam",
         identity: { type: "profile", id: "profile-sam" },
@@ -484,15 +485,18 @@ it.each([
 ] as const)(
   "shows the mention label quietly when a guest's %s %s mention has no roster match",
   async (placement, outcome) => {
+    const samProfile = { ...sessionOwnerProfiles("Sam").profiles[0]!, role: "guest" };
     const fixture = await mountPersonContext({
       guest: true,
       methods: outcome === "no new sessions" ? ["users.mentionable"] : undefined,
       handler: (method) =>
-        method !== "users.mentionable"
-          ? sessionOwnerProfiles("Ada")
-          : outcome === "refused"
-            ? Promise.reject(new Error("forbidden"))
-            : guestRoster,
+        method === "users.self"
+          ? { profile: samProfile }
+          : method !== "users.mentionable"
+            ? sessionOwnerProfiles("Ada")
+            : outcome === "refused"
+              ? Promise.reject(new Error("forbidden"))
+              : guestRoster,
     });
     const [id, label] =
       outcome === "self" ? ["profile-sam", "@Sam"] : ["profile-renamed", "@Old Name"];
@@ -503,6 +507,15 @@ it.each([
     expect(card.textContent).not.toContain("Could not load people");
     expect(card.querySelector("img")).toBeNull();
     expect(fixture.calls("users.list")).toEqual([]);
+    expect(fixture.calls("config.get")).toEqual([]);
+    expect(fixture.calls("users.self")).toEqual(outcome === "self" ? [{}] : []);
+    if (outcome === "self") {
+      await waitForSolid(() =>
+        expect(queries(card).getByTitle("Saved role assignment").textContent).toBe(
+          "Saved role assignment: guest",
+        ),
+      );
+    }
     expect(fixture.calls("users.mentionable")).toEqual(
       outcome === "self" || outcome === "no new sessions" ? [] : [fixture.roster(name, placement)],
     );

@@ -288,6 +288,21 @@ an access policy supplied by a plugin.
 }
 ```
 
+The Control UI’s **Settings → People & permissions** overview is read-only.
+People shows saved assignments and the Gateway-resolved effective role, including
+GitHub login mappings and default-role fallback. Roles shows configured ceilings
+and the people using each role. Activity cards show the canonical saved role
+assignment; **View permissions** opens that person’s entry. Configured ceilings
+include operator scopes, model restrictions, and required access-policy plugins,
+with technical details available on demand. Directory and configured-policy
+reads retain their existing broad operator-read requirement. Session-only guests
+can inspect their own saved assignment through the existing self-profile read
+and their own negotiated connection grants, not another person’s private facts.
+
+Configured maximums are not live grants. The overview does not establish another
+person’s current access, invitation eligibility, access-program approval, or an
+existing session’s sandbox, and does not assign roles or grant permissions.
+
 Use the administrator-scoped `users.setRole` Gateway method with
 `{ profileId, role }` to assign a configured role. Set `role: null` to clear an
 assignment. Assignment changes immediately invalidate and close that profile's

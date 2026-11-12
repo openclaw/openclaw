@@ -51,7 +51,7 @@ const readyWindowRequestLimits = {
 };
 type Route = keyof typeof readyWindowRequestLimits;
 
-async function visit(page: Page, route: Route) {
+async function visit(page: Page, route: Route | "people") {
   const scenario = createEnginePageScenarios(requestLatencyMs).find(
     ({ id }) => id === `page-${route}-visit`,
   );
@@ -115,6 +115,18 @@ async function visit(page: Page, route: Route) {
 }
 
 suite.define(() => {
+  it("loads configured role limits through the shared People census", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await visit(page, "people");
+      const summary = page.locator(".people-permissions details > summary");
+      await summary.click();
+      const policy = page.locator(".people-permissions__policy");
+      await policy.waitFor();
+      expect(await policy.textContent()).toContain("operator.sessions.read");
+      expect(await policy.textContent()).toContain('"sandbox": "required"');
+    });
+  });
+
   it.each(["skills", "skill-settings", "plugins", "plugin-settings"] as const)(
     "bounds %s ready-window asset requests at 100 ms from a settled New Session",
     (route) =>

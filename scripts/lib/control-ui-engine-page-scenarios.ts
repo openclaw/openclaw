@@ -772,6 +772,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       },
     },
   },
+  people: {
+    ready: ".people-permissions details > summary",
+    search: "?person=person-0",
+    action: fill('.people-permissions input[type="search"]', "Synthetic"),
+  },
   profile: {
     ready: 'openclaw-profile-page input[aria-label="Display name"]:enabled',
     action: {
@@ -1189,8 +1194,12 @@ function noChangeActions(id: RouteId): NoChangeAction[] {
     actions[0] = unchangedPush("portal.changed", {}, "portal.list");
   } else if (id === "apps") {
     actions[0] = unchangedPush("config.changed", {}, "mcp.app.discover");
-  } else if (id === "profile") {
-    actions[0] = unchangedPush("sessions.changed", { reason: "profile-identity" }, "users.self");
+  } else if (id === "profile" || id === "people") {
+    actions[0] = unchangedPush(
+      "sessions.changed",
+      { reason: "profile-identity" },
+      id === "people" ? "users.list" : "users.self",
+    );
   }
   if (id === "devices" || id === "activity" || id === "agents" || id === "systems") {
     actions.push({
@@ -1292,7 +1301,24 @@ function createPageFixture(
         : {};
     const config = {
       ...(typeof originalConfig === "object" && originalConfig !== null ? originalConfig : {}),
-      gateway: { controlUi: { experimental: { templates: true } } },
+      gateway: {
+        controlUi: { experimental: { templates: true } },
+        ...(id === "people"
+          ? {
+              roles: {
+                default: "guest",
+                definitions: {
+                  guest: {
+                    agents: ["main"],
+                    sessions: { others: "view" },
+                    sandbox: "required",
+                    scopes: ["operator.sessions.read"],
+                  },
+                },
+              },
+            }
+          : {}),
+      },
       cloudWorkers: {
         profiles: Object.fromEntries(
           Array.from({ length: 30 }, (_, index) => [
@@ -1387,6 +1413,7 @@ function createPageFixture(
           "secrets.store.set",
           "users.setDisplayName",
           ...(id === "profile" ? ["users.personalFile.get"] : []),
+          ...(id === "people" ? ["users.list", "config.get"] : []),
           "templates.catalog.search",
           "node.list",
           "device.pair.list",
@@ -1428,9 +1455,24 @@ function createPageFixture(
               } satisfies UsersPersonalFileGetResult,
             }
           : {}),
+        ...(id === "people"
+          ? {
+              "users.list": {
+                profiles: [
+                  {
+                    ...savedProfile,
+                    role: "guest",
+                    effectiveRole: "guest",
+                    roleSource: "assigned",
+                  },
+                ],
+              },
+            }
+          : {}),
         "config.get": {
           config,
           sourceConfig: config,
+          ...(id === "people" ? { runtimeConfig: config } : {}),
           hash: "page-census",
           raw: JSON.stringify(config),
           valid: true,

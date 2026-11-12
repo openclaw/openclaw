@@ -71,6 +71,7 @@ export function createApplicationGateway(
       return snapshot;
     },
     connect: () => undefined,
+    loadSelfProfile: async () => null,
     subscribe: (listener: (value: ApplicationGatewaySnapshot) => void) =>
       registerListener(listeners, listener),
     subscribeEvents: (listener: GatewayEventListener) => registerListener(eventListeners, listener),

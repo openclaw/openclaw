@@ -47,6 +47,10 @@
   line-height: 1;
 }
 
+.person-activity-card__role {
+  overflow-wrap: anywhere;
+}
+
 .person-activity-card__status {
   display: inline-flex;
   align-items: center;

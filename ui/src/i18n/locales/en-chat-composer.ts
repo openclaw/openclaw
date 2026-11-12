@@ -3,6 +3,29 @@ import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
 const catalog = {
+  presence: {
+    card: {
+      onlineFor: "Online for",
+      where: "Where",
+      reportedTimeZone: "Reported time zone: {zone}",
+      lastActivity: "Last interaction",
+      notObserved: "Activity unavailable",
+      recentSessions: "Recent sessions",
+      noRecentSessions: "No recent visible sessions.",
+      ago: "ago",
+      viewPermissions: "View permissions",
+      assignedRole: "Saved role assignment",
+      noAssignedRole: "No saved role",
+      ownerRole: "Gateway owner — no named role",
+      roleStates: {
+        unknown: "Not reported",
+        loading: "Loading…",
+        unavailable: "Unavailable",
+        denied: "Not available with your access",
+        disconnected: "Reconnect to inspect",
+      },
+    },
+  },
   chat: {
     view: {
       activityDetails: "View activity details",
