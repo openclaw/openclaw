@@ -82,6 +82,16 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   if (delivery?.kind === PLUGIN_NOTICE_KIND || delivery?.kind === MODEL_FALLBACK_NOTICE_KIND) {
     return true;
   }
+  // A mirrored command exchange (a stop or another delivered command) is
+  // operational history, not an agent turn input: it can land between a queued
+  // turn's user row and that turn's replay admission.
+  if (
+    typeof message.idempotencyKey === "string" &&
+    (message.idempotencyKey.startsWith("command-input:") ||
+      message.idempotencyKey.startsWith("command-reply:"))
+  ) {
+    return true;
+  }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
     return false;
   }
