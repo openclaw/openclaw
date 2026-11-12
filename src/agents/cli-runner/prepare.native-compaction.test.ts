@@ -140,7 +140,7 @@ it.each([
         throw new Error("compaction must run as a child process");
       }
       const { argv } = spawn;
-      const file = argv.indexOf("--append-system-prompt-file") + 1;
+      const file = argv.indexOf("--system-prompt-file") + 1;
       compaction = { argv, systemPrompt: file ? fs.readFileSync(argv[file] ?? "", "utf8") : "" };
       const stdout = [
         { type: "system", subtype: "compact_boundary", session_id: nativeSessionId },
@@ -155,7 +155,9 @@ it.each([
 
     const [turn] = sent;
     expect(turn?.systemPrompt).toContain("TURN-ONLY-INBOUND-METADATA");
+    // Turns replace Claude Code's prompt with OpenClaw's; the compaction process must too.
     expect(compaction?.systemPrompt).toBe(turn?.systemPrompt);
+    expect(compaction?.argv).not.toContain("--append-system-prompt-file");
     expect(compaction?.argv.at(-1)).toBe("/compact");
     expect(compaction?.argv).toEqual(expect.arrayContaining(["--resume", nativeSessionId]));
     const tools = (args: readonly string[]) => args[args.indexOf("--tools") + 1];

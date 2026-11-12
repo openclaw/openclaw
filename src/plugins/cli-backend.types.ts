@@ -406,6 +406,11 @@ type CliBackendManualCompaction = Readonly<{
   buildPrompt: (customInstructions?: string) => string;
   /** Prompt transport required by the backend control command. */
   input: "arg" | "stdin";
+  /**
+   * System-prompt file flag for the control process when the backend's live turns send
+   * the prompt through another transport, so the control request keeps the turns' prefix.
+   */
+  systemPromptFileArg?: string;
   /** Positively confirms that a successful process exit performed compaction. */
   validateOutput: (rawOutput: string) => { ok: true } | { ok: false; reason: string };
 }>;
