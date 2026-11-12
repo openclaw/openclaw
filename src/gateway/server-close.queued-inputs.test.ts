@@ -11,6 +11,7 @@ import {
   listSessionPendingInputs,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../plugins/gateway-ingress.types.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
@@ -252,6 +253,8 @@ it.for(["restart", "stop"] as const)(
       capture.spy.mockRestore();
       stage.spy.mockRestore();
       dispatch.mockClear();
+      // Direct server starts bypass the CLI restart loop that rotates ownership.
+      rotateAgentEventLifecycleGeneration();
       const reopened = await fixture.gateway.start(fixture.port);
       const next = fixture.gateway.kernels.get(fixture.port);
       assert(next);
