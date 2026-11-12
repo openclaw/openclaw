@@ -1,2 +1,0 @@
-120
-# Real-worker cron recovery, receipt preservation, and pause/stop/retirement controls.
