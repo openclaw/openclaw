@@ -132,7 +132,9 @@ final class MacOpenClawIDSignIn: NSObject, ASWebAuthenticationPresentationContex
         try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(
                 url: url, callbackURLScheme: MacOpenClawIDConfiguration.callbackScheme)
-            { callback, error in
+            { @Sendable callback, error in
+                // AuthenticationServices calls this on its XPC reply queue, so it must not inherit
+                // this class's main-actor isolation; it only resumes the continuation.
                 if let callback {
                     continuation.resume(returning: callback)
                 } else if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
