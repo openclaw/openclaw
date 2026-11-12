@@ -1,0 +1,4 @@
+# PR #197560: exact 27-line regression test that every bundled Decision provider with a
+# fixed model list publishes a hosted v3 row and declares no runtime discovery (red on base
+# for Fastino, Perplexity and SubQ). Consolidated from 51 lines; no smaller real-manifest check.
+27
