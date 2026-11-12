@@ -170,6 +170,8 @@ fallback.
   or expert service runs.
 - `fields` support `string`, `number`, `boolean`, and string-array values, with
   optional `required` and string enumerations.
+- A page type may declare a `layout`: how its pages are written. See
+  [Page layouts](#page-layouts).
 
 Selective borrowing reads only a donor's own declarations:
 
@@ -220,12 +222,69 @@ implies no inverse edges, inference, redirection, or lifecycle change.
 
 All shipped fields are optional; extensions can require fields.
 
+### Page layouts
+
+A page type's optional `layout` says how its pages are written after the
+introduction and State: the question a page answers, its sections in order with
+guidance for each, and optional notes for the whole page.
+
+```yaml
+layout:
+  question: what is it for, where does it stand, and what is undecided?
+  sections:
+    - heading: Key decisions
+      guidance: decisions that still shape the project, newest first.
+    - heading: Open questions
+      guidance: unresolved decisions and risks, with who owns each.
+  notes: State says where things stand.
+```
+
+`question` is up to 500 characters, each `heading` up to 100 (one line, without
+`#`), each `guidance` up to 2,000, `notes` up to 4,000, with 1–30 sections.
+Layouts guide agents and the Knowledge UI; validation never reads them, so a page
+that departs from its layout is not invalid. The default vocabulary ships layouts
+for `project`, `person`, `company`, and `concept`. Agents read a type's layout
+with `knowledge_ontology` `view: "definitions"`; the default catalog omits it.
+
+Because an override replaces the whole definition, a manifest can also replace
+only layouts, by type name, without copying definitions:
+
+```yaml
+layouts:
+  project:
+    question: what is it for and what is due?
+    sections:
+      - heading: Milestones
+        guidance: dated outcomes and targets.
+```
+
+Layout maps apply from the farthest ancestor to the active manifest, so the
+nearest one wins. An entry for a type the resolved ontology no longer declares
+is ignored with an `ontology-layout-ignored` diagnostic. Borrowing does not
+import a donor's `layouts` map.
+
+The Knowledge UI edits layouts in **Settings → Vocabulary**: open a page type's
+details, then **Edit layout**, **Add layout**, or **Reset to default**. A save
+sets or removes that type's entry in the partition's `layouts` map. When the
+vault has no `ontology.yaml`, the first save creates one named `vault` that
+extends `knowledge-default` and declares no definitions. Each save is a
+journaled publication: it is rejected when the layout changed after the editor
+opened it, appears in mutation history with operation `layout`, and is committed
+to [local Git history](/plugins/knowledge#local-git-history). Saving needs
+`operator.write` and enabled writes; agents cannot edit layouts.
+
+Older Knowledge versions reject manifests that contain `layout` or `layouts`,
+which makes that vault's ontology unavailable until the plugin is upgraded or the
+keys are removed. Do not open a vault with saved layouts in an older plugin.
+
 ### Fingerprints
 
-The SHA-256 fingerprint covers the canonical effective definitions plus the
-active name and version. Parent or donor edits that change effective definitions
-change it; formatting, comments, key order, and unused declarations do not.
-Assertion writes require the current fingerprint, so an ontology change between
+The SHA-256 fingerprint covers the canonical effective definitions, excluding
+layouts. Parent or donor edits that change effective definitions change it;
+layouts, manifest names and versions, formatting, comments, key order, and
+unused declarations do not. Saving a layout, including the save that first
+creates `ontology.yaml`, therefore never invalidates an in-flight write.
+Assertion writes require the current fingerprint, so a definition change between
 read and write is rejected.
 
 ## Filenames and links

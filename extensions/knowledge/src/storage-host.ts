@@ -72,6 +72,8 @@ export const operations = {
     a: Access,
     input: { value: In<Storage["createRelationship"]>; actor: string },
   ) => s.createRelationship(input.value, a, input.actor),
+  saveLayout: (s: Storage, a: Access, input: In<Storage["saveLayout"]>) =>
+    s.saveLayout(input, a, "operator"),
   remember: (s: Storage, a: Access, input: In<Storage["remember"]>) =>
     s.remember(input, a, "agent"),
   relink: (s: Storage, a: Access, input: In<Storage["relink"]>) => s.relink(input, a, "agent"),

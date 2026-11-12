@@ -55,6 +55,7 @@ import {
   Receipt,
   HistoryEntry,
   GitStatus,
+  LayoutInput,
   requestId,
 } from "./mutation-contract.js";
 import { HUB_PAGE_BUDGET_CHARS, PAGE_BUDGET_CHARS } from "./page-budget.js";
@@ -573,10 +574,17 @@ export const contract = defineFeatureContract({
     ontology: {
       kind: "query",
       description:
-        "Inspect authorized ontology with progressive detail. Default catalog lists types with kind and description (50/page) plus the full fingerprint writes need. Use view=definitions with name for structured authoring fields, endpoint constraints and provenance (10/page); no serialized duplicate. includeRecords adds up to 20 examples/type; use knowledge_records for exhaustive records. view=sources lists source paths; add sourcePath for YAML only when debugging/editing a source, bounded by maxChars (12,000 default). view=diagnostics pages issues. Follow nextOffset using the same view/filters; source offsets are characters, other offsets are items. Behavior flags describe definitions, not implemented workflows.",
+        "Inspect authorized ontology with progressive detail. Default catalog lists types with kind and description (50/page) plus the full fingerprint writes need. Use view=definitions with name for structured authoring fields, the page layout, endpoint constraints and provenance (10/page); no serialized duplicate. includeRecords adds up to 20 examples/type; use knowledge_records for exhaustive records. view=sources lists source paths; add sourcePath for YAML only when debugging/editing a source, bounded by maxChars (12,000 default). view=diagnostics pages issues. Follow nextOffset using the same view/filters; source offsets are characters, other offsets are items. Behavior flags describe definitions, not implemented workflows.",
       input: OntologyInput,
       output: Type.Union([LeanOntologyOutput, OntologyOutput]),
       tool: { name: "knowledge_ontology", label: "Inspect ontology" },
+    },
+    ontology_layout: {
+      kind: "action",
+      description:
+        "Control UI: save or reset one page type's layout in the vault's own ontology.yaml. Requires operator write access and the layout the editor started from. Layouts are outside the ontology fingerprint.",
+      input: LayoutInput,
+      output: Receipt,
     },
     diagnostics: {
       kind: "query",

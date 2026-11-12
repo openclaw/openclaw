@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Check, Errors } from "typebox/value";
 import { parseYaml, readText } from "./files.js";
-import { Definition, name, text, type Issue } from "./model.js";
+import { Definition, Layout, name, text, type Issue } from "./model.js";
 import { ontologyRoot } from "./plugin-files.js";
 
 const Manifest = Type.Object(
@@ -26,6 +26,9 @@ const Manifest = Type.Object(
       ),
     ),
     definitions: Type.Array(Definition, { maxItems: 100 }),
+    // Layout replacements for page types this manifest inherits or borrows,
+    // so changing one layout does not copy (and freeze) the whole definition.
+    layouts: Type.Optional(Type.Record(name, Layout, { maxProperties: 100 })),
   },
   { additionalProperties: false },
 );
@@ -41,6 +44,8 @@ type EffectiveDefinition = {
   source: string;
   ontology: string;
   version: string;
+  /** Set when the active manifest's `layouts` map supplies this page type's layout. */
+  layoutOverride?: boolean;
 };
 export type ResolvedOntology = {
   name: string;
@@ -86,7 +91,7 @@ export function parseOntology(path: string, raw: string, issues: Issue[]): Ontol
         d.path_prefixes ??= [d.directory];
         d.behaviors ??= { extractable: false, expert_routing: false };
       } else {
-        if (d.primitive || d.aliases || d.path_prefixes || d.behaviors) {
+        if (d.primitive || d.aliases || d.path_prefixes || d.behaviors || d.layout) {
           throw new Error(`Relationship ${d.name} cannot declare page settings`);
         }
         if (d.from_types?.length === 0 || d.to_types?.length === 0) {
@@ -253,6 +258,27 @@ export function resolveOntology(
     const pages = merge(chain.length === 1 ? [own(root), borrowed, own(root)] : layers).filter(
       (d) => d.definition.kind === "page",
     );
+    // Layout maps apply farthest ancestor first, so the nearest manifest wins.
+    // A map entry for a type that is no longer declared is reported, not fatal:
+    // a parent dropping a type must not take the vault's vocabulary offline.
+    for (const s of chain.toReversed()) {
+      for (const [type, layout] of Object.entries(s.manifest!.layouts ?? {})) {
+        const at = pages.findIndex((d) => d.definition.name === type);
+        if (at < 0) {
+          issues.push({
+            path: s.path,
+            code: "ontology-layout-ignored",
+            message: `Layout for ${type} is ignored: no page type ${type} is declared.`,
+          });
+          continue;
+        }
+        pages[at] = {
+          ...pages[at]!,
+          definition: { ...pages[at]!.definition, layout },
+          layoutOverride: s === root,
+        };
+      }
+    }
     const relationships = new Map<string, EffectiveDefinition>();
     for (const layer of layers) {
       for (const d of layer) {
@@ -275,16 +301,16 @@ export function resolveOntology(
         }
       }
     }
-    const effective = {
+    // The fingerprint fences what write validation reads. Layouts are writing
+    // guidance and manifest names and versions validate nothing, so saving a
+    // layout (which may first create the vault's ontology.yaml) keeps it.
+    const validated = definitions.map(({ definition: { layout: _layout, ...d } }) => d);
+    return {
       name: root.manifest.name,
       version: root.manifest.version,
-      definitions: definitions.map((d) => d.definition),
-    };
-    return {
-      ...effective,
       definitions,
       chain: chain.map((s) => `${s.manifest!.name}@${s.manifest!.version}`),
-      fingerprint: createHash("sha256").update(canonical(effective)).digest("hex"),
+      fingerprint: createHash("sha256").update(canonical(validated)).digest("hex"),
     };
   } catch (e) {
     issues.push({

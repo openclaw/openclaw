@@ -34,7 +34,7 @@ import {
   returnedRecords,
   type ActivityInput,
 } from "./session-activity.js";
-import { StorageIngestion } from "./storage-ingestion.js";
+import { StorageLayouts } from "./storage-layouts.js";
 import { scopeKey } from "./storage-types.js";
 import { verifyRecords } from "./verification.js";
 
@@ -42,7 +42,7 @@ import { verifyRecords } from "./verification.js";
 // gets its own character budget.
 const GATE_INDEX_MAX_ENTRIES = 2_000;
 
-export class KnowledgeStorage extends StorageIngestion {
+export class KnowledgeStorage extends StorageLayouts {
   async trackRead<T>(
     access: VaultAccess,
     operation: string,

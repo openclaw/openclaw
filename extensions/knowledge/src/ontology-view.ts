@@ -1,5 +1,7 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import type { FullOutputContract } from "./contract.js";
+import { modal, openLayoutDialog } from "./layout-editor.js";
+import type { Layout } from "./model.js";
 import { button, el } from "./page-dom.js";
 import { icon as glyph, type IconName } from "./ui-icons.js";
 
@@ -85,11 +87,19 @@ const relationshipGroups: (Category & { names: string[] })[] = [
   },
 ];
 
+/** Layout editing for operators who may write; absent when the viewer may only read. */
+export type LayoutEditing = {
+  save: (type: Definition, layout: Layout | null) => Promise<string | undefined>;
+};
+
 /** A human-facing projection of the shared contract; diagnostics remain in agent operations. */
 export function ontologyView(
   data: Ontology,
   openRecord: (id: string) => void,
   browseIssues: () => void,
+  editing?: LayoutEditing,
+  /** A page type whose detail opens once this view is shown, as after a layout save. */
+  openType?: string,
 ) {
   const root = el("div", undefined, "knowledge-ontology");
   if (!data.available) {
@@ -148,8 +158,37 @@ export function ontologyView(
   function card(d: Definition) {
     const article = el("article", undefined, "knowledge-type-card");
     article.append(el("h4", d.label), el("p", d.description, "knowledge-type-description"));
-    const details = el("details", undefined, "knowledge-type-details");
-    details.append(el("summary", "Explore type"));
+    // Focus is restored per type across reloads.
+    article.dataset.readingKey = `type:${d.kind}:${d.name}`;
+    const count = d.recordCount;
+    const footer = el("div", undefined, "knowledge-type-footer");
+    const explore = button("Explore type", () => openDetail(d), "knowledge-type-explore");
+    explore.setAttribute("aria-haspopup", "dialog");
+    footer.append(
+      el(
+        "span",
+        `${count} ${count === 1 ? "record" : "records"}`,
+        count ? "knowledge-count-used" : "",
+      ),
+      explore,
+    );
+    article.append(footer);
+    // The whole card opens its detail; the button keeps it reachable by keyboard.
+    article.addEventListener("click", (event) => {
+      if (!(event.target instanceof Element && event.target.closest("button"))) {
+        explore.click();
+      }
+    });
+    return article;
+  }
+  /** One type's detail: layout, fields, search terms and examples. */
+  function openDetail(d: Definition) {
+    const { body: content, close, show } = modal(d.label, "knowledge-type-dialog");
+    content.dataset.type = d.name;
+    content.append(el("p", d.description, "knowledge-type-description"));
+    if (d.kind === "page") {
+      content.append(layoutSection(d, close));
+    }
     if (d.kind === "relationship") {
       const label = (names: string[]) =>
         names.length
@@ -163,10 +202,10 @@ export function ontologyView(
         el("span", "→"),
         el("span", label(d.toTypes ?? [])),
       );
-      details.append(endpoints);
+      content.append(endpoints);
     }
     if (d.fields?.length) {
-      details.append(el("h5", "Details you can add"));
+      content.append(el("h5", "Details you can add"));
       const fields = el("ul", undefined, "knowledge-type-fields");
       for (const field of d.fields) {
         const item = el("li");
@@ -179,10 +218,10 @@ export function ontologyView(
         }
         fields.append(item);
       }
-      details.append(fields);
+      content.append(fields);
     }
     if (d.aliases.length) {
-      details.append(
+      content.append(
         el("h5", "Search terms"),
         el(
           "p",
@@ -194,34 +233,87 @@ export function ontologyView(
       for (const alias of d.aliases) {
         tags.append(el("span", alias.replaceAll("-", " ")));
       }
-      details.append(tags);
+      content.append(tags);
     }
-    details.append(el("h5", "In your vault"));
+    content.append(el("h5", "In your vault"));
     if (d.recordCount) {
       const records = el("div", undefined, "knowledge-type-records");
       for (const record of d.records ?? []) {
-        records.append(button(record.title, () => openRecord(record.id), ""));
+        records.append(
+          button(
+            record.title,
+            () => {
+              close();
+              openRecord(record.id);
+            },
+            "",
+          ),
+        );
       }
       if (d.recordsTruncated) {
         records.append(
           el("p", "Showing the first 20 records. Filter Records by this type to browse all."),
         );
       }
-      details.append(records);
+      content.append(records);
     } else {
-      details.append(el("p", "No records of this type yet."));
+      content.append(el("p", "No records of this type yet."));
     }
-    const count = d.recordCount;
-    const footer = el("div", undefined, "knowledge-type-footer");
-    footer.append(
-      el(
-        "span",
-        `${count} ${count === 1 ? "record" : "records"}`,
-        count ? "knowledge-count-used" : "",
-      ),
-    );
-    article.append(footer, details);
-    return article;
+    show();
+  }
+  function layoutSection(d: Definition, closeDetail: () => void) {
+    const section = el("section", undefined, "knowledge-type-layout");
+    const head = el("div", undefined, "knowledge-type-layout-head");
+    head.append(el("h5", "Page layout"));
+    if (d.layoutOverride) {
+      head.append(el("span", "Customized", "knowledge-layout-badge"));
+    }
+    section.append(head);
+    if (d.layout) {
+      section.append(el("p", `Answers: ${d.layout.question}`, "knowledge-layout-question"));
+      const list = el("ol", undefined, "knowledge-layout-sections");
+      for (const s of d.layout.sections) {
+        const item = el("li");
+        item.append(el("strong", s.heading), el("p", s.guidance));
+        list.append(item);
+      }
+      section.append(list);
+      if (d.layout.notes) {
+        section.append(el("p", d.layout.notes, "knowledge-layout-notes"));
+      }
+    } else {
+      section.append(
+        el(
+          "p",
+          "No layout yet. Pages of this type use an introduction, State and the sections their content needs.",
+        ),
+      );
+    }
+    if (editing) {
+      const actions = el("div", undefined, "knowledge-type-layout-actions");
+      // A saved layout re-renders the view, which reopens this type's detail.
+      const save = async (next: Layout | null) => {
+        const failure = await editing.save(d, next);
+        if (failure === undefined) {
+          closeDetail();
+        }
+        return failure;
+      };
+      actions.append(
+        button(
+          d.layout ? "Edit layout" : "Add layout",
+          () => openLayoutDialog(d, save),
+          "knowledge-button",
+        ),
+      );
+      if (d.layoutOverride) {
+        actions.append(
+          button("Reset to default", () => openLayoutDialog(d, save, true), "knowledge-quiet"),
+        );
+      }
+      section.append(actions);
+    }
+    return section;
   }
   function render() {
     pageButton.setAttribute("aria-pressed", String(mode === "page"));
@@ -304,5 +396,13 @@ export function ontologyView(
     }
   }
   render();
+  const reopen = openType && pages.find((d) => d.name === openType);
+  if (reopen) {
+    requestAnimationFrame(() => {
+      if (root.isConnected) {
+        openDetail(reopen);
+      }
+    });
+  }
   return root;
 }

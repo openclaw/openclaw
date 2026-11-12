@@ -18,6 +18,8 @@ export function catalogFacts(data: ScanResult) {
         data.records.map((r) => [r.id, r.path, r.hash, r.valid]),
         active.map((r) => r.id),
         data.ontology?.fingerprint,
+        // Layouts are outside the fingerprint but still change what Vocabulary shows.
+        data.ontology?.definitions.map((d) => d.definition.layout ?? null),
         data.issues,
       ]),
     ),

@@ -267,6 +267,7 @@ export const LeanDefinition = Type.Object(
     toTypes: Type.Optional(Type.Array(text(200), { maxItems: 100 })),
     pathPrefixes: Type.Optional(Type.Array(text(100), { maxItems: 100 })),
     behaviors: Definition.properties.behaviors,
+    layout: Definition.properties.layout,
     records: Type.Optional(Type.Array(PageRow, { maxItems: 20 })),
     recordsTruncated: Type.Optional(Type.Boolean()),
   },

@@ -44,8 +44,8 @@ after compaction unless you are about to use it again.
 - **Retire duplicates, replaced claims and snapshot series:**
   [retiring](references/retiring.md).
 - **Review a page:** [page review](references/page-review.md), which sends you
-  to [subject pages](references/profiles.md) and the one layout for the page's
-  type.
+  to [subject pages](references/profiles.md) and the ontology layout for the
+  page's type.
 
 ## Scopes
 

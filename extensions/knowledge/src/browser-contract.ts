@@ -44,6 +44,7 @@ export const browserContract = {
     records_detail: { kind: "query" },
     record_detail: { kind: "query" },
     ontology: { kind: "query" },
+    ontology_layout: { kind: "action" },
     diagnostics: { kind: "query" },
     maintenance_status: { kind: "query" },
     stores_snapshot: { kind: "query" },

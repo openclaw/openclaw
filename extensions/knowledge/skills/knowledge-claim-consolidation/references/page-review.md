@@ -2,9 +2,9 @@
 
 A page review makes one entity page (person, company, project, concept) read as
 a current explanation of its subject. The correct result for most pages is no
-change. Read [subject pages](profiles.md) for the rules and only the layout for
-this page's type. Do not review authored documents (designs, plans, writing),
-meeting pages or source pages this way.
+change. Read [subject pages](profiles.md) for the rules and the layout for this
+page's type from the ontology. Do not review authored documents (designs, plans,
+writing), meeting pages or source pages this way.
 
 Work from claim rows. Read a claim in full only when you are about to change
 it, and never read whole source transcripts: the rows and the citations already

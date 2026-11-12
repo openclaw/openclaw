@@ -155,7 +155,7 @@ export class StorageJournal extends StorageBase {
               after,
               checkpointKey(this.config.vaultId),
             );
-            const records = plan.records ?? [plan.record];
+            const records = plan.records ?? (plan.record ? [plan.record] : []);
             observeWithdrawals(db, records, this.retrievalBinding(access));
             releaseSupersessionGuards(db, plan.restored ?? [], this.retrievalBinding(access));
             for (const record of records) {

@@ -412,6 +412,8 @@ export async function inspectOntology(
               toTypes: def.to_types ?? [],
               pathPrefixes: def.path_prefixes ?? [],
               ...(def.behaviors ? { behaviors: def.behaviors } : {}),
+              ...(def.layout ? { layout: def.layout } : {}),
+              ...(d.layoutOverride ? { layoutOverride: true } : {}),
               source: d.source,
               ontology: d.ontology,
               version: d.version,

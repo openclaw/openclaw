@@ -32,11 +32,11 @@ Continue below too to revise a page's prose or save a longer note.
 ## Update a page or save a note
 
 Read [setup](references/setup.md), [subject pages](references/profiles.md) and
-only the layout for the page's type ([project](references/layout-project.md),
-[person](references/layout-person.md), [company](references/layout-company.md),
-[concept](references/layout-concept.md)). Read [publish](references/publish.md)
-before the write and [writing](references/writing.md) before new prose. You
-don't need to reread them after compaction unless you are about to use them.
+the layout for the page's type from the ontology (its `layout` in
+`knowledge_ontology({view: "definitions", name: "<type>"})`). Read
+[publish](references/publish.md) before the write and
+[writing](references/writing.md) before new prose. You don't need to reread them
+after compaction unless you are about to use them.
 
 1. Preserve the supplied wording, especially original ideas. Use the active
    ontology's type descriptions to classify the information. Do not add
