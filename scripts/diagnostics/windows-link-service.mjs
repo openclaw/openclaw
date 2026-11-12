@@ -208,7 +208,9 @@ async function childMain() {
       effectLimit: 640,
       admissionMs: ADMISSION_MS,
       lifetimeMs: LIFETIME_MS,
-      harnessSha256: createHash("sha256").update(await fs.readFile(filename)).digest("hex"),
+      harnessSha256: createHash("sha256")
+        .update(await fs.readFile(filename))
+        .digest("hex"),
       scope: "synthetic-only; not release proof; inherited options are potential confounders",
     });
     for (let sample = 0; sample < SAMPLE_COUNT; sample++) {
@@ -350,12 +352,15 @@ async function supervise() {
     });
     process.exit(1);
   };
-  const watchdog = setTimeout(() => {
-    timedOut = true;
-    // A fixed settlement-observation allowance does not admit more child work.
-    killGrace = setTimeout(uncertainty, 5_000);
-    child.kill("SIGKILL");
-  }, Math.max(0, LIFETIME_MS - ms(now() - start)));
+  const watchdog = setTimeout(
+    () => {
+      timedOut = true;
+      // A fixed settlement-observation allowance does not admit more child work.
+      killGrace = setTimeout(uncertainty, 5_000);
+      child.kill("SIGKILL");
+    },
+    Math.max(0, LIFETIME_MS - ms(now() - start)),
+  );
   child.on("error", () => {
     spawnFailure = true;
   });
