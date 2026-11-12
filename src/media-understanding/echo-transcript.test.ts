@@ -52,6 +52,23 @@ describe("sendTranscriptEcho", () => {
     );
   });
 
+  it("keeps the default delivery unchanged and silences echoes across chats when enabled", async () => {
+    await sendTranscriptEcho({ ctx: createCtx(), cfg: EMPTY_CONFIG, transcript: "default" });
+    expect(mockDeliverOutboundPayloads.mock.calls[0]?.[0].silent).toBeUndefined();
+
+    const cfg: OpenClawConfig = { tools: { media: { audio: { echoSilent: true } } } };
+    for (const to of ["telegram:-100123:topic:7", "telegram:-100456:topic:7"]) {
+      await sendTranscriptEcho({
+        ctx: createCtx({ Provider: "telegram", OriginatingTo: to }),
+        cfg,
+        transcript: "voice note",
+      });
+    }
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledTimes(3);
+    expect(mockDeliverOutboundPayloads.mock.calls[1]?.[0]).toMatchObject({ silent: true });
+    expect(mockDeliverOutboundPayloads.mock.calls[2]?.[0]).toMatchObject({ silent: true });
+  });
+
   it("skips non-deliverable channels", async () => {
     await sendTranscriptEcho({
       ctx: createCtx({ Provider: "internal-system", From: "some-source" }),

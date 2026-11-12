@@ -730,6 +730,8 @@ const ToolsMediaAudioSchema = ToolsMediaCapabilitySchema.unwrap()
      * Default: '📝 "{transcript}"'
      */
     echoFormat: z.string().optional(),
+    /** Deliver the transcript echo silently on supported channels. Default: false. */
+    echoSilent: z.boolean().optional(),
   })
   .optional();
 
