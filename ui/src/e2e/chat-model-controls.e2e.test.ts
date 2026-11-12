@@ -29,7 +29,14 @@ suite.define(() => {
             serviceTiers: ["default"],
           },
         ],
-        sessionInfo: { model: id, modelProvider: "clawrouter", thinkingLevel: "medium" },
+        sessions: [
+          {
+            key: "agent:main:main",
+            model: id,
+            modelProvider: "clawrouter",
+            thinkingLevel: "medium",
+          },
+        ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__input").first();
