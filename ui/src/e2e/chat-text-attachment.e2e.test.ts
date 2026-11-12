@@ -126,6 +126,14 @@ suite.define(() => {
           }),
         ).toBe(true);
         if (extension === "md") {
+          // Markdown reading text opts out of the app chrome's antialiased smoothing.
+          expect(
+            await reader.evaluate((element) =>
+              [element, document.body].map((node) =>
+                getComputedStyle(node).getPropertyValue("-webkit-font-smoothing"),
+              ),
+            ),
+          ).toEqual(["auto", "antialiased"]);
           await scroller.evaluate((element) => {
             element.scrollTop = 0;
           });
