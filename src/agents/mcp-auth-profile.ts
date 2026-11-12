@@ -46,6 +46,7 @@ async function resolveMcpBearerToken(params: {
   server: BundleMcpServerConfig;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  signal?: AbortSignal;
 }): Promise<string | undefined> {
   const authProfileId = resolveMcpAuthProfileId(params.server);
   if (authProfileId) {
@@ -54,6 +55,7 @@ async function resolveMcpBearerToken(params: {
       profileId: authProfileId,
       cfg: params.cfg,
       agentDir: params.agentDir,
+      signal: params.signal,
     });
   }
   if (params.server.auth !== "oauth") {
@@ -71,6 +73,7 @@ async function resolveMcpBearerToken(params: {
     identity: operatorMcpOAuthIdentity(params.serverName, resolved.url),
     config: resolved.oauth,
     fetchFn: buildMcpOAuthAuthorizationFetch(resolved),
+    signal: params.signal,
   });
 }
 
@@ -120,6 +123,7 @@ export async function resolveMcpBearerBundleConfig(
     tokenProjection?: "env" | "literal";
     omitUnavailableOAuthServers?: boolean;
     onServerUnavailable?: (serverName: string, error: unknown) => void;
+    signal?: AbortSignal;
   } & McpAuthProfileOptions,
 ): Promise<{ config: BundleMcpConfig; env?: Record<string, string> }> {
   let nextServers: Record<string, BundleMcpServerConfig> | undefined;
@@ -128,15 +132,22 @@ export async function resolveMcpBearerBundleConfig(
 
   for (const [serverName, server] of Object.entries(params.config.mcpServers)) {
     let token: string | undefined;
+    params.signal?.throwIfAborted();
     try {
       token = await resolveMcpBearerToken({
         serverName,
         server,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        signal: params.signal,
       });
     } catch (error) {
-      if (!params.omitUnavailableOAuthServers || !requiresMcpBearerProjection(server)) {
+      // Cancellation is the caller's outcome, never an unavailable credential.
+      if (
+        params.signal?.aborted ||
+        !params.omitUnavailableOAuthServers ||
+        !requiresMcpBearerProjection(server)
+      ) {
         throw error;
       }
       nextServers ??= { ...params.config.mcpServers };
@@ -161,13 +172,13 @@ export async function resolveMcpBearerBundleConfig(
     const headers = withoutMcpAuthorizationHeader(filterStringRecord(server.headers));
     nextServers ??= { ...params.config.mcpServers };
     const { auth: _auth, oauth: _oauth, ...externalServer } = server;
-    nextServers[serverName] = {
-      ...externalServer,
-      headers: {
-        ...headers,
-        Authorization: authorization,
-      },
-    };
+    // Define, not assign: a literal __proto__ server name must stay a data property.
+    Object.defineProperty(nextServers, serverName, {
+      value: { ...externalServer, headers: { ...headers, Authorization: authorization } },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
 
   return {
