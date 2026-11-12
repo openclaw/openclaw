@@ -3,10 +3,15 @@ import { expect, it } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 import {
   ensureCanonicalUserProfileForOpenClawIdIdentity as ensureIdentity,
+  linkCanonicalOpenClawIdUserProfile as link,
+  readOpenClawIdLinkedProfile,
+  readOpenClawIdLinkOfProfile,
   readOpenClawIdUserProfiles,
+  unlinkCanonicalOpenClawIdUserProfile as unlink,
 } from "./user-profile-openclaw-id.js";
 import { listProfiles } from "./user-profile-reads.js";
 import {
+  ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
   ensureCanonicalUserProfileForTailscaleIdentity,
   mergeCanonicalUserProfiles,
@@ -103,4 +108,54 @@ it("does not create state on reads and preserves explicit profile merges", async
     source: { id: target.id, displayName: "Target", email: "source@example.test" },
     target: { id: target.id, displayName: "Target", email: null },
   });
+});
+
+it("links one OCID account to one personal profile, carried by merge and removed by unlink", async () => {
+  const person = await ensureCanonicalUserProfileForTailscaleIdentity(
+    { login: "josh@example.test", name: "Josh" },
+    options,
+  );
+  const other = await ensureCanonicalUserProfileForEmail("other@example.test", options);
+  const owner = await ensureCanonicalGatewayOwnerProfile("Owner", options);
+  expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toBeNull();
+
+  expect(
+    await link({ profileId: person.id, accountId: "acct-josh", email: "josh@id.test" }, options),
+  ).toEqual({ ok: true });
+  // Idempotent for the same profile; refused for another profile or another account.
+  expect(
+    await link({ profileId: person.id, accountId: "acct-josh", email: null }, options),
+  ).toEqual({ ok: true });
+  expect(await link({ profileId: other.id, accountId: "acct-josh", email: null }, options)).toEqual(
+    { ok: false, code: "linked_elsewhere" },
+  );
+  expect(
+    await link({ profileId: person.id, accountId: "acct-else", email: null }, options),
+  ).toEqual({ ok: false, code: "profile_linked" });
+  expect(
+    await link({ profileId: owner.id, accountId: "acct-owner", email: null }, options),
+  ).toEqual({ ok: false, code: "owner_profile" });
+  // A member profile created for an account holds it: linking that account elsewhere is refused.
+  await ensureIdentity({ accountId: "acct-member" }, options);
+  expect(
+    await link({ profileId: other.id, accountId: "acct-member", email: null }, options),
+  ).toEqual({ ok: false, code: "linked_elsewhere" });
+
+  expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toMatchObject({
+    profileId: person.id,
+  });
+  expect(await readOpenClawIdLinkOfProfile(person.id, options)).toEqual({
+    accountId: "acct-josh",
+    email: "josh@id.test",
+  });
+  // Membership-style ensure reuses the linked profile rather than creating another.
+  expect((await ensureIdentity({ accountId: "acct-josh" }, options)).id).toBe(person.id);
+
+  await mergeCanonicalUserProfiles(person.id, other.id, options);
+  expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toMatchObject({
+    profileId: other.id,
+  });
+  expect(await unlink({ profileId: other.id }, options)).toEqual({ unlinked: true });
+  expect(await readOpenClawIdLinkedProfile("acct-josh", options)).toBeNull();
+  expect(await unlink({ profileId: other.id }, options)).toEqual({ unlinked: false });
 });

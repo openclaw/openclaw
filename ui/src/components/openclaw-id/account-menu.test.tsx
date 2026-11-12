@@ -301,7 +301,7 @@ describe("approved OpenClaw ID account menu", () => {
     await vi.advanceTimersByTimeAsync(4_999);
     expect(polls).toBe(0);
     await vi.advanceTimersByTimeAsync(10_001);
-    await expect(finished).resolves.toMatchObject({ email: "owner@example.test" });
+    await expect(finished).resolves.toMatchObject({ signedIn: { email: "owner@example.test" } });
     expect(openClawIdAccount()?.idToken).toBe("device-token");
     expect(openClawIdMenuIdentity(personal)).toEqual({
       name: "Owner",
