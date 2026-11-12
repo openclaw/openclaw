@@ -19,6 +19,7 @@ function resolveProviderlessConfiguredImageModelRef(params: {
     return ref;
   }
 
+  const normalizedRef = normalizeLowercaseStringOrEmpty(ref);
   const providers = params.cfg?.models?.providers;
   const matchedRefs = new Set<string>();
   for (const [providerKey, providerConfig] of Object.entries(providers ?? {})) {
@@ -36,7 +37,6 @@ function resolveProviderlessConfiguredImageModelRef(params: {
       if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
         candidates.push(modelId.slice(slash + 1));
       }
-      const normalizedRef = normalizeLowercaseStringOrEmpty(ref);
       if (
         !candidates.some(
           (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
