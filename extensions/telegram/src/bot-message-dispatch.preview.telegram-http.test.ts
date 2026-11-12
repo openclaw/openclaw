@@ -101,7 +101,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           await dispatcher.waitForIdle();
           dispatcher.sendBlockReply({ text: first, textMode: "delta" });
           const streamed = mode === "progress" ? [] : [(prefix + first + chunk + first).trimEnd()];
-          expect((await dispatcher.waitForIdle()).anyVisibleDelivered).toBe(streamed.length > 0);
+          expect((await dispatcher.waitForIdle())?.anyVisibleDelivered).toBe(streamed.length > 0);
           expect(http.texts()).toEqual(streamed);
           dispatcher.sendFinalReply({ text: finalText });
           dispatcher.sendFinalReply({ text: "Separate status." });
