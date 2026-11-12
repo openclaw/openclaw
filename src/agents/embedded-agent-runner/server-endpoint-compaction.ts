@@ -91,7 +91,9 @@ export async function attemptServerEndpointCompaction(params: {
             prompt: "",
             replay: { model: params.model, ...params.requestOptions },
             llmBoundaryTokenPressure: () =>
-              estimateProjectedRequestTokenPressure({ context: params.context }),
+              estimateProjectedRequestTokenPressure({
+                context: { systemPrompt: params.context.systemPrompt, messages },
+              }),
           });
     if (inputTokens > contextWindow) {
       log.warn(
