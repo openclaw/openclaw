@@ -23,7 +23,6 @@ import {
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
 import {
   createGlobalInstallEnv,
-  verifyPackageUpdateRecovery,
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
@@ -60,6 +59,7 @@ import {
   resolveGlobalManager,
   runUpdateStep,
 } from "./shared.js";
+import type { GitInstallRelocation } from "./update-command-git.types.js";
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
@@ -364,6 +364,7 @@ export async function updateGitInstall(params: {
   restart?: boolean;
   sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
+  gitRelocation?: GitInstallRelocation;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number | undefined;
   startedAt: number;
@@ -387,12 +388,15 @@ export async function updateGitInstall(params: {
   ) => Promise<void>;
 }): Promise<UpdateRunResult> {
   const assertCurrent = params.assertCurrent;
-  let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
+  let updateRoot = params.switchToGit
+    ? (params.gitRelocation?.directory ?? resolveGitInstallDir())
+    : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
   const pkgOwnership = createSystemPackageOwnershipInspection(effectiveTimeout);
   await pkgOwnership.assertUnowned(updateRoot);
   const installTarget = params.switchToGit
-    ? await resolveGlobalInstallTarget({
+    ? (params.gitRelocation?.installTarget ??
+      (await resolveGlobalInstallTarget({
         manager: await resolveGlobalManager({
           root: params.root,
           installKind: params.installKind,
@@ -403,7 +407,7 @@ export async function updateGitInstall(params: {
         timeoutMs: effectiveTimeout,
         pkgRoot: params.root,
         pkgOwnership,
-      })
+      })))
     : null;
   const installEnv = await createGlobalInstallEnv(undefined, installTarget ?? {});
   const npmLifecycleGate = installTarget
@@ -475,11 +479,7 @@ export async function updateGitInstall(params: {
   };
   const snapshotBeforeClone = params.switchToGit ? await checkSnapshot() : undefined;
   if (snapshotBeforeClone && snapshotBeforeClone.exitCode !== 0) {
-    return failed(
-      "snapshot-capacity-insufficient",
-      [snapshotBeforeClone],
-      verifyPackageUpdateRecovery(params.root),
-    );
+    return failed("snapshot-capacity-insufficient", [snapshotBeforeClone]);
   }
 
   const previousPackage = installTarget
@@ -547,6 +547,7 @@ export async function updateGitInstall(params: {
                   expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
                   activateGitRoot: updateRoot,
                   onTransaction: params.onTransaction,
+                  beforeActivate: params.gitRelocation?.assertCurrent,
                   assertCurrent: params.assertCurrent,
                   postVerifyStep: runDoctor,
                 });
@@ -567,6 +568,7 @@ export async function updateGitInstall(params: {
           env: installEnv,
           timeoutMs: effectiveTimeout,
           progress: params.progress,
+          requireFresh: Boolean(params.gitRelocation),
           useStagedCheckout: async (stagingRoot, publish, targetRoot, storageRoot) => {
             // Exposure must use the clone owner's pinned destination, not a
             // caller alias that transport may have retargeted meanwhile.
@@ -579,7 +581,7 @@ export async function updateGitInstall(params: {
               stagedUpdateResult = {
                 ...stagedUpdateResult,
                 root: params.root,
-                recovery: await verifyPackageUpdateRecovery(params.root),
+                recovery: await readOriginalUpdateRecovery(params, effectiveTimeout),
               };
             }
           },
@@ -606,6 +608,11 @@ export async function updateGitInstall(params: {
       const packageUpdate = await exposure.activate();
       return {
         ...updateResult,
+        ...(params.gitRelocation && {
+          root: packageUpdate.activePackageRoot
+            ? await fs.realpath(packageUpdate.activePackageRoot)
+            : undefined,
+        }),
         before,
         status: packageUpdate.failedStep ? "error" : "ok",
         reason:

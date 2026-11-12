@@ -131,7 +131,11 @@ export async function previewUpdateCommand(params: {
     if (prepared.requestedChannel && prepared.requestedChannel !== target.storedChannel) {
       actions.push(`Persist update.channel=${prepared.requestedChannel} in config`);
     }
-    if (target.switchToGit) {
+    if (target.gitRelocation) {
+      actions.push(
+        `Install in ${target.gitRelocation.directory}, preserving local changes in ${target.root}`,
+      );
+    } else if (target.switchToGit) {
       actions.push("Switch install mode from package to git checkout (dev channel)");
     } else if (target.switchToPackage) {
       actions.push(`Switch install mode from git to package manager (${mode})`);
@@ -274,6 +278,7 @@ export async function preflightUpdateCommandSchemas(params: {
   root: string;
   updateInstallKind: "git" | "package" | "unknown";
   switchToGit: boolean;
+  gitRelocation?: { directory: string };
   shouldRestart: boolean;
   updateStepTimeoutMs: number;
   invocationCwd?: string;
@@ -339,7 +344,9 @@ export async function preflightUpdateCommandSchemas(params: {
         await import("./update-command-database-context.js");
       const { inspectGitDryRunTargetSchemaVersions } = await import("./update-command-git.js");
       const inspectionParams: Parameters<typeof inspectUpdateDatabaseContexts>[0] = {
-        roots: switchToGit ? [root, resolveGitInstallDir()] : [root],
+        roots: switchToGit
+          ? [root, params.gitRelocation?.directory ?? resolveGitInstallDir()]
+          : [root],
         updateInstallKind,
         packageAlreadyCurrent: params.packageAlreadyCurrent,
         shouldRestart,
@@ -377,7 +384,9 @@ export async function preflightUpdateCommandSchemas(params: {
       const target =
         updateInstallKind === "git"
           ? await inspectGitDryRunTargetSchemaVersions({
-              root: switchToGit ? resolveGitInstallDir() : root,
+              root: switchToGit
+                ? (params.gitRelocation?.directory ?? resolveGitInstallDir())
+                : root,
               timeoutMs: updateStepTimeoutMs,
               channel,
               devTarget,

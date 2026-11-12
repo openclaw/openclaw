@@ -235,6 +235,7 @@ async function updateCommandInternal(
       storedChannel,
       channel,
       switchToGit,
+      gitRelocation,
       switchToPackage,
       tag,
       currentVersion,
@@ -469,7 +470,10 @@ async function updateCommandInternal(
       const retentionStartedAt = Date.now();
       await progress.onStepStart?.(retentionStep);
       const retention = await retainRuntime({
-        mutationRoots: [root, ...(switchToGit ? [resolveGitInstallDir()] : [])],
+        mutationRoots: [
+          root,
+          ...(switchToGit ? [gitRelocation?.directory ?? resolveGitInstallDir()] : []),
+        ],
         installTarget,
         env,
         timeoutMs: updateStepTimeoutMs,

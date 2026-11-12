@@ -26,6 +26,12 @@ aligned:
 - `beta` -> prefers npm dist-tag `beta`, falling back to `latest` when beta is
   missing or older than the current stable release.
 
+With `--channel dev`, a dirty Git checkout exposed through an npm launcher on
+macOS or Linux is preserved while the update installs in a fresh checkout.
+`OPENCLAW_GIT_DIR` must name an empty directory outside the current installation;
+otherwise an occupied default directory gets a fresh sibling. Custom launchers
+are left untouched, with instructions to commit changes and retry.
+
 Fresh clones are validated before publication. If the destination or staging
 folder is replaced during validation, the update stops without changing the
 replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
