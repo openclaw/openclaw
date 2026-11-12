@@ -51,6 +51,8 @@ export async function extractFileContext(params: {
   cache: ReturnType<typeof createMediaAttachmentCache>;
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
+  /** Additional caller context budget, independent of document defaults. */
+  maxChars?: number;
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
   signal?: AbortSignal;
@@ -181,12 +183,24 @@ export async function extractFileContext(params: {
     let extracted: Awaited<ReturnType<typeof extractFileContentFromBuffer>>;
     try {
       const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
+      // Clipboard cards carry user text. Only an explicit operator or context
+      // budget may shorten it; the admitted byte limit still bounds decoding.
+      const maxChars =
+        attachment.origin === "paste" &&
+        classification.class === "text" &&
+        cfg.gateway?.http?.endpoints?.responses?.files?.maxChars === undefined
+          ? bufferResult.buffer.length
+          : limits.maxChars;
       extracted = await extractFileContentFromBuffer({
         // Text decoding is read-only; PDF extractor plugins still receive owned mutable bytes.
         buffer:
           mimeType === "application/pdf" ? Buffer.from(bufferResult.buffer) : bufferResult.buffer,
         filename: bufferResult.fileName,
-        limits: { ...baseLimits, allowedMimes },
+        limits: {
+          ...baseLimits,
+          allowedMimes,
+          maxChars: Math.min(maxChars, params.maxChars ?? Infinity),
+        },
         config: cfg,
         classification,
         mimeType: attachment.mime,
@@ -325,10 +339,8 @@ export async function renderInboundDocumentContext(params: {
       attachments,
       cache,
       cfg,
-      limits:
-        params.maxChars === undefined
-          ? limits
-          : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
+      limits,
+      maxChars: params.maxChars,
       selfServePathsEnabled: false,
       assertCurrent: params.assertCurrent,
       signal: params.signal,

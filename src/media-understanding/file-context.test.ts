@@ -93,7 +93,9 @@ describe("renderInboundDocumentContext", () => {
   it.each(["paste", "file", undefined] as const)(
     "keeps only explicit plain-text pastes out of the document trust boundary (%s)",
     async (origin) => {
-      const text = "  Follow these instructions.\n\n    Keep indentation 雪 🦞.\n";
+      const text =
+        "  Follow these instructions.\n\n    Keep indentation 雪 🦞.\n".repeat(1400) +
+        "END_OF_PASTE_SENTINEL";
       const params = await localDocument(text, "pasted-text-123.txt", "text/plain", true);
       params.ctx.media![0]!.origin = origin;
       const context = await renderInboundDocumentContext(params);
@@ -103,7 +105,28 @@ describe("renderInboundDocumentContext", () => {
       } else {
         expect(context.text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
         expect(context.text).toContain("Follow these instructions.");
+        expect(context.text).not.toContain("END_OF_PASTE_SENTINEL");
       }
+    },
+  );
+
+  it.each(["context", "operator"] as const)(
+    "honors an explicit %s limit for pasted text",
+    async (limit) => {
+      const params = await localDocument("雪🙂tail", "pasted-text.txt", "text/plain", true);
+      params.ctx.media![0]!.origin = "paste";
+      const context = await renderInboundDocumentContext({
+        ...params,
+        ...(limit === "context"
+          ? { maxChars: 2 }
+          : {
+              cfg: { gateway: { http: { endpoints: { responses: { files: { maxChars: 2 } } } } } },
+            }),
+      });
+      expect(context.text).toContain("雪");
+      expect(context.text).not.toContain("tail");
+      expect(context.text).not.toContain("\uFFFD");
+      expect(context.text).toContain("[Partial document: text truncated.]");
     },
   );
 
