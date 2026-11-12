@@ -4,7 +4,7 @@ const noopAuth = async () => ({ profiles: [] });
 const OPENAI_ACCOUNT_WIZARD_GROUP = {
   groupId: "openai",
   groupLabel: "OpenAI",
-  groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
+  groupHint: "Codex login, Sign in with ChatGPT, or API key",
 } as const;
 const CODEX_CHATGPT_IMPORT = {
   migrationProviderId: "codex",
@@ -52,7 +52,7 @@ export function createOpenAIProviderMetadata(): ProviderPlugin {
         {
           id: "siwc",
           kind: "oauth",
-          label: "Sign in with ChatGPT (Beta)",
+          label: "Sign in with ChatGPT",
           hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
           wizard: {
             choiceId: "openai-token-sharing",

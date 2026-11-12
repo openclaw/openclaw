@@ -107,7 +107,7 @@ it("labels and orders OpenAI authentication choices", () => {
   const group = {
     groupId: "openai",
     groupLabel: "OpenAI",
-    groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
+    groupHint: "Codex login, Sign in with ChatGPT, or API key",
   };
   for (const [id, choiceLabel, choiceHint] of [
     ["openai", "Codex login (browser)", "Sign in to Codex locally with your ChatGPT account"],
@@ -119,7 +119,7 @@ it("labels and orders OpenAI authentication choices", () => {
     ["openai-api-key", "OpenAI API Key", "Use your OpenAI API key directly"],
     [
       "openai-token-sharing",
-      "Sign in with ChatGPT (Beta)",
+      "Sign in with ChatGPT",
       "Authorize OpenClaw for eligible Responses models using your Codex allowance",
     ],
   ] as const) {
