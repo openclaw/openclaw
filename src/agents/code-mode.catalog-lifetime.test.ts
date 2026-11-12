@@ -1,5 +1,11 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { getSession, waitForExecSession } from "./bash-process-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
+import { createProcessTool } from "./bash-tools.process.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -16,7 +22,30 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("keeps the 64-slot limit on suspensions, including a reserved active resume, not CPU-only exec", async () => {
+it("keeps the suspension limit while required observers collect existing process results", async ({
+  onTestFinished,
+}) => {
+  const state = await createOpenClawTestState({ label: "capacity-observer" });
+  const scopeKey = "capacity-observer";
+  const closeScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
+    processTree: "required-all",
+  });
+  onTestFinished(async () => {
+    await closeScope();
+    resetProcessRegistryForTests();
+    await state.cleanup();
+  });
+  const shell = createExecTool({
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    scopeKey,
+    cwd: state.workspaceDir,
+    notifyOnExit: false,
+  });
+  const observer = createProcessTool({ scopeKey });
+  const launched = vi.spyOn(shell, "execute");
+  const observed = vi.spyOn(observer, "execute");
   const entered = createDeferred();
   const release = createDeferred();
   let aborts = 0;
@@ -43,9 +72,25 @@ it("keeps the 64-slot limit on suspensions, including a reserved active resume, 
   });
   const ids: unknown[] = [];
   const extra = createCodeModeHarness();
-  applyCodeModeCatalog({ ...extra.ctx, tools: extra.tools });
+  applyCodeModeCatalog({ ...extra.ctx, tools: [...extra.tools, shell, observer] });
   let active: Promise<unknown> | undefined;
   try {
+    const started = resultDetails(
+      await extra.tools[0]!.execute("launch-once", {
+        code: `return await exec(${JSON.stringify({ command: nodeCommand('process.stdout.write("benchmark-result")'), background: true })});`,
+      }),
+    );
+    expect(started, JSON.stringify(started)).toMatchObject({
+      status: "completed",
+      value: { status: "running" },
+    });
+    const value = started.value;
+    assert(value && typeof value === "object" && "sessionId" in value);
+    assert(typeof value.sessionId === "string");
+    const sessionId = value.sessionId;
+    const session = getSession(sessionId);
+    assert(session);
+    await waitForExecSession(session);
     // Four real VM starts at a time; no fabricated map entries or worker-count quota.
     for (let offset = 0; offset < owners.length; offset += 4) {
       await Promise.all(
@@ -80,6 +125,26 @@ it("keeps the 64-slot limit on suspensions, including a reserved active resume, 
       });
     };
     await rejectSuspension();
+    const collect = `return await process({ action: "poll", sessionId: ${JSON.stringify(sessionId)}, timeout: 0 });`;
+    expect(
+      resultDetails(await extra.tools[0]!.execute("observer-at-capacity", { code: collect })),
+    ).toMatchObject({
+      status: "failed",
+      bridgeDispatchStarted: false,
+      error: expect.stringContaining("too many suspended"),
+    });
+    expect(observed).not.toHaveBeenCalled();
+    expect(
+      resultDetails(
+        await extra.tools[0]!.execute("required-observer", { code: collect, awaitResults: true }),
+      ),
+    ).toMatchObject({
+      status: "completed",
+      value: { sessionId, status: "completed", exitCode: 0, aggregated: "benchmark-result" },
+    });
+    expect(launched).toHaveBeenCalledOnce();
+    expect(observed).toHaveBeenCalledOnce();
+    expect(testing.activeRuns.size).toBe(64);
     const first = owners[0]!;
     const repark = resultDetails(
       await first.tools[1]!.execute("repark-at-capacity", { runId: ids[0] }),
@@ -113,3 +178,10 @@ it("keeps the 64-slot limit on suspensions, including a reserved active resume, 
   expect(testing.activeRuns.size).toBe(0);
   expect(testing.resumingRunIds.size).toBe(0);
 });
+
+function nodeCommand(source: string): string {
+  const quote = (value: string) =>
+    `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+  const command = `${quote(process.execPath)} -e ${quote(source)}`;
+  return process.platform === "win32" ? `& ${command}` : command;
+}

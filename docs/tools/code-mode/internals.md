@@ -134,7 +134,9 @@ session.`.
   do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
-runs.`.
+runs.`. Cells submitted with outer `awaitResults: true` retain ownership through
+  completion instead of publishing a suspended run, so they do not reserve a
+  slot. They still obey tool authority, cancellation, and execution limits.
 
 The selected executor stays fixed for the cell's lifetime. Suspended state is
 bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also
