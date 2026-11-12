@@ -321,7 +321,7 @@ export function pageContext(
         subscribe,
       } as unknown as ApplicationContext["sessions"]),
     acquireChannels: () => channels,
-    runtimeConfig: { subscribe },
+    runtimeConfig: { subscribe, refresh: vi.fn(async () => {}) },
   } as unknown as ApplicationContext;
 }
 

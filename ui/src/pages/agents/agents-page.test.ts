@@ -64,7 +64,7 @@ function refreshPanel(page: ReturnType<typeof createAgentsPage>) {
   if (page.read().readData().agentsPanel === "cron") {
     page.read().cron.onRefresh();
   } else {
-    page.read().overview.onModelCatalogOpen?.();
+    page.read().onRefresh();
   }
 }
 
@@ -339,9 +339,13 @@ describe("AgentsPage gateway lifecycle", () => {
       );
       expect(page.read().overview.modelCatalog).toEqual([]);
       expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toEqual(
-        Array.from({ length: 3 }, () => ({
+        Array.from({ length: 3 }, (_, index) => ({
           method: "models.list",
-          params: { agentId: "main", view: "configured" },
+          params: {
+            agentId: "main",
+            view: "configured",
+            ...(index === 2 ? { refresh: true } : {}),
+          },
         })),
       );
     },
@@ -379,32 +383,46 @@ describe("AgentsPage gateway lifecycle", () => {
     });
   });
 
-  it("keeps picker opens cached and reloads after a catalog publication", async () => {
-    const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
-    const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ models: oldModels })
-      .mockResolvedValueOnce({ models: nextModels });
-    const { page, currentGateway } = mountPage(
-      { request } as unknown as GatewayBrowserClient,
-      "overview",
-    );
+  it.each([false, true])(
+    "refreshes availability on picker open (initial read pending: %s)",
+    async (pending) => {
+      const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
+      const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
+      const initial = deferred<{ models: ModelCatalogEntry[] }>();
+      const request = vi
+        .fn()
+        .mockReturnValueOnce(pending ? initial.promise : Promise.resolve({ models: oldModels }))
+        .mockResolvedValueOnce({ models: nextModels });
+      const { page, currentGateway } = mountPage(
+        { request } as unknown as GatewayBrowserClient,
+        "overview",
+      );
 
-    refreshPanel(page);
-    await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(oldModels));
+      if (!pending) {
+        await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(oldModels));
+      }
+      refreshPanel(page);
+      expect(request).toHaveBeenCalledTimes(1);
 
-    page.read().overview.onModelCatalogOpen?.();
-    expect(request).toHaveBeenCalledTimes(1);
+      page.read().overview.onModelCatalogOpen?.();
+      await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenLastCalledWith("models.list", {
+        view: "configured",
+        agentId: "main",
+        refresh: true,
+      });
 
-    page.read().overview.onModelCatalogOpen?.();
-    await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(oldModels));
-    expect(request).toHaveBeenCalledTimes(1);
+      initial.resolve({ models: oldModels });
+      await initial.promise;
+      expect(page.read().overview.modelCatalog).toEqual(nextModels);
 
-    emitCatalogChanged(currentGateway);
-    await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(nextModels));
-    expect(request).toHaveBeenCalledTimes(2);
-  });
+      request.mockResolvedValueOnce({ models: oldModels });
+      emitCatalogChanged(currentGateway);
+      await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(oldModels));
+      expect(request).toHaveBeenCalledTimes(3);
+    },
+  );
 
   it.each(["client", "reconnect", "gateway source", "publication"] as const)(
     "rejects an old model read after a newer %s",

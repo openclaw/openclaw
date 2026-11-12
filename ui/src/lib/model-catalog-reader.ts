@@ -25,7 +25,7 @@ export class ModelCatalogReader {
   };
   private controller?: AbortController;
   private unsubscribe?: () => void;
-  private deferredRead = false;
+  private deferredRead: "cached" | "refresh" | undefined;
   failed = false;
 
   constructor(
@@ -112,19 +112,21 @@ export class ModelCatalogReader {
     );
   }
 
-  read(): Promise<ModelCatalogResult | undefined> {
+  read(options: { refresh?: boolean } = {}): Promise<ModelCatalogResult | undefined> {
     const binding = this.binding;
     if (!binding || !this.owns(binding)) {
       return Promise.resolve(undefined);
     }
     this.controller?.abort();
     this.controller = undefined;
+    // A hidden refresh must survive later ordinary reads until this binding is presented.
+    const refresh = options.refresh === true || this.deferredRead === "refresh";
     if (document.visibilityState === "hidden" || this.options.isPresented?.() === false) {
-      this.deferredRead = true;
+      this.deferredRead = refresh ? "refresh" : "cached";
       return Promise.resolve(undefined);
     }
-    this.deferredRead = false;
-    const cached = peekModelCatalog(binding.client, binding.scope);
+    this.deferredRead = undefined;
+    const cached = !refresh && peekModelCatalog(binding.client, binding.scope);
     if (cached) {
       this.failed = false;
       this.options.onResult?.(cached);
@@ -138,6 +140,7 @@ export class ModelCatalogReader {
     this.failed = false;
     const read = loadModelCatalog(binding.client, {
       ...binding.scope,
+      ...(refresh ? { refresh: true } : {}),
       signal: controller.signal,
       timeoutMs: this.options.timeoutMs,
     }).then(
@@ -183,6 +186,6 @@ export class ModelCatalogReader {
     this.unsubscribe?.();
     this.unsubscribe = undefined;
     this.failed = false;
-    this.deferredRead = false;
+    this.deferredRead = undefined;
   }
 }

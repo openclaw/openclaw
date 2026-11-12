@@ -114,9 +114,11 @@ suite.define(() => {
         document.dispatchEvent(new Event("visibilitychange"));
       });
       await gateway.waitForRequest("models.list", { after: before });
+      expect(await gateway.getRequests("models.list")).toHaveLength(before + 1);
       await trigger.click();
       await page.getByRole("option", { name: /Updated fixture model/ }).waitFor();
-      expect(await gateway.getRequests("models.list")).toHaveLength(before + 1);
+      const afterOpen = before + 1 + (path === "new" ? 0 : 1);
+      expect(await gateway.getRequests("models.list")).toHaveLength(afterOpen);
       await gateway.setMethodResponse("models.list", {
         models: [model("Authenticated fixture model")],
       });
@@ -126,7 +128,7 @@ suite.define(() => {
         commandsChanged: false,
       });
       await page.getByRole("option", { name: /Authenticated fixture model/ }).waitFor();
-      expect(await gateway.getRequests("models.list")).toHaveLength(before + 2);
+      expect(await gateway.getRequests("models.list")).toHaveLength(afterOpen + 1);
     },
   );
 

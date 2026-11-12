@@ -59,8 +59,8 @@ export function createAgentModelCatalog(
       needsRecovery = false;
       state.chatModelCatalogRead = null;
     }
-    if (!reader.pending && (options.refresh || !state.chatModelCatalogRead || reader.failed)) {
-      void reader.read();
+    if (options.refresh || (!reader.pending && (!state.chatModelCatalogRead || reader.failed))) {
+      void reader.read(options);
     } else {
       reader.resume();
     }

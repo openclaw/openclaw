@@ -175,16 +175,21 @@ it("observes each admitted read while preserving the non-throwing request contra
   expect(onRead).toHaveBeenCalledTimes(3);
 });
 
-it.each(["document", "presentation"] as const)(
-  "defers hidden %s catalog changes and catches up once on reveal",
-  async (hiddenBy) => {
+it.each([
+  ["document", false],
+  ["presentation", false],
+  ["document", true],
+  ["presentation", true],
+] as const)(
+  "defers hidden %s catalog changes and catches up once on reveal (refresh: %s)",
+  async (hiddenBy, refresh) => {
     let visible = true;
     const visibility = vi
       .spyOn(document, "visibilityState", "get")
       .mockImplementation(() => (hiddenBy === "document" && !visible ? "hidden" : "visible"));
     onTestFinished(() => visibility.mockRestore());
     const onRead = vi.fn<(read: Promise<ModelCatalogResult | undefined>) => void>();
-    const { reader, client, current } = fixture({
+    const { reader, client, current, gateway } = fixture({
       isPresented: () => hiddenBy !== "presentation" || visible,
       onRead,
     });
@@ -195,6 +200,12 @@ it.each(["document", "presentation"] as const)(
     visible = false;
     current().request.mockResolvedValue(second);
     for (let index = 0; index < 60; index++) {
+      if (refresh) {
+        await reader.read({ refresh: true });
+        // A later ordinary read must not downgrade the deferred refresh.
+        await reader.read();
+        continue;
+      }
       invalidateModelCatalogCache(client, main);
       current().testOptions.onEvent?.({
         type: "event",
@@ -216,5 +227,22 @@ it.each(["document", "presentation"] as const)(
     expect(current().request).toHaveBeenCalledTimes(1);
     expect(reader.snapshot.models).toEqual(second.models);
     expect(onRead).toHaveBeenCalledOnce();
+    expect(current().request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "main",
+      ...(refresh ? { refresh: true } : {}),
+    });
+
+    visible = false;
+    await reader.read({ refresh: true });
+    reader.bind(gateway, other);
+    visible = true;
+    reader.resume();
+    expect(current().request).toHaveBeenCalledTimes(1);
+    await reader.read();
+    expect(current().request).toHaveBeenLastCalledWith("models.list", {
+      view: "configured",
+      agentId: "other",
+    });
   },
 );
