@@ -1,4 +1,7 @@
 import { expect, it } from "vitest";
+import { createSessionGoalFixture } from "../../../src/gateway/session-goal.test-support.js";
+import { ChatGoal } from "../pages/chat/components/chat-composer-goal.tsx";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
 import progressStyles from "./chat/composer-progress.css?inline";
 
 it("loads Goal action styling from the standalone processed progress stylesheet", () => {
@@ -34,3 +37,48 @@ it("loads Goal action styling from the standalone processed progress stylesheet"
     frame.remove();
   }
 });
+
+it.each(["active", "paused"] as const)(
+  "keeps the %s goal's transport glyph filled under outline icon styling",
+  (status) => {
+    const frame = document.createElement("iframe");
+    frame.width = "800";
+    document.body.append(frame);
+    const doc = frame.contentDocument!;
+    const style = doc.createElement("style");
+    style.textContent = `:root { --muted: rgb(51, 68, 85); --chat-stack-trailing-control-size: 24px; }\n${progressStyles}`;
+    doc.head.append(style);
+    const view = mountSolid(
+      ChatGoal,
+      {
+        goal: createSessionGoalFixture("goal-icons", "Verify the deployment", { status }),
+        expanded: false,
+        canAct: true,
+        onGoalAction: () => {},
+        onExpandedChange: () => {},
+      },
+      doc.body,
+    );
+    try {
+      const action = status === "active" ? "pause" : "resume";
+      const button = doc.querySelector<HTMLButtonElement>(`.agent-chat__goal-${action}`)!;
+      const shapes = button.querySelectorAll("svg path, svg rect, svg polygon");
+      expect(shapes.length).toBeGreaterThan(0);
+      for (const shape of shapes) {
+        const paint = frame.contentWindow!.getComputedStyle(shape);
+        expect(paint.fill).toBe("rgb(51, 68, 85)");
+        expect(paint.stroke).toBe("none");
+      }
+      expect(button.disabled).toBe(false);
+      const clear = doc.querySelector(".agent-chat__goal-clear")!;
+      const buttonBox = button.getBoundingClientRect();
+      const clearBox = clear.getBoundingClientRect();
+      expect(buttonBox.height).toBe(24);
+      expect(clearBox.top).toBe(buttonBox.top);
+      expect(clearBox.left - buttonBox.right).toBe(4);
+    } finally {
+      view.dispose();
+      frame.remove();
+    }
+  },
+);
