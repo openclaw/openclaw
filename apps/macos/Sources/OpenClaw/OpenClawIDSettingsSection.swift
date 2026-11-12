@@ -61,13 +61,20 @@ final class OpenClawIDSettingsModel {
         }
         return Self.unenrolledPresentation(
             available: MacOpenClawIDConfiguration.current() != nil,
-            mode: state.connectionMode, transport: state.remoteTransport,
-            target: state.remoteTarget, url: state.remoteUrl, removal: self.store.lastRemoval())
+            mode: state.connectionMode,
+            transport: state.remoteTransport,
+            target: state.remoteTarget,
+            url: state.remoteUrl,
+            removal: self.store.lastRemoval())
     }
 
     static func unenrolledPresentation(
-        available: Bool, mode: AppState.ConnectionMode, transport: AppState.RemoteTransport,
-        target: String, url: String, removal: MacOpenClawIDRemoval?) -> OpenClawIDSettingsPresentation?
+        available: Bool,
+        mode: AppState.ConnectionMode,
+        transport: AppState.RemoteTransport,
+        target: String,
+        url: String,
+        removal: MacOpenClawIDRemoval?) -> OpenClawIDSettingsPresentation?
     {
         guard available else { return nil }
         guard mode == .remote else { return .signIn(removal: removal) }
@@ -302,7 +309,6 @@ struct OpenClawIDSettingsSection: View {
         .sheet(item: self.$model.confirmation) { confirmation in
             OpenClawIDConfirmationSheet(kind: confirmation) { self.model.confirm(confirmation) }
         }
-
     }
 
     /// Runtime text built from claw and device names (rendered as given).

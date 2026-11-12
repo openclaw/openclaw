@@ -100,7 +100,7 @@ enum DashboardFailurePage {
         """
         <!doctype html>
         <html><head><meta charset="utf-8"><style>
-        \(Self.styles)
+        \(self.styles)
         :root { --primary: #0067df; --primary-hover: #005bc8; --primary-active: #004fae; --focus-ring: #007aff; }
         main { width: min(900px, calc(100vw - 72px)); padding: 32px; text-align: center;
           background: transparent; border: 0; box-shadow: none; }

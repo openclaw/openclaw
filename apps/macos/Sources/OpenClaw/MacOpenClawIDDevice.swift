@@ -102,7 +102,8 @@ final class MacOpenClawIDDeviceStore {
     {
         guard self.load()?.deviceEnrollmentID == device.deviceEnrollmentID else { return }
         let removal = MacOpenClawIDRemoval(
-            hostname: device.hostname, date: now,
+            hostname: device.hostname,
+            date: now,
             origin: self.localRemoval == device.deviceEnrollmentID ? .here : origin)
         self.defaults.set([
             "hostname": removal.hostname, "shortName": removal.shortName,
@@ -152,13 +153,13 @@ final class MacOpenClawIDDeviceStore {
                     }
                     do {
                         let target = try await OpenClawIDDeviceRoute.refresh(
-                        hostname: device.hostname,
-                        discoveryOrigin: device.discoveryOrigin,
-                        peer: peer,
-                        admission: .owner,
-                        node: node,
-                        session: session,
-                        store: store)
+                            hostname: device.hostname,
+                            discoveryOrigin: device.discoveryOrigin,
+                            peer: peer,
+                            admission: .owner,
+                            node: node,
+                            session: session,
+                            store: store)
                         return (target.serverKey, target.relayURL)
                     } catch OpenClawIDNodeEnrollmentError.notAdmitted {
                         await self.remove(device, origin: .elsewhere)

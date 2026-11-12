@@ -56,7 +56,11 @@ struct OnboardingOpenClawIDView: View {
                 }
             }
             Button("Close") {
-                if let onClose = self.onClose { onClose() } else { self.dismiss() }
+                if let onClose = self.onClose {
+                    onClose()
+                } else {
+                    self.dismiss()
+                }
             }.keyboardShortcut(.cancelAction)
         }
         .padding(28)

@@ -23,18 +23,31 @@ struct OpenClawIDRemovalRenderTests {
                     OpenClawIDSettingsSection(presentation: .signIn(removal: note), model: model)
                     Section("Gateway") { LabeledContent("Mode", value: "Not configured") }
                 }.formStyle(.grouped),
-                name: name, label: "Real SwiftUI · fixture data · not live", output: output, width: 720, dark: false)
+                name: name,
+                label: "Real SwiftUI · fixture data · not live",
+                output: output,
+                width: 720,
+                dark: false)
         }
-        for (name, origin) in [("1-dashboard-removed-here", MacOpenClawIDRemoval.Origin.here),
-                               ("2-dashboard-removed-elsewhere", .elsewhere)]
-        {
+        for (name, origin) in [
+            ("1-dashboard-removed-here", MacOpenClawIDRemoval.Origin.here),
+            ("2-dashboard-removed-elsewhere", .elsewhere),
+        ] {
             let configuration = WKWebViewConfiguration()
             configuration.websiteDataStore = .nonPersistent()
             let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 700), configuration: configuration)
             webView.appearance = NSAppearance(named: .aqua)
             let loaded = LoadedPage()
             webView.navigationDelegate = loaded
-            defer { webView.stopLoading(); webView.navigationDelegate = nil }
+            let window = NSWindow(contentRect: webView.frame, styleMask: [], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = webView
+            defer {
+                webView.stopLoading()
+                webView.navigationDelegate = nil
+                window.contentView = nil
+                window.close()
+            }
             let removal = MacOpenClawIDRemoval(hostname: "studio.example.test", origin: origin)
             try await loaded.load(DashboardFailurePage.html(removal: removal), into: webView)
             let image = try await webView.takeSnapshot(configuration: nil)
