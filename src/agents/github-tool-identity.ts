@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { root as fsRoot } from "@openclaw/fs-safe/root";
 import type {
   GitHubIdentityFacts,
@@ -192,7 +193,7 @@ function githubIdentityProbeEnvironment(
 async function readManagedGitHubToken(profileDir: string): Promise<string | undefined> {
   const token = await runGitWorkerOperation({
     type: "github.profile-token",
-    input: { profileDir },
+    input: { profileDir, nativeMode: getFsSafeNativeConfig().mode },
   });
   if (token) {
     registerSecretValueForRedaction(token);

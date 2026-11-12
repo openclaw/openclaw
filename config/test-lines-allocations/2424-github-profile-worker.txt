@@ -1,2 +1,2 @@
-# Public credential resolution proves main-thread fs isolation and live external rotation.
-19
+# Public credential resolution proves main-thread fs isolation, live rotation, and Bun native policy.
+102
