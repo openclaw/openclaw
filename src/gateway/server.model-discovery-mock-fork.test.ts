@@ -44,3 +44,36 @@ test("gateway model discovery stand-in keeps forked registries routed through th
     agentDiscoveryMock.models = [];
   }
 });
+
+test("gateway model discovery stand-in resolves a model through the real prepared runtime", async () => {
+  const model = {
+    id: "forked-only",
+    name: "Forked Only",
+    provider: "forked-provider",
+    api: "openai-completions" as const,
+    baseUrl: "https://forked-provider.invalid/v1",
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 4096,
+  };
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [model];
+  try {
+    // No stores are passed, so the resolver prepares the model runtime itself: discovery
+    // returns the stand-in, createStores forks it, and resolveExplicitModelWithRegistry
+    // reads metadata owners and the model row from that fork.
+    const { resolveModelAsync } = await import("../agents/embedded-agent-runner/model.js");
+    const resolved = await resolveModelAsync("forked-provider", "forked-only", agentDir, {});
+
+    expect(resolved.error).toBeUndefined();
+    expect(resolved.model).toMatchObject({ provider: "forked-provider", id: "forked-only" });
+    expect(Object.getPrototypeOf(resolved.modelRegistry)?.constructor?.name).toBe(
+      "MockModelRegistry",
+    );
+  } finally {
+    agentDiscoveryMock.enabled = false;
+    agentDiscoveryMock.models = [];
+  }
+});
