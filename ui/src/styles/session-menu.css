@@ -149,6 +149,14 @@
   stroke-linejoin: round;
 }
 
+/* Brand marks such as GitHub are filled artwork; the stroke reset above would
+   hollow them into outlines. */
+.session-menu__icon svg.icon--filled,
+.new-session-page__target-icon svg.icon--filled {
+  stroke: none;
+  fill: currentColor;
+}
+
 .session-menu__item[data-new-tab-action]:not(:disabled, [aria-disabled="true"]) {
   cursor: pointer;
 }

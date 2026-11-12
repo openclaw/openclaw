@@ -21,6 +21,7 @@ const CONTROL_UI_RESOURCE_ROUTES = {
   providerIcon: { prefix: "/__openclaw__/provider-icon", suffix: "" },
   pluginActivityIcon: { prefix: "/__openclaw__/plugin-activity-icon", suffix: "" },
   pluginThemeArt: { prefix: "/__openclaw__/plugin-theme-art", suffix: "" },
+  projectIcon: { prefix: "/__openclaw__/project-icon", suffix: "" },
   userAvatar: {
     prefix: CONTROL_UI_USER_AVATAR_PATH_PREFIX.slice(0, -1),
     suffix: CONTROL_UI_USER_AVATAR_PATH_SUFFIX,

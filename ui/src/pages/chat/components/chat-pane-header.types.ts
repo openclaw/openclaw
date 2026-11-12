@@ -3,6 +3,7 @@ import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { GatewayStatusProps } from "../../../components/gateway-status.ts";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
+import type { WorkspaceIconSource } from "../../../components/workspace-icon-source.ts";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { ChatHeaderSharingSnapshot } from "../chat-header-viewers-snapshot.ts";
@@ -45,12 +46,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   workspaceRoot: string | null;
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
-  workspaceIcon: {
-    routeUrl: string;
-    authTokens: readonly string[];
-    authReady: boolean;
-    connectionId?: string;
-  } | null;
+  workspaceIcon: WorkspaceIconSource | null;
   parentSession: {
     key: string;
     title: string;

@@ -117,6 +117,10 @@ it("keeps project search live through catalog reads and retires invalidated rows
   await waitForSolid(() => expect(rows()).toHaveLength(1));
   const alphaRow = rows()[0];
   expect(alphaRow?.textContent).toContain("Alpha project");
+  // Rows request the project's own icon by id and keep the book glyph until it loads.
+  const alphaIcon = alphaRow?.querySelector("openclaw-workspace-icon");
+  expect(alphaIcon?.routeUrl).toMatch(/\/__openclaw__\/project-icon\/alpha$/);
+  expect(alphaIcon?.fallbackIcon).toBe("book");
   expect(view.container.querySelector('input[type="search"]')).toBe(input);
   expect(document.activeElement).toBe(input);
   type("");
@@ -134,7 +138,8 @@ it("keeps project search live through catalog reads and retires invalidated rows
   type("worksp");
   expect(view.container.querySelector('[data-value="workspace"]')).not.toBeNull();
   type("alpha");
-  expect(rows()).toEqual([alphaRow]);
+  // Filtering to zero rows retired the original row; its replacement names the same project.
+  expect(rows().map((row) => row.dataset.value)).toEqual(["project:alpha"]);
   const refresh = browser.refreshProjects();
   nativeTerminal = true;
   changed();

@@ -29,6 +29,7 @@ import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
+import { ProjectIcon } from "./project-icon.tsx";
 
 export function ProjectPickerContent(props: ProjectChipProps) {
   const [projectSearching, setProjectSearching] = createSignal<boolean | undefined>(undefined);
@@ -403,7 +404,13 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   }
                 >
                   {(project) => {
-                    const icon = <Icon name="book" />;
+                    const icon = (
+                      <ProjectIcon
+                        context={props.params.context}
+                        projectId={project().id}
+                        fallbackIcon="book"
+                      />
+                    );
                     return (
                       <SessionMenuItem
                         item={{
@@ -474,7 +481,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                         }
                       >
                         {(project) => {
-                          const icon = <Icon name="book" />;
+                          const icon = <Icon name="github" />;
                           return (
                             <SessionMenuItem
                               item={{
@@ -525,7 +532,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   }
                 >
                   {(recent, index) => {
-                    const icon = <Icon name={recent().kind === "folder" ? "folder" : "book"} />;
+                    const icon = <Icon name={recent().kind === "folder" ? "folder" : "github"} />;
                     const item = createMemo(() => {
                       const row = recent();
                       return {

@@ -31,14 +31,18 @@ import { createSessionRowProjection, type SessionRowProjection } from "./session
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
+  authorizeRead: vi.fn(),
 }));
 
-vi.mock("./http-utils.js", () => ({
+vi.mock("./http-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-utils.js")>()),
+  authorizeControlUiReadRequestOrReply: (...args: unknown[]) => mocks.authorizeRead(...args),
   authorizeControlUiSessionOwnerReadRequestOrReply: (...args: unknown[]) =>
     mocks.authorize(...args),
 }));
 
 const {
+  handleProjectIconHttpRequest,
   handleWorkspaceIconHttpRequest,
   resolveWorkspaceIcon,
   SVG_ICON_MAX_BYTES,
@@ -444,6 +448,87 @@ describe("handleWorkspaceIconHttpRequest", () => {
       },
     );
     await requestIcon(401, "agent:main:hidden");
+    expect(reads).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleProjectIconHttpRequest", () => {
+  let origin: string;
+  let server: ReturnType<typeof createServer>;
+  let cfg: OpenClawConfig;
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      void handleProjectIconHttpRequest(req, res, {
+        auth: { mode: "token", token: "test-token", allowTailscale: false },
+        config: cfg,
+      })
+        .then((handled) => {
+          if (!handled) {
+            res.statusCode = 418;
+            res.end("unhandled");
+          }
+        })
+        .catch(() => finishFailedGatewayHttpResponse(res));
+    });
+    origin = await listenLoopback(server);
+  });
+
+  afterAll(async () => {
+    await closeHttpServer(server);
+  });
+
+  beforeEach(() => {
+    mocks.authorizeRead
+      .mockReset()
+      .mockImplementation(({ res }: { res: ServerResponse }) =>
+        bindHttpResponseAuthority(
+          { authMethod: "token", operatorScopes: ["operator.read"] },
+          res,
+          () => true,
+        ),
+      );
+  });
+
+  const projectRoute = (projectId: string) =>
+    `${origin}/__openclaw__/project-icon/${encodeURIComponent(projectId)}`;
+
+  it("serves a listed project's icon to a read-scoped caller", async () => {
+    const root = await makeWorkspace({ "public/favicon.svg": SVG_BYTES });
+    cfg = { agents: { entries: { main: {} }, defaults: { workspace: root } } };
+    const response = await fetch(projectRoute("workspace:main"));
+    expect(response.status).toBe(200);
+    expectHeaders(response, {
+      "content-type": "image/svg+xml",
+      "content-disposition": 'attachment; filename="project-icon"',
+    });
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(SVG_BYTES);
+    expect(mocks.authorizeRead).toHaveBeenCalledWith(
+      expect.objectContaining({ requiredOperatorMethod: "projects.list" }),
+    );
+  });
+
+  it("answers an unknown project without reading files", async () => {
+    cfg = { agents: { entries: { main: {} } } };
+    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+    const response = await fetch(projectRoute("workspace:missing"));
+    expect(response.status).toBe(404);
+    expectHeaders(response, { "cache-control": "no-store" });
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("never reads a project when authorization fails", async () => {
+    const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+    cfg = { agents: { entries: { main: {} }, defaults: { workspace: root } } };
+    const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+    mocks.authorizeRead.mockImplementation(
+      async (params: { res: { statusCode: number; end: () => void } }) => {
+        params.res.statusCode = 401;
+        params.res.end();
+        return null;
+      },
+    );
+    expect((await fetch(projectRoute("workspace:main"))).status).toBe(401);
     expect(reads).not.toHaveBeenCalled();
   });
 });

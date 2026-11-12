@@ -1,16 +1,18 @@
 import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { Icon } from "./solid/icon.tsx";
+import { Icon, type IconName } from "./solid/icon.tsx";
 
 type WorkspaceIconProps = {
   routeUrl: string | null;
   authTokens: readonly string[];
   authReady: boolean;
   connectionId: string | undefined;
+  /** Glyph shown until the Gateway serves a project icon, or when it has none. */
+  fallbackIcon: IconName;
 };
 
-defineSolidBridge<WorkspaceIconProps>(
+export const WorkspaceIcon = defineSolidBridge<WorkspaceIconProps>(
   "openclaw-workspace-icon",
   (props, host) => {
     host.style.display = "contents";
@@ -36,7 +38,7 @@ defineSolidBridge<WorkspaceIconProps>(
         when={blobUrl()}
         fallback={
           <span class="workspace-icon-fallback" aria-hidden="true">
-            <Icon name="folder" />
+            <Icon name={props.fallbackIcon} />
           </span>
         }
       >
@@ -57,6 +59,7 @@ defineSolidBridge<WorkspaceIconProps>(
       authTokens: { default: [], attribute: false },
       authReady: { default: false, attribute: false },
       connectionId: { default: undefined, attribute: false },
+      fallbackIcon: { default: "folder", attribute: false },
     },
   },
 );

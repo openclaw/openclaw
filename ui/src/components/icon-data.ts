@@ -295,6 +295,18 @@ export const iconData = {
   folder: strokePathData(
     "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
   ),
+  // Lucide folder-git-2 (ISC).
+  folderGit2: strokeIconData([
+    ["path", { d: "M18 19a5 5 0 0 1-5-5v8" }],
+    [
+      "path",
+      {
+        d: "M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5",
+      },
+    ],
+    ["circle", { cx: "13", cy: "12", r: "2" }],
+    ["circle", { cx: "20", cy: "19", r: "2" }],
+  ]),
   folders: strokePathData(
     "M20 5a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h2.5a1.5 1.5 0 0 1 1.2.6l.6.8a1.5 1.5 0 0 0 1.2.6z",
     "M3 8.268a2 2 0 0 0-1 1.738V19a2 2 0 0 0 2 2h11a2 2 0 0 0 1.732-1",

@@ -778,6 +778,21 @@ div.new-session-page__project-search {
   display: inline-flex;
 }
 
+/* Project artwork keeps its own pixels inside the glyph box, like the chat
+   header's workspace chip: contained, never stretched or tinted. */
+.new-session-page__picker-root .workspace-icon,
+.new-session-page__trigger > .new-session-page__target-icon .workspace-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.new-session-page__picker-root .workspace-icon-fallback,
+.new-session-page__trigger > .new-session-page__target-icon .workspace-icon-fallback {
+  display: contents;
+}
+
 .new-session-page__environment-option .session-menu__icon,
 .new-session-page__environment-option .session-menu__icon svg,
 .new-session-page__card-icon svg,

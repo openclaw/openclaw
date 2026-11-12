@@ -1,10 +1,11 @@
-import { lazy } from "solid-js";
+import { lazy, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { SessionPicker } from "./picker.tsx";
 import type { resolveProjectChip } from "./project-chip.ts";
+import { ProjectIcon } from "./project-icon.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 const ProjectPickerContent = lazy(() => import("./project-picker-content.tsx"), {
@@ -34,13 +35,20 @@ export function ProjectChip(props: ProjectChipProps) {
       label={`${t("newSession.what")}: ${label()}`}
       value={label()}
       icon={
-        <Icon
-          name={
-            props.params.place.browser.projectId || props.params.place.browser.remoteProject
-              ? "book"
-              : "folder"
+        <Show
+          when={props.params.place.browser.projectId}
+          fallback={
+            <Icon name={props.params.place.browser.remoteProject ? "github" : "folderGit2"} />
           }
-        />
+        >
+          {(projectId) => (
+            <ProjectIcon
+              context={props.params.context}
+              projectId={projectId()}
+              fallbackIcon="folderGit2"
+            />
+          )}
+        </Show>
       }
       triggerAttributes={{ "data-project-id": props.params.place.browser.projectId || undefined }}
       params={props.params}
