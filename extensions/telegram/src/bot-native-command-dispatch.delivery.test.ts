@@ -469,7 +469,7 @@ describe("Telegram registered plugin delivery", () => {
         text: "Choose a deployment",
         reply_markup: { inline_keyboard: [[{ text: "Deploy", callback_data: "deploy" }]] },
       });
-      expect(sent).toHaveBeenCalledOnce();
+      expect(sent.mock.calls.map(([, ctx]) => ctx?.sessionKey)).toEqual(["agent:main:main"]);
       expect(sent.mock.calls[0]?.[0]).toMatchObject({
         success: true,
         messageId: "701",
