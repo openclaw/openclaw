@@ -75,6 +75,12 @@ const receiptSettlements = resolveGlobalSingleton(
   () => new WeakMap<SystemEvent, (adopted: boolean) => void>(),
 );
 
+/** Occurrences admitted to start their own turn, bounded apart from passive notices. */
+const wakeEvents = resolveGlobalSingleton(
+  Symbol.for("openclaw.systemEvents.wakeEvents"),
+  () => new WeakSet<SystemEvent>(),
+);
+
 function settleSystemEventReceipt(event: SystemEvent, adopted: boolean): void {
   const settle = receiptSettlements.get(event);
   receiptSettlements.delete(event);
@@ -225,6 +231,7 @@ export function enqueueRequiredSystemEventEntry(
   const event = enqueueOwnedSystemEventEntry(text, options, {
     ...receiptOptions,
     throwOnFull: true,
+    wake: true,
   });
   return event ? cloneSystemEvent(event) : null;
 }
@@ -232,7 +239,7 @@ export function enqueueRequiredSystemEventEntry(
 function enqueueOwnedSystemEventEntry(
   text: string,
   options: SystemEventOptions,
-  receiptOptions?: ReceiptOptions & { throwOnFull?: boolean },
+  receiptOptions?: ReceiptOptions & { throwOnFull?: boolean; wake?: boolean },
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   if (readExecRequestOwners(options)?.some((owner) => owner.signal.aborted)) {
@@ -280,7 +287,13 @@ function enqueueOwnedSystemEventEntry(
       return null;
     }
   }
-  if (entry.queue.length >= MAX_EVENTS && !(options.replace && entry.queue.some(matches))) {
+  // Passive notices wait for a later ordinary turn; waking occurrences start their own turn.
+  // Bound each pool separately so accumulated passive notices (for example unpolled
+  // hidden-subagent exec completions) cannot refuse the occurrence that resumes the session.
+  // Accepted edge: a session may hold up to 2 * MAX_EVENTS entries.
+  const wake = receiptOptions?.wake === true;
+  const pooled = entry.queue.filter((event) => wakeEvents.has(event) === wake).length;
+  if (pooled >= MAX_EVENTS && !(options.replace && entry.queue.some(matches))) {
     const error = new SystemEventQueueFullError();
     log.warn(error.message, { sessionKey: key });
     if (receiptOptions?.throwOnFull) {
@@ -306,6 +319,9 @@ function enqueueOwnedSystemEventEntry(
     },
     readExecRequestOwners(options),
   );
+  if (wake) {
+    wakeEvents.add(event);
+  }
   entry.queue.push(event);
   // Install the replacement before cancellation callbacks can enqueue more work.
   retireSystemEvents(replaced);
@@ -446,6 +462,7 @@ export function enqueueAutomationSystemEvent(
   const event = enqueueOwnedSystemEventEntry(text, options, {
     allowDuplicate: true,
     throwOnFull: true,
+    wake: true,
   });
   if (!event) {
     throw new Error("Deferred automation event was not accepted");

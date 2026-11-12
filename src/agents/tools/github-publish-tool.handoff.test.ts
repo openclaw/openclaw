@@ -23,7 +23,11 @@ import {
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import * as exec from "../../infra/exec-request-context.js";
-import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  enqueueSystemEventWithReceipt,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
@@ -70,6 +74,7 @@ afterEach(() => {
 it.for([
   "prepared",
   "published",
+  "published-behind-full-queue",
   "publication-failed",
   "failed",
   "stop",
@@ -79,7 +84,10 @@ it.for([
 ] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
   async (outcome, { signal }) => {
-    const localPublication = outcome === "published" || outcome === "publication-failed";
+    const localPublication =
+      outcome === "published" ||
+      outcome === "published-behind-full-queue" ||
+      outcome === "publication-failed";
     const failedPublication = {
       status: "failed",
       requestId: "local-publication",
@@ -346,6 +354,14 @@ it.for([
               }),
             };
           });
+        // A long run leaves unpolled exec completions queued for a later turn.
+        const passive = outcome === "published-behind-full-queue" ? 20 : 0;
+        for (let index = 0; index < passive; index++) {
+          enqueueSystemEventWithReceipt(`Exec completed (${index})`, {
+            sessionKey,
+            contextKey: `exec:${index}`,
+          });
+        }
         const exercise = async () => {
           const wrapped = withSessionControllerOwner(operation, () =>
             wrapToolWithAbortSignal(
@@ -437,6 +453,7 @@ it.for([
               expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
               expect(forbidden).not.toHaveBeenCalled();
               expect(publish).toHaveBeenCalledOnce();
+              expect(peekSystemEvents(sessionKey)).toHaveLength(passive);
             }
           }
           if (outcome === "interrupted") {
