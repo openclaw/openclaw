@@ -1,0 +1,4 @@
+# PR #197501: new bundled Gemini Decision provider (wire codec, transport failures,
+# admission/cancellation), its registered integration and live flows, and the
+# typed-only catalog-row regression found by end-to-end testing.
+718
