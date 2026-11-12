@@ -1522,9 +1522,11 @@ transcript search is filtering messages.
 
 In completed dashboard turns, commentary, reasoning-only messages, and tool activity
 share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and visual results stay
-visible below it. Browser tab previews keep their execution order relative to those
-visible results, so a page opened after an inline widget appears after that widget.
+activity in its original order; explicit answer segments and delivered visual
+results stay visible below it. Images returned for tool inspection remain inside
+that tool's activity instead of splitting the completed response. Browser tab
+previews keep their execution order relative to those visible results, so a page
+opened after an inline widget appears after that widget.
 Speech bubble view keeps commentary in place; contiguous tool activity uses its own
 activity disclosure instead of the **Worked for…** rollup.
 Failed tool results after the last answer stay visible outside

@@ -115,7 +115,6 @@ export async function cleanScratch(params: {
         cursor.kind = target.kind;
         cursor.filesystem = await openRoot(target.root, {
           symlinks: "reject",
-          mutationSymlinks: "reject",
         });
         if (cursor.filesystem.rootReal !== path.resolve(target.root)) {
           throw new Error("scratch root uses a symlink; entry retained");
@@ -146,18 +145,30 @@ export async function cleanScratch(params: {
           result.scanned++;
         }
         params.assertCurrent();
-        if (stat.isSymbolicLink || (!stat.isDirectory && !stat.isFile)) {
-          throw new Error("scratch contains a symlink or special file; entry retained");
+        if (!stat.isSymbolicLink && !stat.isDirectory && !stat.isFile) {
+          throw new Error("scratch contains a special file; entry retained");
         }
-        let newest = stat.isFile ? stat.mtimeMs : -Infinity;
+        let newest = stat.isDirectory ? -Infinity : stat.mtimeMs;
         if (stat.isDirectory) {
+          const objectDirectory = /(?:^|[/\\])\.git[/\\]objects[/\\](?:pack|[a-f0-9]{2})$/.test(
+            relativePath,
+          );
           for await (const child of root.entries(relativePath, {
             order: "filesystem",
             symlinks: "reject",
           })) {
+            const childNewest = await walk(
+              path.join(relativePath, child.name),
+              child,
+              depth + 1,
+              remove,
+              entryCount,
+            );
+            // Git refreshes existing packs through every hardlink. Link creation changes
+            // this directory, while another checkout's object writes are not task activity.
             newest = Math.max(
               newest,
-              await walk(path.join(relativePath, child.name), child, depth + 1, remove, entryCount),
+              objectDirectory && child.isFile && child.nlink > 1 ? stat.mtimeMs : childNewest,
             );
             if (!remove && newest >= cutoff) {
               return newest;

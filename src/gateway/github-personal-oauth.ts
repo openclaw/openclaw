@@ -554,7 +554,7 @@ export function createPersonalGitHubOAuthLifecycle() {
       action: PersonalGitHubAction,
     ): Promise<UsersGitHubAuthorizeStartResult> {
       guard(action);
-      assertGitHubCliAvailable();
+      await assertGitHubCliAvailable();
       const requestId = randomUUID();
       const createdAtMs = Date.now();
       const initial = await mutateUserGitHubConnection(
