@@ -213,6 +213,13 @@ export async function buildTalkTranscriptionConfig(
     providers: providerConfigs,
     model: voiceModelDefault?.model,
     file,
+    // The path chosen above, reported by talk.catalog so clients need not
+    // re-derive this precedence from config.
+    source: file
+      ? ("media-understanding" as const)
+      : !provider && voiceModelDefault
+        ? ("voice-model" as const)
+        : ("streaming" as const),
   };
 }
 
