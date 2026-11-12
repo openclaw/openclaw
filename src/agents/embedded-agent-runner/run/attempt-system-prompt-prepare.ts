@@ -37,7 +37,7 @@ import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-confi
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
-import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
+import { buildRunGrantedToolDirectory, buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPromptAsync,
@@ -86,6 +86,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   referencePaths?: Awaited<ReturnType<typeof resolveOpenClawReferencePaths>>;
   remoteWorkspace?: boolean;
   toolSchemaDirectoryPrompt?: () => string | undefined;
+  /** Pre-rendered run-granted listing for callers whose catalog is gone after projection. */
+  runGrantedToolDirectory?: () => string | undefined;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
   effectiveTools: PromptTools;
@@ -194,6 +196,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         : undefined);
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
+  // The cached directory omits run-granted tools; the turn holding the grant lists them.
+  let runGrantedToolsListed = !params.codeModeActive && toolSchemaDirectoryPrompt !== undefined;
 
   // Only externally publishable origins need the admitted session's sharing facts.
   phases.mark("attempt.system-prompt.session-entry");
@@ -524,6 +528,13 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         }),
         ...turnInstructions,
       ];
+      const runGrantedTools = runGrantedToolsListed
+        ? (params.runGrantedToolDirectory?.() ??
+          buildRunGrantedToolDirectory(params.toolSearchCatalogRef))
+        : undefined;
+      if (runGrantedTools) {
+        fragments.push({ kind: "runtime-instruction", text: runGrantedTools });
+      }
       if (currentWatchedSessions) {
         fragments.push({
           kind: "conversation-data",
@@ -586,6 +597,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           }
           assertPreparationCurrent();
           currentWatchedSessions = refreshedWatchedSessions;
+          runGrantedToolsListed =
+            !params.codeModeActive && refreshedToolSchemaDirectoryPrompt !== undefined;
           const systemPrompt = nextSystemPrompt.refreshSystemPrompt(
             currentSystemPrompt,
             permissionNotice,
