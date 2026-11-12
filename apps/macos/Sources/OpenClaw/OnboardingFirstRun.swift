@@ -11,10 +11,20 @@ enum OnboardingFirstRun {
         connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
         onboardingVersion: Int,
+        joinedClaw: Bool = false,
         markComplete: () -> Void,
-        show: () -> Void)
+        show: () -> Void,
+        openDashboard: () -> Void = {})
     {
-        if connectionMode != .unconfigured, onboardingSeen {
+        // A Mac joined to a claw over OpenClaw ID has nothing left to set up here: the claw owns
+        // AI and Gateway setup, which its member-scoped key cannot run. An unfinished first run
+        // (for example, a join interrupted before completion) finishes into the claw's dashboard.
+        if joinedClaw {
+            if !onboardingSeen {
+                markComplete()
+                openDashboard()
+            }
+        } else if connectionMode != .unconfigured, onboardingSeen {
             markComplete()
         } else if onboardingVersion < currentOnboardingVersion || !onboardingSeen {
             show()
