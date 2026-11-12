@@ -69,7 +69,9 @@ it("keeps a recursive browser download until an admitted search removes it", asy
     clearWorkspaceTimer(state.sessionWorkspaceState);
     stop();
     mounted.unmount();
-    for (const query of queries) query.response.resolve(listing);
+    for (const query of queries) {
+      query.response.resolve(listing);
+    }
   });
   await waitForSolid(() =>
     expect(mounted.queryByRole("button", { name: "reports" })).not.toBeNull(),
@@ -121,7 +123,9 @@ it("keeps a recursive browser download until an admitted search removes it", asy
   expect(mounted.queryByRole("button", { name: /^Download/ })).toBeNull();
   download.resolve({ filename: "report.md", url: "/api/artifacts/download/connection/ticket" });
   await download.promise;
-  await new Promise<void>((resolve) => onSettled(resolve));
+  await new Promise<void>((resolve) => {
+    onSettled(resolve);
+  });
   expect(save).not.toHaveBeenCalled();
 });
 
@@ -201,7 +205,9 @@ it.each(
     }
     pending.resolve({ filename: "report.md", url: "https://example.invalid/report.md" });
     await pending.promise;
-    await new Promise<void>((resolve) => onSettled(resolve));
+    await new Promise<void>((resolve) => {
+      onSettled(resolve);
+    });
     await waitForSolid(() => expect(save).not.toHaveBeenCalled());
   },
 );

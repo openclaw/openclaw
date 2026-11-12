@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, flush, onSettled } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { loadSettings, patchSettings } from "../../../app/settings.ts";
@@ -179,7 +179,7 @@ describe("session workspace path actions", () => {
     ["reports/monthly", false, "reports", undefined],
     ["reports", true, null, undefined],
     ["reports/monthly", true, null, { path: "", search: "report", entries: [] }],
-  ] as const)(
+  ] satisfies [string, boolean, string | null, List["browser"]][])(
     "keeps folder recovery available for %s (loading: %s)",
     async (path, loading, parentPath, browser) => {
       const onBrowsePath = vi.fn();

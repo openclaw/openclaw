@@ -552,9 +552,9 @@ it.each([400, 820, 1280])(
     container.style.setProperty("--control-ui-text-xs", "18px");
     await waitForSolid(() => expect(getComputedStyle(heading).fontSize).toBe("18px"));
     container.style.removeProperty("--control-ui-text-xs");
-    const boundary = rows()
-      .filter((row) => Number(row.getAttribute("aria-label")!.match(/file-(\d+)/)![1]) < 100)
-      .at(-1)!;
+    const boundary = rows().findLast(
+      (row) => Number(row.getAttribute("aria-label")!.match(/file-(\d+)/)![1]) < 100,
+    )!;
     const next = filename(Number(boundary.getAttribute("aria-label")!.match(/file-(\d+)/)![1]) + 1);
     boundary.focus();
     await waitForSolid(() =>
