@@ -14,6 +14,7 @@ import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 export function createGatewayServerVitestConfig(
   env?: Record<string, string | undefined>,
   phaseContainer = false,
+  phase?: "native" | "parallel",
 ): ViteUserConfig {
   const options = {
     dir: "src/gateway",
@@ -36,7 +37,7 @@ export function createGatewayServerVitestConfig(
     ["src/gateway/**/*server*.test.ts", ...gatewayServerBackedHttpTestFiles],
     options,
   );
-  if (!phaseContainer) {
+  if (!phaseContainer && !phase) {
     return defineConfig({
       ...config,
       test: {
@@ -52,34 +53,36 @@ export function createGatewayServerVitestConfig(
     name: "gateway-server-native",
   });
   const groupOrder = config.test?.sequence?.groupOrder ?? 0;
+  if (phase) {
+    const selected = phase === "native" ? native : config;
+    return defineConfig({
+      ...selected,
+      test: {
+        ...selected.test,
+        name: "gateway-server-" + phase,
+        ...(phase === "native"
+          ? { maxWorkers: 1 }
+          : {
+              exclude: [
+                ...(config.test?.exclude ?? []),
+                ...relativizeScopedPatterns(gatewayServerSerialTestFiles, options.dir),
+              ],
+            }),
+        sequence: {
+          ...selected.test?.sequence,
+          groupOrder: groupOrder + (phase === "parallel" ? 1 : 0),
+        },
+      },
+    });
+  }
   return defineConfig({
     ...config,
     test: {
       ...config.test,
-      // Config discovery retains the complete inventory; only the inline leaves run.
+      // File-backed leaves retain their identity during native report replay.
       projects: [
-        {
-          ...native,
-          extends: false,
-          test: {
-            ...native.test,
-            maxWorkers: 1,
-            sequence: { ...native.test?.sequence, groupOrder },
-          },
-        },
-        {
-          ...config,
-          extends: false,
-          test: {
-            ...config.test,
-            name: "gateway-server-parallel",
-            exclude: [
-              ...(config.test?.exclude ?? []),
-              ...relativizeScopedPatterns(gatewayServerSerialTestFiles, options.dir),
-            ],
-            sequence: { ...config.test?.sequence, groupOrder: groupOrder + 1 },
-          },
-        },
+        "test/vitest/vitest.gateway-server-native.config.ts",
+        "test/vitest/vitest.gateway-server-parallel.config.ts",
       ],
     },
   });

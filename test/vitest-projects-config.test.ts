@@ -5,7 +5,7 @@ import { afterEach, assert, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
 import { resolveExtensionTestConfig } from "../scripts/lib/extension-test-plan.mts";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
-import { withEnv } from "../src/test-utils/env.js";
+import { withEnv, withEnvAsync } from "../src/test-utils/env.js";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -31,10 +31,7 @@ import {
   gatewayServerIsolatedTestFiles,
 } from "./vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
-import {
-  createGatewayProjectShardVitestConfig,
-  createGatewayVitestConfig,
-} from "./vitest/vitest.gateway.config.ts";
+import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import liveConfig from "./vitest/vitest.live.config.ts";
 import { createProjectShardVitestConfig } from "./vitest/vitest.project-shard-config.ts";
 import {
@@ -176,10 +173,14 @@ describe("projects vitest config", () => {
             ? undefined
             : patternFiles.writePatternFile("gateway-fallback-include.json", selected),
       };
-      const resolved = await resolveConfig(
-        { config: false },
-        createGatewayProjectShardVitestConfig(env),
+      const resolved = await withEnvAsync(env, () =>
+        resolveConfig({ config: "test/vitest/vitest.gateway.config.ts" }),
       );
+      expect(resolved.test.resolvedProjects.map(({ viteConfig }) => normalizeConfigPath(viteConfig.configFile))).toEqual([
+        "test/vitest/vitest.gateway-ordinary.config.ts",
+        "test/vitest/vitest.gateway-database-workers.config.ts",
+      ]);
+      expect(resolved.test.resolvedProjects.every((project) => !project.inline)).toBe(true);
       const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
       expect(projects.map((project) => project.name)).toEqual([
         "gateway",
@@ -220,12 +221,18 @@ describe("projects vitest config", () => {
         `
         import assert from "node:assert/strict";
         import { globSync } from "node:fs";
+        import path from "node:path";
         import { resolveConfig } from "vitest/node";
         const resolved = await resolveConfig({
           config: "test/vitest/vitest.gateway-server.config.ts",
         });
         const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
         assert.equal(projects.length, 2);
+        assert(resolved.test.resolvedProjects.every(project => !project.inline));
+        assert.deepEqual(resolved.test.resolvedProjects.map(({ viteConfig }) => path.basename(viteConfig.configFile)), [
+          "vitest.gateway-server-native.config.ts",
+          "vitest.gateway-server-parallel.config.ts",
+        ]);
         const [native, parallel] = projects;
         assert.match(native.name, /gateway-server-native/);
         assert.match(parallel.name, /gateway-server-parallel/);
@@ -263,6 +270,12 @@ describe("projects vitest config", () => {
       expect(result.status, output).toBe(0);
     },
   );
+
+  it("names the file-backed E2E project for native report replay", async () => {
+    const resolved = await resolveConfig({ config: "test/vitest/vitest.e2e.config.ts" });
+    expect(resolved.test.name).toBe("e2e");
+    expect(normalizeConfigPath(resolved.configFile)).toBe("test/vitest/vitest.e2e.config.ts");
+  });
 
   it("keeps Gateway tests needing native process state or module isolation in every aggregate", () => {
     const methodsIsolatedProject = "test/vitest/vitest.gateway-methods-isolated.config.ts";

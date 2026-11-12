@@ -182,12 +182,19 @@ it("keeps exact deferred capabilities and resolved tools, not an unused installe
     plugins: {
       allow: plugins.map(({ id }) => id),
       load: { paths: plugins.map(({ file }) => file) },
-      entries: Object.fromEntries(plugins.map(({ id }) => [id, { enabled: true }])),
+      entries: {
+        ...Object.fromEntries(plugins.map(({ id }) => [id, { enabled: true }])),
+        [hook.id]: { enabled: true, hooks: { allowConversationAccess: true } },
+      },
       slots: { memory: "none" },
     },
   };
   const workspaceDir = makePluginLoaderTempDir();
   const registry = loadAgentRuntimePluginRegistryHandle({ config, workspaceDir });
+  expect(registry.typedHooks.map(({ pluginId, hookName }) => ({ pluginId, hookName }))).toContainEqual({
+    pluginId: hook.id,
+    hookName: "agent_end",
+  });
   const snapshot = createModelRuntimeChoiceOwnerFixture(config, () => true, {
     pluginRegistry: registry,
   });

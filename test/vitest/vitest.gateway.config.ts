@@ -1,6 +1,5 @@
 import { defineConfig } from "vitest/config";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
-import { createGatewayDatabaseWorkersVitestConfig } from "./vitest.gateway-database-workers.config.ts";
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayMethodsIsolatedTestFiles,
@@ -43,19 +42,13 @@ export function createGatewayProjectShardVitestConfig(
   if (env.OPENCLAW_GATEWAY_PROJECT_SHARDS !== "0") {
     return aggregate;
   }
-  const ordinary = createGatewayVitestConfig(env);
   return defineConfig({
     ...aggregate,
     test: {
       ...aggregate.test,
       projects: [
-        {
-          ...ordinary,
-          extends: false,
-          // Unsharded Gateway tests still need the process-main-thread SQLite broker.
-          test: { ...ordinary.test, pool: "forks" },
-        },
-        { ...createGatewayDatabaseWorkersVitestConfig(env), extends: false },
+        "test/vitest/vitest.gateway-ordinary.config.ts",
+        "test/vitest/vitest.gateway-database-workers.config.ts",
       ],
     },
   });

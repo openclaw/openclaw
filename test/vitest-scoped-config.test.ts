@@ -472,7 +472,12 @@ describe("scoped vitest configs", () => {
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "plugins"));
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
     expect(testConfig.exclude).toContain("contracts/**");
-    const resolved = await resolveConfig({ config: false }, defaultPluginsConfig);
+    const resolved = await resolveConfig({ config: "test/vitest/vitest.plugins.config.ts" });
+    expect(resolved.test.resolvedProjects.map(({ viteConfig }) => normalizeConfigPath(viteConfig.configFile))).toEqual([
+      "test/vitest/vitest.plugins-source.config.ts",
+      "test/vitest/vitest.plugins-native-loader.config.ts",
+    ]);
+    expect(resolved.test.resolvedProjects.every((project) => !project.inline)).toBe(true);
     const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
     expect(
       projects.map((project) => ({

@@ -268,6 +268,38 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
   );
 
   reportTest(
+    "replays file-backed Gateway phases, plugin loaders and named E2E together",
+    { timeout: 60000 },
+    async ({ expect, reports }) => {
+      const result = await reports.run("file-backed-suites");
+      expect(result.code, result.stderr).toBe(0);
+      expect(inventory(json(result.output))).toEqual([...expected, ["delta/one", "passed"], ["gamma/one", "passed"]]);
+      const index = json(path.join(result.reportSet!, "index.json"));
+      expect(index.complete).toBe(true);
+      expect(index.entries).toHaveLength(3);
+      const captures: VitestReportCapture[] = index.entries.map(
+        (entry: { attempts: { json: string }[] }) => json(entry.attempts.at(-1)!.json + ".capture.json"),
+      );
+      const replay: VitestReportCapture = json(path.join(result.reportSet!, "aggregate.json.capture.json"));
+      expect(serialized(replay.projects)).toEqual(serialized(captures.flatMap((capture) => capture.projects)));
+      expect(serialized(replay.modules)).toEqual(serialized(captures.flatMap((capture) => capture.modules)));
+      expect(replay.projects.map((project) => {
+        if (typeof project.config !== "string") {
+          throw new Error("Expected a file-backed replay project");
+        }
+        return path.basename(project.config);
+      }).toSorted()).toEqual([
+        "vitest.e2e.config.ts",
+        "vitest.gateway-server-native.config.ts",
+        "vitest.plugins-native-loader.config.ts",
+        "vitest.plugins-source.config.ts",
+      ]);
+      expect(replay.projects.every((project) => project.name.length > 0)).toBe(true);
+      expect(index.merge).toMatchObject({ code: 0, signal: null });
+    },
+  );
+
+  reportTest(
     "automatically overlaps exact targets with isolated reports and joins before publication",
     { timeout: 60000 },
     async ({ expect, reports }) => {
