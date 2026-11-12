@@ -1,3 +1,4 @@
+import type { FsSafeNativeMode } from "@openclaw/fs-safe/config";
 import type {
   GitWorktreeEffects,
   GitWorktreeOperations,
@@ -20,6 +21,10 @@ export type GitWorkerOperations = Omit<
   GitReadOperations,
   "pull-request.branch-facts" | "checkout.diff" | "repository.branches"
 > & {
+  "github.profile-token": {
+    input: { profileDir: string; nativeMode: FsSafeNativeMode };
+    output: string | undefined;
+  };
   "repository.branches": {
     input: GitReadOperations["repository.branches"]["input"];
     output: GitReadOperations["repository.branches"]["output"] & {

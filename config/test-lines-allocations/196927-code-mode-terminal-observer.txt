@@ -1,0 +1,4 @@
+# Real background-process collection at 64 parked VM runs proves that required
+# completion can recover the original result without dispatching duplicate work.
+# Exact net regression growth for PR #196927; reuses the existing capacity test.
+59
