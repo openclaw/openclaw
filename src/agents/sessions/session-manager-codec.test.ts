@@ -123,19 +123,27 @@ describe("session manager codec compatibility", () => {
     const header = sessionHeader("partition");
     const recognized = [
       messageEntry(userMessage("valid")),
-      { type: "compaction", id: "c", summary: "", firstKeptEntryId: "entry", tokensBefore: NaN },
+      {
+        type: "compaction",
+        id: "c",
+        summary: "",
+        firstKeptEntryId: "entry",
+        tokensBefore: Number.NaN,
+      },
       { type: "custom", id: "plugin", customType: "plugin-state", data: { retained: true } },
       { type: "custom_message", id: "cm", customType: "plugin", content: [], display: false },
       { type: "label", id: "label", targetId: "entry", label: "" },
       { type: "session_info", id: "info" },
     ];
+    const sparseContent: unknown[] = [];
+    sparseContent.length = 1;
     const opaque = [
       { type: "future-plugin", id: "future", parentId: null, payload: [1, 2] },
       { ...recognized[0], id: "" },
       { ...recognized[0], parentId: 1 },
       { ...recognized[0], timestamp: null },
       { ...recognized[0], message: { role: "user", content: [null] } },
-      { ...recognized[0], message: { role: "user", content: new Array(1) } },
+      { ...recognized[0], message: { role: "user", content: sparseContent } },
       {
         ...recognized[0],
         message: { role: "toolResult", content: [], toolCallId: "t", toolName: "read" },

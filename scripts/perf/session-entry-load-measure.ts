@@ -41,8 +41,9 @@ if (!values.child) {
         );
         for (const row of result.rows) {
           const key = `${row.count}/${row.version}`;
-          if (hashes.has(key))
+          if (hashes.has(key)) {
             assert.equal(row.digest, hashes.get(key), `Partition mismatch ${key}`);
+          }
           hashes.set(key, row.digest);
         }
         samples.push({ experiment, pair, arm, ...result });
@@ -120,12 +121,16 @@ if (!values.child) {
         result.fileEntriesByOriginalIndex,
       ]) {
         hasher.update("[");
-        for (const entry of collection) hasher.update(JSON.stringify(entry) ?? "null").update(",");
+        for (const entry of collection) {
+          hasher.update(JSON.stringify(entry) ?? "null").update(",");
+        }
         hasher.update("]");
       }
       const digest = hasher.digest("hex");
       const iterations = Math.max(5, Math.floor(100000 / count));
-      for (let n = 0; n < 5; n++) prepareSessionManagerEntries(entries);
+      for (let n = 0; n < 5; n++) {
+        prepareSessionManagerEntries(entries);
+      }
       global.gc?.();
       const wall = performance.now();
       const cpu = process.threadCpuUsage();
@@ -143,7 +148,9 @@ if (!values.child) {
         includeObjectsCollectedByMajorGC: true,
         includeObjectsCollectedByMinorGC: true,
       });
-      for (let n = 0; n < iterations; n++) prepareSessionManagerEntries(entries);
+      for (let n = 0; n < iterations; n++) {
+        prepareSessionManagerEntries(entries);
+      }
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
       durations.sort((a, b) => a - b);
       rows.push({
