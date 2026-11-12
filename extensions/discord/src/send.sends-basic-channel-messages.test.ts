@@ -270,6 +270,33 @@ it.each(DISCORD_MARKDOWN_GOLDENS)("%s", async (_name, before, after) => {
   expect(requestBody(postMock).content).toBe(after);
 });
 
+it.each([
+  ["line limit", Array.from({ length: 15 }, (_, index) => `line ${index}`).join("\n")],
+  ["character limit", "a".repeat(1993)],
+])("sends a complete code block after the default %s boundary", async (_label, prefix) => {
+  let messageCount = 0;
+  const loopback = await loopbackRest({
+    respond: (request) =>
+      request.method === "GET"
+        ? { id: "789", type: ChannelType.GuildText }
+        : { id: `message-${++messageCount}`, channel_id: "789" },
+  });
+  const code = "```ts\nconst x = 1;\n```\nafter";
+  const result = await sendMessageDiscord("channel:789", `${prefix}\n${code}`, {
+    ...clientOptions(loopback.rest),
+  });
+  const posts = loopback.requests.filter((request) => request.method === "POST");
+  expect(posts.map((request) => JSON.parse(request.body).content.trimEnd())).toEqual([
+    prefix,
+    code,
+  ]);
+  expect(posts.map((request) => request.path)).toEqual([
+    "/v10/channels/789/messages",
+    "/v10/channels/789/messages",
+  ]);
+  expect(result.receipt.platformMessageIds).toEqual(["message-1", "message-2"]);
+});
+
 it("sends a pre-sized fenced media tail once", async () => {
   let messageCount = 0;
   const loopback = await loopbackRest({
