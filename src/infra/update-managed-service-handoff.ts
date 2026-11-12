@@ -19,7 +19,7 @@ import {
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
-import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
+import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { resolveOpenClawCliEntryPath } from "./openclaw-cli-invocation.js";
@@ -126,7 +126,7 @@ const { pathToFileURL } = require("node:url");
 
 ${MANAGED_HANDOFF_BOOTSTRAP_SOURCE}
 
-const { parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, handoffLedger, packageActivationIdentity, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
+const { parseLaunchctlJob, classifyUpdateOutcome, OPENCLAW_STATE_SCHEMA_SQL, assertOpenClawStateWriteAllowed, prepareManagedHandoffLeaseStore, extractSqliteTableSchema, inspectManagedHandoffSentinelRowSync, recordManagedHandoffSentinelOutcomeRowSync, resolveImmutableSqliteFileUri, resolveUpdateRestartNoticeMeta, shouldPublishUpdateRestartNotice, procCgroupMembershipMatches, prepareManagedHandoffLedger, packageActivationIdentity, recoverInterruptedManagedUpdate, readManagedHandoffGatewayStop, findUpdateGatewayStop } =
   require("./runtime/${MANAGED_HANDOFF_RUNTIME_ENTRY}");
 if (!params.updateLeaseDatabaseIdentity) {
   throw new Error("Managed handoff requires its prepared lease database identity");
@@ -568,7 +568,7 @@ async function collectUpdateFailureTriage() {
       if (!fs.existsSync(params.recoveryModulePath)) throw new Error("installed runtime is unavailable: " + params.recoveryModulePath);
       // Bookkeeping, including lazy fs-safe loads, must survive a missing install.
       // Terminal writes prefer the fresh candidate after any schema migration.
-      runLedger = handoffLedger;
+      runLedger = await prepareManagedHandoffLedger(ownsManagedUpdateLease);
       originalInstallationIdentity = packageActivationIdentity(params.updateLeaseKey, true);
       for (const name of ["adoptUpdateRun", "finishUpdateRun", "getUpdateRun", "recordUpdateRunStep", "recordUpdateRunVerification"]) {
         if (typeof runLedger[name] !== "function") throw new Error("managed update ledger writer is unavailable");
@@ -1505,11 +1505,11 @@ export async function assertForegroundUpdateOrigin(
   closed: boolean,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  const matchesOwner = () => {
+  const matchesOwner = async () => {
+    const owner = await readGatewayOwnerLeaseAsync({ env });
     if (!hasForegroundUpdatePaths(origin, env)) {
       return false;
     }
-    const owner = readGatewayOwnerLease({ env, current: true });
     return closed
       ? owner === undefined
       : owner?.mode === "foreground" &&
@@ -1520,7 +1520,7 @@ export async function assertForegroundUpdateOrigin(
           owner.startedAt === origin.startedAt &&
           owner.port === origin.port;
   };
-  if (!matchesOwner()) {
+  if (!(await matchesOwner())) {
     throw new Error("Foreground Gateway owner or paths changed");
   }
   const lock = await readActiveGatewayLockIdentity({ env, requireInspection: true });
@@ -1534,7 +1534,7 @@ export async function assertForegroundUpdateOrigin(
   if (closed && (await probePortUsage(origin.port)) !== "free") {
     throw new Error("Foreground Gateway port is not verified free");
   }
-  if (!matchesOwner()) {
+  if (!(await matchesOwner())) {
     throw new Error("Foreground Gateway owner or paths changed during inspection");
   }
 }

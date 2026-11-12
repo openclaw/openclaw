@@ -19,7 +19,11 @@ import {
   readActiveGatewayLockPort,
   resolveGatewayLockPaths,
 } from "./gateway-lock.js";
-import { acquireGatewayStateOwner, captureGatewayStateOwner } from "./gateway-state-owner.js";
+import {
+  acquireGatewayStateOwner,
+  captureGatewayStateOwner,
+  captureStateDatabaseAccess,
+} from "./gateway-state-owner.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 type GatewayLockOptions = NonNullable<Parameters<typeof acquireGatewayLock>[0]>;
@@ -219,13 +223,15 @@ it.each(["root", "projection"])(
     await fs.unlink(pathname);
 
     await withLock(env, {}, async (owner) => {
-      owner.run(() => {
+      await owner.run(async () => {
         const captured = captureGatewayStateOwner(databasePath);
+        const access = await captureStateDatabaseAccess(databasePath);
         expect(captured).toBeDefined();
         captured!.assertCurrent();
         // Preserve the acquisition token: exact payload bytes still bind custody.
         const held = fsSync.readFileSync(pathname, "utf8");
         fsSync.writeFileSync(pathname, held.replace(/"createdAt":\s*"[^"]*"/u, '"createdAt":42'));
+        await expect(access.prepareAccess()).rejects.toThrow();
         expect(() => captured!.assertCurrent()).toThrow();
         expect(() => owner.assertCurrent()).toThrow();
       });

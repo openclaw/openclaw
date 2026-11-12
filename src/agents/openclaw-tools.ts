@@ -20,6 +20,7 @@ import {
   resolveSessionAgentIds,
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
+import { readGitHubPublicationConfiguration } from "./github-tool-identity-config.js";
 import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
@@ -38,6 +39,7 @@ import { resolveWebSearchToolContext } from "./openclaw-tools.model-context.js";
 import { prepareOpenClawTools } from "./openclaw-tools.preparation.js";
 import {
   applyNodesToolWorkspaceGuard,
+  shouldIncludeMessageToolForOpenClawTools,
   shouldIncludePrimarySessionToolForOpenClawTools,
   shouldIncludeProgressCardToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
@@ -423,11 +425,6 @@ function* createOpenClawToolsSteps(
   });
   options?.recordToolPrepStage?.("openclaw-tools:nodes-tool");
   const embedded = isEmbeddedMode();
-  const explicitFactoryAllowlist = mergeFactoryPolicyList(
-    resolvedConfig?.tools?.allow,
-    resolvedConfig?.tools?.alsoAllow,
-    options?.pluginToolAllowlist,
-  );
   const explicitFactoryDenylist = mergeFactoryPolicyList(
     resolvedConfig?.tools?.deny,
     options?.pluginToolDenylist,
@@ -451,14 +448,11 @@ function* createOpenClawToolsSteps(
     pinnedWidgetAuthoringAdmitted &&
     inlineWidgetClientAvailable &&
     options?.clientCaps?.includes("inline-widgets") !== true;
-  const includeMessageTool =
-    !embedded ||
-    options?.sourceReplyDeliveryMode === "message_tool_only" ||
-    isToolExplicitlyAllowedByFactoryPolicy({
-      toolName: "message",
-      allowlist: explicitFactoryAllowlist,
-      denylist: explicitFactoryDenylist,
-    });
+  const includeMessageTool = shouldIncludeMessageToolForOpenClawTools(
+    options,
+    embedded,
+    explicitFactoryDenylist,
+  );
   const sessionLookupToolOptions = {
     agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     sandboxed: options?.sandboxed,
@@ -498,7 +492,9 @@ function* createOpenClawToolsSteps(
     workspaceDir: spawnWorkspaceDir,
   };
   const tools: AnyAgentTool[] = [
-    ...createInstalledSkillTools(options?.installedSkills ?? []),
+    ...createInstalledSkillTools(options?.installedSkills ?? [], {
+      modelContextWindowTokens: options?.modelContextWindowTokens,
+    }),
     createDashboardTool({
       agentSessionKey:
         scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,
@@ -592,6 +588,12 @@ function* createOpenClawToolsSteps(
       ? createGitHubPublishTool({
           ...options,
           publicationAvailable: options.githubPublicationAvailable,
+          observationOnly:
+            options.githubPublicationConfigurationAware === true &&
+            readGitHubPublicationConfiguration({
+              config: availabilityConfig ?? {},
+              agentId: sessionAgentId,
+            }) === "unconfigured",
           preview: options.githubPublicationPreview,
         })
       : null,

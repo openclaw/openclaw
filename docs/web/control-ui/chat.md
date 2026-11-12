@@ -84,6 +84,11 @@ shows the tool label instead of leaving the text blank. Activity summaries stay
 dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
 screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
 and outcomes available. Completed group summaries retain their operation counts.
+The **Worked for** summary and reply metadata use the same saved elapsed time,
+from the initiating message to the last recorded output for that run. This includes
+request preparation and waiting, not just model execution. Starting another turn
+or reloading the same complete history does not switch the timing source. If either
+saved endpoint is unavailable, the elapsed duration is omitted.
 Tool Search calls use the called tool's name, icon, and input details in tool rows
 and activity summaries. Built-in tools use semantic icons, including an envelope
 for messages, a calendar clock for scheduled jobs, and an image for image generation.
@@ -1517,9 +1522,11 @@ transcript search is filtering messages.
 
 In completed dashboard turns, commentary, reasoning-only messages, and tool activity
 share one **Worked for…** disclosure above the answers. Expanding it shows the
-activity in its original order; explicit answer segments and visual results stay
-visible below it. Browser tab previews keep their execution order relative to those
-visible results, so a page opened after an inline widget appears after that widget.
+activity in its original order; explicit answer segments and delivered visual
+results stay visible below it. Images returned for tool inspection remain inside
+that tool's activity instead of splitting the completed response. Browser tab
+previews keep their execution order relative to those visible results, so a page
+opened after an inline widget appears after that widget.
 Speech bubble view keeps commentary in place; contiguous tool activity uses its own
 activity disclosure instead of the **Worked for…** rollup.
 Failed tool results after the last answer stay visible outside

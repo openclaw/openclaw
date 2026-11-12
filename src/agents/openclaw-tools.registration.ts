@@ -9,6 +9,11 @@ import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
+import {
+  isToolExplicitlyAllowedByFactoryPolicy,
+  mergeFactoryPolicyList,
+} from "./openclaw-tools.media-factory-plan.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -125,6 +130,28 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
         senderPolicyMode: "never",
       }).subagentPolicy,
     ].map(expandProgressCardPolicyNames),
+  );
+}
+
+export function shouldIncludeMessageToolForOpenClawTools(
+  options:
+    | Pick<OpenClawToolsOptions, "config" | "sourceReplyDeliveryMode" | "pluginToolAllowlist">
+    | undefined,
+  embedded: boolean,
+  denylist: string[] | undefined,
+): boolean {
+  return (
+    !embedded ||
+    options?.sourceReplyDeliveryMode === "message_tool_only" ||
+    isToolExplicitlyAllowedByFactoryPolicy({
+      toolName: "message",
+      allowlist: mergeFactoryPolicyList(
+        options?.config?.tools?.allow,
+        options?.config?.tools?.alsoAllow,
+        options?.pluginToolAllowlist,
+      ),
+      denylist,
+    })
   );
 }
 
