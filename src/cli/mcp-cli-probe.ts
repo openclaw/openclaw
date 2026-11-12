@@ -5,8 +5,9 @@ import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
-import { exitCliAfterOutput } from "./one-shot-exit.js";
+import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 
 const createSessionMcpRuntime = createLazyRuntimeMethod(
   () => import("../agents/agent-bundle-mcp-runtime.js"),
@@ -73,19 +74,29 @@ export async function probeMcpServers(
   sessionId: string,
   config: OpenClawConfig,
   servers: Record<string, Record<string, unknown>>,
+  signal?: AbortSignal,
 ) {
+  signal?.throwIfAborted();
   const { recoverMcpDockerServers } = await import("../agents/mcp-docker-recovery.js");
   await recoverMcpDockerServers(Object.values(servers));
+  signal?.throwIfAborted();
   const runtime = await createSessionMcpRuntime({
     sessionId,
     workspaceDir: process.cwd(),
     cfg: { ...config, mcp: { ...config.mcp, servers } },
     manifestRegistry: { plugins: [] },
   });
-  let result: Awaited<ReturnType<typeof readMcpProbeResult>>;
+  const onAbort = () => {
+    void runtime.dispose().catch(() => undefined);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  let outcome: { result: Awaited<ReturnType<typeof readMcpProbeResult>> } | { error: unknown };
   let cleanupError: string | undefined;
   try {
-    result = await readMcpProbeResult(runtime);
+    signal?.throwIfAborted();
+    outcome = { result: await readMcpProbeResult(runtime) };
+  } catch (error) {
+    outcome = { error };
   } finally {
     try {
       await runtime.dispose();
@@ -93,9 +104,18 @@ export async function probeMcpServers(
       await runtime.joinCleanup?.();
     } catch (err) {
       cleanupError = `${formatErrorMessage(err)}. Rerun this command; if local cleanup still fails, restart the process that owns the MCP connection.`;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
   }
-  return { ...result, ...(cleanupError ? { cleanupError } : {}) };
+  if (cleanupError && signal?.aborted) {
+    throw new Error(cleanupError);
+  }
+  signal?.throwIfAborted();
+  if ("error" in outcome) {
+    throw outcome.error;
+  }
+  return { ...outcome.result, ...(cleanupError ? { cleanupError } : {}) };
 }
 
 export function resolveMcpProbeIssue(params: {
@@ -146,5 +166,55 @@ export async function probeMcpServersOrFail(params: {
   if (probeIssues.length > 0) {
     defaultRuntime.error(formatMcpProbeIssues([...probeIssues, "Configuration was not saved."]));
     exitCliAfterOutput(defaultRuntime, 1);
+  }
+}
+
+export function reportMcpProbeResult(params: {
+  result: Awaited<ReturnType<typeof probeMcpServers>>;
+  servers: Record<string, Record<string, unknown>>;
+  path: string;
+  json?: boolean;
+}): void {
+  const { result } = params;
+  if (params.json) {
+    defaultRuntime.writeJson(result);
+  } else {
+    defaultRuntime.log(terminalText`MCP check (${params.path}):`);
+    for (const [serverName, server] of Object.entries(result.servers)) {
+      defaultRuntime.log(
+        terminalText`- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}, Codex approval ${server.codexApprovalMode}`,
+      );
+      if (server.approvalHint) {
+        defaultRuntime.log(terminalText`  i ${server.approvalHint}`);
+      }
+    }
+    for (const diagnostic of result.diagnostics) {
+      defaultRuntime.log(terminalText`! ${diagnostic.serverName}: ${diagnostic.message}`);
+    }
+    if (result.cleanupError) {
+      defaultRuntime.log(terminalText`! cleanup: ${result.cleanupError}`);
+    }
+  }
+  const probeIssues = resolveMcpProbeIssue({ result, servers: params.servers, path: params.path });
+  if (probeIssues.length > 0) {
+    defaultRuntime.error(formatMcpProbeIssues(probeIssues));
+    if (!requestExitAfterOneShotOutput(defaultRuntime, 1)) {
+      exitCliAfterOutput(defaultRuntime, 1);
+    }
+  }
+}
+
+/** Only diagnostic callers opt into canceling their privately owned discovery runtime. */
+export async function runMcpDiagnosticRead(
+  run: (signal: AbortSignal | undefined) => Promise<void>,
+): Promise<void> {
+  const signal = getAsyncWorkSignal();
+  try {
+    signal?.throwIfAborted();
+    await run(signal);
+  } catch (err) {
+    if (!signal?.aborted || err !== signal.reason) {
+      throw err;
+    }
   }
 }
