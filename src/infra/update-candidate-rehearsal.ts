@@ -63,6 +63,7 @@ function isolatedConfig(
   const copied = structuredClone(config);
   if (Object.values(resolveDatabaseFamilyEngines(copied)).includes("postgres")) {
     // Provider exports are private SQLite images, never live PostgreSQL anchors.
+    // Candidates repeat this for older drivers (projectUpdateRehearsalDatabaseConfig).
     copied.database = { engine: "sqlite" };
   }
   const projectPluginPath = (value: string) => {
