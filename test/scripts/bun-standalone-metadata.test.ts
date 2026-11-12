@@ -1019,7 +1019,7 @@ describe("standalone image metadata", () => {
       getPluginInstance: () => undefined,
       loadSetupRuntimeChannelCandidate: () => true,
       recordPluginError: ({ error }: { error: string }) => errors.push(error),
-      detailPluginStartupTrace: () => {},
+      recordPluginStartupDiagnostics: () => {},
     });
     const ownerFile =
       owner === "runtime"

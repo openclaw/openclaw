@@ -289,6 +289,13 @@ export const executePreparedWorkerInference = async (
       return inferenceError("cancelled");
     }
 
+    const costConfig = isDiagnosticsEnabled(config)
+      ? await resolveModelCostConfig({ provider: model.provider, model: model.id, config })
+      : undefined;
+    if (signal.aborted || !params.isCurrent()) {
+      return inferenceError("cancelled");
+    }
+
     const startedAt = Date.now();
     const trace = createDiagnosticTraceContextFromActiveScope();
     let modelCallSeq = 0;
@@ -318,11 +325,7 @@ export const executePreparedWorkerInference = async (
         usage.cost?.total ??
         estimateUsageCost({
           usage,
-          cost: resolveModelCostConfig({
-            provider: model.provider,
-            model: model.id,
-            config,
-          }),
+          cost: costConfig,
         });
       emitTrustedDiagnosticEvent({
         type: "model.usage",

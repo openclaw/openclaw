@@ -14,6 +14,7 @@ import {
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { RebindCommitResult } from "../gateway/openclaw-id/service-rebind.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { describeRebind, displayKey } from "./id-cli-rebind.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -95,7 +96,7 @@ function parseBindingSeq(value: string | undefined): number | undefined {
   }
   const seq = Number(value);
   if (!Number.isSafeInteger(seq) || seq < 1) {
-    throw new Error("--binding-seq must be a positive whole number.");
+    throwExpectedCliError("--binding-seq must be a positive whole number.");
   }
   return seq;
 }
@@ -106,7 +107,7 @@ async function readLinkCode(opts: RebindOpts): Promise<string> {
     return opts.code.trim();
   }
   if (opts.kitStdin) {
-    throw new Error("--kit-stdin needs --code <link-code> from your OpenClaw ID account.");
+    throwExpectedCliError("--kit-stdin needs --code <link-code> from your OpenClaw ID account.");
   }
   const code = await password({
     message: "Link code from your OpenClaw ID account (Add a claw page, claws.<domain>/link)",
@@ -236,7 +237,9 @@ async function runRebind(opts: RebindOpts) {
     return;
   }
   if (opts.yes && !opts.kitStdin) {
-    throw new Error("--yes needs --kit-stdin: type the recovery kit at the prompt otherwise.");
+    throwExpectedCliError(
+      "--yes needs --kit-stdin: type the recovery kit at the prompt otherwise.",
+    );
   }
   const bindingSeq = parseBindingSeq(opts.bindingSeq);
   const code = await readLinkCode(opts);
@@ -244,7 +247,7 @@ async function runRebind(opts: RebindOpts) {
   const prep = (await authority(opts, { action: "rebind_prepare", code })) as RebindPreparation;
   const signed = await signRebind(prep, await readKit(opts.kitStdin === true), { bindingSeq });
   if (!signed.ok) {
-    throw new Error(describeSignRefusal(signed, prep.hostname));
+    throwExpectedCliError(describeSignRefusal(signed, prep.hostname));
   }
   if (!opts.yes) {
     process.stdout.write(`${await describeRebind(prep, signed.binding)}\n`);
