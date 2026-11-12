@@ -1,13 +1,9 @@
-name: Compiler Delegation Targeted Proof
+name: Release Compiler Delegation Prerequisite Diagnostic
 on:
   workflow_dispatch:
     inputs:
-      format_only:
-        description: Emit canonical formatting for the two pinned repair heads only
-        type: boolean
-        default: false
       target_ref:
-        description: Exact reviewed compiler-delegation commit (bind CANDIDATE_SHA first)
+        description: Exact reviewed release backport commit (must equal CANDIDATE_SHA)
         required: true
         type: string
 permissions:
@@ -17,17 +13,15 @@ concurrency:
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  BASE_SHA: e0dd0206412af448b324387435dd8fed6575fd7b
-  # Bound to the verified test and canonical formatting repairs; original BEFORE is unchanged.
-  CANDIDATE_SHA: ad8dd9457c79890e4f2a6ae37b8ac6802fdabd14
-  SOURCE_TREE: e6ac38dea6c8e5f733a88b50b3e113cbe75a26a3
-  PATCH_SHA256: 0f71aab466be921c5809bd5dd5f9974c88f88209afab3a547301e56f3c37afdf
-  REPAIR_PARENT: d26d3ea3eb710ea964de48a34a5599a11fb0be49
-  REPAIR_PATCH_SHA256: 58f6fa7df2c33593c4aafee9aededb0912dc9423e1218545834ae0e14725d29d
+  # Prerequisite diagnostic only; not final C/Q/P or Full Release Validation.
+  BASE_SHA: 1a4aebe30bac1a4cc33410c2c4790d8dbe3ca732
+  CANDIDATE_SHA: 6d20d6026844359417e196606b19855f809de958
+  SOURCE_TREE: 04cd519cea72074d5e8a6e3bc2539cf8164cfd40
+  PATCH_SHA256: c3225ba80913b22f905db71566c1596a01c3e1cdd8a4bd9763da5d8b8e60f2d6
+  MAIN_PROVENANCE: ff148c221cf59a377331815c632f908482bc7e77
   WORKFLOW_PATH: .github/workflows/retained-cli-composition-proof.yml
 jobs:
   tests:
-    if: ${{ !inputs.format_only }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -58,9 +52,8 @@ jobs:
           test "$TARGET_SHA" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-          test "$(git rev-parse HEAD~2)" = "$REPAIR_PARENT"
-          test "$(git rev-parse "$REPAIR_PARENT^")" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 3
+          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 1
           test -z "$(git status --porcelain)"
           git diff --name-only "$BASE_SHA" HEAD > "$evidence/changed-paths.txt"
           cat > "$evidence/expected-paths.txt" <<'PATHS'
@@ -69,18 +62,14 @@ jobs:
           scripts/ci-check-plan.mts
           test/scripts/changed-lanes.test.ts
           test/scripts/check-changed-compiler-delegation.test.ts
+          test/scripts/ci-workflow-manifest.test-support.ts
           PATHS
           cmp "$evidence/expected-paths.txt" "$evidence/changed-paths.txt"
           git diff --no-ext-diff --no-textconv --no-renames --binary --full-index "$BASE_SHA" HEAD > "$evidence/source.patch"
           echo "$PATCH_SHA256  $evidence/source.patch" | sha256sum --check --strict
-          git diff --name-only "$REPAIR_PARENT" HEAD > "$evidence/repair-paths.txt"
-          printf '%s\n' scripts/check-changed.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts > "$evidence/expected-repair-paths.txt"
-          cmp "$evidence/expected-repair-paths.txt" "$evidence/repair-paths.txt"
-          git diff --no-ext-diff --no-textconv --no-renames --binary --full-index "$REPAIR_PARENT" HEAD > "$evidence/repair.patch"
-          echo "$REPAIR_PATCH_SHA256  $evidence/repair.patch" | sha256sum --check --strict
           git ls-tree -r HEAD -- $(cat "$evidence/expected-paths.txt") > "$evidence/source-blobs.txt"
           git show "$WORKFLOW_SHA:$WORKFLOW_PATH" > "$evidence/workflow.yml"
-          printf 'candidate=%s\nbase=%s\ntree=%s\npatch_sha256=%s\nworkflow=%s\nrun=%s\nattempt=%s\nlane=%s\n' "$CANDIDATE_SHA" "$BASE_SHA" "$SOURCE_TREE" "$PATCH_SHA256" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PROOF_LANE" > "$evidence/identity.txt"
+          printf 'candidate=%s\nbase=%s\ntree=%s\npatch_sha256=%s\nmain_provenance=%s\nscope=prerequisite-diagnostic-only-not-final-C-Q-P-FRV\nworkflow=%s\nrun=%s\nattempt=%s\nlane=%s\n' "$CANDIDATE_SHA" "$BASE_SHA" "$SOURCE_TREE" "$PATCH_SHA256" "$MAIN_PROVENANCE" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PROOF_LANE" > "$evidence/identity.txt"
       - &select
         name: Select bound revision
         env:
@@ -124,7 +113,7 @@ jobs:
           set -euo pipefail
           evidence="$GITHUB_WORKSPACE/.artifacts/compiler-delegation"
           set +e
-          node scripts/test-projects.mts test/scripts/check-changed-compiler-delegation.test.ts -- --maxWorkers=1 --testNamePattern='^removes only the explicitly mapped compiler commands from the selected check plan$' --reporter=default --reporter=json --outputFile="$evidence/tests.json" 2>&1 | tee "$evidence/tests.log"
+          node scripts/test-projects.mts test/scripts/check-changed-compiler-delegation.test.ts -- --maxWorkers=1 --testNamePattern='^delegates only mapped compiler commands for ' --reporter=default --reporter=json --outputFile="$evidence/tests.json" 2>&1 | tee "$evidence/tests.log"
           codes=("${PIPESTATUS[@]}")
           test_code=${codes[0]}
           set -e
@@ -142,19 +131,29 @@ jobs:
           const root = '.artifacts/compiler-delegation/';
           const report = JSON.parse(fs.readFileSync(root + 'tests.json', 'utf8'));
           assert.equal(fs.readFileSync(root + 'test-exit.txt', 'utf8').trim(), '1');
-          assert.equal(report.numFailedTests, 1);
+          assert.equal(report.numFailedTests, 2);
           assert.equal(report.numPassedTests, 0);
           assert.equal(report.numFailedTestSuites, 1);
           assert.equal(report.numRuntimeErrorTestSuites ?? 0, 0);
           const suites = report.testResults.filter(item => item.name.replaceAll(String.fromCharCode(92), '/').endsWith('/test/scripts/check-changed-compiler-delegation.test.ts'));
           assert.equal(suites.length, 1);
           const failed = suites[0].assertionResults.filter(item => item.status === 'failed');
-          assert.equal(failed.length, 1);
-          assert.equal(failed[0].fullName.trim(), 'removes only the explicitly mapped compiler commands from the selected check plan');
-          assert.match(failed[0].failureMessages.join('\n'), /expected undefined to deeply equal \[\]/);
+          assert.equal(report.numTotalTestSuites, 1);
+          assert.equal(suites[0].message, '');
+          const selected = suites[0].assertionResults.filter(item => item.title.startsWith('delegates only mapped compiler commands for '));
+          assert.equal(selected.length, 2);
+          assert.equal(failed.length, 2);
+          assert.equal(new Set(failed.map(item => item.fullName)).size, 2);
+          for (const item of selected) {
+            assert.equal(item.status, 'failed');
+            assert.equal(item.failureMessages.length, 1);
+            assert.match(item.failureMessages[0], /expected undefined to deeply equal \[\]/);
+            // The exact overlaid source first reads the absent property at line 39.
+            assert.match(item.failureMessages[0], /check-changed-compiler-delegation\.test\.ts:39:\d+/);
+          }
           assert.equal(fs.readFileSync(root + 'cli-exit.txt', 'utf8').trim(), '1');
           assert.equal(fs.readFileSync(root + 'cli.log', 'utf8').trim(), 'Unknown option: --delegate-compilers\n[check:changed] FAILED (exit 1)');
-          fs.writeFileSync(root + 'classification.json', JSON.stringify({ expectedRegression: true, api: 'missing delegatedTypeGraphs', cli: 'unknown --delegate-compilers', setupFailureAccepted: false }, null, 2) + '\n');
+          fs.writeFileSync(root + 'classification.json', JSON.stringify({ expectedRegression: true, failedDelegateCases: 2, api: 'missing delegatedTypeGraphs', cli: 'unknown --delegate-compilers', setupFailureAccepted: false }, null, 2) + '\n');
           NODE
       - name: AFTER touched and sibling owner suites
         if: matrix.revision == 'after'
@@ -224,13 +223,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   types:
-    if: ${{ !inputs.format_only }}
     strategy:
       fail-fast: false
       max-parallel: 3
       matrix:
         revision: [before, after]
-        graph: [scripts, test-root-tooling, test-root-scripts]
+        graph: [scripts, root-stripe-1, root-stripe-2]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -242,16 +240,21 @@ jobs:
       - *setup
       - *bun
       - *ripgrep
-      - name: Run one canonical compiler graph (no serial full core-test graph)
+      - name: Run release-native scripts graph or root stripe
         env:
           GRAPH: ${{ matrix.graph }}
         run: |
           set -euo pipefail
           evidence=.artifacts/compiler-delegation
-          graphs=$(node --input-type=module -e 'console.log(JSON.stringify([process.env.GRAPH]))')
-          printf '%s\n' "$graphs" > "$evidence/type-graphs.json"
+          case "$GRAPH" in
+            scripts) args=(--ci-graphs-json '["scripts"]') ;;
+            root-stripe-1) args=(--root-stripe 1/4) ;;
+            root-stripe-2) args=(--root-stripe 2/4) ;;
+            *) echo "Unexpected compiler lane: $GRAPH" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "${args[@]}" > "$evidence/type-args.txt"
           set +e
-          node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json "$graphs" 2>&1 | tee "$evidence/types.log"
+          node scripts/run-tsgo-core-test-shards.mjs "${args[@]}" 2>&1 | tee "$evidence/types.log"
           codes=("${PIPESTATUS[@]}")
           code=${codes[0]}
           set -e
@@ -261,7 +264,6 @@ jobs:
       - *hashes
       - *upload
   static:
-    if: ${{ !inputs.format_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -279,9 +281,9 @@ jobs:
           trap 'code=$?; if (( code == 124 || code >= 128 )); then echo stopped=true >> "$GITHUB_OUTPUT"; fi; exit "$code"' EXIT
           source scripts/ci-collect-checks.sh
           {
-            run_check format node scripts/run-format.mts --check scripts/check-changed.mts scripts/ci-check-plan.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts docs/ci/local-proof.md
+            run_check format node scripts/run-format.mts --check scripts/check-changed.mts scripts/ci-check-plan.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts test/scripts/ci-workflow-manifest.test-support.ts docs/ci/local-proof.md
             run_check script-lint node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/check-changed.mts scripts/ci-check-plan.mts
-            run_check test-lint node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts
+            run_check test-lint node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.json test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts test/scripts/ci-workflow-manifest.test-support.ts
             run_check script-erasability pnpm check:script-erasability
             run_check docs-mdx node scripts/check-docs-mdx.mjs docs/ci/local-proof.md --json-out .artifacts/compiler-delegation/docs-mdx.json
             run_check docs-links pnpm docs:check-links
@@ -329,78 +331,3 @@ jobs:
           test "${parity_status[1]}" -eq 0
       - *hashes
       - *upload
-
-  repair-format:
-    if: ${{ inputs.format_only }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        include:
-          - label: compiler
-            source: 0a1ec3a4b70f377c3d966cc7fb3be99709d868ff
-            files: test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-manifest.test-support.ts
-          - label: windows
-            source: cbb97e8939d86db83be4b7670704fb4b1ac21068
-            files: scripts/diagnostics/windows-link-service.mjs
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ matrix.source }}
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Bind exact input
-        env:
-          SOURCE: ${{ matrix.source }}
-          FILES: ${{ matrix.files }}
-          REQUEST: ${{ inputs.target_ref }}
-          WORKFLOW: ${{ github.workflow_sha }}
-        run: |
-          set -euo pipefail
-          test "$REQUEST" = 0a1ec3a4b70f377c3d966cc7fb3be99709d868ff
-          test "$(git rev-parse HEAD)" = "$SOURCE"
-          test -z "$(git status --porcelain)"
-          mkdir -p .artifacts/repair-format
-          printf 'source=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$SOURCE" "$WORKFLOW" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/repair-format/identity.txt
-          printf '%s\n' $FILES > .artifacts/repair-format/selected.txt
-          sha256sum $FILES > .artifacts/repair-format/before.sha256
-      - uses: ./.github/actions/setup-node-env
-        with:
-          semantic-checks: "true"
-          install-bun: "false"
-          cache-mode: restore
-      - uses: ./.github/actions/setup-test-bun
-      - name: Format and verify parity
-        env:
-          OPENCLAW_FORMAT_TOOL: oxfmt
-        run: |
-          set -euo pipefail
-          evidence=.artifacts/repair-format
-          mapfile -t files < "$evidence/selected.txt"
-          git diff --quiet
-          node scripts/run-format.mts --write "${files[@]}" 2>&1 | tee "$evidence/write.log"
-          node scripts/run-format.mts --check "${files[@]}" 2>&1 | tee "$evidence/parity.log"
-          git diff --name-only | sort > "$evidence/changed.txt"
-          sort "$evidence/selected.txt" > "$evidence/allowed.txt"
-          test -z "$(comm -23 "$evidence/changed.txt" "$evidence/allowed.txt")"
-          git diff --check
-          git diff --binary --full-index > "$evidence/formatter.patch"
-          sha256sum "${files[@]}" > "$evidence/after.sha256"
-          mkdir -p "$evidence/formatted-source"
-          cp --parents -- "${files[@]}" "$evidence/formatted-source/"
-          printf 'write=passed\nparity=passed\n' > "$evidence/result.txt"
-      - name: Hash evidence
-        if: always()
-        run: |
-          if test -d .artifacts/repair-format; then
-            (cd .artifacts/repair-format && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS)
-          fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        if: always()
-        with:
-          name: repair-format-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/repair-format/
-          if-no-files-found: error
-          retention-days: 14
