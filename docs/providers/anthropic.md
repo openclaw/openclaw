@@ -452,21 +452,20 @@ After setting up either auth route above, select the standard model ref:
 openclaw models set anthropic/claude-fable-5-2
 ```
 
-Fable 5.2 keeps the Fable 5.1 request contract: a 1,000,000-token context window,
-a 128,000-token output limit, always-on adaptive thinking with native `low`,
-`medium`, `high`, `xhigh`, and `max` effort, and no forced tool calls. OpenClaw
-defaults to `medium`.
+Fable 5.2 has a 1,000,000-token context window and a 128,000-token output limit.
+It always uses adaptive thinking, with native `low`, `medium`, `high`, `xhigh`,
+and `max` effort; OpenClaw defaults to `medium`. Unlike Fable 5.1, it supports
+native fast mode and rejects a trailing assistant prefill, so
+OpenClaw drops a prefill before sending the request.
 For API-key billing, input and output cost `$8/$40` per million tokens and
 cache reads cost `$0.20` per million tokens.
 See Anthropic's [Fable 5.2 specifications](https://platform.claude.com/docs/en/models/fable-5-2/overview)
 and [migration guide](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide).
 
-Claude CLI authentication needs Claude Code 2.1.290 or newer for this model.
+On the Claude CLI runtime, the installed Claude Code must be 2.1.290 or newer for this model (`claude update`).
 
-The bare `fable` alias selects `anthropic/claude-fable-5-2`. Explicit
-`fable-5.1`, `fable-5`, and full `anthropic/claude-fable-5-1` or
-`anthropic/claude-fable-5` selections keep their model; OpenClaw does not
-rewrite them to Fable 5.2.
+The `fable-5.2` and `fable-5-2` aliases select `anthropic/claude-fable-5-2`.
+The bare `fable` alias still selects Fable 5.1.
 
 ## Use Claude Fable 5.1
 
@@ -500,8 +499,9 @@ For API-key billing, input and output remain `$10/$50` per million tokens;
 cache reads cost `$0.25` per million tokens, one quarter of Fable 5's rate.
 See Anthropic's [Fable 5.1 specifications](https://platform.claude.com/docs/en/models/fable-5-1/overview).
 
-Explicit `fable-5` and `anthropic/claude-fable-5` selections still use Fable 5;
-OpenClaw does not rewrite them to Fable 5.1.
+The bare `fable` alias now selects `anthropic/claude-fable-5-1`. Explicit
+`fable-5` and `anthropic/claude-fable-5` selections still use Fable 5; OpenClaw
+does not rewrite them to Fable 5.1.
 
 ### Tool calls and retained thinking
 
@@ -756,11 +756,11 @@ restrictions. The catalog uses Anthropic's standard `$2/$10` input/output pricin
 per million tokens. Anthropic canceled the previously scheduled September 2026
 increase; see [current model pricing](https://platform.claude.com/docs/en/about-claude/pricing#model-pricing).
 
-`anthropic/claude-fable-5-1` and `anthropic/claude-fable-5` always use adaptive
-thinking. OpenClaw defaults both versions to `medium` effort. Anthropic does not allow thinking to be
+`anthropic/claude-fable-5-2`, `anthropic/claude-fable-5-1`, and `anthropic/claude-fable-5`
+always use adaptive thinking. OpenClaw defaults all three versions to `medium` effort. Anthropic does not allow thinking to be
 disabled for these models, so stored `off` and `minimal` settings map to `low`
 effort instead. OpenClaw also omits caller-selected sampling parameters for
-both Fable versions.
+all Fable versions.
 
 Fable effort controls offer `low`, `medium`, `high`, `xhigh`, and `max`, matching
 [Anthropic's effort levels](https://platform.claude.com/docs/en/build-with-claude/effort).
@@ -816,7 +816,7 @@ Related Anthropic docs:
 ## Safety refusal fallback (Claude Opus, Sonnet 5.5, and Fable)
 
 <Warning>
-Claude Opus 5.5, Opus 5, Sonnet 5.5, Fable 5.1, and Fable 5 can route a
+Claude Opus 5.5, Opus 5, Sonnet 5.5, Fable 5.2, Fable 5.1, and Fable 5 can route a
 safety-classifier refusal to another Claude model. OpenClaw opts into Anthropic's recommended per-category
 routing for direct API-key requests. A fallback-served turn is billed at the model
 that answered. If your policy requires every turn to stay on the requested
@@ -832,7 +832,7 @@ Anthropic has a recommended model for that refusal category.
 ### How it works
 
 1. For every direct API-key request to `anthropic/claude-opus-5-5`,
-   `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`,
+   `anthropic/claude-opus-5`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-fable-5-2`,
    `anthropic/claude-fable-5-1`, or `anthropic/claude-fable-5`, OpenClaw sends the
    `server-side-fallback-2026-07-01` beta header plus
    `fallbacks: "default"`. Anthropic selects the recommended model for the
@@ -1090,8 +1090,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Claude Haiku 5.5, Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Mythos 5, Fable 5.1, and
-    Fable 5 have an exact 1,000,000-token input window and support up to 128,000 output tokens.
+    Claude Haiku 5.5, Opus 5.5, Opus 5, Sonnet 5.5, Sonnet 5, Mythos 5, Fable 5.2, Fable 5.1,
+    and Fable 5 have an exact 1,000,000-token input window and support up to 128,000 output tokens.
     Anthropic's 1M context window is also GA on Claude 4.x models with adaptive
     thinking: Opus 4.8,
     Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes these models
