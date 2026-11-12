@@ -2,13 +2,18 @@ import { createAsyncLock } from "@openclaw/fs-safe/advanced";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
 import {
   type EligibleNodeMessages,
   resolveEligibleNodeFromList,
 } from "../../shared/node-resolve.js";
 import { isStringOption } from "../../utils/string-readers.js";
+import {
+  MOBILE_UI_ACT_COMMAND,
+  MOBILE_UI_CAPABILITY,
+  MOBILE_UI_OBSERVE_COMMAND,
+  supportsMobileUiNode,
+} from "../mobile-ui-node-capabilities.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam, ToolInputError } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
@@ -20,9 +25,6 @@ import {
   type NodeListNode,
 } from "./nodes-utils.js";
 
-const MOBILE_UI_OBSERVE_COMMAND = "mobile.ui.observe";
-const MOBILE_UI_ACT_COMMAND = "mobile.ui.act";
-const MOBILE_UI_CAPABILITY = "mobileUI";
 const MAX_WAIT_MS = 100_000;
 const MAX_SWIPE_DURATION_MS = 60_000;
 const GLOBAL_ACTION_NAMES = ["back", "home", "recents", "notifications"] as const;
@@ -166,19 +168,7 @@ function readMobileUiAction(input: Record<string, unknown>): MobileUiAction {
 }
 
 function isEligibleMobileUiNode(node: NodeListNode): boolean {
-  const platform = normalizeOptionalLowercaseString(node.platform) ?? "";
-  const caps = Array.isArray(node.caps) ? node.caps : [];
-  const commands = Array.isArray(node.commands) ? node.commands : [];
-  return (
-    node.connected === true &&
-    platform.startsWith("android") &&
-    caps.some(
-      (capability) =>
-        normalizeOptionalLowercaseString(capability) === MOBILE_UI_CAPABILITY.toLowerCase(),
-    ) &&
-    commands.includes(MOBILE_UI_OBSERVE_COMMAND) &&
-    commands.includes(MOBILE_UI_ACT_COMMAND)
-  );
+  return node.connected === true && supportsMobileUiNode(node);
 }
 
 const MOBILE_UI_NODE_HINT = "enable Android Accessibility Control and approve the pairing update";

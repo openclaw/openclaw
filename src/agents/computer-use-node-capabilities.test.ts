@@ -68,10 +68,20 @@ const capabilities = (actions: ComputerUseV2ActionName[]) =>
     actions,
   );
 
-function createContext(gatewayComputerService?: GatewayRequestContext["gatewayComputerService"]) {
+function createContext(
+  gatewayComputerService?: GatewayRequestContext["gatewayComputerService"],
+  workerEnvironmentService?: Pick<
+    NonNullable<GatewayRequestContext["workerEnvironmentService"]>,
+    "prepareAttachedComputer" | "findSessionAttachment"
+  >,
+) {
   const nodeRegistry = new NodeRegistry();
   registries.push(nodeRegistry);
-  return { nodeRegistry, gatewayComputerService } as GatewayRequestContext;
+  return {
+    nodeRegistry,
+    gatewayComputerService,
+    workerEnvironmentService,
+  } as GatewayRequestContext;
 }
 
 function connect(
@@ -268,4 +278,89 @@ it("retains transport discovery for CLI and embedded callers", async () => {
   const embedded = createContext();
   embedded.localEmbedded = true;
   await expectPrepared({ actions: ["screenshot", "scroll"] }, embedded);
+});
+
+it("omits only proven-absent routes and retains unknown or paired offline targets", async () => {
+  const read = () =>
+    loadPairedComputerUseAvailabilityForSurface({
+      computerAllowed: true,
+      mobileUiAllowed: true,
+    });
+  expect((await read())?.unsupportedTools).toEqual(["computer", "mobile_ui"]);
+  vi.mocked(listNodes).mockRejectedValueOnce(new Error("inventory unavailable"));
+  expect((await read())?.unsupportedTools).toEqual([]);
+  vi.mocked(listNodes).mockResolvedValue([
+    {
+      nodeId: "offline-android",
+      platform: "android",
+      paired: true,
+      connected: false,
+      caps: ["mobileUI"],
+      commands: ["mobile.ui.observe", "mobile.ui.act", "computer.act", "screen.snapshot"],
+    },
+  ]);
+  const offline = await read();
+  expect(offline?.unsupportedTools).toEqual([]);
+  expect(offline?.prepared?.actions).toEqual([]);
+  vi.mocked(listNodes).mockResolvedValue([]);
+  vi.mocked(loadGatewayComputerStatus).mockResolvedValue({ configured: true, available: false });
+  expect((await read())?.unsupportedTools).toEqual(["mobile_ui"]);
+});
+
+it("prepares mobile-only listing from hosted facts without probing a desktop or remote nodes", async () => {
+  const context = createContext();
+  const result = await withContext(context, () =>
+    loadPairedComputerUseAvailabilityForSurface({
+      computerAllowed: false,
+      mobileUiAllowed: true,
+    }),
+  );
+  expect(result?.unsupportedTools).toEqual(["mobile_ui"]);
+  expect(result?.prepared).toBeUndefined();
+  expect(listNodes).not.toHaveBeenCalled();
+  expect(loadGatewayComputerStatus).not.toHaveBeenCalled();
+  expect(startComputerHostProcess).not.toHaveBeenCalled();
+});
+
+it("keeps configured attachment service and bound desktops without a paired node or local display", async () => {
+  const prepareAttachedComputer = vi.fn();
+  const findSessionAttachment = vi.fn<
+    NonNullable<GatewayRequestContext["workerEnvironmentService"]>["findSessionAttachment"]
+  >(() => undefined);
+  const context = createContext(undefined, {
+    prepareAttachedComputer,
+    findSessionAttachment,
+  });
+  const read = (config: OpenClawConfig) =>
+    withContext(context, () =>
+      loadPairedComputerUseAvailabilityForSurface({ computerAllowed: true, config }),
+    );
+  expect((await read({}))?.unsupportedTools).toEqual(["computer"]);
+  expect((await read({ cloudWorkers: { desktop: true } }))?.unsupportedTools).toEqual([]);
+  findSessionAttachment.mockReturnValue({
+    agentId: "main",
+    sessionKey: "agent:main:computer-discovery",
+    sessionId: "attached-session",
+    environmentId: "fixture-desktop",
+    ownerEpoch: 1,
+    generation: 1,
+  });
+  expect((await read({}))?.unsupportedTools).toEqual([]);
+  const transport = {
+    computerUse: capabilities(["screenshot"]),
+    resolveNode: vi.fn(),
+    invoke: vi.fn(),
+  };
+  expect(
+    await withContext(context, () =>
+      loadPairedComputerUseAvailabilityForSurface({
+        computerAllowed: true,
+        computerTransport: transport,
+        config: {},
+      }),
+    ),
+  ).toBeUndefined();
+  expect(prepareAttachedComputer).not.toHaveBeenCalled();
+  expect(transport.resolveNode).not.toHaveBeenCalled();
+  expect(startComputerHostProcess).not.toHaveBeenCalled();
 });
