@@ -4,6 +4,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { SshResolvedConfig } from "../infra/ssh-config.js";
 import type { inspectGatewayTlsCertificate as InspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -354,12 +355,17 @@ describe("gateway-status command", () => {
         async () => {
           const url = "wss://attacker.example:18789";
           if (!credential) {
-            await expect(run({ url })).rejects.toMatchObject({
+            const error = await run({ url }).catch((err: unknown) => err);
+            expect(error).toMatchObject({
               name: "GatewayExplicitAuthRequiredError",
               message: expect.stringContaining(
                 "gateway url override requires explicit credentials",
               ),
             });
+            // The remedy must stay readable after the shared error redaction.
+            expect(formatErrorMessage(error)).toContain(
+              "Fix: pass --url together with --token or --password.",
+            );
             for (const effect of [
               readBestEffortConfig,
               discoverGatewayBeacons,

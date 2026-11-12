@@ -98,7 +98,7 @@ function shapeTargetError(
   }
   if (error instanceof GatewayStoredDeviceAuthUnavailableError && gatewayUrl) {
     return new Error(
-      `No stored device auth for ${gatewayUrl}. Pass --token or --password once, approve the pairing request in that gateway's Control UI (Settings > Devices), then retry.`,
+      `No stored device auth for ${gatewayUrl}. Run once with --token or --password, approve the pairing request in that gateway's Control UI (Settings > Devices), then retry.`,
     );
   }
   if (!(error instanceof Error)) {
