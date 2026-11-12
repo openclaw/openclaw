@@ -35,6 +35,7 @@ are reviewed; subagent sessions are not, because the main agent sees their resul
 and can redirect them. A later review in the same run is told the correction it
 already gave and does not repeat it. Each conversation has at most one review
 in flight; the run ending or a new user message cancels it. Gateway info logs
-record review token usage and whether a correction was steered.
+record review token usage, whether a correction was steered, and each cancelled
+review with its reason and running time.
 
 Docs: https://docs.openclaw.ai/plugins/reference/advisor
