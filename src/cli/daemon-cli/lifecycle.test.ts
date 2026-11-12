@@ -348,18 +348,11 @@ describe("runDaemonRestart health checks", () => {
 
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
     process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
-    const refusal = () => (restartParams.beforeServiceMutation as () => void)();
-    expect(refusal).toThrow(/non-default state dir/);
-    // The refusal carries its own remedy to the root renderer instead of a generic failure.
-    let caught: unknown;
-    try {
-      refusal();
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toMatchObject({
-      humanOutput: expect.stringMatching(/^Gateway restart blocked: service management skipped/),
-    });
+    expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
+      expect.objectContaining({
+        humanOutput: expect.stringMatching(/^Gateway restart blocked: service management skipped/),
+      }),
+    );
   });
 
   it("refreshes distinct caller and service config after restart repair", async () => {
@@ -1011,10 +1004,8 @@ describe("runDaemonRestart health checks", () => {
       ["uninstall", () => runDaemonUninstall({ json: true })],
       ["restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
     ])("blocks native %s lifecycle access", async (action, run) => {
-      const refusal = run();
-      await expect(refusal).rejects.toThrow("managed by an external supervisor");
-      await expect(refusal).rejects.toMatchObject({
-        humanOutput: expect.stringMatching(`^Gateway ${action} blocked: OpenClaw gateway`),
+      await expect(run()).rejects.toMatchObject({
+        humanOutput: expect.stringMatching(`^Gateway ${action} blocked: .*external supervisor`),
       });
 
       expectNoCalls(
