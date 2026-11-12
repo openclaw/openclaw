@@ -9,12 +9,12 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
+import type { NewSessionComposerOptions } from "../new-session/composer-options.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
 } from "../new-session/composer-textarea.ts";
 import { composerContext, mountNewSessionComposer } from "../new-session/composer.test-support.ts";
-import type { NewSessionComposerOptions } from "../new-session/composer.tsx";
 import { NewSessionModelControl } from "../new-session/model-control.ts";
 import {
   createComposerContainer,

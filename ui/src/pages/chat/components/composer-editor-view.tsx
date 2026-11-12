@@ -535,7 +535,7 @@ export function mountComposerEditor(
   return {
     view,
     sync,
-    destroy() {
+    destroy(this: void) {
       destroyed = true;
       resizeObserver?.disconnect();
       stopResize?.();

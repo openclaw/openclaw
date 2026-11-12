@@ -1,4 +1,5 @@
 import { Text } from "@codemirror/state";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { userEvent } from "vitest/browser";
@@ -7,6 +8,7 @@ import {
   readComposerEditor,
   selectComposerInput,
 } from "../../lib/composer-input.ts";
+import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import "../../test-helpers/load-styles.ts";
 import { createMentionComposerBinding } from "../../lib/reactive/composer-editor.ts";
 import {
@@ -14,6 +16,26 @@ import {
   mention,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
+
+const historyModifier = isApplePlatform() ? "Meta" : "Control";
+
+// Count the validator's label scan without replacing a shared module export.
+function countRecipientReads(text: string, action: () => void) {
+  const scan = vi.spyOn(String.prototype, "charCodeAt");
+  const stringify = vi.spyOn(Text.prototype, "toString");
+  try {
+    action();
+    return {
+      serializations: stringify.mock.results.filter((result) => result.value === text).length,
+      scannedOffsets: scan.mock.calls.flatMap(([offset], index) =>
+        scan.mock.contexts[index] === text ? [offset] : [],
+      ),
+    };
+  } finally {
+    scan.mockRestore();
+    stringify.mockRestore();
+  }
+}
 
 afterEach(resetMentionComposerFixture);
 describe.each(["chat", "new-session"] as const)(
@@ -141,21 +163,7 @@ describe.each(["chat", "new-session"] as const)(
       await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
       const input = f.query("textarea") as HTMLTextAreaElement;
       const editor = readComposerEditor(input)!;
-      // Count the validator's label scan without replacing a shared module export.
-      const scan = vi.spyOn(String.prototype, "charCodeAt");
-      const stringify = vi.spyOn(Text.prototype, "toString");
-      let scannedOffsets: number[];
-      let serializations: number;
-      try {
-        editor.sync();
-        serializations = stringify.mock.results.filter((result) => result.value === "@Alex").length;
-        scannedOffsets = scan.mock.calls.flatMap(([offset], index) =>
-          scan.mock.contexts[index] === "@Alex" ? [offset] : [],
-        );
-      } finally {
-        scan.mockRestore();
-        stringify.mockRestore();
-      }
+      const { serializations, scannedOffsets } = countRecipientReads("@Alex", () => editor.sync());
       expect(serializations).toBe(1);
       expect(scannedOffsets).toEqual([0, 1, 2, 3, 4]);
       expect(f.query(".chat-composer-mention")?.textContent).toContain("Alex");
@@ -173,55 +181,83 @@ describe.each(["chat", "new-session"] as const)(
       vi.useRealTimers();
       await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
       const input = f.query("textarea") as HTMLTextAreaElement;
-      const scan = vi.spyOn(String.prototype, "charCodeAt");
-      const stringify = vi.spyOn(Text.prototype, "toString");
-      let scannedOffsets: number[];
-      let nextSerializations: number;
-      try {
-        readComposerEditor(input)!.replace("!", 5, 5);
-        nextSerializations = stringify.mock.results.filter(
-          (result) => result.value === "@Alex!",
-        ).length;
-        // Ignore pre-edit synchronization and count only this owner update.
-        scannedOffsets = scan.mock.calls.flatMap(([offset], index) =>
-          scan.mock.contexts[index] === "@Alex!" ? [offset] : [],
-        );
-      } finally {
-        scan.mockRestore();
-        stringify.mockRestore();
-      }
-      expect(nextSerializations).toBe(1);
+      const { serializations, scannedOffsets } = countRecipientReads("@Alex!", () =>
+        readComposerEditor(input)!.replace("!", 5, 5),
+      );
+      expect(serializations).toBe(1);
       expect(scannedOffsets).toEqual([0, 1, 2, 3, 4]);
       expect(f.value()).toEqual({ draft: "@Alex!", mentions: [mention("alex-one", 0, 5)] });
       expect(f.query(".chat-composer-mention")?.getAttribute("data-profile-id")).toBe("alex-one");
     });
 
-    it.each(["@Bo", "@Bob "])(
-      "undoes and redoes the first person selected from %s",
-      async (query) => {
-        const f = composerFixture(kind, "", []);
+    it.each([
+      ["@Bo", false],
+      ["@Bob ", false],
+      ["@Bo", true],
+      ["@Bob ", true],
+    ] as const)(
+      "undoes and redoes a person selected from %s (existing mention: %s)",
+      async (query, existing) => {
+        const prefix = existing ? "Ask @Alex after " : "";
+        const f = composerFixture(
+          kind,
+          prefix.trimEnd(),
+          existing ? [mention("alex-one", 4, 9)] : [],
+        );
         vi.useRealTimers();
+        if (existing) {
+          await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
+        }
         f.request.mockResolvedValue({
           users: [{ profileId: "bob", displayName: "Bob", online: true }],
           truncated: false,
         });
         const input = f.query("textarea") as HTMLTextAreaElement;
-        input.focus();
-        await userEvent.keyboard(query);
+        focusComposerInput(input);
+        selectComposerInput(input, input.value.length, input.value.length);
+        await userEvent.keyboard((existing ? " " : "") + query);
         f.refresh();
+        const beforePick = f.value();
+        expect(beforePick.draft).toBe(prefix + query);
         await expect
           .poll(() => document.querySelector('[role="option"]')?.textContent ?? "")
           .toContain("Bob");
         await userEvent.keyboard("{Enter}");
         f.refresh();
         await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
-        focusComposerInput(input);
-        await userEvent.keyboard("{Control>}z{/Control}");
+        await expect
+          .poll(() => f.value().mentions.some((person) => person.profileId === "bob"))
+          .toBe(true);
+        // Project the committed owner before checking the retained editor.
         f.refresh();
-        expect(f.value()).toEqual({ draft: query, mentions: [] });
-        await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+        await expect
+          .poll(() =>
+            [...f.container.querySelectorAll(".chat-composer-mention")]
+              .map((label) => label.textContent)
+              .join(" "),
+          )
+          .toContain("Bob");
+        const picked = f.value();
+        expect(picked).toEqual({
+          draft: prefix + "@Bob ",
+          mentions: [
+            ...(existing ? [mention("alex-one", 4, 9)] : []),
+            mention("bob", prefix.length, prefix.length + 4),
+          ],
+        });
+        await expect
+          .poll(() => f.query('[data-composer-editor="true"]')?.contains(document.activeElement))
+          .toBe(true);
+        await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
         f.refresh();
-        expect(f.value()).toEqual({ draft: "@Bob ", mentions: [mention("bob", 0, 4)] });
+        expect(f.value()).toEqual(beforePick);
+        await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
+        f.refresh();
+        expect(f.value()).toEqual(picked);
+        selectComposerInput(input, picked.draft.length, picked.draft.length);
+        await userEvent.keyboard("done");
+        f.refresh();
+        expect(f.value().draft).toBe(prefix + "@Bob done");
       },
     );
 
@@ -230,7 +266,7 @@ describe.each(["chat", "new-session"] as const)(
       vi.useRealTimers();
       await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
       focusComposerInput(f.query("textarea") as HTMLTextAreaElement);
-      await userEvent.keyboard("{Control>}z{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "@Alex", mentions: [mention("alex-one", 0, 5)] });
     });
@@ -278,7 +314,7 @@ describe.each(["chat", "new-session"] as const)(
         .poll(() => f.container.querySelectorAll(".chat-composer-mention").length)
         .toBe(1);
       focusComposerInput(input);
-      await userEvent.keyboard("{Control>}z{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "@Alex", mentions: [] });
     });
@@ -305,10 +341,10 @@ describe.each(["chat", "new-session"] as const)(
       await expect.poll(() => f.query(".chat-composer-mention")?.textContent).toContain("Alex");
       expect(input.hidden).toBe(true);
       focusComposerInput(input);
-      await userEvent.keyboard("{Control>}z{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "", mentions: [] });
-      await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "@Alex", mentions: [mention("alex-one", 0, 5)] });
       selectComposerInput(input, input.value.length, input.value.length);
@@ -333,10 +369,10 @@ describe.each(["chat", "new-session"] as const)(
       await expect
         .poll(() => f.container.querySelectorAll(".chat-composer-mention").length)
         .toBe(2);
-      await userEvent.keyboard("{Control>}z{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "@Alex", mentions: [mention("alex-one", 0, 5)] });
-      await userEvent.keyboard("{Control>}{Shift>}Z{/Shift}{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/Shift}{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({
         draft: "@Alex @Alex",
@@ -361,7 +397,7 @@ describe.each(["chat", "new-session"] as const)(
       expect(f.value().draft).toBe("  @Alex\n");
       // A send/discard clear is not an edit the user can undo back into the draft.
       f.restoreDraft("", []);
-      await userEvent.keyboard("{Control>}z{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "", mentions: [] });
       const six = Array.from({ length: 6 }, (_, index) =>
@@ -409,62 +445,6 @@ describe.each(["chat", "new-session"] as const)(
         mentions: [mention("alex-one", 10, 15)],
       });
     });
-    it.each(["@Bo", "@Bob "])(
-      "undoes a second person selected from %s through the real picker",
-      async (query) => {
-        const f = composerFixture(kind, "Ask @Alex after", [mention("alex-one", 4, 9)]);
-        vi.useRealTimers();
-        await expect.poll(() => f.query('[data-composer-editor="true"]')).not.toBeNull();
-        f.request.mockResolvedValue({
-          users: [{ profileId: "bob", displayName: "Bob", online: true }],
-          truncated: false,
-        });
-        const input = f.query("textarea") as HTMLTextAreaElement;
-        focusComposerInput(input);
-        selectComposerInput(input, input.value.length, input.value.length);
-        await userEvent.keyboard(" " + query);
-        f.refresh();
-        const beforePick = f.value();
-        expect(beforePick.draft).toBe("Ask @Alex after " + query);
-        await expect
-          .poll(() => document.querySelector('[role="option"]')?.textContent ?? "", {
-            timeout: 5000,
-          })
-          .toContain("Bob");
-        await userEvent.keyboard("{Enter}");
-        f.refresh();
-        await expect
-          .poll(() => f.value().mentions.some((person) => person.profileId === "bob"))
-          .toBe(true);
-        // This fixture projects its plain owner explicitly; production callers
-        // receive the same committed draft through their live owner projection.
-        f.refresh();
-        await expect
-          .poll(() =>
-            [...f.container.querySelectorAll(".chat-composer-mention")]
-              .map((label) => label.textContent)
-              .join(" "),
-          )
-          .toContain("Bob");
-        const picked = f.value();
-        const bob = picked.mentions.find((person) => person.profileId === "bob")!;
-        expect(picked.draft.slice(bob.start, bob.end)).toBe("@Bob");
-        expect(picked.draft).toBe("Ask @Alex after @Bob ");
-        await expect
-          .poll(() => f.query('[data-composer-editor="true"]')?.contains(document.activeElement))
-          .toBe(true);
-        await userEvent.keyboard("{Control>}z{/Control}");
-        f.refresh();
-        expect(f.value()).toEqual(beforePick);
-        await userEvent.keyboard("{Control>}{Shift>}Z{/Shift}{/Control}");
-        f.refresh();
-        expect(f.value()).toEqual(picked);
-        selectComposerInput(input, picked.draft.length, picked.draft.length);
-        await userEvent.keyboard("done");
-        f.refresh();
-        expect(f.value().draft).toBe("Ask @Alex after @Bob done");
-      },
-    );
   },
 );
 
@@ -520,7 +500,7 @@ it("retires native activation frames after handoff and across ref replacement", 
   recipients = [];
   binding.ref(replacement);
   getMentions.mockClear();
-  queued[0](performance.now());
+  expectDefined(queued[0], "deferred composition callback")(performance.now());
   expect(getMentions).not.toHaveBeenCalled();
   expect(readComposerEditor(next)).toBeUndefined();
   replacement.value = "@Alex";

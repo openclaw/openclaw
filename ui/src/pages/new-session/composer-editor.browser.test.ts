@@ -1,8 +1,11 @@
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { userEvent } from "vitest/browser";
-import "../../test-helpers/load-styles.ts";
 import { composerInputHasFocus, focusComposerInput } from "../../lib/composer-input.ts";
+import "../../test-helpers/load-styles.ts";
+import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import { renderComposer, resetComposerTestFixtures } from "./composer.test-support.ts";
+
+const historyModifier = isApplePlatform() ? "Meta" : "Control";
 
 afterEach(resetComposerTestFixtures);
 
@@ -22,9 +25,9 @@ it("keeps rich editing history inside its New Session draft owner", async () => 
   await userEvent.keyboard("before route change");
   f.rerender();
   expect(f.container.querySelector("textarea")).toBe(original);
-  await userEvent.keyboard("{Control>}z{/Control}");
+  await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
   expect(original.value).toBe("@Alex ");
-  await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+  await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
   expect(original.value).toBe("@Alex before route change");
 
   f.rerenderForDraftRoute("draft:two", "New route draft");
@@ -32,7 +35,7 @@ it("keeps rich editing history inside its New Session draft owner", async () => 
   const next = f.container.querySelector("textarea")!;
   expect(composerInputHasFocus(next)).toBe(true);
   focusComposerInput(next);
-  await userEvent.keyboard("{Control>}z{/Control}");
+  await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
   expect(next.value).toBe("New route draft");
   expect(f.composerTextarea.getTextarea()).toBe(next);
   expect(original.isConnected).toBe(false);

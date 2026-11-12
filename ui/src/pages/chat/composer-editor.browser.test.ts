@@ -3,9 +3,9 @@ import { StateEffect } from "@codemirror/state";
 import { Decoration, EditorView } from "@codemirror/view";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import "../../test-helpers/load-styles.ts";
 import "../../styles/chat/composer-surface.css";
-import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import {
   composerInputHasFocus,
@@ -13,8 +13,11 @@ import {
   selectComposerInput,
   syncComposerInput,
 } from "../../lib/composer-input.ts";
+import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import { mountMentionComposerEditor } from "./components/composer-editor-mentions.tsx";
 import { mountComposerEditor } from "./components/composer-editor-view.tsx";
+
+const historyModifier = isApplePlatform() ? "Meta" : "Control";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -30,7 +33,10 @@ function fixture(
   text = "Ask @Alex after",
   width = 230,
   selected?: readonly HumanMention[],
-  mount = mountMentionComposerEditor,
+  mount: (
+    input: HTMLTextAreaElement,
+    mentions: () => readonly HumanMention[],
+  ) => { destroy: () => void } = mountMentionComposerEditor,
 ) {
   const surface = document.createElement("div");
   surface.className = "agent-chat__input";
@@ -176,7 +182,7 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
       userEvent: "input.type.compose",
     });
     f.content.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "你" }));
-    await userEvent.keyboard("{Control>}z{/Control}");
+    await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
     expect(f.raw()).toBe("Hello Ask @Alex after");
     expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 10, end: 15 }]);
   });
@@ -189,7 +195,7 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     f.content.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     f.content.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "" }));
     expect(f.raw()).toBe("Hello Ask @Alex after");
-    await userEvent.keyboard("{Control>}z{/Control}");
+    await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
     expect(f.raw()).toBe("Ask @Alex after");
     expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 4, end: 9 }]);
   });
@@ -243,13 +249,13 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     expect(f.mentions()).toEqual([{ profileId: "alex-two", start: 0, end: 5 }]);
     for (let cycle = 0; cycle < 2; cycle++) {
       focusComposerInput(f.input);
-      await userEvent.keyboard("{Control>}z{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
       expect(f.raw()).toBe("@Alex @Alex");
       expect(f.mentions()).toEqual([
         { profileId: "alex-one", start: 0, end: 5 },
         { profileId: "alex-two", start: 6, end: 11 },
       ]);
-      await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+      await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
       expect(f.raw()).toBe("@Alex");
       expect(f.mentions()).toEqual([{ profileId: "alex-two", start: 0, end: 5 }]);
     }
@@ -422,12 +428,12 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     expect(f.raw()).toBe("Ask Hi ! after");
     expect(f.mentions()).toEqual([]);
     expect(f.surface.querySelectorAll(".chat-composer-mention")).toHaveLength(0);
-    await userEvent.keyboard("{Control>}z{/Control}");
+    await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
     expect(f.raw()).toBe("Ask Hi @Alex! after");
     // Undo restores the chip's recipient, not just its text.
     expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 7, end: 12 }]);
     await expect.poll(() => f.surface.querySelectorAll(".chat-composer-mention").length).toBe(1);
-    await userEvent.keyboard("{Control>}y{/Control}");
+    await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
     expect(f.raw()).toBe("Ask Hi ! after");
     expect(f.inputEvents.at(-1)?.inputType).toBe("historyRedo");
     expect(composerInputHasFocus(f.input)).toBe(true);

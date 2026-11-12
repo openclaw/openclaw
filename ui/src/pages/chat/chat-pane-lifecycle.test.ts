@@ -295,6 +295,7 @@ it("routes explicit composer focus to its visible editor after the textarea is h
     scrollElement: editor,
     coordsAtPos: () => null,
     sync: vi.fn(),
+    requestSync: vi.fn(),
     focus: () => editor.focus(),
     select: vi.fn(),
     replace: vi.fn(),

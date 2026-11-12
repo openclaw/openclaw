@@ -16,7 +16,7 @@ import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
-import type { NewSessionComposerOptions } from "./composer.tsx";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import { selectedDraftProjectId } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
