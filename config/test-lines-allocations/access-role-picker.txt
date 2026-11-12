@@ -1,3 +1,4 @@
-# Native plugin catalog/default/admin/blocked/member-view coverage, real owner-key
-# signing and direct-channel authority refusals, plus real Gateway reconnect proof.
-56
+# Native plugin catalog/confirmation/blocked/member-view and owner-signature coverage,
+# merged guest warning fixtures, paused-write + wrapped-refusal regression, and real
+# Gateway first-Viewer upgrade/stale-token downgrade exercise distinct trust boundaries.
+243

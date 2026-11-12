@@ -16,7 +16,13 @@ import {
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
 import { roleText } from "./i18n.js";
-import { createInvite, decideInvite, removeMember, changeMemberRole } from "./invites.js";
+import {
+  createInvite,
+  decideInvite,
+  removeMember,
+  changeMemberRole,
+  RoleClassificationChangedError,
+} from "./invites.js";
 import { NodeSection } from "./node-section.js";
 import { createNodeInvite, decideNodeInvite, removeNode } from "./nodes.js";
 import { signMembershipChange, thisOwnerDevice } from "./owner-signing.js";
@@ -182,6 +188,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
       if (!disposed) {
         motion.update(() => setError({ target, ...peopleError(failure, kind, host.redact) }));
       }
+      if (failure instanceof RoleClassificationChangedError) {
+        throw failure;
+      }
       return undefined;
     } finally {
       actionsInFlight.delete(operation);
@@ -238,9 +247,13 @@ export function PeoplePage(props: { host: ControlUiHost }) {
     });
   };
 
-  const changeRole = async (member: Member, role: MemberRole): Promise<boolean> =>
+  const changeRole = async (
+    member: Member,
+    role: MemberRole,
+    confirmedAdmin: boolean,
+  ): Promise<boolean> =>
     (await run(`member:${member.accountId}`, async (link) => {
-      await changeMemberRole(host.request, link, member.accountId, role);
+      await changeMemberRole(host.request, link, member.accountId, role, confirmedAdmin);
       return true;
     })) === true;
 
@@ -310,9 +323,9 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                       error={latest(error)?.target === "invite" ? latest(error) : null}
                       locale={host.locale}
                       existingProfiles={current().link.existingProfiles ?? []}
-                      onCreate={(email, role: MemberRole, existingProfileId) =>
+                      onCreate={(email, role: MemberRole, confirmedAdmin, existingProfileId) =>
                         run("invite", (link) =>
-                          createInvite(host.request, link, email, role, existingProfileId),
+                          createInvite(host.request, link, email, role, confirmedAdmin, existingProfileId),
                         )
                       }
                     />

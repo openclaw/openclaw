@@ -117,7 +117,7 @@ it("signs set_role with the listed browser key and rejects undefined roles befor
     ],
   };
   const request = vi.fn();
-  await changeMemberRole(request, link, "member", "viewer");
+  await changeMemberRole(request, link, "member", "viewer", false);
   const params = request.mock.calls[0]?.[1];
   expect(request.mock.calls[0]?.[0]).toBe("openclawId.authority");
   expect(params.action).toBe("submit");
@@ -132,12 +132,12 @@ it("signs set_role with the listed browser key and rejects undefined roles befor
   expect(parsed.statement.signer).toBe(formatEd25519PublicKey(signer.publicKey));
   await expect(hasValidSignature(parsed.statement)).resolves.toBe(true);
   request.mockClear();
-  await expect(changeMemberRole(request, link, "member", "deleted")).rejects.toMatchObject({
+  await expect(changeMemberRole(request, link, "member", "deleted", false)).rejects.toMatchObject({
     code: "role_undefined",
   });
-  await expect(createInvite(request, link, "person@example.test", "deleted")).rejects.toMatchObject(
-    { code: "role_undefined" },
-  );
+  await expect(
+    createInvite(request, link, "person@example.test", "deleted", false),
+  ).rejects.toMatchObject({ code: "role_undefined" });
   expect(request).not.toHaveBeenCalled();
   await expect(
     changeMemberRole(
@@ -156,11 +156,12 @@ it("signs set_role with the listed browser key and rejects undefined roles befor
       },
       "member",
       "Research Team",
+      false,
     ),
   ).rejects.toMatchObject({ code: "role_invalid" });
   expect(request).not.toHaveBeenCalled();
   stored.clear();
-  await expect(changeMemberRole(request, link, "member", "viewer")).rejects.toMatchObject({
+  await expect(changeMemberRole(request, link, "member", "viewer", false)).rejects.toMatchObject({
     code: "no_owner_key",
   });
   expect(request).not.toHaveBeenCalled();

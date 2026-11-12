@@ -6,8 +6,9 @@ import type { ControlUiComponentHandle, ControlUiHost } from "openclaw/plugin-sd
 import { createEffect, createSignal, For, latest, onSettled, Show } from "solid-js";
 import { roleText } from "./i18n.js";
 import { InviteSandboxWarning } from "./invite-sandbox-warning.js";
-import type { CreatedInvite } from "./invites.js";
+import { RoleClassificationChangedError, type CreatedInvite } from "./invites.js";
 import { MemberDevices } from "./member-devices.js";
+import { Avatar } from "./people-avatar.js";
 import type { PeopleError, PeopleOperationError } from "./people-error.js";
 import {
   countDevices,
@@ -16,7 +17,6 @@ import {
   memberName,
   memberPresence,
   memberRunning,
-  personInitials,
 } from "./people-format.js";
 import type { PeopleMotion } from "./people-motion.js";
 import { administratorWarning, definedRoles, roleOptions } from "./people-roles.js";
@@ -42,34 +42,6 @@ export function OperationError(props: { error?: PeopleError | null; page?: boole
         </div>
       )}
     </Show>
-  );
-}
-
-function Avatar(props: { name?: string }) {
-  return (
-    <span
-      class={["ocid-access__avatar", { "ocid-access__avatar--unknown": !props.name }]}
-      aria-hidden="true"
-    >
-      <Show
-        when={props.name}
-        fallback={
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-          >
-            <circle cx="12" cy="7" r="4" />
-            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
-          </svg>
-        }
-      >
-        {personInitials(props.name ?? "")}
-      </Show>
-    </span>
   );
 }
 
@@ -126,6 +98,7 @@ export function InviteForm(props: {
   onCreate: (
     email: string,
     role: MemberRole,
+    confirmedAdmin: boolean,
     existingProfileId?: string,
   ) => Promise<CreatedInvite | undefined>;
 }) {
@@ -139,16 +112,26 @@ export function InviteForm(props: {
   const [copied, setCopied] = createSignal(false);
   let emailInput!: HTMLInputElement;
   let inviteAgain!: HTMLButtonElement;
-  const submit = async () => {
+  const submit = async (confirmedAdmin = false) => {
     const invitedRole = selectedRole()?.name;
     if (!invitedRole || props.disabled || !EMAIL.test(email().trim())) {
       return;
     }
-    const made = await props.onCreate(
-      email().trim().toLowerCase(),
-      invitedRole,
-      existingProfileId() || undefined,
-    );
+    let made: CreatedInvite | undefined;
+    try {
+      made = await props.onCreate(
+        email().trim().toLowerCase(),
+        invitedRole,
+        confirmedAdmin,
+        existingProfileId() || undefined,
+      );
+    } catch (error) {
+      if (!(error instanceof RoleClassificationChangedError)) {
+        throw error;
+      }
+      setConfirmAdmin(true);
+      return;
+    }
     if (made) {
       props.motion.update(() => {
         setCreated({ ...made, role: invitedRole });
@@ -277,7 +260,7 @@ export function InviteForm(props: {
                       type="button"
                       class="btn primary btn--sm"
                       disabled={props.disabled}
-                      onClick={() => void submit()}
+                      onClick={() => void submit(true)}
                     >
                       {roleText(props.locale, "adminInvite")}
                     </button>
@@ -510,7 +493,7 @@ function MemberRow(props: {
   components: ControlUiHost["components"];
   roles: Role[];
   locale: string;
-  onChangeRole: (member: Member, role: MemberRole) => Promise<boolean>;
+  onChangeRole: (member: Member, role: MemberRole, confirmedAdmin: boolean) => Promise<boolean>;
   disabled: boolean;
   nowMs: number;
   sessionTitle: (sessionKey: string) => string | undefined;
@@ -532,9 +515,15 @@ function MemberRow(props: {
     if (!role || role.name === props.member.role || props.disabled) {
       return;
     }
-    if (await props.onChangeRole(props.member, role.name)) {
-      setEditing(false);
-      setSaved(true);
+    try {
+      if (await props.onChangeRole(props.member, role.name, role.admin)) {
+        setEditing(false);
+        setSaved(true);
+      }
+    } catch (error) {
+      if (!(error instanceof RoleClassificationChangedError)) {
+        throw error;
+      }
     }
   };
   const devices = () => props.member.devices ?? [];
@@ -689,7 +678,7 @@ export function Members(props: {
   members: Member[];
   components: ControlUiHost["components"];
   roles: Role[];
-  onChangeRole: (member: Member, role: MemberRole) => Promise<boolean>;
+  onChangeRole: (member: Member, role: MemberRole, confirmedAdmin: boolean) => Promise<boolean>;
   invites: Invite[];
   ownerDevices: OwnerDevice[];
   onRemoveDevice: (member: Member, device: MemberDevice) => void;

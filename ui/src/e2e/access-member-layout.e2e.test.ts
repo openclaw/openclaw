@@ -120,13 +120,14 @@ suite.define(() => {
               admin: true,
             },
             {
-              name: "isolated",
+              name: "guest",
               defined: true,
               sessions: "none",
               requiresSandbox: true,
               admin: false,
             },
           ],
+          sandboxBackend: { backend: "docker", available: false },
           members: names.map((displayName, index) => ({
             accountId: "member-" + index,
             displayName,
@@ -199,7 +200,7 @@ suite.define(() => {
         expect(await options.allTextContents()).toEqual([
           expect.stringContaining("Operator"),
           expect.stringContaining("administrator"),
-          expect.stringContaining("isolated"),
+          expect.stringContaining("guest"),
           expect.stringContaining("Viewer"),
         ]);
         expect(await options.nth(2).textContent()).toContain("Sandbox required");
@@ -209,6 +210,19 @@ suite.define(() => {
           });
           writeFileSync(path.join(suite.artifactDir, "invite-role-list.png"), frame.png);
         }
+        await page.getByRole("option", { name: /^guest/ }).click();
+        await expect
+          .poll(() => invite.textContent())
+          .toContain(
+            "Members with this role cannot run anything until a sandbox backend is set up",
+          );
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, invite, [invite], {
+            animations: "disabled",
+          });
+          writeFileSync(path.join(suite.artifactDir, "guest-sandbox-warning.png"), frame.png);
+        }
+        await invite.locator(".ocid-access__role-picker button").click();
         await page.getByRole("option", { name: /^administrator · Administrator access/ }).click();
         await invite.getByRole("button", { name: "Create invite link", exact: true }).click();
         const confirmAdmin = invite.getByRole("button", { name: "Confirm administrator invite" });
