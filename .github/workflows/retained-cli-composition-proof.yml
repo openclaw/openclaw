@@ -14,10 +14,12 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   BASE_SHA: e0dd0206412af448b324387435dd8fed6575fd7b
-  # Bound to the independently reviewed and remotely verified source commit.
-  CANDIDATE_SHA: d26d3ea3eb710ea964de48a34a5599a11fb0be49
-  SOURCE_TREE: eeef06d328ce0c6a0546b7345cb1bb35845a33e8
-  PATCH_SHA256: f53b39c6dad901216366d4b43d0bddf34e055e7e7307e3abe70553d373bd4f9a
+  # Bound to the verified two-test repair; original BEFORE is unchanged.
+  CANDIDATE_SHA: c9b2e8fb8343a7e130b65695045b0617876165e8
+  SOURCE_TREE: 7ff9fe45ba9808cbabbffee26b6e585cb4e569be
+  PATCH_SHA256: e8839d182bae30c04aa53a31f756026fbd103af0ee2c213ee74770b7c7e23774
+  REPAIR_PARENT: d26d3ea3eb710ea964de48a34a5599a11fb0be49
+  REPAIR_PATCH_SHA256: 89f8fbc4bb4c13d2a9a5e39ec20bbffd8fc72ec04fb1194206e34dccd5874ed0
   WORKFLOW_PATH: .github/workflows/retained-cli-composition-proof.yml
 jobs:
   tests:
@@ -38,6 +40,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - &bind
+        id: bind
         name: Bind reviewed source and evidence
         env:
           TARGET_SHA: ${{ inputs.target_ref }}
@@ -50,8 +53,9 @@ jobs:
           test "$TARGET_SHA" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 1
+          test "$(git rev-parse HEAD^)" = "$REPAIR_PARENT"
+          test "$(git rev-parse "$REPAIR_PARENT^")" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 2
           test -z "$(git status --porcelain)"
           git diff --name-only "$BASE_SHA" HEAD > "$evidence/changed-paths.txt"
           cat > "$evidence/expected-paths.txt" <<'PATHS'
@@ -64,6 +68,11 @@ jobs:
           cmp "$evidence/expected-paths.txt" "$evidence/changed-paths.txt"
           git diff --no-ext-diff --no-textconv --no-renames --binary --full-index "$BASE_SHA" HEAD > "$evidence/source.patch"
           echo "$PATCH_SHA256  $evidence/source.patch" | sha256sum --check --strict
+          git diff --name-only "$REPAIR_PARENT" HEAD > "$evidence/repair-paths.txt"
+          printf '%s\n' test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts > "$evidence/expected-repair-paths.txt"
+          cmp "$evidence/expected-repair-paths.txt" "$evidence/repair-paths.txt"
+          git diff --no-ext-diff --no-textconv --no-renames --binary --full-index "$REPAIR_PARENT" HEAD > "$evidence/repair.patch"
+          echo "$REPAIR_PATCH_SHA256  $evidence/repair.patch" | sha256sum --check --strict
           git ls-tree -r HEAD -- $(cat "$evidence/expected-paths.txt") > "$evidence/source-blobs.txt"
           git show "$WORKFLOW_SHA:$WORKFLOW_PATH" > "$evidence/workflow.yml"
           printf 'candidate=%s\nbase=%s\ntree=%s\npatch_sha256=%s\nworkflow=%s\nrun=%s\nattempt=%s\nlane=%s\n' "$CANDIDATE_SHA" "$BASE_SHA" "$SOURCE_TREE" "$PATCH_SHA256" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$PROOF_LANE" > "$evidence/identity.txt"
@@ -80,14 +89,17 @@ jobs:
           fi
           printf 'execution_commit=%s\nexecution_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" >> .artifacts/compiler-delegation/identity.txt
       - &setup
+        id: setup
         uses: ./.github/actions/setup-node-env
         with:
           semantic-checks: "true"
           install-bun: "false"
           cache-mode: "restore"
       - &bun
+        id: bun
         uses: ./.github/actions/setup-test-bun
       - &ripgrep
+        id: ripgrep
         uses: ./.github/actions/setup-ripgrep
       - name: BEFORE isolated regression inputs
         if: matrix.revision == 'before'
@@ -253,9 +265,11 @@ jobs:
       - *setup
       - *bun
       - *ripgrep
-      - name: Targeted lint, format, script syntax and docs sanity
+      - id: static_checks
+        name: Targeted lint, format, script syntax and docs sanity
         run: |
           set -euo pipefail
+          trap 'code=$?; if (( code == 124 || code >= 128 )); then echo stopped=true >> "$GITHUB_OUTPUT"; fi; exit "$code"' EXIT
           source scripts/ci-collect-checks.sh
           {
             run_check format node scripts/run-format.mts --check scripts/check-changed.mts scripts/ci-check-plan.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts docs/ci/local-proof.md
@@ -267,5 +281,44 @@ jobs:
             run_check patch-whitespace git diff --check "$BASE_SHA" HEAD
             finish_checks
           } 2>&1 | tee .artifacts/compiler-delegation/static.log
+      - name: Emit canonical formatting repair for exact integration
+        if: ${{ always() && !cancelled() && steps.bind.outcome == 'success' && steps.setup.outcome == 'success' && steps.bun.outcome == 'success' && steps.ripgrep.outcome == 'success' && (steps.static_checks.outcome == 'success' || steps.static_checks.outcome == 'failure') && steps.static_checks.outputs.stopped != 'true' }}
+        env:
+          OPENCLAW_FORMAT_TOOL: oxfmt
+          INPUT_CHECKS_OUTCOME: ${{ steps.static_checks.outcome }}
+        run: |
+          set -euo pipefail
+          evidence=.artifacts/compiler-delegation
+          git diff --quiet
+          mapfile -t files < "$evidence/expected-paths.txt"
+          set +e
+          node scripts/run-format.mts --write "${files[@]}" 2>&1 | tee "$evidence/formatter-write.log"
+          write_status=("${PIPESTATUS[@]}")
+          node scripts/run-format.mts --check "${files[@]}" 2>&1 | tee "$evidence/formatter-parity.log"
+          parity_status=("${PIPESTATUS[@]}")
+          set -e
+          printf 'write_exit=%s\nwrite_log_exit=%s\nparity_exit=%s\nparity_log_exit=%s\ninput_checks_outcome=%s\n' "${write_status[0]}" "${write_status[1]}" "${parity_status[0]}" "${parity_status[1]}" "$INPUT_CHECKS_OUTCOME" > "$evidence/formatter-status.txt"
+          git diff --name-only HEAD > "$evidence/formatted-paths.txt"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const read = name => fs.readFileSync('.artifacts/compiler-delegation/' + name, 'utf8').trim().split('\n').filter(Boolean);
+          const allowed = new Set(read('expected-paths.txt'));
+          for (const name of read('formatted-paths.txt')) assert(allowed.has(name), 'Unexpected formatting mutation: ' + name);
+          NODE
+          git diff --no-ext-diff --no-textconv --no-renames --binary --full-index HEAD > "$evidence/formatter.patch"
+          git diff --check
+          index="$RUNNER_TEMP/compiler-delegation-format.index"
+          GIT_INDEX_FILE="$index" git read-tree HEAD
+          GIT_INDEX_FILE="$index" git add -- "${files[@]}"
+          GIT_INDEX_FILE="$index" git write-tree > "$evidence/formatted-tree.txt"
+          GIT_INDEX_FILE="$index" git ls-files -s -- "${files[@]}" > "$evidence/formatted-blobs.txt"
+          printf 'input_commit=%s\ninput_tree=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})" > "$evidence/formatter-identity.txt"
+          mkdir -p "$evidence/formatted-source"
+          cp --parents -- "${files[@]}" "$evidence/formatted-source/"
+          test "${write_status[0]}" -eq 0
+          test "${write_status[1]}" -eq 0
+          test "${parity_status[0]}" -eq 0
+          test "${parity_status[1]}" -eq 0
       - *hashes
       - *upload
