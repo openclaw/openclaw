@@ -97,6 +97,7 @@ export async function runCoreContributionHealth(
 export async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
+  options?: { infoNoteTitle?: string },
 ): Promise<void> {
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
   const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
@@ -115,6 +116,18 @@ export async function runCoreHealthFindingNote(
   }
   recordDoctorHealthWarnings(ctx, findings);
   renderStructuredHealthFindings(ctx, findings);
+  const infoFindings = findings.filter((finding) => finding.severity === "info");
+  if (options?.infoNoteTitle && infoFindings.length > 0) {
+    const { note } = await import("../../packages/terminal-core/src/note.js");
+    note(
+      infoFindings
+        .map((finding) =>
+          finding.fixHint ? `- ${finding.message}\n  ${finding.fixHint}` : `- ${finding.message}`,
+        )
+        .join("\n"),
+      options.infoNoteTitle,
+    );
+  }
   if (
     findings.some(
       (finding) =>

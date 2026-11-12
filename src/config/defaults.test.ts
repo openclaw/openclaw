@@ -30,6 +30,7 @@ import {
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+import { validateConfigObjectRaw } from "./validation-core.js";
 
 const mocks = vi.hoisted(() => ({
   applyProviderConfigDefaultsForConfig: vi.fn(),
@@ -490,5 +491,49 @@ describe("applyModelDefaults catalog seeding", () => {
     );
     expect(model.input).toEqual(["text"]);
     expect(model.reasoning).toBe(false);
+  });
+});
+
+describe("applyModelDefaults output-token default", () => {
+  const custom = (
+    model: Partial<ModelProviderConfig["models"][number]>,
+    provider: Partial<ModelProviderConfig> = {},
+  ) => {
+    const parsed = validateConfigObjectRaw({
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://custom.example.com/v1",
+            ...provider,
+            models: [{ id: "house-model", name: "House Model", ...model }],
+          },
+        },
+      },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.issues));
+    }
+    return applyModelDefaults(parsed.config, { manifestRegistry: { plugins: [] } }).models
+      ?.providers?.custom?.models?.[0]?.maxTokens;
+  };
+
+  it.each([
+    ["an unknown window", {}, 32_768],
+    ["a large window", { contextWindow: 262_144 }, 32_768],
+    ["a 32k window", { contextWindow: 32_768 }, 16_384],
+    ["a 16k window", { contextWindow: 16_384 }, 8_192],
+    ["a window below the former default", { contextWindow: 4_096 }, 4_096],
+    ["a smaller served context", { contextWindow: 262_144, contextTokens: 32_768 }, 16_384],
+  ])("sizes the invented cap for %s", (_label, model, expected) => {
+    expect(custom(model)).toBe(expected);
+  });
+
+  it.each([
+    ["model", { maxTokens: 8_192, contextWindow: 262_144 }, {}, 8_192],
+    ["model above the default", { maxTokens: 65_536, contextWindow: 262_144 }, {}, 65_536],
+    ["provider", { contextWindow: 262_144 }, { maxTokens: 8_192 }, 8_192],
+    ["provider on a small window", { contextWindow: 32_768 }, { maxTokens: 30_000 }, 30_000],
+  ])("keeps an authored %s cap", (_label, model, provider, expected) => {
+    expect(custom(model, provider)).toBe(expected);
   });
 });
