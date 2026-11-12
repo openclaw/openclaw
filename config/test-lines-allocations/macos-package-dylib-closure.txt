@@ -1,0 +1,3 @@
+141
+# Source f817a8b3eb1175df6b4a5c38fdd93baf8187a1f2; scripts/lib/mac-swift-build.sh sparkle_framework_for_arch selects locked XCFramework artifact; scripts/package-mac-app.sh mandatory Sparkle embedding/MLX install-name repair; scripts/lib/mac-runtime-portability.mjs app-mode per-executable closure before signing/replacement.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.

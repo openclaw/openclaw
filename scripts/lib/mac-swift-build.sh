@@ -42,7 +42,14 @@ build_mlx_tts_helper() {
 }
 
 sparkle_framework_for_arch() {
-  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+  # Swift Build products do not contain binary dependencies. SwiftPM resolves
+  # the locked XCFramework into the architecture's scratch artifact directory.
+  local framework="$(build_path_for_arch "$1")/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+  if [[ ! -f "$framework/Sparkle" ]]; then
+    echo "ERROR: Required Sparkle.framework not found at $framework" >&2
+    return 1
+  fi
+  printf '%s\n' "$framework"
 }
 
 run_with_locked_swift_packages() {
