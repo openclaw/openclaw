@@ -80,6 +80,20 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
   });
 
   it.each([
+    // An escaped backtick is prose, so the speech-only block is hidden.
+    "Before \\`literal [[tts:text]]SPEECH_ONLY[[/tts:text]] after",
+    // An escaped backslash leaves the backtick free to open code.
+    "Use \\\\`[[tts:text]]literal[[/tts:text]]` here.",
+  ])("matches final parsing at every two-chunk cut: %j", (input) => {
+    const expected = extractTtsDirectiveFacts(input).cleanedText;
+    for (let cut = 0; cut <= input.length; cut += 1) {
+      const cleaner = createTtsDirectiveTextStreamCleaner();
+      const streamed = cleaner.push(input.slice(0, cut)) + cleaner.push(input.slice(cut));
+      expect(streamed + cleaner.flush(), `cut ${cut}`).toBe(expected);
+    }
+  });
+
+  it.each([
     ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
     ["Use `", "[[tts:literal", " speech]]", "` here."],
     ["Use `", "`[[tts:literal", " speech]]", "`` here."],
