@@ -53,7 +53,7 @@ export function validateScheduleTimestamp(
     const minutesAgo = Math.floor(-diffMs / ONE_MINUTE_MS);
     return {
       ok: false,
-      message: `schedule.at is in the past: ${atDate} (${minutesAgo} minutes ago). Current time: ${nowDate}`,
+      message: `schedule.at is in the past: ${atDate} (${minutesAgo} minute${minutesAgo === 1 ? "" : "s"} ago). Current time: ${nowDate}`,
     };
   }
 
