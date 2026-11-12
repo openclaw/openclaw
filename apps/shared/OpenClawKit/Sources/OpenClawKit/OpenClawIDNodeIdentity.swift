@@ -2,13 +2,11 @@ import CryptoKit
 import Foundation
 import Security
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Atomic create-if-absent storage. A missing item differs from inaccessible/corrupt storage.
 public protocol OpenClawIDNodeIdentityStore: Sendable {
     func loadOrCreateSeed() async throws -> Data
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Device-only Keychain owner for W, separate from native pairing and owner/member identities.
 public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     private let service: String
@@ -59,7 +57,6 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     }
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Swift-owned W signing material. It is never Codable and has no public seed getter.
 public struct OpenClawIDNodeIdentity: Sendable {
     private let key: Curve25519.Signing.PrivateKey
@@ -83,6 +80,7 @@ public struct OpenClawIDNodeIdentity: Sendable {
         self.key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
     }
 
+    // periphery:ignore - Used only by the opt-in native iroh build (OPENCLAW_IROH_NATIVE), which the Periphery scans do not compile.
     /// Module-only native adapter handoff. Never expose this to JSONL, configuration or diagnostics.
     func withNativeSeed<T>(_ body: (Data) async throws -> T) async rethrows -> T {
         // CryptoKit can share its key storage with rawRepresentation; wipe only an owned copy.

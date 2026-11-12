@@ -1,6 +1,5 @@
 import Foundation
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// App-private node enrollment state. Never opens or upgrades a Gateway or client-credential database.
 public enum OpenClawIDNodeStateSchema {
     public static let version: Int64 = 1
