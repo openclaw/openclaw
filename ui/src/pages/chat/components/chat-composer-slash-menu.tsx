@@ -9,6 +9,7 @@ import {
 import { t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
+import { SlashCommandTrail } from "./chat-composer-slash-menu-dom.tsx";
 import {
   getActiveSlashMenuOptionId,
   getSlashArgOptionId,
@@ -49,6 +50,7 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
     <Show when={mode()} keyed>
       {(activeMode) => (
         <ComposerMenu
+          class="slash-menu--commands"
           getTextarea={() => props.host.getTextarea()}
           id={paneDomId(props.host.paneId, "slash-menu-listbox")}
           label={t(activeMode === "args" ? "chat.commands.arguments" : "chat.commands.menu")}
@@ -113,8 +115,19 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
                           activeId={getActiveSlashMenuOptionId(state(), props.host.paneId)}
                           rows={group()[1].map(({ command, index }) => ({
                             id: getSlashCommandOptionId(props.host.paneId, command),
-                            name: `/${command.name}${command.args ? ` ${command.args}` : ""}`,
-                            description: getSlashCommandDescription(command),
+                            name: (
+                              <>
+                                /{command.name}
+                                {command.args ? (
+                                  <span class="slash-menu-args"> {command.args}</span>
+                                ) : null}
+                              </>
+                            ),
+                            description: getSlashCommandDescription(command).replace(
+                              /(?<!\.)\.$/u,
+                              "",
+                            ),
+                            trailing: <SlashCommandTrail command={command} host={props.host} />,
                             select: () => props.menu.selectCommand(command, props.host),
                             hover: () => props.menu.hover(index),
                           }))}

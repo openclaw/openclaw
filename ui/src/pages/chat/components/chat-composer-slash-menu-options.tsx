@@ -2,7 +2,7 @@ import { For } from "solid-js";
 import { sessionIconMask } from "../../../components/solid/icon.tsx";
 import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
 import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
-import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.tsx";
+import { renderSlashMatchedName, SlashCommandTrail } from "./chat-composer-slash-menu-dom.tsx";
 import {
   getSlashArgOptionId,
   getSlashCommandOptionId,
@@ -32,7 +32,7 @@ export function SlashMenuOptions(props: {
                 childProps.command.source === "skill"
                   ? "pencilSparkles"
                   : (childProps.command.icon ?? "terminal"),
-                1.5,
+                1.6,
               ),
             }}
           />
@@ -46,6 +46,7 @@ export function SlashMenuOptions(props: {
           </>
         }
         description={getSlashCommandDescription(childProps.command).replace(/(?<!\.)\.$/u, "")}
+        trailing={<SlashCommandTrail command={childProps.command} host={props.host} />}
       />
     );
   }
@@ -73,7 +74,7 @@ export function SlashArgumentOptions(props: { menu: SlashMenuState; host: SlashM
               class="session-css-icon"
               aria-hidden="true"
               style={{
-                "mask-image": sessionIconMask(state().slashMenuCommand?.icon ?? "terminal", 1.5),
+                "mask-image": sessionIconMask(state().slashMenuCommand?.icon ?? "terminal", 1.6),
               }}
             />
           }

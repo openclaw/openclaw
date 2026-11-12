@@ -9,8 +9,9 @@ const ComposerMenuPointer = createContext<((event: PointerEvent) => boolean) | n
 export function ComposerMenuLoadingRows(props: {
   rows: readonly {
     id: string;
-    name: string;
+    name: JSX.Element;
     description?: string;
+    trailing?: JSX.Element;
     select: () => void;
     hover: () => void;
   }[];
@@ -42,6 +43,7 @@ export function ComposerMenuLoadingRows(props: {
                 <span style={{ opacity: 0 }}>{row().description}</span>
               </span>
             }
+            trailing={row().trailing}
           />
         )}
       </For>
@@ -104,6 +106,7 @@ export function renderComposerMenuOption(options: {
   iconHidden?: boolean;
   name: JSX.Element;
   description: JSX.Element;
+  trailing?: JSX.Element;
 }) {
   const pointerMoved = useContext(ComposerMenuPointer);
   return (
@@ -136,6 +139,7 @@ export function renderComposerMenuOption(options: {
         <span class="slash-menu-name">{options.name}</span>{" "}
         <span class="slash-menu-desc">{options.description}</span>
       </span>
+      {options.trailing}
     </div>
   );
 }
