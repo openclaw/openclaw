@@ -4,7 +4,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
-import { cliRetainedCompositionModules } from "../../src/cli/cli-entrypoint.test-support.ts";
+import {
+  cliRetainedCompositionModules,
+  cliRetainedCompositionRouteSubstitution,
+} from "../../src/cli/cli-entrypoint.test-support.ts";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
 import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
 import { createVitestWorkerFixtureGraph } from "./vitest-worker-fixture-graph.mts";
@@ -433,12 +436,15 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   // complete core worker/recovery set: runtime-selected worker names are not
   // compiler import edges. This is conservative, not a claim of minimality.
   const fixtures = {
-    retainedCliComposition: fixtureGraph.select([
-      ...Object.values(cliRetainedCompositionModules).map((name) => legacyOutputPrefix + "src/" + name),
-      ...runtimeProcessCoreEntrypoints.map((processEntry) => processEntry.distWorkerPath),
-      managedHandoffRuntimeEntrypoint.distWorkerPath,
-      packageActivationRuntimeEntrypoint.distWorkerPath,
-    ]),
+    retainedCliComposition: fixtureGraph.select(
+      [
+        ...Object.values(cliRetainedCompositionModules).map((name) => legacyOutputPrefix + "src/" + name),
+        ...runtimeProcessCoreEntrypoints.map((processEntry) => processEntry.distWorkerPath),
+        managedHandoffRuntimeEntrypoint.distWorkerPath,
+        packageActivationRuntimeEntrypoint.distWorkerPath,
+      ],
+      [cliRetainedCompositionRouteSubstitution.outputPath],
+    ),
   };
   const manifest = await writeVitestWorkerManifest(directory, inputs, outputs, started, { fixtures });
   reportPhase("compiler outputs verified");

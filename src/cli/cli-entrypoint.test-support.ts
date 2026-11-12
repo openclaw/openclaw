@@ -138,6 +138,14 @@ export const cliRetainedCompositionModules = {
   workerGeneration: "infra/runtime-worker-generation.js",
 } as const;
 
+// This import-free dispatch replacement is also a terminal node in the compiler's
+// composition closure. Keep its exact output identity and bytes with that contract.
+export const cliRetainedCompositionRouteSubstitution = {
+  outputPath: "legacy-finalizer/src/cli/route.js",
+  source:
+    "export async function tryRouteCli() { await globalThis.__openclawRetainedCompositionCommand(); return true; }\n",
+} as const;
+
 // The composition fixture preserves real CLI/finalizer module identities.
 export const cliRetainedCompositionEntrypoint = {
   currentModuleUrl: import.meta.url,

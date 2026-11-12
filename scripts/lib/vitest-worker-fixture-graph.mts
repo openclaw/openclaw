@@ -15,7 +15,13 @@ export function createVitestWorkerFixtureGraph(outDir: string) {
         assets.add(normalize(name));
       }
     },
-    select(roots: readonly string[]): string[] {
+    select(roots: readonly string[], substitutedChunks: readonly string[] = []): string[] {
+      const terminal = new Set(substitutedChunks.map(normalize));
+      for (const name of terminal) {
+        if (!chunks.has(name)) {
+          throw new Error("Fixture substitution output missing: " + name);
+        }
+      }
       // Assets lack complete consumer edges in Rolldown. Keep every emitted and
       // declaration-owned asset, including package-root paths outside dist/.
       const selected = new Set(assets);
@@ -28,6 +34,11 @@ export function createVitestWorkerFixtureGraph(outDir: string) {
           throw new Error("Fixture compiler output missing: " + name);
         }
         selected.add(name);
+        // The fixture replaces this exact output with import-free source. Keep
+        // the node, but never traverse edges belonging only to its original bytes.
+        if (terminal.has(name)) {
+          return;
+        }
         for (const specifier of chunk.imports) {
           let target: string;
           let internal: boolean;

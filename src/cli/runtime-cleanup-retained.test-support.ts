@@ -8,7 +8,10 @@ import type { Worker } from "node:worker_threads";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import type { StagedPackageSwapParams } from "../infra/package-update-swap-contract.js";
-import { cliRetainedCompositionModules } from "./cli-entrypoint.test-support.js";
+import {
+  cliRetainedCompositionModules,
+  cliRetainedCompositionRouteSubstitution,
+} from "./cli-entrypoint.test-support.js";
 
 export type CliRetainedCompositionFixture = {
   root: string;
@@ -38,6 +41,8 @@ export async function copyCliRetainedCompositionGraph(params: {
   );
   const files = manifest.fixtures?.retainedCliComposition;
   assert(files, "composition requires the compiler-owned fixture graph");
+  const route = cliRetainedCompositionRouteSubstitution.outputPath;
+  assert(files.includes(route), "composition requires the declared route substitution output");
   for (const name of files) {
     const target = path.join(destination, name);
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -60,11 +65,7 @@ export async function copyCliRetainedCompositionGraph(params: {
   }
   // Only dispatch is substituted. The entrypoint, runCli, registry, retention,
   // database and every finalizer remain the actual prepared production modules.
-  const route = "legacy-finalizer/src/cli/route.js";
-  await fs.writeFile(
-    path.join(destination, route),
-    "export async function tryRouteCli() { await globalThis.__openclawRetainedCompositionCommand(); return true; }\n",
-  );
+  await fs.writeFile(path.join(destination, route), cliRetainedCompositionRouteSubstitution.source);
   // Export only relative names and digests, never compiler input paths or config.
   // This completes before child launch, outside its unchanged deadlock guard.
   const proofDirectory = process.env.OPENCLAW_RETAINED_CLI_PROOF_DIR;
