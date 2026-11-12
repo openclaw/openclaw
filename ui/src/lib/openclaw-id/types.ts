@@ -1,5 +1,8 @@
 // Response shapes of the OpenClaw ID Gateway methods (openclawId.*) the Control UI reads.
-import type { SignedStatement } from "../../../../packages/openclaw-id-protocol/src/index.ts";
+import type {
+  MemberRole,
+  SignedStatement,
+} from "../../../../packages/openclaw-id-protocol/src/index.ts";
 import type { OpenClawIdLinkPreparation } from "./link.ts";
 
 export type OpenClawIdPublication =
@@ -57,7 +60,7 @@ type OpenClawIdConnection =
     }
   | {
       kind: "member";
-      role: "operator" | "viewer";
+      role: MemberRole;
       accountId: string;
       email: string | null;
       displayName: string | null;
