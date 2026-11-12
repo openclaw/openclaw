@@ -399,6 +399,7 @@ describe("Full Access delegated chat", () => {
           sessionKey: "agent:main:main",
           operationalRunInstance,
           fullPermission: true,
+          assertAutoApproveChangesCurrent: () => {},
         },
         () =>
           callChat({
@@ -688,6 +689,7 @@ describe("Full Access delegated chat", () => {
           sessionKey: "agent:main:main",
           operationalRunInstance,
           fullPermission: true,
+          assertAutoApproveChangesCurrent: () => {},
         },
         () =>
           callChat({
@@ -740,6 +742,8 @@ describe("Full Access delegated chat", () => {
           sessionKey: "agent:main:main",
           operationalRunInstance,
           fullPermission: previousRun === "unregistered-closed",
+          assertAutoApproveChangesCurrent:
+            previousRun === "unregistered-closed" ? () => {} : undefined,
         },
         () =>
           callChat({
@@ -783,6 +787,8 @@ describe("Full Access delegated chat", () => {
             sessionKey: "agent:main:main",
             operationalRunInstance: replacementRun,
             fullPermission: previousRun !== "live-restricted",
+            assertAutoApproveChangesCurrent:
+              previousRun !== "live-restricted" ? () => {} : undefined,
           },
           () =>
             callChat({

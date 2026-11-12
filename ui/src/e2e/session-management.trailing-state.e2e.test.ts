@@ -309,6 +309,11 @@ suite.define(() => {
       );
       expect(nameBounds.x + nameBounds.width).toBeLessThanOrEqual(pinBounds.x + 1);
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
+      expect(nameBounds.width).toBeGreaterThan(0);
+      await row.locator(".sidebar-recent-session__link").tap();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(new URL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:touch-forked")).pathname);
     } finally {
       await context.close();
     }

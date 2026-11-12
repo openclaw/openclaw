@@ -131,6 +131,8 @@ export type OpenClawToolsOptions = {
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
   execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  /** Host-owned proof of the final surviving core execution surface. */
+  delegationExecAuthority?: () => "gateway-host" | undefined;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */

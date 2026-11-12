@@ -414,6 +414,7 @@ export function createAgentHarnessHostCapabilities(params: {
     return {
       options: {
         ...effectiveOptions,
+        unverifiedExecutionPolicy: true as const,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
         runtimePluginToolGrant,

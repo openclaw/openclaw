@@ -1,3 +1,4 @@
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 // Dashboard title tests cover eligibility, routing, normalization, and guarded persistence.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -95,6 +96,20 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
+    "does not generate a title from a %s wake",
+    async (_kind, userMessage) => {
+      await expect(
+        prepareDashboardSessionTitle({ cfg, agentId: "main", userMessage }),
+      ).resolves.toBeNull();
+      await expect(
+        maybeGenerateDashboardSessionTitle({ ...titleParams(), userMessage }),
+      ).resolves.toBe(false);
+      expect(mocks.generate).not.toHaveBeenCalled();
+      expect(mocks.patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes both attempts through the effective session model and auth profile", async () => {
     const entry = {

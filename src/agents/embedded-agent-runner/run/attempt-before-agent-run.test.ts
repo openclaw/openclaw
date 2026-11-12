@@ -1,3 +1,4 @@
+import type { ImageContent } from "../../../llm/types.js";
 import { describe, expect, it, vi } from "vitest";
 import type { GlobalHookRunnerRegistry } from "../../../plugins/hook-registry.types.js";
 import type {
@@ -57,6 +58,7 @@ function createInput(hooks: PluginHookRegistration[] = []) {
       hookMessages: state.messages,
       hookRunner: createHookRunner(createRegistry(hooks)),
       modelPrompt: "model prompt",
+      images: [{ type: "image", data: "synthetic-image", mimeType: "image/png" }] as ImageContent[],
       sessionManager,
       systemPrompt: "system prompt",
       withOwnedTranscriptWrite,
@@ -81,6 +83,7 @@ describe("runEmbeddedAttemptBeforeAgentRun", () => {
     const handler = vi.fn(async (event: PluginHookBeforeAgentRunEvent) => {
       const first = event.messages[0] as Extract<AgentMessage, { role: "user" }>;
       first.content = "mutated by hook";
+      event.images![0]!.data = "mutated by hook";
       return { outcome: "pass" as const };
     });
     const { input, lock, state } = createInput([
@@ -104,6 +107,7 @@ describe("runEmbeddedAttemptBeforeAgentRun", () => {
     expect(state.messages[0]).toEqual(
       expect.objectContaining({ content: [{ type: "text", text: "original prompt" }] }),
     );
+    expect(input.images[0]?.data).toBe("synthetic-image");
     expect(lock.acquisitions).toBe(0);
   });
 

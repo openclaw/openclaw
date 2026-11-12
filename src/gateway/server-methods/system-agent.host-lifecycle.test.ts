@@ -179,6 +179,7 @@ describe("openclaw.chat hosted lifecycle", () => {
         operationalRunInstance,
         approvalAuthority: authority,
         fullPermission,
+        assertAutoApproveChangesCurrent: fullPermission ? () => {} : undefined,
         gatewayContextResolver: () => liveContext,
         approvalSignals: [controller.signal],
         ...(loss === "worker" ? { workerTurnClaim } : {}),

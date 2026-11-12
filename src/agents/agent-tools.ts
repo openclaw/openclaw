@@ -47,6 +47,7 @@ import {
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { applyDelegationCapability } from "./delegation-capability.js";
+import { resolveGatewayExecAuthority } from "./execution-authority.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -427,6 +428,8 @@ function* assembleOpenClawCodingTools(
             sessionPortalTarget,
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
             sessionPermissionPolicy,
+            delegationExecAuthority: () =>
+              resolveGatewayExecAuthority(options, scheduledCoreTools, callableTools),
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
@@ -721,12 +724,12 @@ export function createOpenClawCodingTools(options?: PluginCodingToolsOptions): A
     method: "createOpenClawCodingTools",
     replacement: "await createOpenClawCodingToolsAsync()",
   });
-  return createOpenClawCodingToolsInternal(options);
+  return createOpenClawCodingToolsInternal({ ...options, unverifiedExecutionPolicy: true });
 }
 
 /** Build the SDK tool list with a fresh, source-bound exec policy. */
 export function createOpenClawCodingToolsAsync(
   options?: PluginCodingToolsOptions,
 ): Promise<AnyAgentTool[]> {
-  return createOpenClawCodingToolsInternalAsync(options);
+  return createOpenClawCodingToolsInternalAsync({ ...options, unverifiedExecutionPolicy: true });
 }

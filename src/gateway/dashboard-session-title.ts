@@ -21,6 +21,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
+import { isInternalWakeSessionTitleSource } from "../sessions/session-title-source.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
@@ -81,6 +82,9 @@ export function buildDashboardSessionTitleSource(params: {
   message: string;
   attachments?: readonly ChatAttachment[];
 }): string {
+  if (isInternalWakeSessionTitleSource(params.message)) {
+    return "";
+  }
   const visibleMessage = params.message.trim();
   const slashCommand = visibleMessage.startsWith("/");
   let source = slashCommand ? "" : visibleMessage;
@@ -132,7 +136,10 @@ export function isDashboardSessionTitleCandidate(params: {
 }): boolean {
   const sourceText = params.userMessage.trim();
   return Boolean(
-    sourceText && !sourceText.startsWith("/") && isAutoTitleSessionKey(params.sessionKey),
+    sourceText &&
+      !sourceText.startsWith("/") &&
+      !isInternalWakeSessionTitleSource(sourceText) &&
+      isAutoTitleSessionKey(params.sessionKey),
   );
 }
 

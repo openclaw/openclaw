@@ -118,3 +118,28 @@ describe("agent GitHub sandbox identity", () => {
     }
   });
 });
+
+describe("delegated persistent change approval", () => {
+  it.each([true, false, undefined])(
+    "preserves %s at global and agent scope",
+    (autoApproveChanges) => {
+      const openclaw = autoApproveChanges === undefined ? {} : { autoApproveChanges };
+      const config = {
+        tools: { openclaw },
+        agents: { entries: { main: { tools: { openclaw } } } },
+      };
+      const result = OpenClawSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.tools?.openclaw).toEqual(openclaw);
+        expect(result.data.agents?.entries?.main?.tools?.openclaw).toEqual(openclaw);
+      }
+    },
+  );
+
+  it.each(["true", 1, null])("rejects non-boolean authorization %j", (autoApproveChanges) => {
+    const tools = { openclaw: { autoApproveChanges } };
+    expect(OpenClawSchema.safeParse({ tools }).success).toBe(false);
+    expect(AgentsSchema.safeParse({ entries: { main: { tools } } }).success).toBe(false);
+  });
+});

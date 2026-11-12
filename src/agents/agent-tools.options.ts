@@ -147,6 +147,8 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** External tool construction cannot certify the final Gateway execution policy. */
+  unverifiedExecutionPolicy?: true;
   awaitSessionDiffBaseline?: () => Promise<void>;
   /** Policy-approved publication unavailable in this workspace, retained for new children. */
   inheritedPublicationToolRef?: { current?: AnyAgentTool };

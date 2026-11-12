@@ -162,13 +162,6 @@ export async function executeWorkerTurn(
       blocked = true;
     },
   };
-  const blockedResult = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
-    gateWorkerTurnInput(inputContext),
-  );
-  if (blockedResult) {
-    await releaseClaimIfOwned(params.placements, params.turnClaim);
-    return blockedResult;
-  }
   await using contextEngineAdmission = await withPluginRuntimeGenerationScope(
     preparedRuntime.snapshot,
     () =>
@@ -185,16 +178,6 @@ export async function executeWorkerTurn(
       ),
   );
   assertContextCurrent();
-  if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
-    const persisted = await recorder.persistApproved({
-      storageTarget: transcriptTarget,
-      cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
-    });
-    if (persisted) {
-      turn.onUserMessagePersisted?.(persisted.message);
-    }
-    assertContextCurrent();
-  }
   const context = await readWorkerTurnInputContext(inputContext);
   const { manager, history, userMessageAlreadyPersisted } = context;
   let baseLeafId = context.baseLeafId;
@@ -502,6 +485,25 @@ export async function executeWorkerTurn(
       isAuthorized,
       signal,
     });
+    assertActive();
+    const blockedResult = await withPluginRuntimeGenerationScope(preparedRuntime.snapshot, () =>
+      gateWorkerTurnInput(inputContext, { ...media, prompt: turn.prompt, history }),
+    );
+    if (blockedResult) {
+      await releaseClaimIfOwned(params.placements, params.turnClaim);
+      return blockedResult;
+    }
+    if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
+      const persisted = await recorder.persistApproved({
+        storageTarget: transcriptTarget,
+        cwd: params.workspace.kind === "local" ? params.workspace.path : placement.remoteWorkspaceDir,
+      });
+      if (persisted) {
+        turn.onUserMessagePersisted?.(persisted.message);
+      }
+      assertContextCurrent();
+      baseLeafId = recorder.getAdmissionReceipt()?.entryId ?? baseLeafId;
+    }
     const skillResources = await prepareSkillResourceDelivery(
       turn.skillsSnapshot,
       () => {

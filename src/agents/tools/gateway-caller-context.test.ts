@@ -37,6 +37,35 @@ import {
 } from "./gateway-caller-context.js";
 
 describe("gateway caller context wrapper", () => {
+  it("preserves every same-run automatic delegation assertion", async () => {
+    let outerActive = true;
+    let innerActive = true;
+    const outer = () => {
+      if (!outerActive) {
+        throw new Error("outer revoked");
+      }
+    };
+    const inner = () => {
+      if (!innerActive) {
+        throw new Error("inner revoked");
+      }
+    };
+    const caller = { agentId: "main", sessionKey: "agent:main:main" };
+    await withGatewayToolCallerIdentity(
+      { ...caller, assertAutoApproveChangesCurrent: outer },
+      () => withGatewayToolCallerIdentity({ ...caller, assertAutoApproveChangesCurrent: inner }, () => {
+        const assertCurrent = getGatewayToolCallerIdentity()?.assertAutoApproveChangesCurrent;
+        expect(assertCurrent).toBeDefined();
+        expect(assertCurrent).not.toThrow();
+        outerActive = false;
+        expect(assertCurrent).toThrow("outer revoked");
+        outerActive = true;
+        innerActive = false;
+        expect(assertCurrent).toThrow("inner revoked");
+      }),
+    );
+  });
+
   it("keeps prepared caller authority live through personal selection without synchronous source reads", async () => {
     const refusal = new Error("requesting session authority was revoked");
     let active = true;

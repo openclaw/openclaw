@@ -1,3 +1,4 @@
+import type { ImageContent } from "../../../llm/types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import {
@@ -30,6 +31,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
   hookMessages: AgentMessage[];
   hookRunner: BeforeAgentRunHookRunner | null;
   modelPrompt: string;
+  images?: ImageContent[];
   sessionManager: ReturnType<typeof guardSessionManager>;
   systemPrompt: string;
   withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
@@ -38,6 +40,7 @@ export async function runEmbeddedAttemptBeforeAgentRun(input: {
     input.hookRunner,
     {
       prompt: input.modelPrompt,
+      images: input.images,
       systemPrompt: input.systemPrompt,
       messages: input.hookMessages,
       channelId: input.hookContext.channelId,

@@ -562,6 +562,13 @@ const ElevatedToolsSchema = z
   })
   .optional();
 
+const OpenClawToolConfigSchema = z
+  .strictObject({
+    /** Standing delegated administration grant; false requires exact human approval. */
+    autoApproveChanges: z.boolean().optional(),
+  })
+  .optional();
+
 const MessageToolConfigSchema = z
   .strictObject({
     crossContext: z
@@ -623,6 +630,7 @@ const AgentToolsSchema = z
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
+    openclaw: OpenClawToolConfigSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
     github: GitHubToolIdentitySchema.unwrap()
       .extend({
@@ -717,6 +725,7 @@ export const ToolsSchema = z
     /** Elevated exec permissions for the host machine. */
     elevated: ElevatedToolsSchema,
     exec: ToolExecSchema,
+    openclaw: OpenClawToolConfigSchema,
     fs: ToolFsSchema,
     /** Sub-agent tool policy defaults (deny wins; progress_card is always denied). */
     subagents: NestedToolPolicySchema,

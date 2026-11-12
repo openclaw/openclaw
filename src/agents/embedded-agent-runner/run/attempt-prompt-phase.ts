@@ -255,6 +255,19 @@ export async function runEmbeddedAttemptPromptPhase(
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
     setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
+    const imageResult = await prepareEmbeddedAttemptPromptExecution({
+      mediaOwnerAgentId: sessionAgentId,
+      effectiveFsWorkspaceOnly,
+      effectiveWorkspace,
+      sandbox,
+      attempt,
+      prompt: promptContext.promptSubmission.prompt,
+      skipPromptSubmission,
+    });
+    if (runAbortController.signal.aborted) {
+      throw createAbortableError(runAbortController.signal);
+    }
+    promptAssembly.assertHostActive?.();
     const beforeAgentRunOutcome =
       attempt.operation === "settled-tool-finalization"
         ? undefined
@@ -265,6 +278,7 @@ export async function runEmbeddedAttemptPromptPhase(
             hookMessages: hookMessagesForCurrentPrompt,
             hookRunner,
             modelPrompt: promptForModel,
+            images: imageResult.images,
             sessionManager,
             systemPrompt: systemPromptForHook,
             withOwnedTranscriptWrite,
@@ -304,15 +318,6 @@ export async function runEmbeddedAttemptPromptPhase(
       }
     }
 
-    const imageResult = await prepareEmbeddedAttemptPromptExecution({
-      mediaOwnerAgentId: sessionAgentId,
-      effectiveFsWorkspaceOnly,
-      effectiveWorkspace,
-      sandbox,
-      attempt,
-      prompt: promptContext.promptSubmission.prompt,
-      skipPromptSubmission,
-    });
     const reserveTokens = settingsManager.getCompactionReserveTokens();
     const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
     let state: PromptPreflightState = {

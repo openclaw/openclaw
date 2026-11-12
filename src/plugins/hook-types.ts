@@ -1,3 +1,4 @@
+import type { ImageContent } from "../llm/types.js";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -806,6 +807,8 @@ type PluginHookBeforeInstallResult = {
 export type PluginHookBeforeAgentRunEvent = {
   /** The user's message that triggered this run. */
   prompt: string;
+  /** Prepared current-turn images. Treat this cloned content as read-only. */
+  images?: ImageContent[];
   /** Loaded session history before the current prompt is submitted. */
   messages: unknown[];
   /** Active system prompt prepared for this run. */
