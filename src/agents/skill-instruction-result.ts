@@ -120,6 +120,23 @@ export function reparentSkillInstructionDelivery(params: {
 }
 
 /**
+ * Recognises a delivered copy inside a payload that carried it as JSON.
+ *
+ * Code Mode hands the model its exec result serialized, so a body wrapped in that
+ * payload arrives with escaped newlines and quotes: `# Pond\ncomplete instructions`
+ * is present, but never as the raw multiline text. Matching only the raw body would
+ * read intact delivery as a shortened copy and drop a dedupe entry that is still
+ * valid, so the next read would serve the whole document again.
+ */
+function deliveredCopyPresent(deliveredText: string, content: string): boolean {
+  if (deliveredText.includes(content)) {
+    return true;
+  }
+  const escaped = JSON.stringify(content).slice(1, -1);
+  return escaped !== content && deliveredText.includes(escaped);
+}
+
+/**
  * Compares the copy a skill read delivered with the copy the model received and
  * drops the whole-read cache entry when a tool-result reducer shortened it.
  *
@@ -141,7 +158,7 @@ export function reconcileSkillInstructionDelivery(params: {
   const { deliveredText } = params;
   for (const record of records) {
     const intact = record.wrapped
-      ? deliveredText !== undefined && deliveredText.includes(record.content)
+      ? deliveredText !== undefined && deliveredCopyPresent(deliveredText, record.content)
       : deliveredText !== undefined && sha256Hex(deliveredText) === record.fingerprint;
     if (!intact) {
       record.forget();

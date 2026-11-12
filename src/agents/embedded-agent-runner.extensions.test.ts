@@ -380,21 +380,28 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(cacheB.size).toBe(1);
   });
 
-  // A Code Mode script prints the copy it read, so the exec output carries it verbatim.
+  // Code Mode serializes the executed tool result into the exec payload, so an
+  // intact copy reaches the hook with escaped newlines and quotes rather than as
+  // the raw multiline body.
   it.each([
-    ["shortened", 'console.log("# Pond")', 0],
-    ["intact", `console.log(${skillInstructionText})`, 1],
+    ["shortened", (payload: string) => payload.slice(0, 24), 0],
+    ["intact", (payload: string) => payload, 1],
   ])(
-    "reconciles a nested read against the exec result that carried it: %s",
-    async (label, deliveredText, expectedSize) => {
-      installMiddleware(() => ({
-        result: textToolResult(deliveredText, { kind: "text" as const, content: deliveredText }),
-      }));
+    "reconciles a nested read against the exec payload that carried it: %s",
+    async (label, deliver, expectedSize) => {
       const deliveryCache = new Map<string, Promise<boolean>>();
       const runId = `run-code-mode-${label}`;
       const nestedRead = createSkillRead(deliveryCache, runId);
-      await nestedRead.execute("call-nested", { path: skillInstructionPath });
+      const served = await nestedRead.execute("call-nested", { path: skillInstructionPath });
       expect(deliveryCache.size).toBe(1);
+
+      const execPayload = JSON.stringify({ content: served.content });
+      expect(execPayload).toContain('\\n');
+      expect(execPayload).not.toContain(skillInstructionText);
+      const deliveredText = deliver(execPayload);
+      installMiddleware(() => ({
+        result: textToolResult(deliveredText, { kind: "text" as const, content: deliveredText }),
+      }));
 
       // Code Mode reports the read under the outer exec call, so the delivery moves there.
       reparentSkillInstructionDelivery({
@@ -407,10 +414,12 @@ describe("buildEmbeddedExtensionFactories", () => {
         toolName: "exec",
         toolCallId: "call-exec",
         input: {},
-        content: [{ type: "text" as const, text: skillInstructionText }],
-        details: { kind: "text" as const, content: skillInstructionText },
+        content: [{ type: "text" as const, text: deliveredText }],
+        details: { kind: "text" as const, content: deliveredText },
       });
 
+      // An intact serialized copy must keep deduping; only a shortened or missing one
+      // re-serves the document on the next read.
       expect(deliveryCache.size).toBe(expectedSize);
     },
   );
