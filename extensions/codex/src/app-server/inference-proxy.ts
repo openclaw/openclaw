@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage } from "node:http";
-import { Writable, type Duplex } from "node:stream";
+import type { Duplex } from "node:stream";
 import {
   createDeferred,
   createPermitPool,
@@ -30,7 +30,12 @@ import {
 import {
   OVERLOAD_BODY,
   OVERLOAD_HEADERS,
+  REQUEST_TIMEOUT_MS,
+  isCodexCatalogRequest,
   rejectBusyUpgrade,
+  rejectUnsupportedHttpOperation,
+  relayCodexCatalogRequest,
+  relayHttpResponse,
   relayHeaders,
   logInferenceTransportFailure,
   type CodexInferenceTransportStage,
@@ -52,7 +57,6 @@ const MAX_ERROR_BODY_BYTES = 1024 * 1024;
 const MAX_WEBSOCKETS = 64;
 // Preserve the former 64 WS + 16 HTTP envelope; uploads no longer own response slots.
 const MAX_RESIDENTS = MAX_WEBSOCKETS + MAX_UPLOADS;
-const REQUEST_TIMEOUT_MS = 30_000;
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const IDLE_WEBSOCKET_MS = 60_000;
 
@@ -235,25 +239,9 @@ export async function createCodexInferenceProxy(
         const { target, path, query } = resolveTarget(req);
         // Discovery uses native account headers, but has no model execution or turn body.
         // Keep it separate from inference admission and host-held OAuth funding.
-        const catalog =
-          !params.oauth &&
-          req.method === "GET" &&
-          path === "/models" &&
-          [...query.keys()].every((key) => key === "client_version") &&
-          query.getAll("client_version").length <= 1 &&
-          !req.headers["transfer-encoding"] &&
-          (!req.headers["content-length"] || req.headers["content-length"] === "0");
+        const catalog = !params.oauth && isCodexCatalogRequest(req, path, query);
         if (!catalog && req.method !== "POST") {
-          // Native retries transport failures; unsupported operations cannot be fixed by retrying.
-          res.writeHead(400, { "content-type": "application/json" }).end(
-            JSON.stringify({
-              error: {
-                type: "invalid_request_error",
-                code: "unsupported_relay_operation",
-                message: "This operation is not supported by the Codex inference relay.",
-              },
-            }),
-          );
+          rejectUnsupportedHttpOperation(res);
           return;
         }
         stage = "admission";
@@ -267,28 +255,7 @@ export async function createCodexInferenceProxy(
         }
         if (catalog) {
           stage = "upstream";
-          const catalogSignal = AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
-          guarded = await fetchWithSsrFGuard({
-            url: target.toString(),
-            init: { method: "GET", headers: relayHeaders(req.headers), signal: catalogSignal },
-            signal: catalogSignal,
-            beforeRequest: assertCurrent,
-            requireHttps: true,
-            maxRedirects: 0,
-            capture: false,
-            mode: "trusted_env_proxy",
-            policy: upstreamPolicy,
-            auditContext: "codex-parent-local-catalog",
-          });
-          assertCurrent();
-          const headers = Object.fromEntries(guarded.response.headers);
-          delete headers["content-encoding"];
-          res.writeHead(guarded.response.status, relayHeaders(headers));
-          if (guarded.response.body) {
-            await guarded.response.body.pipeTo(Writable.toWeb(res), { signal: catalogSignal });
-          } else {
-            res.end();
-          }
+          await relayCodexCatalogRequest(req, res, target, upstreamPolicy, signal, assertCurrent);
           return;
         }
         releasePermit = await acquireUpload(signal, deadlineAtMs);
@@ -362,15 +329,7 @@ export async function createCodexInferenceProxy(
         }
         upload.assertCurrent();
         stage = "response";
-        // fetch decodes response content encodings. Never forward stale encoding/length headers.
-        const headers = Object.fromEntries(guarded.response.headers);
-        delete headers["content-encoding"];
-        res.writeHead(guarded.response.status, relayHeaders(headers));
-        if (!guarded.response.body) {
-          res.end();
-        } else {
-          await guarded.response.body.pipeTo(Writable.toWeb(res), { signal: upload.signal });
-        }
+        await relayHttpResponse(guarded.response, res, upload.signal);
       } catch (error) {
         // Errors can contain headers, bodies, or the private URL: never log/reflect them.
         const denied = authorizationFailure(error);
