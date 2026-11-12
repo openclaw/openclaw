@@ -1,9 +1,16 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isUpdateAdmissionAuthorityEnvKey } from "../../infra/update-admission-contract.js";
-import type { CanaryResult } from "../../infra/update-candidate-canary-commands.js";
+import type {
+  CanaryResult,
+  UpdateCandidateCanaryParams,
+} from "../../infra/update-candidate-canary-commands.js";
+import { parseUpdateRehearsalEventLine } from "../../infra/update-rehearsal-contract.js";
+import type { UpdateRunStep } from "../../infra/update-run-record.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { registerUpdateCli } from "../update-cli.js";
 
@@ -15,11 +22,12 @@ vi.mock("../../infra/update-candidate-canary.js", () => ({
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const previousExitCode = process.exitCode;
+let home: string;
 
 beforeEach(() => {
   vi.clearAllMocks();
   process.exitCode = undefined;
-  const home = dirs.make("update-preflight-");
+  home = dirs.make("update-preflight-");
   for (const key of Object.keys(process.env)) {
     if (isUpdateAdmissionAuthorityEnvKey(key)) {
       vi.stubEnv(key, undefined);
@@ -116,4 +124,150 @@ it("emits only an unverified receipt when canary cleanup fails", async () => {
     }),
   );
   expect(process.exitCode).toBe(2);
+});
+
+const rehearsalProgress: UpdateRunStep = { step: "candidate-doctor", status: "in_progress" };
+const rehearsalStep: UpdateStepResult = {
+  name: "candidate-doctor",
+  command: "doctor --fix",
+  cwd: ".",
+  durationMs: 1,
+  exitCode: 0,
+};
+
+async function rehearse(request: unknown, requestPath = path.join(home, "request.json")) {
+  await fs.writeFile(path.join(home, "request.json"), JSON.stringify(request));
+  const receipts: unknown[] = [];
+  vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+    receipts.push(parseUpdateRehearsalEventLine(String(chunk).trimEnd()));
+    return true;
+  });
+  const program = new Command().exitOverride();
+  registerUpdateCli(program);
+  await program.parseAsync(["node", "openclaw", "update", "rehearse", "--request", requestPath]);
+  return receipts;
+}
+
+it.each([
+  [{ status: "ok" }, 0],
+  [{ status: "error", reason: "doctor-failed" }, 3],
+] as const)(
+  "rehearses the updater's request and answers %o with exit %i",
+  async (outcome, code) => {
+    const result: CanaryResult = {
+      ...outcome,
+      phase: "doctor",
+      durationMs: 1,
+      logTail: [],
+      steps: [rehearsalStep],
+    };
+    canary.mockImplementation(async (params: UpdateCandidateCanaryParams) => {
+      await params.onProgress?.(rehearsalProgress);
+      await params.onStep?.(rehearsalStep);
+      return result;
+    });
+
+    const receipts = await rehearse({
+      protocol: 1,
+      config: { gateway: { port: 18789 } },
+      sourceBundledPlugins: { packageRoot: "/serving/openclaw" },
+      timeoutMs: 90_000,
+      fullIntegrityCheck: true,
+    });
+
+    // The candidate rehearses the updater's resolved source, not its own reading of the profile.
+    expect(canary).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { gateway: { port: 18789 } },
+        sourceBundledPlugins: { packageRoot: "/serving/openclaw" },
+        stateDir: path.join(home, "state"),
+        timeoutMs: 90_000,
+        fullIntegrityCheck: true,
+      }),
+    );
+    expect(receipts).toEqual([
+      { type: "progress", step: rehearsalProgress },
+      { type: "step", step: rehearsalStep },
+    ]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({ protocol: 1, result });
+    expect(process.exitCode).toBe(code);
+  },
+);
+
+it.each([
+  [
+    "inherited updater authority",
+    { protocol: 1, config: {} },
+    undefined,
+    "OPENCLAW_UPDATE_IN_PROGRESS",
+  ],
+  ["another protocol", { protocol: 2, config: {} }, undefined, undefined],
+  ["a request without a config source", { protocol: 1 }, undefined, undefined],
+  ["a relative request path", { protocol: 1, config: {} }, "request.json", undefined],
+] as const)(
+  "answers %s with no result, leaving the rehearsal to the updater",
+  async (...testCase) => {
+    const [, request, requestPath, authority] = testCase;
+    if (authority) {
+      vi.stubEnv(authority, "1");
+    }
+
+    await rehearse(request, requestPath);
+
+    expect(canary).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      protocol: 1,
+      error: "rehearsal-execution-failed",
+    });
+    expect(process.exitCode).toBe(2);
+  },
+);
+
+it.each(["candidate-checks-timeout", "candidate-snapshot-failed"] as const)(
+  "does not refuse an update over %s",
+  async (reason) => {
+    canary.mockResolvedValue({
+      status: "error",
+      reason,
+      phase: "snapshot",
+      durationMs: 1,
+      logTail: [],
+      steps: [],
+    } satisfies CanaryResult);
+
+    await rehearse({ protocol: 1, config: {} });
+
+    // No verdict: the installed updater's own checks decide.
+    expect(defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      protocol: 1,
+      error: "rehearsal-execution-failed",
+    });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`inconclusive (${reason})`),
+    );
+    expect(process.exitCode).toBe(2);
+  },
+);
+
+it("proves it is alive while a check runs longer than the updater's patience", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let finish: (result: CanaryResult) => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    canary.mockImplementation(
+      () =>
+        new Promise<CanaryResult>((settle) => {
+          finish = settle;
+          resolve();
+        }),
+    );
+  });
+  const receipts: unknown[] = [];
+  const running = rehearse({ protocol: 1, config: {} }).then((all) => receipts.push(...all));
+  await started;
+  vi.advanceTimersByTime(45_000);
+  finish({ status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [] });
+  await running;
+  vi.useRealTimers();
+
+  expect(receipts).toEqual(Array.from({ length: 3 }, () => ({ type: "heartbeat" })));
 });

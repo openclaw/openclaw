@@ -334,6 +334,14 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       await updateAdmitCommand(opts.context);
     });
 
+  setCommandJsonMode(update.command("rehearse", { hidden: true }), "output", () => true)
+    .description("Internal candidate-owned rehearsal protocol")
+    .requiredOption("--request <path>", "Absolute path to the private rehearsal request")
+    .action(async (opts: { request: string }) => {
+      const { updateRehearseCommand } = await import("./update-cli/update-command-rehearse.js");
+      await updateRehearseCommand(opts.request);
+    });
+
   setCommandJsonMode(update.command("preflight", { hidden: true }), "output", () => true)
     .description("Internal isolated candidate readiness protocol")
     .option("--json", "Output the readiness receipt as JSON", true)

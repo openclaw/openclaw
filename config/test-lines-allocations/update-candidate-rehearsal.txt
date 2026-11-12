@@ -1,0 +1,5 @@
+# Candidate-owned update rehearsal: a new two-sided protocol. The excess covers the
+# updater-side fallback table (nine invalid-result shapes), liveness and cancellation
+# timing, inconclusive candidate outcomes, and one real-subprocess case through the
+# validation entry point.
+124

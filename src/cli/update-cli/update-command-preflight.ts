@@ -15,6 +15,27 @@ import { withArtifactPreservingStateReads } from "../../state/artifact-preservin
 import { parseUpdateTimeoutMs } from "./shared.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
+/** This package inspecting the serving profile for a supervisor that granted it no authority. */
+export async function resolveCandidateInspectionContext(mode: "preflight" | "rehearsal") {
+  if (Object.keys(process.env).some(isUpdateAdmissionAuthorityEnvKey)) {
+    throw new Error(`Candidate ${mode} requires an authority-free supervisor invocation.`);
+  }
+  const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  if (!root) {
+    throw new Error("Candidate package root is unavailable.");
+  }
+  const candidateVersion = await readPackageVersion(root, { maxBytes: 1024 * 1024 });
+  if (!candidateVersion) {
+    throw new Error("Candidate package version is unavailable.");
+  }
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  env.OPENCLAW_VERSION = candidateVersion;
+  env.OPENCLAW_DEV_SOURCE_ROOT = root;
+  env.NODE_DISABLE_COMPILE_CACHE = "1";
+  delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  return { root, candidateVersion, env };
+}
+
 /** Candidate-owned inspection for external supervisors; never admits a mutable update. */
 export async function updatePreflightCommand(
   options: {
@@ -33,27 +54,13 @@ export async function updatePreflightCommand(
   process.on("SIGINT", cancel);
   process.on("SIGTERM", cancel);
   try {
-    if (Object.keys(process.env).some(isUpdateAdmissionAuthorityEnvKey)) {
-      throw new Error("Candidate preflight requires an authority-free supervisor invocation.");
-    }
-    const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-    if (!root) {
-      throw new Error("Candidate package root is unavailable.");
-    }
-    candidateVersion = await readPackageVersion(root, { maxBytes: 1024 * 1024 });
-    if (!candidateVersion) {
-      throw new Error("Candidate package version is unavailable.");
-    }
+    const { root, env, ...candidate } = await resolveCandidateInspectionContext("preflight");
+    candidateVersion = candidate.candidateVersion;
     const timeoutMs = parseUpdateTimeoutMs(options.timeout);
     const sourceRoot = options.sourceRoot;
     if (sourceRoot && !path.isAbsolute(sourceRoot)) {
       throw new Error("Candidate preflight requires an absolute source package root.");
     }
-    const env = cloneEnvWithPlatformSemantics(process.env);
-    env.OPENCLAW_VERSION = candidateVersion;
-    env.OPENCLAW_DEV_SOURCE_ROOT = root;
-    env.NODE_DISABLE_COMPILE_CACHE = "1";
-    delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const verdict = await withOwnedManagedUpdateEnv(env, () =>
       withCommandProcessScope(
         () =>

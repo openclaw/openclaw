@@ -768,6 +768,42 @@ the supervisor to fall back. It does not perform managed-service ancestry checks
 The default admission budget is 120 seconds and follows the canary timeout
 budget resolution.
 
+### Candidate-owned rehearsal
+
+Candidates that declare `openclaw.updateRehearsalProtocol: 1` in `package.json`
+rehearse themselves. After staging, the installed updater runs the candidate's
+hidden `openclaw update rehearse --request <absolute-path>` command in place of
+its own rehearsal. The candidate copies state, runs its Doctor and validation,
+and probes a private Gateway with its own logic and its own size-aware budgets,
+so a fix to those checks takes effect on the update that ships it.
+
+The request is a private file holding the configuration source the updater
+resolved, the serving package root for bundled plugin paths, and the operator's
+`--timeout` and `--full-integrity-check` choices. The candidate receives no
+update or service authority, rejects inherited authority variables, and touches
+copied state only. The previous Gateway keeps serving throughout.
+
+The candidate reports each check to the updater as it starts and finishes, and
+the updater records those steps in the run history as before. Stdout carries one
+JSON document with `protocol: 1` and the rehearsal result. Exit `0` means the
+checks passed and `3` means the candidate refuses the update; a refusal is
+binding. The candidate refuses only when its Doctor rehearsal or its private
+Gateway fails on the copied state. A check that ran out of time or a state copy
+that failed is not a refusal: the candidate returns no result, and the updater
+runs its own rehearsal. A pass grants nothing: the installed updater still owns
+drain, activation, verification, and rollback.
+
+The updater runs its own rehearsal instead when the target lacks the marker, or
+when the candidate exits with any other status, returns an invalid or
+contradictory document, or stays silent for 15 minutes. The candidate sends a
+heartbeat every 15 seconds, so that limit detects a dead or blocked candidate
+process and does not bound slow checks. The update output names the fallback
+reason. An explicit `--timeout` still ends the rehearsal.
+
+Both the installed updater and the candidate must support this. An older
+installed updater ignores the marker and runs its own rehearsal with its own
+budgets.
+
 ### External supervisor readiness
 
 Candidates that declare `openclaw.updatePreflightProtocol: 1` in `package.json`

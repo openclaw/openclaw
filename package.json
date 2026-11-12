@@ -4,6 +4,7 @@
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
+    "updateRehearsalProtocol": 1,
     "databaseEngines": [
       "sqlite",
       "postgres"

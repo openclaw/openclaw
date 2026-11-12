@@ -74,6 +74,58 @@ if (args.includes("--help")) {
   return { root, validate, snapshot, rehearsal, run };
 }
 
+it.each([
+  ["accepts the candidate's own rehearsal", 0],
+  ["runs its own rehearsal when the candidate's ends without a result", 2],
+] as const)("%s", async (_name, exitCode) => {
+  const { root, validate, snapshot, run } = await prepareValidation();
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    '{"version":"2026.9.5","type":"module","openclaw":{"updateRehearsalProtocol":1}}',
+  );
+  const entry = path.join(root, "dist", "index.js");
+  // A candidate that rehearses itself: it reads the request, reports receipts, then answers.
+  await fs.writeFile(
+    entry,
+    `import fs from "node:fs";
+if (process.argv.includes("rehearse")) {
+  const request = JSON.parse(fs.readFileSync(process.argv.at(-1), "utf8"));
+  const step = {name: "candidate-doctor", command: "doctor --fix", cwd: process.cwd(), durationMs: 1, exitCode: 0};
+  const receipt = (event) => process.stderr.write("openclaw-update-rehearsal-event: " + JSON.stringify(event) + "\\n");
+  receipt({type: "progress", step: {step: "candidate-doctor", status: "in_progress", detail: "candidate protocol " + request.protocol}});
+  receipt({type: "step", step});
+  if (${exitCode} === 0) {
+    console.log(JSON.stringify({protocol: 1, result: {status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [step], candidateSchemaVersions: {state: 7, agent: 9}}}));
+  }
+  process.exitCode = ${exitCode};
+}
+${await fs.readFile(entry, "utf8")}`,
+  );
+
+  const result = await validate();
+
+  expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+  if (exitCode === 0) {
+    // The candidate's receipt reached the run ledger.
+    const saved = await getUpdateRunAsync(run.runId, { env: run.env });
+    expect(saved?.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: "candidate-doctor", detail: "candidate protocol 1" }),
+      ]),
+    );
+    // The updater did not snapshot or check anything itself.
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(result.candidateSchemaVersions).toEqual({ state: 7, agent: 9 });
+    expect(result.steps.map(({ name }) => name)).toEqual(["candidate-doctor"]);
+  } else {
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(result.steps.map(({ name }) => name)).toContain("candidate-gateway-startup");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Candidate rehearsal did not return a valid result (exit-2)"),
+    );
+  }
+});
+
 it("preserves each size-aware check budget after a long snapshot and Doctor", async () => {
   const { validate, snapshot, rehearsal, run } = await prepareValidation(undefined, true);
   const capabilityProbe = vi.spyOn(exec, "runExec");

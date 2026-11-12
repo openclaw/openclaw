@@ -9,6 +9,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
 import { updatePreflightCommand } from "./update-cli/update-command-preflight.js";
+import { updateRehearseCommand } from "./update-cli/update-command-rehearse.js";
 
 // The real command's inspection is covered by update-command-admit tests and the published-driver cell.
 // mock-isolation: emits the SQLite budget debug line admission logs mid-inspection, then the verdict.
@@ -29,6 +30,32 @@ vi.mock("./update-cli/update-command-preflight.js", () => ({
   }),
 }));
 
+// mock-isolation: exercises early protocol routing without running a candidate rehearsal.
+vi.mock("./update-cli/update-command-rehearse.js", () => ({
+  updateRehearseCommand: vi.fn(async () => {
+    createSubsystemLogger("state/sqlite").debug("rehearsal snapshot inspection");
+    defaultRuntime.writeJson({ protocol: 1, result: { status: "ok" } });
+  }),
+}));
+
+const protocols = {
+  admit: {
+    input: "--context",
+    stdout: { protocol: 1, verdict: "admit" },
+    stderr: "[state/sqlite] SQLite read-only snapshot for /fixture/",
+  },
+  preflight: {
+    input: undefined,
+    stdout: { protocol: 1, mode: "preflight", status: "ready" },
+    stderr: "[state/sqlite] preflight snapshot inspection",
+  },
+  rehearse: {
+    input: "--request",
+    stdout: { protocol: 1, result: { status: "ok" } },
+    stderr: "[state/sqlite] rehearsal snapshot inspection",
+  },
+} as const;
+
 const initialExitCode = process.exitCode;
 const initialRouting = loggingState.forceConsoleToStderr;
 
@@ -41,7 +68,7 @@ afterEach(() => {
   resetLogger();
 });
 
-it.each(["admit", "preflight"] as const)(
+it.each(["admit", "preflight", "rehearse"] as const)(
   "keeps $0 protocol stdout separate from raised-level logs",
   async (command) => {
     for (const key of Object.keys(process.env)) {
@@ -72,7 +99,8 @@ it.each(["admit", "preflight"] as const)(
     }
     loggingState.forceConsoleToStderr = false;
     resetLogger();
-    const contextPath = path.resolve("/fixture/admission-context.json");
+    const inputPath = path.resolve("/fixture/private-input.json");
+    const { input } = protocols[command];
 
     await expect(
       tryRunUpdateAdmissionBeforeStartup(
@@ -81,22 +109,14 @@ it.each(["admit", "preflight"] as const)(
           "openclaw",
           "update",
           command,
-          ...(command === "admit" ? ["--context", contextPath] : ["--json"]),
+          ...(input ? [input, inputPath] : ["--json"]),
         ]),
       ),
     ).resolves.toBe(true);
 
-    expect(JSON.parse(stdout)).toEqual(
-      command === "admit"
-        ? { protocol: 1, verdict: "admit" }
-        : { protocol: 1, mode: "preflight", status: "ready" },
-    );
+    expect(JSON.parse(stdout)).toEqual(protocols[command].stdout);
     // CI colorizes the subsystem prefix.
-    expect(stripAnsi(stderr)).toContain(
-      command === "admit"
-        ? "[state/sqlite] SQLite read-only snapshot for /fixture/"
-        : "[state/sqlite] preflight snapshot inspection",
-    );
+    expect(stripAnsi(stderr)).toContain(protocols[command].stderr);
     expect(process.exitCode).toBe(initialExitCode);
   },
 );
@@ -151,3 +171,24 @@ it.each(["malformed", "authority"])(
     expect(process.exitCode).toBe(2);
   },
 );
+
+it.each([
+  ["a relative request path", ["--request", "request.json"], undefined],
+  ["an unknown option", ["--request", path.resolve("/fixture/request.json"), "--force"], undefined],
+  ["inherited updater authority", ["--request", path.resolve("/fixture/request.json")], "1"],
+] as const)("refuses a rehearsal with %s before startup", async (_name, args, authority) => {
+  for (const key of Object.keys(process.env)) {
+    if (isUpdateAdmissionAuthorityEnvKey(key)) {
+      vi.stubEnv(key, undefined);
+    }
+  }
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", authority);
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  await expect(
+    tryRunUpdateAdmissionBeforeStartup(
+      resolveCliArgvInvocation(["node", "openclaw", "update", "rehearse", ...args]),
+    ),
+  ).resolves.toBe(true);
+  expect(updateRehearseCommand).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(2);
+});
