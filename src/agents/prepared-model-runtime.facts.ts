@@ -26,6 +26,7 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-au
 import { prepareAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
 import { discoverModelsFromCapturedSources } from "./agent-model-discovery.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
+import { isFailedOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import {
   createBundledStaticCatalogModelResolver,
@@ -431,7 +432,17 @@ export async function prepareWorkspaceBuildGroup(
         ...new Set(
           (facts.input.config.models?.mode === "replace"
             ? []
-            : [...facts.providerIds, ...Object.keys(facts.credentials).map(normalizeProviderId)]
+            : [
+                ...facts.providerIds,
+                ...Object.keys(facts.credentials).map(normalizeProviderId),
+                // An ended sign-in keeps its account's saved rows, so its models stay known
+                // and their turns report the sign-in instead of an unknown model.
+                ...Object.values(facts.authStore.profiles).flatMap((profile) =>
+                  profile.type === "oauth" && isFailedOAuthRefreshFence(profile)
+                    ? [normalizeProviderId(profile.provider)]
+                    : [],
+                ),
+              ]
           ).flatMap((provider) => {
             const pluginId = resolvePluginModelCatalogOwnerPluginId({
               providerId: provider,

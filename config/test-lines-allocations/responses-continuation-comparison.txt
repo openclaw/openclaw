@@ -1,0 +1,2 @@
+# Continuation comparator work-count regression extends existing mutable-history coverage.
+7

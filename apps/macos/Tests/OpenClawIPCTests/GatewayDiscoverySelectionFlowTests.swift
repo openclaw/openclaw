@@ -265,7 +265,7 @@ struct GatewayDiscoverySelectionFlowTests {
         let matches = try await AppKitTestSupport.accessibilityElements(in: root).filter {
             $0.accessibilityRole?() == .button && $0.isAccessibilityEnabled?() == true &&
                 [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].compactMap(\.self).contains {
-                    $0 == title || (title == "Nearby selection fixture" && $0.contains(title))
+                    $0 == title || ((title == "Nearby" || title == "Nearby selection fixture") && $0.contains(title))
                 }
         }
         try #require(matches.count <= 1, "Ambiguous mounted button: \(title)")
