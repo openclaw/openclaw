@@ -763,7 +763,7 @@ describe("scheduled authenticated operator source", () => {
             gatewayAccessGrant: original,
           });
           permitted = false;
-          await expect(fixture.restore()).rejects.toThrow("Gateway access is not active");
+          await expect(fixture.restore()).rejects.toThrow("[access-cause=grant-revoked]");
           permitted = true;
           resume.mockClear();
           using restored = await restoreFixture(fixture);

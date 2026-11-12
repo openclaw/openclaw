@@ -1,0 +1,2 @@
+# Authenticated Gateway Add immediately publishes a paused schedule and its account.
+68
