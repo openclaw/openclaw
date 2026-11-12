@@ -71,6 +71,7 @@ import type {
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
+import type { ReadinessChecker } from "../server/readiness.js";
 import type { ConnectionSessionRows } from "../session-ancestor-references.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
@@ -291,7 +292,7 @@ type GatewayKernelContext = {
     params: ChatStartupProjectionReadParams,
   ) => Promise<ChatStartupProjectionResult | undefined>;
   getHealthCache: () => HealthSummary | null;
-  getReadiness?: import("../server/readiness.js").ReadinessChecker;
+  getReadiness?: ReadinessChecker;
   logHealth: { error: (message: string) => void };
   logGateway: SubsystemLogger;
   publishPresence: () => void;
