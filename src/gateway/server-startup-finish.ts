@@ -7,13 +7,11 @@ import {
 } from "../config/io.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { isNixMode } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import { resolveGatewayAuth } from "./auth.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -31,7 +29,7 @@ import { activateGatewayAgentDatabaseStartup } from "./server-agent-database-sta
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.js";
 import { refreshConnectedNodeSurfaceCaches } from "./server-methods/nodes.read.js";
-import { assertGatewayRuntimeSecurityConfig } from "./server-runtime-config.js";
+import { createGatewayRuntimeSecurityAssertion } from "./server-runtime-config.js";
 import { logGatewayReady } from "./server-startup-readiness.js";
 import { startGatewayTlsRenewal } from "./server-tls-renewal.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
@@ -429,20 +427,15 @@ export async function finishGatewayStartup(params: {
     .catch((error: unknown) => log.warn(`openclaw-id: start failed: ${String(error)}`));
 
   const { startManagedGatewayConfigReloader } = await import("./server-reload-managed.js");
-  const assertRuntimeSecurityConfig = (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv) => {
-    assertGatewayRuntimeSecurityConfig({
-      cfg,
-      port,
-      bindHost,
-      controlUiEnabled: opts.controlUiEnabled ?? cfg.gateway?.controlUi?.enabled ?? true,
-      tailscaleMode: runtime.tailscaleMode,
-      resolvedAuth: resolveGatewayAuth({
-        authConfig: cfg.gateway?.auth,
-        tailscaleMode: runtime.tailscaleMode,
-        env,
-      }),
-    });
-  };
+  const assertRuntimeSecurityConfig = createGatewayRuntimeSecurityAssertion({
+    port,
+    bindHost,
+    controlUiEnabled: opts.controlUiEnabled,
+    tailscaleMode: runtime.tailscaleMode,
+  });
+  // config.set/patch/apply check their candidate as a reload would, before persisting it.
+  gatewayRequestContext.assertRuntimeSecurityConfigForWrite = (config) =>
+    assertRuntimeSecurityConfig(applyFixedGatewayOverlays(config));
   const tlsRenewal = startGatewayTlsRenewal({
     scheduler: runtime.scheduler,
     runtime: gatewayTls,

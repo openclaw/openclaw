@@ -717,7 +717,7 @@ export const configHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond({
+    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond(context, {
       previousConfig: parsed.writeSnapshot.snapshot.config,
       config: parsed.config,
       respond,
@@ -886,7 +886,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const writeConfig = validatedSubmission.validationCandidate;
     const validatedConfig = validatedSubmission.config;
-    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond({
+    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond(context, {
       previousConfig: snapshot.config,
       config: validatedConfig,
       respond,
@@ -943,7 +943,7 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond({
+    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond(context, {
       previousConfig: parsed.writeSnapshot.snapshot.config,
       config: parsed.config,
       respond,

@@ -8,6 +8,7 @@ import {
   createGatewayAuthDraft,
   gatewayAuthIssue,
   gatewayAuthPatch,
+  signInAgainWith,
   stageGatewayAuthEdit,
   type GatewayAuthDraft,
 } from "./gateway-auth-draft.ts";
@@ -88,18 +89,36 @@ describe("gateway auth draft", () => {
     ).toBeNull();
   });
 
+  it("says when the browser must sign in again with a secret it only knows as saved", () => {
+    const both = { mode: "password", password: REDACTED_SENTINEL, token: REDACTED_SENTINEL };
+    expect(signInAgainWith(staged([[["mode"], "token"]], both))).toBe("token");
+    expect(
+      signInAgainWith(
+        staged(
+          [
+            [["mode"], "token"],
+            [["token"], "typed-token"],
+          ],
+          both,
+        ),
+      ),
+    ).toBeNull();
+    expect(signInAgainWith(staged([[["allowTailscale"], true]], both))).toBeNull();
+  });
+
   it("drops the draft when edits return to the saved values", () => {
     const controller = createGatewayAuthDraft({
       readCurrent: () => structuredClone(saved),
-      apply: vi.fn(async () => true),
-      failureMessage: () => "failed",
+      scope: () => 1,
+      apply: vi.fn(async () => ({ ok: true as const })),
       reconnect: vi.fn(),
+      onConnectionChanged: vi.fn(),
     });
     controller.stage(["gateway", "auth", "mode"], { value: "password" });
     flush();
-    expect(controller.draft()?.next.mode).toBe("password");
+    expect(controller.view().draft?.next.mode).toBe("password");
     controller.stage(["gateway", "auth", "mode"], { value: "token" });
     flush();
-    expect(controller.draft()).toBeNull();
+    expect(controller.view().draft).toBeNull();
   });
 });

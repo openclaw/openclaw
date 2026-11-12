@@ -1442,6 +1442,12 @@ const enSettings = {
         "How browsers and clients sign in to this Gateway. Changes here wait for Apply, so a half-finished change never signs you out.",
       mode: "Authentication mode",
       pendingDescription: "Not applied yet. The Gateway keeps its current mode until you apply.",
+      pendingSignInAgain: {
+        token:
+          "Not applied yet. After you apply, this browser signs in again with the saved token.",
+        password:
+          "Not applied yet. After you apply, this browser signs in again with the saved password.",
+      },
       token: "Gateway token",
       tokenDescription: "Shared secret clients send to connect in token mode.",
       tokenPlaceholder: "Enter a token",
@@ -1463,6 +1469,8 @@ const enSettings = {
       apply: "Apply",
       applying: "Applying…",
       applyFailed: "Authentication settings were not applied. Your current settings are unchanged.",
+      changedElsewhere:
+        "Authentication settings changed on the Gateway, so your unsaved changes were discarded. Review the current settings and try again.",
       issues: {
         tokenRequired: "Enter a token to use token authentication.",
         passwordRequired: "Enter a password to use password authentication.",

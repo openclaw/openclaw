@@ -11,94 +11,82 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import { assertGatewayAuthConfigured, resolveGatewayAuth } from "../auth.js";
-import type { RespondFn } from "./types.js";
+import { resolveGatewayAuth } from "../auth.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-/** Startup's own auth checks for one config, as a message, or null when a client can connect. */
-function gatewayAuthUnusableReason(params: {
-  config: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-}): string | null {
+type AssertRuntimeSecurity = NonNullable<
+  GatewayRequestContext["assertRuntimeSecurityConfigForWrite"]
+>;
+
+/** A token or password SecretRef whose provider has not answered yet; startup resolves it. */
+function hasPendingCredentialRef(config: OpenClawConfig, resolvedConfig: OpenClawConfig): boolean {
   const auth = resolveGatewayAuth({
-    authConfig: params.resolvedConfig.gateway?.auth,
+    authConfig: resolvedConfig.gateway?.auth,
     env: process.env,
-    tailscaleMode: params.resolvedConfig.gateway?.tailscale?.mode,
+    tailscaleMode: resolvedConfig.gateway?.tailscale?.mode,
   });
-  const authored = params.config.gateway?.auth;
-  // A SecretRef the write already resolved through its owner counts as configured.
-  if (
+  return (
     (auth.mode === "token" || auth.mode === "password") &&
     !auth[auth.mode] &&
-    resolveSecretInputRef({ value: authored?.[auth.mode] }).ref
-  ) {
-    return null;
-  }
-  try {
-    assertGatewayAuthConfigured(auth, authored);
-  } catch (error) {
-    return formatErrorMessage(error);
-  }
-  if (auth.mode === "trusted-proxy" && !params.resolvedConfig.gateway?.trustedProxies?.length) {
-    return "gateway auth mode is trusted-proxy, but gateway.trustedProxies lists no proxy IP";
-  }
-  return null;
+    Boolean(resolveSecretInputRef({ value: config.gateway?.auth?.[auth.mode] }).ref)
+  );
 }
 
 /**
- * Rejects a write that changes Gateway auth into a state nobody can connect with.
- * Startup and reload run the same checks only after the file is persisted, which
- * locks out the client that submitted it. Unrelated writes, and edits that keep an
- * already-incomplete mode (such as a runtime-generated token), stay accepted.
- * Environment credentials count (`--token` arrives as OPENCLAW_GATEWAY_TOKEN);
- * `--auth`/`--password` startup overrides are not visible here, so a file-only
- * switch that relies on them is rejected with the missing setting named.
+ * Rejects a write that changes Gateway auth into a state the serving Gateway would
+ * refuse at its next reload or restart, which locks out the client that submitted it.
+ * The Gateway's own startup and reload checks decide, so environment credentials,
+ * `--auth`/`--password` overrides, a runtime-generated token and the listener's bind
+ * all count. A refusal the saved config already had is not this write's doing: unrelated
+ * writes, and edits that leave it in place, stay accepted.
+ * Accepted edges: the checks use the current listener, so one write that changes auth
+ * together with the bind or Tailscale mode is judged against the listener it replaces;
+ * a SecretRef given as a startup override is not resolved here and does not count.
  */
 export function unusableGatewayAuthChangeError(params: {
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   /** nextConfig with SecretRefs resolved by the write's secrets preparation. */
   resolvedNextConfig: OpenClawConfig;
+  assertRuntimeSecurity: AssertRuntimeSecurity;
 }): string | null {
   const previous = params.previousConfig.gateway;
   const next = params.nextConfig.gateway;
   if (
-    isDeepStrictEqual(previous?.auth, next?.auth) &&
-    isDeepStrictEqual(previous?.trustedProxies, next?.trustedProxies)
+    (isDeepStrictEqual(previous?.auth, next?.auth) &&
+      isDeepStrictEqual(previous?.trustedProxies, next?.trustedProxies)) ||
+    hasPendingCredentialRef(params.nextConfig, params.resolvedNextConfig)
   ) {
     return null;
   }
-  const nextReason = gatewayAuthUnusableReason({
-    config: params.nextConfig,
-    resolvedConfig: params.resolvedNextConfig,
-  });
-  if (!nextReason) {
+  const refusal = (config: OpenClawConfig): string | null => {
+    try {
+      params.assertRuntimeSecurity(config);
+      return null;
+    } catch (error) {
+      return formatErrorMessage(error);
+    }
+  };
+  const reason = refusal(params.resolvedNextConfig);
+  // The saved config is unresolved here: its SecretRef credential works at startup, so
+  // removing it must not pass as a refusal that was already there.
+  const savedReason = hasPendingCredentialRef(params.previousConfig, params.previousConfig)
+    ? null
+    : refusal(params.previousConfig);
+  if (!reason || reason === savedReason) {
     return null;
   }
-  const previousReason = gatewayAuthUnusableReason({
-    config: params.previousConfig,
-    resolvedConfig: params.previousConfig,
-  });
-  const modeOf = (config: OpenClawConfig) =>
-    resolveGatewayAuth({
-      authConfig: config.gateway?.auth,
-      env: process.env,
-      tailscaleMode: config.gateway?.tailscale?.mode,
-    }).mode;
-  if (previousReason && modeOf(params.previousConfig) === modeOf(params.nextConfig)) {
-    return null;
-  }
-  return `Gateway authentication change rejected; the current settings were kept: ${nextReason}`;
+  return `Gateway authentication change rejected; the current settings were kept: ${reason}`;
 }
 
 /**
  * Resolves the submitted config's secrets the way the Gateway will, then refuses
  * submissions whose gateway auth would leave no client able to connect.
  */
-export async function prepareConfigWriteSecretsOrRespond(params: {
-  previousConfig: OpenClawConfig;
-  config: OpenClawConfig;
-  respond: RespondFn;
-}): Promise<PreparedSecretsRuntimeSnapshot | null> {
+export async function prepareConfigWriteSecretsOrRespond(
+  context: Pick<GatewayRequestContext, "assertRuntimeSecurityConfigForWrite">,
+  params: { previousConfig: OpenClawConfig; config: OpenClawConfig; respond: RespondFn },
+): Promise<PreparedSecretsRuntimeSnapshot | null> {
   let snapshot: PreparedSecretsRuntimeSnapshot;
   try {
     snapshot = await prepareSecretsRuntimeSnapshot({
@@ -124,11 +112,15 @@ export async function prepareConfigWriteSecretsOrRespond(params: {
     );
     return null;
   }
-  const authError = unusableGatewayAuthChangeError({
-    previousConfig: params.previousConfig,
-    nextConfig: params.config,
-    resolvedNextConfig: snapshot.config,
-  });
+  const assertRuntimeSecurity = context.assertRuntimeSecurityConfigForWrite;
+  const authError =
+    assertRuntimeSecurity &&
+    unusableGatewayAuthChangeError({
+      previousConfig: params.previousConfig,
+      nextConfig: params.config,
+      resolvedNextConfig: snapshot.config,
+      assertRuntimeSecurity,
+    });
   if (authError) {
     params.respond(
       false,

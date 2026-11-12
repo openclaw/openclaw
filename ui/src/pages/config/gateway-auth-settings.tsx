@@ -105,7 +105,13 @@ export function GatewayAuthSettings(props: {
     >
       <SettingsRow
         title={t("configPage.gatewayAuth.mode")}
-        description={props.auth.staged ? t("configPage.gatewayAuth.pendingDescription") : undefined}
+        description={
+          props.auth.signInAgainWith
+            ? t(`configPage.gatewayAuth.pendingSignInAgain.${props.auth.signInAgainWith}`)
+            : props.auth.staged
+              ? t("configPage.gatewayAuth.pendingDescription")
+              : undefined
+        }
         control={
           <SettingsSelect
             aria-label={t("configPage.gatewayAuth.mode")}

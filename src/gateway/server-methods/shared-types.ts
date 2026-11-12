@@ -313,6 +313,11 @@ type GatewayKernelContext = {
     nextConfig: OpenClawConfig,
     previousConfig: OpenClawConfig,
   ) => void;
+  /**
+   * Throws when startup or reload would refuse this config on the serving listener,
+   * with the Gateway's startup overrides (`--auth`, `--password`, Tailscale) applied.
+   */
+  assertRuntimeSecurityConfigForWrite?: (config: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
