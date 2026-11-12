@@ -378,6 +378,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/tools-invoke-authorization.test.ts",
   "src/gateway/tools-invoke-http.abort.test.ts",
   "src/gateway/tools-invoke-http.test.ts",
+  "src/gateway/trusted-proxy-git-coauthor.admission.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
   "src/gateway/update-recovery-cleanup.authority.integration.test.ts",
   "src/gateway/update-recovery-cleanup.destinations.integration.test.ts",
