@@ -47,14 +47,122 @@ describe("show_widget current-channel presentation", () => {
         title: "Status",
         receipt: { primaryPlatformMessageId: "message-1" },
       },
-      text: "Widget presented in the current channel as message message-1",
+      text: "Widget presented in the current channel as message message-1. The user sees it; do not restate its contents in text.",
     });
     expect(present).toHaveBeenCalledExactlyOnceWith({
-      document: { kind: "html", html: buildWidgetDocument("Status", "<p>ready</p>") },
+      document: {
+        kind: "html",
+        html: buildWidgetDocument("Status", "<p>ready</p>"),
+        source: "<p>ready</p>",
+      },
       title: "Status",
+      name: "status",
       context,
     });
     await expectNoDocument();
+  });
+
+  describe("channel-owned widget runtime", () => {
+    const receipt = {
+      primaryPlatformMessageId: "42",
+      platformMessageIds: ["42"],
+      parts: [],
+      sentAt: 1,
+    };
+    const channelPresenter = (present: Parameters<typeof currentPresenter>[0]) =>
+      currentPresenter(present, {
+        capabilities: {
+          sourceKinds: ["html"],
+          authoringGuidance: "CHANNEL-RULES: draw from TelegramWidget.chatData.",
+          state: { maxBytes: 8, description: "STATE-DOC" },
+        },
+      });
+
+    it("replaces browser-host rules with the channel's rules and exposes state", () => {
+      const tool = createTool({
+        inlineClientAvailable: false,
+        presenters: [channelPresenter(vi.fn())],
+        presenterContext: { messageChannel: "telegram" },
+      });
+      expect(tool.description).toContain("CHANNEL-RULES");
+      expect(tool.description).not.toContain("cdn.jsdelivr.net");
+      const parameters = tool.parameters as {
+        properties: Record<string, { description?: string }>;
+      };
+      expect(parameters.properties.state?.description).toBe("STATE-DOC");
+    });
+
+    it("sends a state-only update to the presenter without hosting a document", async () => {
+      const present = vi.fn(async () => ({
+        ok: true as const,
+        value: { kind: "message" as const, receipt, updated: true },
+      }));
+      const context = { messageChannel: "telegram", currentMessageId: "query-1" };
+      const tool = createTool({
+        inlineClientAvailable: false,
+        presenters: [channelPresenter(present)],
+        presenterContext: context,
+      });
+
+      expect(
+        payload(await run(tool, { title: "Vote", widget_code: undefined, state: '{"v":2}' })),
+      ).toMatchObject({
+        text: "Widget state updated in place on message 42. The user sees it; do not restate it in text.",
+      });
+      expect(present).toHaveBeenCalledExactlyOnceWith({
+        document: { kind: "html", html: "", source: "" },
+        title: "Vote",
+        name: "vote",
+        state: '{"v":2}',
+        context,
+      });
+      await expectNoDocument();
+    });
+
+    it("refuses to pin channel-native widget code to the browser dashboard", async () => {
+      const present = vi.fn();
+      const tool = createTool({
+        inlineClientAvailable: false,
+        presenters: [channelPresenter(present)],
+        presenterContext: { messageChannel: "telegram" },
+        agentSessionKey: "agent:main:main",
+      });
+      await expect(
+        run(tool, { title: "Vote", pin: true, widget_code: "<p id=o></p>" }),
+      ).rejects.toThrow(/pin=true is unavailable for this channel's widgets/);
+      expect(present).not.toHaveBeenCalled();
+      await expectNoDocument();
+    });
+
+    it("passes an explicitly empty state through as a clearing update", async () => {
+      const present = vi.fn(async () => ({
+        ok: true as const,
+        value: { kind: "message" as const, receipt, updated: true },
+      }));
+      const tool = createTool({
+        inlineClientAvailable: false,
+        presenters: [channelPresenter(present)],
+        presenterContext: { messageChannel: "telegram", currentMessageId: "query-1" },
+      });
+      await run(tool, { title: "Vote", state: "" });
+      expect(present).toHaveBeenCalledWith(expect.objectContaining({ state: "" }));
+    });
+
+    it("rejects oversized state before presenting", async () => {
+      const present = vi.fn();
+      const tool = createTool({
+        inlineClientAvailable: false,
+        presenters: [channelPresenter(present)],
+        presenterContext: { messageChannel: "telegram" },
+      });
+      await expect(run(tool, { state: "123456789" })).rejects.toThrow(/state/);
+      expect(present).not.toHaveBeenCalled();
+    });
+
+    it("rejects state on surfaces without a state-capable presenter", async () => {
+      const tool = createTool({ inlineClientAvailable: true });
+      await expect(run(tool, { state: "{}" })).rejects.toThrow("state is unavailable");
+    });
   });
   it.each(["pending", "rejected", "granted"] as const)(
     "reports the owner's %s capability outcome",

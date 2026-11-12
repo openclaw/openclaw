@@ -29,7 +29,24 @@ export function bindOwnerApprovalNotifications(gateway: ApplicationGateway) {
             void import("../../components/openclaw-id/owner-approval-dialog.tsx")
               .then(({ showOwnerApprovalDialog }) => {
                 if (!disposed) {
-                  void showOwnerApprovalDialog({ client });
+                  void showOwnerApprovalDialog({
+                    client,
+                    onDevices: () => {
+                      if (disposed) {
+                        return;
+                      }
+                      void import("../../components/openclaw-id/owner-devices-dialog.tsx")
+                        .then(({ showOwnerDevicesDialog }) =>
+                          disposed ? undefined : showOwnerDevicesDialog({ client }),
+                        )
+                        .catch((error: unknown) =>
+                          showToast({
+                            severity: "error",
+                            message: openClawIdErrorToast(error, "open"),
+                          }),
+                        );
+                    },
+                  });
                 }
               })
               .catch((error: unknown) =>
