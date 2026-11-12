@@ -515,7 +515,8 @@ actor GatewayEndpointStore {
                     guard await self.sourceIsCurrent(source, generation: generation) else { return }
                     self.setState(.unavailable(
                         mode: .remote,
-                        reason: "This Mac can’t reach its claw over OpenClaw ID yet. Check that the claw is online and that this Mac is still allowed on its Access page."))
+                        reason: "This Mac can’t reach its claw over OpenClaw ID yet. Check that the claw is online " +
+                            "and that this Mac is still allowed on its Access page."))
                 }
                 return
             }

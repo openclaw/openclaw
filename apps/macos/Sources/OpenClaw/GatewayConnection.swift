@@ -1035,12 +1035,12 @@ extension GatewayConnection {
         let activationBindingKey = self.activationBindingKeyProvider()
         let sessionBox = endpoint.openClawIDSession ??
             self.sessionProvider(browserSession == nil ? endpoint.tls : nil) ?? browserSession.map { _ in
-            WebSocketSessionBox(session: GatewayTLSPinningSession(
-                params: GatewayTLSParams(
-                    required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
-                allowsRedirects: false,
-                allowsStoredCredentials: false))
-        }
+                WebSocketSessionBox(session: GatewayTLSPinningSession(
+                    params: GatewayTLSParams(
+                        required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil),
+                    allowsRedirects: false,
+                    allowsStoredCredentials: false))
+            }
         let client = GatewayChannelActor(
             url: config.url,
             token: browserSession == nil ? config.token : nil,

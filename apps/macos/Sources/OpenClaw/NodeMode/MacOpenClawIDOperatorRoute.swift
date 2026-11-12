@@ -64,7 +64,7 @@ final class MacOpenClawIDOperatorRoute {
         authority: Authority,
         task: Task<(MacOpenClawIDOperatorLive, Resources), Error>)?
     /// Read synchronously by dashboard URL derivation, which runs off the main actor.
-    nonisolated private static let published = Mutex<(host: String, live: MacOpenClawIDOperatorLive)?>(nil)
+    private nonisolated static let published = Mutex<(host: String, live: MacOpenClawIDOperatorLive)?>(nil)
 
     init(enrollment: @escaping @MainActor () -> MacOpenClawIDOperatorEnrollment? = { nil }) {
         self.enrollment = enrollment
