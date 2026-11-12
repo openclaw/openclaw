@@ -19,9 +19,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   # Prerequisite diagnostic only; not final C/Q/P or Full Release Validation.
   BASE_SHA: 1a4aebe30bac1a4cc33410c2c4790d8dbe3ca732
-  CANDIDATE_SHA: 6d20d6026844359417e196606b19855f809de958
-  SOURCE_TREE: 04cd519cea72074d5e8a6e3bc2539cf8164cfd40
-  PATCH_SHA256: c3225ba80913b22f905db71566c1596a01c3e1cdd8a4bd9763da5d8b8e60f2d6
+  CANDIDATE_SHA: db633cbcc3c95a0ce67b5bf12e2fdcc7b0c4d618
+  SOURCE_TREE: 51e674cbb705bdd672b3fc619ea6b0fe868a626c
+  PATCH_SHA256: 48ee8fef0385741e8a719b256d00c7105cc8a5771a28ba5e27b3a7c37f2c549b
   MAIN_PROVENANCE: ff148c221cf59a377331815c632f908482bc7e77
   WORKFLOW_PATH: .github/workflows/retained-cli-composition-proof.yml
 jobs:
@@ -57,8 +57,9 @@ jobs:
           test "$TARGET_SHA" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-          test "$(git rev-parse HEAD^)" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 1
+          test "$(git rev-parse HEAD^)" = 6d20d6026844359417e196606b19855f809de958
+          test "$(git rev-parse HEAD~2)" = "$BASE_SHA"
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 2
           test -z "$(git status --porcelain)"
           git diff --name-only "$BASE_SHA" HEAD > "$evidence/changed-paths.txt"
           cat > "$evidence/expected-paths.txt" <<'PATHS'
