@@ -258,6 +258,8 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
+A turn started by `sessions_send` adopts queued passive notices, such as background exec completions, just as a channel-started turn does. Other agent-method callers retain their existing behavior.
+
 Waiting and delayed inter-session replies recover the accepted run's full answer
 instead of returning its 4,096-character lifecycle preview. If the full answer is
 unavailable under the requester's current access, inline results include
