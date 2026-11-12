@@ -66,7 +66,7 @@ it("commits a cached failure summary with its transcript row", () => {
   );
 });
 
-it("replaces the canonical failed run row with one line-icon notice and explicit actions", async () => {
+it("replaces the canonical failed run row with one system card and explicit actions", async () => {
   const summary = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
   const message = {
     role: "custom",
@@ -91,7 +91,9 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   expect(part("icon svg")).not.toBeNull();
   expect(query("details")).toBeNull();
   expect(container.textContent).not.toContain("Change model");
-  expect(part("summary")).toBeNull();
+  expect(part("summary")?.textContent).toBe(
+    "The AI service needs a short break. Please try again in a few minutes.",
+  );
   expect(part("log")?.textContent).toBe(
     "The AI service needs a short break. Please try again in a few minutes.",
   );
@@ -110,13 +112,14 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
 
 it("updates text and callbacks without closing the open details", async () => {
   const onRetry = vi.fn();
-  const item = failure("First failure\nFirst details");
+  const item = failure("First `failure`\nFirst details");
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   const host = query("openclaw-chat-run-failure-notice");
   expect(part("summary")?.textContent).toBe("First failure");
-  expect(part("log")?.textContent).toBe("First failure\nFirst details");
+  expect(part("summary code")?.textContent).toBe("failure");
+  expect(part("log")?.textContent).toBe("First `failure`\nFirst details");
   part("toggle")?.click();
-  expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
+  await waitForSolid(() => expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true"));
 
   const nextRetry = vi.fn();
   const detail = `${"Long failure ".repeat(30)}\nUpdated details`;
@@ -127,7 +130,7 @@ it("updates text and callbacks without closing the open details", async () => {
   );
   expect(query("openclaw-chat-run-failure-notice")).toBe(host);
   expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
-  expect(part("summary")).toBeNull();
+  expect(part("summary")?.textContent).toBe(detail.split("\n")[0]);
   expect(part("log")?.textContent).toBe(detail);
   retry();
   expect(onRetry).not.toHaveBeenCalled();
@@ -146,6 +149,7 @@ it.each([
   expect(query(".chat-run-failure__retry")).not.toBeNull();
   drawNotice(item, { ...recovery, ...actions });
   expect(query(".chat-run-failure__retry")).toBeNull();
+  expect(part("actions")).toBeNull();
   expect(query('button[aria-label="Copy error"]')).not.toBeNull();
 });
 
@@ -161,7 +165,7 @@ it("keeps ordinary assistant warning text as authored content", () => {
 it("shows a repeat count only for repeated failures", () => {
   const item = { ...failure("Rate-limit recovery stopped"), repeatCount: 3 };
   drawNotice(item);
-  expect(part("repeat")?.textContent).toBe("· 3 times");
+  expect(part("repeat")?.textContent?.trim()).toBe("· 3 times");
   for (const repeatCount of [1, undefined]) {
     drawNotice({ ...item, repeatCount });
     expect(part("repeat")).toBeNull();
