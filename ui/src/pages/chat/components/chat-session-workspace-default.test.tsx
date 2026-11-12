@@ -231,3 +231,119 @@ it("keeps missing metadata and disables only the unavailable download", async ()
   expect(open).toHaveBeenCalledExactlyOnceWith("missing.md", "session", undefined);
   expect(download).not.toHaveBeenCalled();
 });
+
+it.each(["changed", "read", "artifacts"] as const)(
+  "reveals default %s activity after collapsing session files, but preserves ordinary disclosure",
+  async (filter) => {
+    const listFiles = vi.fn().mockResolvedValue({
+      sessionKey: "agent:main:files",
+      files: [file("changed.md"), file("read.md", "read")],
+      browser: { path: "", entries: [] },
+    });
+    const state = createSessionWorkspaceHost({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+      client: createGatewayBrowserClientFixture({
+        request: () => ({
+          artifacts: [{ id: "report", title: "Report", type: "file", download: { mode: "bytes" } }],
+        }),
+      }),
+      sessions: createSessionCapabilityFixture({ listFiles }),
+    });
+    const props = () => createSessionWorkspaceProps(state, { expanded: true });
+    const mounted = await mountWorkspace(props());
+    const stop = sessionWorkspaceForHost(state).subscribe(() => mounted.update(props()));
+    onTestFinished(() => {
+      clearWorkspaceTimer(state.sessionWorkspaceState);
+      stop();
+      mounted.unmount();
+    });
+    await waitForSolid(() =>
+      expect(mounted.queryByRole("button", { name: "changed.md" })).not.toBeNull(),
+    );
+    const expandedPaths = [...state.sessionWorkspaceState!.tree!.expandedPaths];
+    const group = () => mounted.getByRole("button", { name: "Session files", exact: true });
+    group().click();
+    flush();
+    expect(group().getAttribute("aria-expanded")).toBe("false");
+    props().onRetry();
+    await state.sessionWorkspaceState!.readResult;
+    flush();
+    expect(group().getAttribute("aria-expanded")).toBe("false");
+    props().onSetFilter("all");
+    flush();
+    expect(group().getAttribute("aria-expanded")).toBe("false");
+    mounted.getByRole("button", { name: "Filter files: All" }).click();
+    flush();
+    const label = filter === "changed" ? "Changed" : filter === "read" ? "Read" : "Session files";
+    mounted.getByRole("menuitemradio", { name: label }).click();
+    flush();
+    expect(group().getAttribute("aria-expanded")).toBe("true");
+    expect(
+      mounted.queryByRole("button", {
+        name: filter === "changed" ? "changed.md" : filter === "read" ? "read.md" : "Report",
+        exact: true,
+      }),
+    ).not.toBeNull();
+    expect(state.sessionWorkspaceState!.tree!.expandedPaths).toEqual(expandedPaths);
+    expect(listFiles).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([undefined, "desktop"] as const)(
+  "restores the visible %s search control after incomplete-search recovery",
+  async (presentation) => {
+    const listFiles = vi.fn(async (_key: string, options?: { search?: string }) => ({
+      sessionKey: "agent:main:files",
+      files: [file("read.md", "read")],
+      browser: {
+        path: "",
+        entries: [],
+        ...(options?.search ? { search: options.search, truncated: true } : {}),
+      },
+    }));
+    const state = createSessionWorkspaceHost({
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
+      client: createGatewayBrowserClientFixture({ request: () => ({ artifacts: [] }) }),
+      sessions: createSessionCapabilityFixture({ listFiles }),
+    });
+    const props = () => createSessionWorkspaceProps(state, { expanded: true, presentation });
+    const mounted = await mountWorkspace(props());
+    const stop = sessionWorkspaceForHost(state).subscribe(() => mounted.update(props()));
+    onTestFinished(() => {
+      clearWorkspaceTimer(state.sessionWorkspaceState);
+      stop();
+      mounted.unmount();
+    });
+    await state.sessionWorkspaceState!.readResult;
+    flush();
+    if (presentation === "desktop") {
+      mounted.getByRole("button", { name: "Search files", exact: true }).click();
+      flush();
+    }
+    const input = mounted.getByRole("searchbox") as HTMLInputElement;
+    input.value = "absent";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForSolid(() =>
+      expect(mounted.queryByRole("button", { name: "Browse files" })).not.toBeNull(),
+    );
+    const recovery = mounted.getByRole("button", { name: "Browse files" });
+    recovery.focus();
+    recovery.click();
+    await state.sessionWorkspaceState!.readResult;
+    await waitForSolid(() =>
+      expect(document.activeElement).toBe(
+        presentation === undefined
+          ? input
+          : mounted.getByRole("button", { name: "Search files", exact: true }),
+      ),
+    );
+    expect(state.sessionWorkspaceState!.browserSearch).toBe("");
+    expect(state.sessionWorkspaceState!.tree!.searchOpen).toBe(false);
+    expect(mounted.queryByRole("button", { name: "Browse files" })).toBeNull();
+    expect(listFiles.mock.calls.map(([, options]) => options?.search ?? "")).toEqual([
+      "",
+      "absent",
+      "",
+    ]);
+  },
+);

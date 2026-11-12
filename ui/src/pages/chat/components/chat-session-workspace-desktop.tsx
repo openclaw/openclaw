@@ -260,7 +260,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
         searchField?.focus({ preventScroll: true });
       } else if (restoreSearchFocus) {
         restoreSearchFocus = false;
-        searchButton?.focus({ preventScroll: true });
+        (defaultCatalog() ? searchField : searchButton)?.focus({ preventScroll: true });
       }
     },
   });
