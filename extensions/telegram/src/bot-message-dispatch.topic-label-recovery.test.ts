@@ -1,6 +1,10 @@
-import { AsyncWorkScope, getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
+import {
+  AsyncWorkScope,
+  createDeferred,
+  getAsyncWorkSignal,
+} from "openclaw/plugin-sdk/concurrency-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   createBot,
   createContext,

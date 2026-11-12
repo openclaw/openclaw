@@ -391,12 +391,14 @@ describeTelegramDispatch("Telegram topic naming lifecycle", () => {
           expect((await getTopicLabelMetadata(123, 777, scope))?.name).toBe("Invoice review"),
         );
         expect(edit).toHaveBeenCalledWith(123, 777, { name: "Invoice review" });
-        const { readSessionEntryReadOnlyInWorker } =
-          await import("../../../src/config/sessions/session-entry-read-runtime.js");
-        expect(await readSessionEntryReadOnlyInWorker(target)).toMatchObject({
-          topicName: "Invoice review",
-          displayName: "Invoice review",
-        });
+        await waitForNaming(async () =>
+          expect(
+            await sdk.getSessionEntryAsync({ ...target, readConsistency: "latest" }),
+          ).toMatchObject({
+            topicName: "Invoice review",
+            displayName: "Invoice review",
+          }),
+        );
       } finally {
         release("Invoice review");
         await pending;
