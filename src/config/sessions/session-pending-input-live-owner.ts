@@ -1,8 +1,26 @@
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
+import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import type {
   SessionPendingInputWorkerFacts,
   SessionPendingInputWorkerReceipt,
 } from "./session-pending-input.types.js";
+import type { PreparedSessionMentionInvitation } from "./session-sharing-authority.types.js";
+
+/** Invitation authority belongs to the live source owner, never a collected receipt copy. */
+export function bindPendingInputMentionInvitation(
+  owner: SessionPendingInputOwner | undefined,
+  prepare: (message: PersistedUserTurnMessage) => PreparedSessionMentionInvitation | undefined,
+): void {
+  if (!owner || owner.consumed || owner.mentionInvitation) {
+    return;
+  }
+  const prepared = prepare(parseSessionPendingInputMessage(owner.messageJson));
+  if (prepared) {
+    owner.mentionInvitation = structuredClone(prepared.invitation);
+    owner.assertMentionInvitationCurrent = prepared.assertCurrent;
+  }
+}
 
 /** Worker facts delegate liveness to the host; only the host may finish custody. */
 export function hydratePendingInputWorkerOwner(
@@ -36,6 +54,7 @@ export function copySessionPendingInputWorkerFacts(
     idempotencyKey: owner.idempotencyKey,
     lifecycleGeneration: owner.lifecycleGeneration,
     messageJson: owner.messageJson,
+    mentionInvitation: owner.mentionInvitation,
     preparedAuthority:
       owner.authority || owner.sources?.some((source) => source.authority) ? true : undefined,
     ...(owner.sources ? { sources: owner.sources.map(copySessionPendingInputWorkerFacts) } : {}),

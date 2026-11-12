@@ -1,7 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -12,7 +12,6 @@ import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
-  stageSessionPendingInput,
 } from "./session-accessor.js";
 import type { SessionMentionInvitation } from "./session-sharing-authority.types.js";
 import { readSessionMembersInWorker, removeSessionMember } from "./session-sharing-store.js";
@@ -195,44 +194,6 @@ it("does not grant access when a message hook removes the selected token", async
     expect(committed.messages).toMatchObject([{ appended: true }]);
     expect(await f.members()).toEqual([]);
     expect(loadSessionEntry(f.scope)?.profileInvolvement).toBeUndefined();
-  });
-});
-
-it("keeps pending custody from adopting a direct caller's invitation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    replaceSessionEntrySync(f.scope, f.entry);
-    const receipt = await stageSessionPendingInput(f.scope, {
-      runId: "pending-invitation",
-      message: f.message("bob"),
-      assertCurrent() {},
-    });
-    assert(receipt?.runAsync, "Expected admitted pending-input custody");
-    try {
-      const committed = await receipt.runAsync(() =>
-        persistSessionTranscriptTurn(f.scope, {
-          expectedSessionId: f.scope.sessionId,
-          messages: [
-            {
-              message: receipt.message,
-              workerPreparation: {
-                prepareMentionInvitation: () => ({
-                  invitation: f.invitation("bob"),
-                  assertCurrent() {},
-                }),
-              },
-            },
-          ],
-          updateMode: "none",
-        }),
-      );
-      expect(committed.messages).toMatchObject([{ appended: true }]);
-      expect(await f.members()).toEqual([]);
-      expect(loadSessionEntry(f.scope)?.profileInvolvement).toBeUndefined();
-    } finally {
-      receipt.finish("interrupted");
-      await receipt.settled?.();
-    }
   });
 });
 

@@ -14,6 +14,10 @@
 // --task-receipts seeds one acknowledged synthetic PR per root/descendant and verifies delivery.
 // --count-membership instruments owner reads; run separately from CPU/allocation measurements.
 // --notifications --clients 65 measures participant-fact notifications (one event per turn);
+// --transcript-notifications measures metadata-only transcript notifications instead.
+// --receipt-changes inserts one receipt per turn and waits for its subscriber delivery.
+// --aa uses the baseline source for both arms as an identical-source control.
+// --large-state fills 35 GiB of real transcript pages and 62k workspace files before sampling.
 // --idle supplies the matching event-loop-only control. Iterations count events/idle turns.
 // Subscription arms install and stop their subscriptions outside each sample, so global
 // publications never exercise the other arm's watchers. Report checks separately from events.
@@ -23,7 +27,7 @@
 // Each arm acquires one physical source, then checks it at every reader's final assertion.
 // Preserve every arm, report host load, and interpret allocation-mode timing separately.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
@@ -59,6 +63,10 @@ const { values } = parseArgs({
     "count-membership": { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
     notifications: { type: "boolean", default: false },
+    "transcript-notifications": { type: "boolean", default: false },
+    "receipt-changes": { type: "boolean", default: false },
+    aa: { type: "boolean", default: false },
+    "large-state": { type: "boolean", default: false },
     idle: { type: "boolean", default: false },
     clients: { type: "string", default: "64" },
     "unrelated-churn": { type: "boolean", default: false },
@@ -80,6 +88,9 @@ assert(
   "Choose --subscribe, --subscriptions, or --notifications",
 );
 assert(!values.idle || values.notifications, "--idle requires --notifications");
+assert(!values["transcript-notifications"] || values.notifications);
+assert(!values["receipt-changes"] || (values.notifications && values["task-receipts"]));
+assert(!values.aa || values["base-owner-suffix"]);
 assert(!(values.captures && watchSubscriptions), "Choose --captures or subscription work");
 assert(
   !values["unrelated-churn"] || ((!watchSubscriptions || values.subscriptions) && !values.captures),
@@ -102,7 +113,11 @@ const sources = [
     `../../src/gateway/session-row-projection-materialize${values["base-projection-suffix"] ? suffix : ""}.ts`,
     import.meta.url,
   );
-  const ownerSuffix = values["base-projection-suffix"] ? "" : suffix;
+  const ownerSuffix = values.aa
+    ? `.${values["base-owner-suffix"]}`
+    : values["base-projection-suffix"]
+      ? ""
+      : suffix;
   const url = new URL(
     `../../src/gateway/control-ui-session-pr-read${ownerSuffix}.ts`,
     import.meta.url,
@@ -184,13 +199,14 @@ process.env = {
 const [
   { setRuntimeConfigSnapshot },
   { writeSessionEntry },
-  { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync },
+  { openOpenClawAgentDatabase, runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync },
   { closeOpenClawStateDatabaseAsync },
   { ensureProfileForEmail },
   { prepareGatewayRecipientProfile },
   { GatewayScheduler },
   { sessionChanges },
   { upsertSessionEntryCore },
+  { AsyncWorkScope },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
@@ -201,6 +217,7 @@ const [
   import("../../src/infra/gateway-scheduler.js"),
   import("../../src/sessions/session-row-changes.js"),
   import("../../src/config/sessions/session-accessor.js"),
+  import("../../src/shared/async-work-scope.js"),
 ]);
 const owners = await Promise.all(
   sources.map(async (source) => {
@@ -249,6 +266,10 @@ const observer = new PerformanceObserver((list) => {
   }
 });
 let stopNotificationArm: (() => Promise<void>) | undefined;
+let publishReceipt: (() => number) | undefined;
+let largeState:
+  | { databaseBytes: number; workspaceFiles: number; workspaceBytes: number }
+  | undefined;
 try {
   runOpenClawAgentWriteTransaction(
     (database) => {
@@ -273,6 +294,54 @@ try {
     },
     { agentId: "main" },
   );
+  if (values["large-state"]) {
+    // Offline synthetic fixture: canonical tables and allocated pages, never a sparse extension.
+    const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+    const pageSize = Number(db.prepare("PRAGMA page_size").get()!.page_size);
+    const bytes = () => Number(db.prepare("PRAGMA page_count").get()!.page_count) * pageSize;
+    const payload = JSON.stringify({
+      type: "message",
+      message: {
+        role: "toolResult",
+        content: [{ type: "text", text: randomBytes(786_432).toString("base64") }],
+      },
+    });
+    const insert = db.prepare(
+      "INSERT INTO transcript_events(session_id,seq,event_json,created_at,navigation_type,message_role) VALUES(?,?,?,1,'message','toolResult')",
+    );
+    let rows = 0;
+    db.exec("PRAGMA wal_autocheckpoint=0");
+    while (bytes() < 35 * 1024 ** 3) {
+      runOpenClawAgentWriteTransaction(
+        () => {
+          for (let index = 0; index < 128; index++, rows++) {
+            insert.run(
+              `currency-session-${rows % sessionCount}`,
+              Math.floor(rows / sessionCount) + 1,
+              payload,
+            );
+          }
+        },
+        { agentId: "main" },
+      );
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    }
+    assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    const content = Buffer.alloc(18_000, 97);
+    for (let index = 0; index < 62_000; index++) {
+      const directory = path.join(stateDir, "workspace", String(Math.floor(index / 1_000)));
+      if (index % 1_000 === 0) {
+        mkdirSync(directory, { recursive: true });
+      }
+      writeFileSync(path.join(directory, `${index}.txt`), content);
+    }
+    largeState = {
+      databaseBytes: bytes(),
+      workspaceFiles: 62_000,
+      workspaceBytes: 62_000 * content.length,
+    };
+    process.stderr.write(`${JSON.stringify({ largeState })}\n`);
+  }
   if (values["task-receipts"]) {
     const { insertRepositoryGitHubPublicationFixture } =
       await import("../../src/gateway/github-publication-store.test-support.js");
@@ -330,6 +399,22 @@ try {
       };
       row.request_digest = repositoryGitHubPublicationDigest(row);
       insertRepositoryGitHubPublicationFixture(row, () => {});
+      if (index === 0) {
+        let number = 10_000;
+        publishReceipt = () => {
+          number++;
+          const changed = {
+            ...row,
+            request_id: `currency-change-${number}`,
+            idempotency_key: `currency-change-${number}`,
+            pull_request_url: `https://github.com/synthetic/currency/pull/${number}`,
+            updated_at_ms: number,
+          };
+          changed.request_digest = repositoryGitHubPublicationDigest(changed);
+          insertRepositoryGitHubPublicationFixture(changed, () => {});
+          return number;
+        };
+      }
     }
   }
   const arms = [];
@@ -455,6 +540,8 @@ try {
     }
     if (values.notifications && owner.subscriptions) {
       const subscriptionOwner = owner.subscriptions;
+      let deliveredNumber = 0;
+      const receiptScopes = new Set<InstanceType<typeof AsyncWorkScope>>();
       const wrapped = new WeakMap<ControlUiSessionPrTarget, ControlUiSessionPrTarget>();
       const countedReads = reads.map((read): ControlUiSessionPrRead => async () => {
         const target = await read();
@@ -481,7 +568,20 @@ try {
         const subscriptions = subscriptionOwner.createControlUiSessionPullRequestSubscriptions({
           scheduler,
           getSessionRowProjection: () => projection,
-          broadcastToConnIds: () => publications++,
+          broadcastToConnIds: (_event, payload) => {
+            publications++;
+            if (values["receipt-changes"]) {
+              assert(isRecord(payload) && isRecord(payload.sessions));
+              const snapshot = payload.sessions[keyFor(0)];
+              if (isRecord(snapshot) && Array.isArray(snapshot.taskPullRequests)) {
+                for (const receipt of snapshot.taskPullRequests) {
+                  if (isRecord(receipt) && typeof receipt.number === "number") {
+                    deliveredNumber = Math.max(deliveredNumber, receipt.number);
+                  }
+                }
+              }
+            }
+          },
           isConnectionActive: () => true,
           prepareRead: async (connId) => countedReads[Number(connId)],
         });
@@ -489,9 +589,32 @@ try {
           await subscriptions.stop();
           await scheduler.stop();
         };
-        for (let index = 0; index < readerCount; index++) {
-          await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
+        // Capture the native owner during setup; instrumentation is absent from measured work.
+        // oxlint-disable-next-line typescript/unbound-method -- Proxy preserves the receiver and setup restores the method.
+        const track = AsyncWorkScope.prototype.track;
+        if (values["receipt-changes"]) {
+          receiptScopes.clear();
+          AsyncWorkScope.prototype.track = new Proxy(track, {
+            apply(target, scope: InstanceType<typeof AsyncWorkScope>, args) {
+              if (
+                /control-ui-session-pr-subscriptions(?:\.[a-z0-9-]+)?\.ts:/.test(
+                  new Error().stack?.split("\n")[2] ?? "",
+                )
+              ) {
+                receiptScopes.add(scope);
+              }
+              return Reflect.apply(target, scope, args);
+            },
+          });
         }
+        try {
+          for (let index = 0; index < readerCount; index++) {
+            await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
+          }
+        } finally {
+          AsyncWorkScope.prototype.track = track;
+        }
+        assert(!values["receipt-changes"] || receiptScopes.size === 1);
         assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
         watcherChecks = 0;
       };
@@ -501,13 +624,30 @@ try {
       };
       run = async (count) => {
         for (let index = 0; index < count; index++) {
-          if (!values.idle) {
+          if (values["receipt-changes"]) {
+            const started = performance.now();
+            const number = publishReceipt!();
+            for (;;) {
+              if (deliveredNumber >= number) {
+                break;
+              }
+              assert(performance.now() - started < 30_000, "Receipt delivery timed out");
+              await nextTurn();
+            }
+            updateDurations.push(performance.now() - started);
+            await AsyncWorkScope.runWhenAllIdle(
+              () => [...receiptScopes],
+              () => undefined,
+            );
+          } else if (!values.idle) {
             sessionChanges.emit({
               agentId: "main",
               storePath: source.path,
               sessionKey: keyFor(index % readerCount),
-              scope: "session-entry",
-              facts: { kind: "participants", projectionChanged: false },
+              scope: values["transcript-notifications"] ? "transcript" : "session-entry",
+              ...(values["transcript-notifications"]
+                ? {}
+                : { facts: { kind: "participants", projectionChanged: false } as const }),
             });
           }
           // Drain the owner's existing deferred pass, without adding a poll.
@@ -778,7 +918,7 @@ try {
     scope: values.captures
       ? "real resident row captures on Team-shaped state; no transport or whole-Gateway claim"
       : values.notifications
-        ? "real subscription-owner participant notifications or idle control; no transport or production-frequency claim"
+        ? "real subscription-owner notifications, receipt changes, or idle control; no transport or production-frequency claim"
         : values.subscribe
           ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
           : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
@@ -824,6 +964,10 @@ try {
       taskReceipts: values["task-receipts"] ? readerCount * (childrenPerRoot + 1) : 0,
       subscribe: values.subscribe,
       notifications: values.notifications,
+      transcriptNotifications: values["transcript-notifications"],
+      receiptChanges: values["receipt-changes"],
+      identicalSourceControl: values.aa,
+      largeState,
       idle: values.idle,
       unrelatedChurn: values["unrelated-churn"],
       captures: values.captures,

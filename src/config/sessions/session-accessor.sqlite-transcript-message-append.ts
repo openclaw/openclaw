@@ -550,7 +550,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
     // SAFETY: Receipt custody comes from this event's exact committed JSON after storage normalization.
     (JSON.parse(appended) as typeof event).message;
   const invitations = pending
-    ? undefined
+    ? pending.mentionInvitations
     : options.mentionInvitation
       ? [options.mentionInvitation]
       : preparedInvitation

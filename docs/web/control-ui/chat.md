@@ -792,8 +792,9 @@ large numbers, and escape sequences. Raw keeps the usual long-code preview,
 reveal control, and word wrapping.
 
 Unfinished streaming fences, invalid JSON, and JSON beyond the tree rendering
-budget stay readable as source. User-message fences and passive previews remain
-plain code without interactive controls.
+budget stay readable as source. User-message fences remain plain code that wraps
+long lines; when a line wraps, a toggle in the block's corner switches to
+horizontal scrolling and back. Passive previews have no interactive controls.
 
 ## Chat behavior
 
