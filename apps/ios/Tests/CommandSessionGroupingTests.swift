@@ -18,6 +18,51 @@ struct CommandSessionGroupingTests {
         #expect(!model.submitting)
     }
 
+    @MainActor
+    @Test(arguments: ["B", "A"], [false, true])
+    func `reorder submits session-derived groups and preserves fresh catalog entries`(
+        moving name: String, freshGroup: Bool) async throws
+    {
+        await GatewayPersistenceTestGate.shared.acquire()
+        defer { GatewayPersistenceTestGate.shared.release() }
+        try await withUserDefaults([SessionGroupStore.defaultsKey: nil]) {
+            let model = SessionGroupModel()
+            let appModel = NodeAppModel()
+            let sessions = [self.entry("uncataloged", category: "B", activity: 1)]
+            var requests: [OpenClawChatGatewayRequest] = []
+            var reads = 0
+            let connection = OpenClawSessionMenuConnection(
+                methods: ["sessions.groups.list", "sessions.groups.put"],
+                scopes: ["operator.write"],
+                isCurrent: { true },
+                request: { request in
+                    requests.append(request)
+                    if request.method == "sessions.groups.list" {
+                        reads += 1
+                        return Data((reads > 1 && freshGroup
+                            ? #"{"groups":[{"name":"A","position":0},{"name":"C","position":1}]}"#
+                            : #"{"groups":[{"name":"A","position":0}]}"#).utf8)
+                    }
+                    return Data(#"{"ok":true,"groups":[]}"#.utf8)
+                })
+            await model.refresh(appModel: appModel, connectionProvider: { _ in connection })
+            #expect(model.names(for: sessions) == ["A", "B"])
+            let offset = name == "B" ? -1 : 1
+            await model.mutate(
+                appModel: appModel,
+                request: OpenClawChatGatewayRequests.sessionGroupsPut(names: ["B", "A"]),
+                sessions: sessions,
+                catalogNames: { OpenClawChatSessionGroupCatalog.moving(name, by: offset, in: $0) },
+                fallback: { _ in Issue.record("Catalog mutation must not use the local fallback") })
+            #expect(model.failure == nil)
+            #expect(requests.map(\.method) == ["sessions.groups.list", "sessions.groups.list", "sessions.groups.put"])
+            let put = try #require(requests.last)
+            // Fresh catalog order is authoritative; session-only B is appended before moving one step.
+            let expected = freshGroup ? (name == "B" ? ["A", "B", "C"] : ["C", "A", "B"]) : ["B", "A"]
+            #expect(put.params["names"]?.value as? [String] == expected)
+        }
+    }
+
     @Test func `groups pinned categories and ungrouped in display order`() {
         let sections = CommandSessionGrouping.sections(from: [
             self.entry("ungrouped", activity: 2),

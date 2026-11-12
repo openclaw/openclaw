@@ -218,6 +218,7 @@ struct CommandSessionGroupHeader<Accessory: View>: View {
             await self.groups.mutate(
                 appModel: self.appModel,
                 request: OpenClawChatGatewayRequests.sessionGroupsPut(names: names),
+                sessions: self.sessions,
                 catalogNames: { OpenClawChatSessionGroupCatalog.moving(self.name, by: offset, in: $0) },
                 fallback: { _ in SessionGroupStore.save(names) })
             await self.refresh()

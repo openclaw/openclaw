@@ -111,6 +111,7 @@ final class SessionGroupModel {
     func mutate(
         appModel: NodeAppModel,
         request: OpenClawChatGatewayRequest,
+        sessions: [OpenClawChatSessionEntry] = [],
         catalogNames: (([String]) -> [String])? = nil,
         fallback: @escaping (OpenClawSessionMenuConnection) async throws -> Void) async
     {
@@ -135,7 +136,7 @@ final class SessionGroupModel {
                     }
                     // Same read-modify-write boundary as ChatViewModel.createSessionGroup.
                     let fresh: OpenClawChatSessionGroupsResponse = try await connection.read("sessions.groups.list")
-                    let names = OpenClawChatSessionGroupCatalog.names(catalog: fresh.groups, local: [], sessions: [])
+                    let names = OpenClawChatSessionGroupCatalog.names(catalog: fresh.groups, local: [], sessions: sessions)
                     request = OpenClawChatGatewayRequests.sessionGroupsPut(names: catalogNames(names))
                 }
                 let response = try await JSONDecoder().decode(
