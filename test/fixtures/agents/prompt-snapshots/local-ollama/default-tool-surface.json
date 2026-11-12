@@ -136,5 +136,5 @@
       }
     }
   ],
-  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nPolicy-approved MCP and client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
+  "toolSchemaDirectoryPrompt": "Available deferred-schema tools:\n- sessions_list (core): No description.\n\nDeferred MCP tools are listed in the tool_search description. Policy-approved client tools may also be discoverable through search.\nUse tool_search for a compact input signature or tool_describe for a full schema. Deferred names are not directly callable. Call dispatch_action with the result id or name in id and all tool parameters in args. Use this wrapper even when other guidance names a deferred tool directly."
 }

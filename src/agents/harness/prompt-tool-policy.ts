@@ -12,6 +12,7 @@ import { normalizeToolPolicyName } from "../tool-policy.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
   buildToolSchemaDirectoryPrompt,
+  refreshToolSearchCatalogDescription,
   restrictToolSearchCatalog,
   type ToolSearchCatalogEntry,
   type ToolSearchCatalogRef,
@@ -85,10 +86,14 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
         baselineEntries: allowedEntries,
       });
       const allowedNames = new Set(allowedTools.map((tool) => normalizeToolPolicyName(tool.name)));
-      const tools = baselineTools.filter((tool) => {
-        const name = normalizeToolPolicyName(tool.name);
-        return allowedNames.has(name) || (catalogCount > 0 && catalog.controlNames.has(name));
-      });
+      const tools = baselineTools
+        .filter((tool) => {
+          const name = normalizeToolPolicyName(tool.name);
+          return allowedNames.has(name) || (catalogCount > 0 && catalog.controlNames.has(name));
+        })
+        .map((tool) =>
+          isAgentTool(tool) ? refreshToolSearchCatalogDescription(tool, catalog.ref.current) : tool,
+        );
       catalog.ref.directOnlyToolNames = new Set(
         tools
           .filter((tool) => catalog.directOnlyToolNames?.has(tool.name))
