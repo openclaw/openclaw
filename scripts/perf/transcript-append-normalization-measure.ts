@@ -6,7 +6,9 @@
  * changed owners with git show before each arm. Run >=5 A/A and counterbalanced A/B
  * pairs externally. Separate timing, allocation, counts, and owner passes. Owner
  * Profile mode writes <output>.cpuprofile at 100 microsecond sampling. Owner
- * mode wraps normalization with threadCpuUsage/performance clocks (diagnostic overhead).
+ * mode wraps normalization with thread CPU/performance clocks (diagnostic overhead).
+ * Linux owner mode builds a tiny Node-API clock using cc and the runtime's headers:
+ * getrusage-based threadCpuUsage updates too coarsely for individual normalizations.
  * --seed-database clones an offline checkpointed synthetic DB using a required reflink;
  * --workspace reuses an offline synthetic workspace. Neither seed is modified.
  * Acceptance: identical persisted-message hash, reduced normalization visits and
@@ -19,7 +21,7 @@ import { createHash, hash } from "node:crypto";
 import { constants, existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
+import { createRequire, registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -60,6 +62,14 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 const counters: Record<string, number> = {};
 const counterKey = Symbol.for("openclaw.bench.transcript-normalization");
 Object.defineProperty(globalThis, counterKey, { value: counters, configurable: true });
+const cpuClockKey = Symbol.for("openclaw.bench.transcript-cpu-clock");
+Object.defineProperty(globalThis, cpuClockKey, {
+  value: () => {
+    const cpu = process.threadCpuUsage();
+    return (cpu.user + cpu.system) / 1000;
+  },
+  configurable: true,
+});
 const owners = [
   "src/config/sessions/transcript-json.ts",
   "src/config/sessions/transcript-json-normalize.ts",
@@ -97,15 +107,16 @@ registerHooks({
       source += `
 function normalizeTranscriptJsonValue(value, key) {
         const counters = globalThis[Symbol.for("openclaw.bench.transcript-normalization")];
-        const cpu = process.threadCpuUsage();
+        const clock = globalThis[Symbol.for("openclaw.bench.transcript-cpu-clock")];
+        const cpu = clock();
         const start = performance.now();
         try { return measuredNormalizeTranscriptJsonValue(value, key); }
         finally {
           const wallMs = performance.now() - start;
-          const used = process.threadCpuUsage(cpu);
+          const used = clock() - cpu;
           counters.calls = (counters.calls || 0) + 1;
           counters.wallMs = (counters.wallMs || 0) + wallMs;
-          counters.threadCpuMs = (counters.threadCpuMs || 0) + (used.user + used.system) / 1000;
+          counters.threadCpuMs = (counters.threadCpuMs || 0) + used;
         }
       }`;
     }
@@ -228,6 +239,22 @@ process.env.TMPDIR = path.resolve(values.scratch);
 const state = await createOpenClawTestState({ label: "transcript-append-normalization" });
 const inspector = mode === "allocation" || mode === "profile" ? new Session() : undefined;
 try {
+  if (mode === "owner" && process.platform === "linux") {
+    const clockPath = state.path("thread-cpu-clock.node");
+    execFileSync("cc", [
+      "-O2",
+      "-shared",
+      "-fPIC",
+      "-I",
+      path.resolve(path.dirname(process.execPath), "../include/node"),
+      fileURLToPath(new URL("./transcript-thread-cpu-clock.c", import.meta.url)),
+      "-o",
+      clockPath,
+    ]);
+    const clock: unknown = createRequire(import.meta.url)(clockPath);
+    assert(typeof clock === "function", "Thread CPU clock must be callable");
+    Object.defineProperty(globalThis, cpuClockKey, { value: clock, configurable: true });
+  }
   // Keep the large synthetic seed within policy; this measures append, not eviction.
   const config: OpenClawConfig = {
     session: {
@@ -347,6 +374,12 @@ try {
     scope:
       "SessionManager async append, isolated SQLite, synthetic payloads; main-isolate allocation",
     mode,
+    ...(mode === "owner"
+      ? {
+          normalizationCpuClock:
+            process.platform === "linux" ? "CLOCK_THREAD_CPUTIME_ID" : "process.threadCpuUsage",
+        }
+      : {}),
     fixture: values.fixture,
     operations,
     warmupOperations: warmup,
@@ -396,4 +429,5 @@ try {
     process.env.TMPDIR = previousTmp;
   }
   Reflect.deleteProperty(globalThis, counterKey);
+  Reflect.deleteProperty(globalThis, cpuClockKey);
 }
