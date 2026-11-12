@@ -739,6 +739,10 @@ activated build.
 This retention covers Node and Bun late imports, including CommonJS dependencies
 and JSON. Module state already loaded by the updater stays shared through cleanup;
 imports outside that retained generation continue using the active installation.
+The retained inventory preserves the running updater's Windows short-path
+spelling so its late imports keep their original module identity after package
+replacement. This requires the installed updater to contain the repair; a newer
+candidate cannot change an older updater that is already running.
 
 Source updates qualify the installed pnpm launcher outside the checkout so even
 its version probe cannot rewrite the checkout's lockfile. If another version is
