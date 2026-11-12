@@ -31,3 +31,16 @@ describe("execution purpose display", () => {
     expect(resolveExecDetail({ title: " ", command: "git status" })).toContain("check git status");
   });
 });
+
+it("keeps the execution target alongside a purpose title", () => {
+  const args = {
+    command: "node --version",
+    title: "Check runtime version",
+    host: "node",
+    node: "preview-node",
+  };
+  expect(resolveExecDetail(args)).toBe("Check runtime version, node: preview-node");
+  expect(resolveExecDetail({ ...args, command: undefined, code: "return 1" })).toBe(
+    "Check runtime version, node: preview-node",
+  );
+});

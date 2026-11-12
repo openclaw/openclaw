@@ -5,7 +5,6 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  formatToolDetail,
   isCommandBearingToolCall,
   isShellToolDisplayName,
   resolveToolDisplay,
@@ -238,17 +237,6 @@ function compactStrings(values: readonly (string | undefined | null)[]): string[
     .filter((value): value is string => Boolean(value));
 }
 
-function inferToolMeta(
-  name: string | undefined,
-  args: Record<string, unknown> | undefined,
-  detailMode: "explain" | "raw" = "explain",
-) {
-  if (!name || !args) {
-    return undefined;
-  }
-  return formatToolDetail(resolveToolDisplay({ name, args, detailMode }));
-}
-
 function buildNamedProgressLine(
   kind: ChannelProgressDraftLineKind,
   name: string | undefined,
@@ -259,6 +247,7 @@ function buildNamedProgressLine(
     commandDetailCandidate?: string;
     id?: string;
     status?: string;
+    label?: string;
   },
 ): ChannelProgressDraftLine {
   const normalizedName = name?.trim() || "tool_call";
@@ -275,7 +264,7 @@ function buildNamedProgressLine(
     ...(fields?.id ? { id: fields.id } : {}),
     kind,
     text,
-    label: display.label,
+    label: fields?.label ?? display.label,
     // Plan and approval rows keep their plain status shape.
     ...(options?.toolIcons && kind !== "plan" && kind !== "approval"
       ? { icon: PROGRESS_TOOL_GLYPHS[display.icon] }
@@ -285,6 +274,9 @@ function buildNamedProgressLine(
     toolName: display.name,
   };
   setProgressDraftLineMetadata(line, fields?.correlationKey, fields?.commandDetailCandidate);
+  if (fields?.label) {
+    line.text = getProgressDraftLineText(line);
+  }
   return line;
 }
 
@@ -455,19 +447,24 @@ export function buildChannelProgressDraftLine(
       }
       const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
       const commandBearing = isCommandBearingToolCall(input.name, input.args);
+      const display = resolveToolDisplay({
+        name: input.name,
+        args: input.args,
+        detailMode: options?.detailMode ?? "explain",
+      });
+      const { detail } = display.progress ?? display;
       return buildNamedProgressLine(
         input.event,
         input.name,
         [
-          options?.commandText !== "raw" && commandBearing
-            ? undefined
-            : inferToolMeta(input.name, input.args, options?.detailMode),
+          options?.commandText !== "raw" && commandBearing ? undefined : detail,
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
         {
           correlationKey: commandBearing ? resolveCommandProgressCorrelationKey(input) : undefined,
           id: itemId,
+          label: display.progress?.label,
         },
       );
     }
