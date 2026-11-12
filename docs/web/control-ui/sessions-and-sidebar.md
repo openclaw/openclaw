@@ -311,6 +311,11 @@ On the first identified connection, the Control UI uploads existing browser-loca
 
 When a remote project session starts before its repository finishes cloning, chat shows workspace preparation progress. If preparation fails, opening or reloading chat restores the session's failure summary. Correct the reported problem, then send a new message in the same session to retry preparation.
 
+An unrecognized Git clone or refresh failure includes a **Diagnostic ID**. Give
+that ID to the Gateway operator to find the matching `projects/clone` file-log
+entry, which retains Git's exit status and process output. Raw Git output stays
+out of the shared conversation; the diagnostic ID does not grant log access.
+
 Accepted browser messages, including initial prompts waiting for workspace
 preparation and follow-ups during a run, remain visible as normal message bubbles
 until their own turn starts, without an additional receipt notice. Inputs accepted through `sessions_send` or the
