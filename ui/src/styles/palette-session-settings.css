@@ -193,9 +193,13 @@
   height: var(--chat-composer-chip-icon);
 }
 
+/* A sunken band docked to the menu's bottom edge, like the palette's own footer. */
 .palette-session-settings__footer {
-  margin-top: 3px;
-  padding: 7px 0 3px;
+  margin: 3px -5px -5px;
+  padding: 7px 5px 8px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 11px 11px;
+  background: var(--bg-muted);
 }
 
 .palette-session-settings__remember {

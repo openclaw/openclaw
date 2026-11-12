@@ -2868,26 +2868,27 @@ select.data-table-pagination__size {
   display: flex;
   flex: 0 0 var(--cmd-palette-dock-height);
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   min-width: 0;
-  padding-inline: 6px 14px;
+  /* The switch sits as far from the side as from the top and bottom; the keys end on the
+     list's own right margin. */
+  padding-inline: 10px 18px;
 }
 
 .cmd-palette__mode-tabs {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
 }
 
 .cmd-palette__mode {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px 0 9px;
-  /* Concentric with the card: its radius minus the dock's inset. */
-  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  gap: 7px;
+  height: 32px;
+  padding: 0 14px 0 12px;
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   corner-shape: var(--chat-composer-corner-shape);
   color: var(--muted);
   font-size: 13px;
@@ -2899,8 +2900,8 @@ select.data-table-pagination__size {
 }
 
 .cmd-palette__mode svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .cmd-palette__mode:hover:not([aria-selected="true"], :disabled) {
@@ -2908,10 +2909,12 @@ select.data-table-pagination__size {
   color: var(--text-strong);
 }
 
-/* The selected pill is made of the panel's surface and edge. */
+/* The selected pill is a piece of the panel, lifted the same way. */
 .cmd-palette__mode[aria-selected="true"] {
   background: var(--chat-composer-surface);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-strong) 8%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text-strong) 6%, transparent),
+    0 1px 2px rgb(0 0 0 / 6%);
   color: var(--text-strong);
 }
 
@@ -2919,7 +2922,7 @@ select.data-table-pagination__size {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 14px;
+  gap: 18px;
   min-width: 0;
   margin-inline-start: auto;
   overflow: hidden;
@@ -2932,20 +2935,20 @@ select.data-table-pagination__size {
 .cmd-palette__hint {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
 }
 
 .cmd-palette__hint .shortcut-kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 1px;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  gap: 2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
   border: 0;
-  border-radius: calc(5px * var(--openclaw-corner-radius-scale));
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: calc(6px * var(--openclaw-corner-radius-scale));
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   box-shadow: none;
   color: var(--muted);
   font-family: inherit;
@@ -2957,7 +2960,7 @@ select.data-table-pagination__size {
 /* A phone has no keys to teach; the switch takes the whole dock. */
 @media (max-width: 560px) {
   .cmd-palette__dock {
-    padding-inline: 6px;
+    padding-inline: 8px;
   }
 
   .cmd-palette__keys {
@@ -2971,7 +2974,8 @@ select.data-table-pagination__size {
 
   .cmd-palette__mode {
     flex: 1;
-    height: 32px;
+    height: 40px;
+    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   }
 }
 
@@ -3010,9 +3014,11 @@ select.data-table-pagination__size {
   /* The composer never shrinks; this panel must, so a short card keeps its dock. */
   flex-shrink: 1;
   border: 0;
+  /* A short, soft lift: the panel rests on the dock rather than floating over it. */
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--text-strong) 6%, transparent),
-    0 1px 3px rgb(0 0 0 / 6%);
+    0 1px 2px rgb(0 0 0 / 4%),
+    0 3px 8px rgb(0 0 0 / 4%);
 }
 
 /* A light page sits close to the panel, so the dock needs one more step to read as sunken. */

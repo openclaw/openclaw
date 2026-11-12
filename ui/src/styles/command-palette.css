@@ -30,6 +30,13 @@
   overflow: hidden;
 }
 
+/* The hairline under the search field; it collapses with the results in Compose. */
+.cmd-palette__search-content::before {
+  content: "";
+  flex: 0 0 1px;
+  background: var(--border);
+}
+
 .cmd-palette--prompt .cmd-palette__search {
   grid-template-rows: 0fr;
   opacity: 0;
@@ -81,7 +88,9 @@
   max-height: min(440px, 50dvh);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px 8px 8px;
+  padding: 2px 8px 14px;
+  /* Rows fade out under the panel's rounded bottom; at the end only the padding fades. */
+  mask-image: linear-gradient(to bottom, black calc(100% - 14px), transparent);
 }
 
 .cmd-palette__group-label {
