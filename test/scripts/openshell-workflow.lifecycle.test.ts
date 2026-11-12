@@ -13,6 +13,18 @@ const fixturePath = fileURLToPath(
 );
 const namespace = "openshell-e2e-123-2";
 
+test("uses the pinned OpenShell gateway configuration schema", () => {
+  const workflow = readFileSync(workflowPath, "utf8");
+  // OpenShell 0.1.3 rejects legacy schema v1 and plural compute_drivers.
+  expect(workflow).toContain("[openshell]\n          version = 2");
+  expect(workflow).toContain('[openshell.gateway]\n          compute_driver = "docker"');
+  expect(workflow).not.toContain("compute_drivers =");
+  expect(workflow).toContain(
+    '[openshell.drivers.docker]\n          sandbox_label = "$gateway_name"',
+  );
+  expect(workflow).not.toContain('network_name = "$gateway_name"');
+});
+
 type LifecycleReport = {
   shellStatus: number;
   calls: { command: string; args: string[] }[];
