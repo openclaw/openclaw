@@ -168,8 +168,14 @@ struct OnboardingViewSmokeTests {
             let requiresSetup = managedAttachment || ["unreadable", "fresh", "fresh-recommended"].contains(scenario)
 
             #expect(!view.cliInstalled)
-            try #require(view.pageOrder == (requiresSetup ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9]))
-            #expect(view.activePageIndex(for: 2) == (requiresSetup ? view.cliPageIndex : view.aiPageIndex))
+            let expectedOrder = scenario == "remote"
+                ? [0, 1, 4, 3, 9]
+                : (requiresSetup ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9])
+            try #require(view.pageOrder == expectedOrder)
+            // Remote setup visits the remote connection page (4) before AI setup.
+            #expect(view.activePageIndex(for: 2) == (scenario == "remote"
+                    ? 4
+                    : (requiresSetup ? view.cliPageIndex : view.aiPageIndex)))
             if scenario == "fresh-recommended" {
                 #expect(view.selectedConnectionMode == .local)
                 #expect(view.isConnectionSelectionBlocking)
