@@ -12,6 +12,7 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
+import { localWorkspaceFingerprintPatch } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceMutation,
@@ -183,14 +184,7 @@ export function mutateLocalWorkspaceProjection(
               baseline_ref: mutation.manifest.resultingRoot,
               baseline_json: null,
               tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot!),
-              ...(mutation.manifest.fingerprints
-                ? {
-                    [`${mutation.manifest.fingerprints.target}_fingerprints`]: Buffer.from(
-                      mutation.manifest.fingerprints.blob,
-                      "base64",
-                    ),
-                  }
-                : {}),
+              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
             }
           : {}),
         ...(mutation.patch.source_paths_digest ? { source_paths_json: "[]" } : {}),

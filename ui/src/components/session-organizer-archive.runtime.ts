@@ -7,7 +7,12 @@ import { formatUiError } from "../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 import { customSnoozeStorageKey, rememberCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import { resolveUiSessionRowAgentId, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSessionNavigationParentKey,
+  resolveUiSessionRowAgentId,
+  isSubagentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
 import { startSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
@@ -137,6 +142,11 @@ export async function confirmSessionArchive(
         rows.push(row);
         ancestorsByKey.set(row.key, ancestors);
       }
+      // Fresh Gateway rows already carry the complete visible child keys. A
+      // leaf (including a hidden worker) needs no additional list request.
+      if (!row.childSessions?.length) {
+        continue;
+      }
       const children = await fetchChildSessionRows({
         sessions: scope.sessions,
         parentKey: row.key,
@@ -146,7 +156,18 @@ export async function confirmSessionArchive(
         return null;
       }
       const nextAncestors = persistent ? [row, ...ancestors] : ancestors;
-      pending.push(...children.map((child) => ({ row: child, ancestors: nextAncestors })));
+      // Child lists also include live control relationships. Archive follows
+      // navigation ancestry, as the sidebar does, not a foreign controller.
+      pending.push(
+        ...children
+          .filter((child) =>
+            areUiSessionKeysEquivalent(
+              resolveUiSessionNavigationParentKey(child) ?? row.key,
+              row.key,
+            ),
+          )
+          .map((child) => ({ row: child, ancestors: nextAncestors })),
+      );
     }
     if (!isCurrent()) {
       return null;

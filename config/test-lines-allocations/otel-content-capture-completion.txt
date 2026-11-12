@@ -1,0 +1,2 @@
+# Require terminal telemetry before asserting content absence.
+1

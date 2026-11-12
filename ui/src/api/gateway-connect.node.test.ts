@@ -39,6 +39,43 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
   let client: GatewayBrowserClient;
 
   it.each([
+    ["access-record-inactive", false],
+    ["profile-invalidated", false],
+    ["policy-check-failed", false],
+    ["future-cause", false],
+    ["policy-unavailable", true],
+    ["plugin-lifetime-retired", true],
+  ] as const)(
+    "handles post-hello access close %s without a reconnect loop",
+    async (cause, retry) => {
+      vi.spyOn(Math, "random").mockReturnValue(0);
+      const onClose = vi.fn();
+      const connection = await startConnect(createClient({ onClose }));
+      await acceptConnect(connection, { role: "operator", scopes: ["operator.read"] });
+      connection.ws.emitClose(
+        4001,
+        `Gateway access stopped [access-cause=${cause}]; synthetic guidance`,
+      );
+      expect(onClose).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: 4001,
+          willRetry: retry,
+          error: expect.objectContaining({
+            details: {
+              code: "OPERATOR_ACCESS_DENIED",
+              accessCause: cause === "future-cause" ? "policy-check-failed" : cause,
+            },
+          }),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(retry ? 2 : 1);
+    },
+  );
+
+  it.each([
     { code: "PROTOCOL_MISMATCH" },
     { minProtocol: PROTOCOL_VERSION + 1, maxProtocol: PROTOCOL_VERSION + 2 },
     { minProtocol: 1, maxProtocol: MIN_CLIENT_PROTOCOL_VERSION - 1 },

@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import { hasKnownPricing } from "../../model-catalog/pricing.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { hasAuthoredProviderModelCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
@@ -17,8 +19,8 @@ import {
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "../prepared-model-runtime.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
+import { AuthStorage } from "../sessions/auth-storage.core.js";
+import { ModelRegistry } from "../sessions/model-registry.core.js";
 import { mergeModelMediaInput } from "./model.compat.js";
 import { resolveConfiguredProviderConfig } from "./model.configured-overrides.js";
 import { type ProviderRuntimeHooks, resolveRuntimeHooks } from "./model.provider-hooks.js";
@@ -59,6 +61,26 @@ type AsyncModelResolutionOptions = {
   /** Resolve local provider facts without starting asynchronous catalog discovery. */
   deferProviderDynamicModelPreparation?: boolean;
 };
+
+/**
+ * The transport bills each call from `model.cost`, so it carries the pricing owner's answer:
+ * authored prices, then the hosted catalog over the bundled row it supersedes. The runtime row's
+ * own cost is a bundled snapshot or a discovery zero placeholder (a newly released Claude model,
+ * for example) and stays only when the owner has no price, as for private endpoints.
+ * Configured overrides already priced the rows of a provider whose models.json or source config
+ * authors model costs, with their own alias, tier and inherited-field rules; those rows keep their
+ * price. Accepted edge: one authored row keeps that provider's other priced rows on their bundled
+ * snapshot, as before.
+ */
+function withResolvedPricing(model: Model, cfg: OpenClawConfig | undefined, agentDir: string) {
+  const owner = { provider: model.provider, config: cfg, agentDir };
+  if (hasKnownPricing(model.cost) && hasAuthoredProviderModelCost(owner)) {
+    return model;
+  }
+  const cost = resolveModelCostConfig({ ...owner, model: model.id });
+  // The owner answers all-zero only for authored or publisher-validated free pricing.
+  return cost ? { ...model, cost } : model;
+}
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
 export function createEmptyAgentDiscoveryStores(): {
@@ -218,7 +240,12 @@ export async function resolveModelAsync(
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
-        return { model: suppressedRuntimeModel, logicalRef, authStorage, modelRegistry };
+        return {
+          model: withResolvedPricing(suppressedRuntimeModel, cfg, resolvedAgentDir),
+          logicalRef,
+          authStorage,
+          modelRegistry,
+        };
       }
       return {
         error: explicitModel.error ?? buildUnknownModelError(registryParams),
@@ -315,7 +342,12 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
-      return { model, logicalRef, authStorage, modelRegistry };
+      return {
+        model: withResolvedPricing(model, cfg, resolvedAgentDir),
+        logicalRef,
+        authStorage,
+        modelRegistry,
+      };
     }
     return {
       error: buildUnknownModelError(registryParams),

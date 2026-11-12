@@ -237,8 +237,12 @@ export async function readNodeWorkspaceUpload(params: {
         "Workspace result version was not negotiated",
       );
     }
-    const contentLength = Number(params.request.headers["content-length"]);
-    if (!Number.isSafeInteger(contentLength) || contentLength < 8 || contentLength > maxBytes) {
+    const declaredContentLength = params.request.headers["content-length"];
+    const contentLength = Number(declaredContentLength);
+    if (
+      declaredContentLength !== undefined &&
+      (!Number.isSafeInteger(contentLength) || contentLength < 8 || contentLength > maxBytes)
+    ) {
       throw new NodeWorkspaceTransferLimitError("Workspace transfer upload exceeds its byte limit");
     }
     const reader = new RequestByteReader(params.request, params.signal, assertCurrent, maxBytes);
@@ -363,7 +367,7 @@ export async function readNodeWorkspaceUpload(params: {
     }
     await reader.assertEnd();
     assertCurrent();
-    if (reader.bytesRead !== contentLength) {
+    if (declaredContentLength !== undefined && reader.bytesRead !== contentLength) {
       throw new NodeWorkspaceTransferInvalidError(
         "content_length",
         "Workspace transfer upload length is inconsistent",
