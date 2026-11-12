@@ -530,6 +530,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         ...buildTurnDeliveryContextFragments({
           ...promptDeliveryFacts,
           sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
+          privateCompletion: attempt.privateCompletion,
           requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
           messageToolFinalByDefault: attempt.messageToolFinalByDefault,
         }),
