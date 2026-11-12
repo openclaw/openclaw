@@ -1,4 +1,4 @@
-name: Release explicit report routing and locale proof
+name: Release canonical root static proof
 'on':
   workflow_dispatch:
     inputs:
@@ -9,7 +9,7 @@ name: Release explicit report routing and locale proof
 permissions:
   contents: read
 concurrency:
-  group: release-report-routing-3fdf22dbe1a317e79b349ed276e57bea686bd6ac
+  group: release-canonical-root-static-3fdf22dbe1a317e79b349ed276e57bea686bd6ac
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -25,140 +25,6 @@ env:
   PATHS_SHA256: 8b35c727dbdea25568ab11fb98e887f95a2b42c40ce134122d056f34e9866f05
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
-  report:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.target_ref }}
-        fetch-depth: 0
-        persist-credentials: false
-    - name: Bind exact candidate
-      shell: bash
-      run: 'set -euo pipefail
-
-        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-
-        test -z "$(git status --porcelain)"
-
-        git merge-base --is-ancestor "$BASE_SHA" HEAD
-
-        mkdir -p .artifacts/final-ci
-
-        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
-
-        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
-
-        printf ''C=%s
-
-        Q=%s
-
-        P=%s
-
-        workflow=%s
-
-        run=%s
-
-        attempt=%s
-
-        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-        > .artifacts/final-ci/identity.txt
-
-        '
-    - uses: ./.github/actions/setup-node-env
-      with:
-        semantic-checks: 'true'
-        install-bun: 'false'
-        cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: Verify report
-      run: 'set -euo pipefail
-
-        ( pnpm test test/scripts/vitest-report-owner.test.ts --maxWorkers=1 -t "replays file-backed Gateway" ) 2>&1 | tee
-        .artifacts/final-ci/report.log
-
-        git diff --exit-code'
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: report-routing-report-${{ github.run_id }}-${{ github.run_attempt }}
-        path: .artifacts/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 14
-  locale:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.target_ref }}
-        fetch-depth: 0
-        persist-credentials: false
-    - name: Bind exact candidate
-      shell: bash
-      run: 'set -euo pipefail
-
-        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-
-        test -z "$(git status --porcelain)"
-
-        git merge-base --is-ancestor "$BASE_SHA" HEAD
-
-        mkdir -p .artifacts/final-ci
-
-        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
-
-        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
-
-        printf ''C=%s
-
-        Q=%s
-
-        P=%s
-
-        workflow=%s
-
-        run=%s
-
-        attempt=%s
-
-        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-        > .artifacts/final-ci/identity.txt
-
-        '
-    - uses: ./.github/actions/setup-node-env
-      with:
-        semantic-checks: 'true'
-        install-bun: 'false'
-        cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: Verify locale
-      run: 'set -euo pipefail
-
-        ( bash scripts/ci-collect-checks.sh "pnpm ui:i18n:check" "pnpm native:i18n:check" "pnpm ui:i18n:verify" "pnpm native:i18n:verify"
-        ) 2>&1 | tee .artifacts/final-ci/locale.log
-
-        git diff --exit-code'
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: report-routing-locale-${{ github.run_id }}-${{ github.run_attempt }}
-        path: .artifacts/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 14
   static:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -215,80 +81,13 @@ jobs:
       run: 'set -euo pipefail
 
         ( node scripts/run-oxlint.mjs --tsconfig tsconfig.json test/scripts/vitest-report-fixture.ts && node scripts/run-tsgo-core-test-shards.mjs
-        --ci-graphs-json ''["test-root-tooling"]'' ) 2>&1 | tee .artifacts/final-ci/static.log
+        --ci-graphs-json ''["test-root"]'' ) 2>&1 | tee .artifacts/final-ci/static.log
 
         git diff --exit-code'
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
-        name: report-routing-static-${{ github.run_id }}-${{ github.run_attempt }}
-        path: .artifacts/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 14
-  format:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: ${{ inputs.target_ref }}
-        fetch-depth: 0
-        persist-credentials: false
-    - name: Bind exact candidate
-      shell: bash
-      run: 'set -euo pipefail
-
-        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-
-        test -z "$(git status --porcelain)"
-
-        git merge-base --is-ancestor "$BASE_SHA" HEAD
-
-        mkdir -p .artifacts/final-ci
-
-        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
-
-        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
-
-        printf ''C=%s
-
-        Q=%s
-
-        P=%s
-
-        workflow=%s
-
-        run=%s
-
-        attempt=%s
-
-        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-        > .artifacts/final-ci/identity.txt
-
-        '
-    - uses: ./.github/actions/setup-node-env
-      with:
-        semantic-checks: 'true'
-        install-bun: 'false'
-        cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: Verify format
-      run: 'set -euo pipefail
-
-        ( pnpm exec oxfmt --check --no-error-on-unmatched-pattern -- test/scripts/vitest-report-fixture.ts ui/src/i18n/.i18n/*.json
-        ) 2>&1 | tee .artifacts/final-ci/format.log
-
-        git diff --exit-code'
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: report-routing-format-${{ github.run_id }}-${{ github.run_attempt }}
+        name: canonical-root-static-${{ github.run_id }}-${{ github.run_attempt }}
         path: .artifacts/
         include-hidden-files: true
         if-no-files-found: error
