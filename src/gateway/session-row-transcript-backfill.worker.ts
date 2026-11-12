@@ -14,7 +14,6 @@ import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
 import {
   projectSessionRowAssistantMessage,
-  serializeSessionRowTranscriptProjection,
   SESSION_ROW_TRANSCRIPT_PREVIEW_MAX_BYTES,
   SESSION_ROW_TRANSCRIPT_TERMINAL_MAX_BYTES,
   type SessionRowTranscriptProjection,
@@ -78,7 +77,7 @@ export function backfillSessionRowTranscriptFieldsInDatabase(
             getSessionKysely(database.db)
               .updateTable("session_windows")
               .set({
-                row_transcript_json: serializeSessionRowTranscriptProjection(fields),
+                row_transcript_json: JSON.stringify(fields),
                 row_transcript_updated_at: projection.version.updatedAt,
               })
               .where("session_id", "=", params.sessionId),

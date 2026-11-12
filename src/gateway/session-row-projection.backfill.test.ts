@@ -163,95 +163,80 @@ it("reuses batch transcript facts across row-owner restarts", async () => {
   });
 });
 
-it.for(["missing assistant", "missing revision", "old revision"])(
-  "rebuilds a cached preview with %s without changing settings or transcript rows",
-  async (legacy, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot(cfg);
-      const { target, query } = seedTranscriptRow("older-preview-cache", {
-        displayName: "Existing session setting",
-      });
-      await appendTranscript(
-        target,
-        { role: "user", content: "Existing question", timestamp: 100 },
-        {
-          role: "assistant",
-          content: "| Color | Hex |\n| --- | --- |\n| Blue | #0000ff |",
-          timestamp: 200,
-        },
-      );
-      expect(setUserPreferences("existing-profile", { "ui.themeMode": "dark" }).ok).toBe(true);
-      const settings = getUserPreferences("existing-profile");
-      const entry = loadSessionEntry(target);
-      expect(settings).toEqual({ "ui.themeMode": "dark" });
-      expect(entry?.displayName).toBe("Existing session setting");
-      const database = openOpenClawAgentDatabase(
-        toDatabaseOptions(resolveSqliteTranscriptReadScope(target)),
-      ).db;
-      const readTranscript = () =>
-        database
-          .prepare(
-            "SELECT seq, event_json, event_zstd FROM transcript_events WHERE session_id = ? ORDER BY seq",
-          )
-          .all(target.sessionId);
-      const transcriptRows = readTranscript();
-      const readCache = () =>
-        database
-          .prepare("SELECT row_transcript_json FROM session_windows WHERE session_id = ?")
-          .get(target.sessionId)?.row_transcript_json as string | undefined;
-      const preview = {
-        lastMessagePreview: "Color Hex Blue #0000ff",
-        lastAssistantMessage: { text: "Color Hex Blue #0000ff", timestamp: 200 },
-      };
-      const stored = JSON.parse(readCache() ?? "null") as Record<string, unknown>;
-      expect(stored).toMatchObject(preview);
-      if (legacy === "missing assistant") {
-        delete stored.lastAssistantMessage;
-      } else {
-        stored.lastMessagePreview = "| Color | Hex | | --- | --- | | Blue | #0000ff |";
-        stored.lastAssistantMessage = { text: stored.lastMessagePreview, timestamp: 200 };
-        if (legacy === "missing revision") {
-          delete stored.previewRevision;
-        } else {
-          stored.previewRevision = 0;
-        }
-      }
-      database
-        .prepare("UPDATE session_windows SET row_transcript_json = ? WHERE session_id = ?")
-        .run(JSON.stringify(stored), target.sessionId);
-
-      const enriched = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
-        row.lastAssistantMessage?.text === "Color Hex Blue #0000ff" ? row.key : "",
-      );
-      {
-        using projection = await createTestProjection({ cfg, modelCatalog: [] });
-        await projection.ensureMaterialized();
-        projection.describe(query);
-        if (legacy !== "missing assistant") {
-          expect(
-            projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
-          ).not.toBe(stored.lastMessagePreview);
-        }
-        await withinTest(enriched, signal);
-        expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
-          displayName: "Existing session setting",
-          ...preview,
-        });
-      }
-      expect(JSON.parse(readCache() ?? "null")).toMatchObject(preview);
-      expect(loadSessionEntry(target)).toEqual(entry);
-      expect(getUserPreferences("existing-profile")).toEqual(settings);
-      expect(readTranscript()).toEqual(transcriptRows);
-
-      const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
-      using reopened = await createTestProjection({ cfg, modelCatalog: [] });
-      await reopened.ensureMaterialized();
-      expect(reopened.snapshot(query, { includeLastMessage: true }).row).toMatchObject(preview);
-      await nextTurn();
-      expect(backfill).not.toHaveBeenCalled();
+it("enriches a pre-assistant preview cache without changing settings or transcript rows", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    const { target, query } = seedTranscriptRow("older-preview-cache", {
+      displayName: "Existing session setting",
     });
-  },
-);
+    await appendTranscript(
+      target,
+      { role: "user", content: "Existing question", timestamp: 100 },
+      {
+        role: "assistant",
+        content: "| Color | Hex |\n| --- | --- |\n| Blue | #0000ff |",
+        timestamp: 200,
+      },
+    );
+    expect(setUserPreferences("existing-profile", { "ui.themeMode": "dark" }).ok).toBe(true);
+    const settings = getUserPreferences("existing-profile");
+    const entry = loadSessionEntry(target);
+    expect(settings).toEqual({ "ui.themeMode": "dark" });
+    expect(entry?.displayName).toBe("Existing session setting");
+    const database = openOpenClawAgentDatabase(
+      toDatabaseOptions(resolveSqliteTranscriptReadScope(target)),
+    ).db;
+    const readTranscript = () =>
+      database
+        .prepare(
+          "SELECT seq, event_json, event_zstd FROM transcript_events WHERE session_id = ? ORDER BY seq",
+        )
+        .all(target.sessionId);
+    const transcriptRows = readTranscript();
+    const readCache = () =>
+      database
+        .prepare("SELECT row_transcript_json FROM session_windows WHERE session_id = ?")
+        .get(target.sessionId)?.row_transcript_json as string | undefined;
+    const preview = {
+      lastMessagePreview: "Color Hex Blue #0000ff",
+      lastAssistantMessage: { text: "Color Hex Blue #0000ff", timestamp: 200 },
+    };
+    const stored = JSON.parse(readCache() ?? "null") as Record<string, unknown>;
+    expect(stored).toMatchObject(preview);
+    delete stored.lastAssistantMessage;
+    database
+      .prepare("UPDATE session_windows SET row_transcript_json = ? WHERE session_id = ?")
+      .run(JSON.stringify(stored), target.sessionId);
+    expect(JSON.parse(readCache() ?? "null")).not.toHaveProperty("lastAssistantMessage");
+
+    const enriched = observeSessionRowBackfill([target.sessionKey], undefined, (row) =>
+      row.lastAssistantMessage?.text === "Color Hex Blue #0000ff" ? row.key : "",
+    );
+    {
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      projection.describe(query);
+      await withinTest(enriched, signal);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row).toMatchObject({
+        displayName: "Existing session setting",
+        ...preview,
+      });
+    }
+    expect(JSON.parse(readCache() ?? "null")).toMatchObject(preview);
+    expect(loadSessionEntry(target)).toEqual(entry);
+    expect(getUserPreferences("existing-profile")).toEqual(settings);
+    expect(readTranscript()).toEqual(transcriptRows);
+
+    const backfill = vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields");
+    using reopened = await createTestProjection({ cfg, modelCatalog: [] });
+    await reopened.ensureMaterialized();
+    expect(reopened.snapshot(query, { includeLastMessage: true }).row).toMatchObject(preview);
+    await nextTurn();
+    expect(backfill).not.toHaveBeenCalled();
+  });
+});
 
 it.for([false, true])(
   "backfills an unknown assistant fact once and retains it across user appends (assistant: %s)",

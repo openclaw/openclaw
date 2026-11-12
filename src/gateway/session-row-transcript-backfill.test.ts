@@ -28,7 +28,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { terminalAssistantMessage } from "./session-row-terminal-message.test-support.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 import { backfillSessionRowTranscriptFieldsInDatabase } from "./session-row-transcript-backfill.worker.js";
-import { serializeSessionRowTranscriptProjection } from "./session-row-transcript-preview.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -129,7 +128,7 @@ describe("session row transcript backfill", () => {
         const fields = expectDefined(backfillInDatabase(params), "seeded transcript fields");
         runOpenClawAgentWriteTransaction(({ db }) => {
           db.prepare("UPDATE session_windows SET row_transcript_json = ? WHERE session_id = ?").run(
-            serializeSessionRowTranscriptProjection({
+            JSON.stringify({
               ...fields,
               lastMessagePreview: "HEARTBEAT_OK",
               lastAssistantMessage: { text: "HEARTBEAT_OK", timestamp: 200 },

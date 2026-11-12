@@ -1,9 +1,6 @@
 import { expect, it } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
-import {
-  readStoredSessionRowTranscriptProjection,
-  serializeSessionRowTranscriptProjection,
-} from "../gateway/session-row-transcript-preview.js";
+import { readStoredSessionRowTranscriptProjection } from "../gateway/session-row-transcript-preview.js";
 import { attachSessionTranscriptRunId } from "./transcript-events.js";
 import { readSessionTranscriptTerminalModel } from "./transcript-terminal-model.js";
 
@@ -33,10 +30,27 @@ it("rebuilds cached terminal facts that attributed a command to an inference mod
   };
   expect(
     readStoredSessionRowTranscriptProjection({
-      json: serializeSessionRowTranscriptProjection(projection),
+      json: JSON.stringify(projection),
       updatedAt: 2,
       transcriptUpdatedAt: 2,
       indexedSeq: 2,
     }),
   ).toBeUndefined();
+});
+
+it("preserves legacy preview text without a formatting revision", () => {
+  const fields = {
+    lastMessagePreview: "Literal **value** | kept",
+    lastAssistantMessage: { text: "Literal **value** | kept", timestamp: 200 },
+    terminalModel: null,
+    indexedSeq: 2,
+  };
+  expect(
+    readStoredSessionRowTranscriptProjection({
+      json: JSON.stringify(fields),
+      updatedAt: 2,
+      transcriptUpdatedAt: 2,
+      indexedSeq: 2,
+    }),
+  ).toEqual(fields);
 });
