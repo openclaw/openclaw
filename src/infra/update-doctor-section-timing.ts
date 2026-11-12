@@ -4,6 +4,7 @@ import type { CommandOutputStream } from "../process/exec-output.js";
 import type { CommandOptions } from "../process/exec.js";
 import { parseDoctorProgressLine, parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { isTruthyEnvValue } from "./env.js";
+import { createUpdateDiagnosticLines } from "./update-diagnostic-lines.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -41,8 +42,7 @@ export function createUpdateDoctorSectionTiming(
   const operatorTrace = isTruthyEnvValue(parentEnv[TRACE_ENV]);
   const phases = new Map<string, number>();
   const decoder = new StringDecoder("utf8");
-  let pending = "";
-  let droppingLine = false;
+  const lines = createUpdateDiagnosticLines(MAX_PENDING_CHARS);
   const retirementWidenings = new Set<string>();
 
   const observeLine = (line: string) => {
@@ -66,18 +66,7 @@ export function createUpdateDoctorSectionTiming(
   };
 
   const observeStderr = (chunk: Buffer) => {
-    let text = decoder.write(chunk);
-    if (droppingLine) {
-      const newline = text.indexOf("\n");
-      if (newline < 0) {
-        return;
-      }
-      text = text.slice(newline + 1);
-      droppingLine = false;
-    }
-    const lines = `${pending}${text}`.split("\n");
-    pending = lines.pop() ?? "";
-    for (const line of lines) {
+    lines.push(decoder.write(chunk), (line) => {
       observeLine(line);
       const phase = onPhase && parseDoctorProgressLine(line);
       if (phase) {
@@ -88,11 +77,7 @@ export function createUpdateDoctorSectionTiming(
           // The CLI's existing asynchronous broken-output exit policy still applies.
         }
       }
-    }
-    if (pending.length > MAX_PENDING_CHARS) {
-      pending = "";
-      droppingLine = true;
-    }
+    });
   };
 
   const hidesLine = (line: string) => !operatorTrace && line.includes(TRACE_MARKER);
@@ -105,10 +90,7 @@ export function createUpdateDoctorSectionTiming(
           .join("\n");
 
   const diagnostic = () => {
-    if (pending) {
-      observeLine(pending);
-      pending = "";
-    }
+    lines.flush(observeLine);
     const sections: string[] = [];
     const contributions: Array<[string, number]> = [];
     for (const [name, milliseconds] of phases) {

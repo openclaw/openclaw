@@ -1,0 +1,2 @@
+70
+# Characterize updater pipe bounds, omission order and final fragments, plus real Doctor subprocess timing and observer preservation.
