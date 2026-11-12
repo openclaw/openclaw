@@ -42,7 +42,7 @@ describe("tmux find-sessions value options", () => {
     // A value that starts with '-' but is not a known option is a real value.
     { args: ["-q", "--foo"] },
   ])("accepts a provided value for $args", async ({ args }) => {
-    const result = await run(args).catch((error) => error);
+    const result = await run(args).catch((error: unknown) => error);
     expect(result.code).not.toBe(2);
     expect(result.stderr ?? "").not.toContain("requires a value");
   });
