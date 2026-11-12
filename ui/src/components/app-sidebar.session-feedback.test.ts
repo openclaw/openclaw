@@ -360,6 +360,9 @@ describe("sidebar session feedback", () => {
     harness.list.mockImplementation(async () => (await pending.promise)!);
     setSessionsGrouping(sidebar.sessionOrganizer, "none");
     await settleLitElement(sidebar);
+    // The flat list offers older pages once its loaded rows are shown.
+    sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]')!.click();
+    await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>(pagination)!.click();
     setSessionsGrouping(sidebar.sessionOrganizer, "category");
     await settleLitElement(sidebar);

@@ -93,7 +93,8 @@ export function setupSidebarTest() {
       defineGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
     }
     for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
-      if (globalThis[name] === undefined) {
+      // jsdom has no layout, so no list end enters view; browser tests own that proof.
+      if (globalThis[name] === undefined || name === "IntersectionObserver") {
         defineGlobal(
           name,
           class {

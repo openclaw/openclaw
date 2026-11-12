@@ -1,2 +1,3 @@
-# Collapse-triggered request and shared unread-dot browser regression; replaces auto-load cases.
-60
+# Browser regressions for the flat sidebar list's end: loaded rows before older pages, no
+# continuation while the list is collapsed, shared unread-dot styling (#197587).
+140

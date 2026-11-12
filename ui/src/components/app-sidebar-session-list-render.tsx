@@ -22,34 +22,20 @@ import type {
   SessionCatalogRenderSnapshot,
 } from "./app-sidebar-session-render-types.ts";
 import { renderChildSessionLoadError } from "./app-sidebar-session-row-render.tsx";
-import { renderSessionSection as SessionSection } from "./app-sidebar-session-section-render.tsx";
+import {
+  renderSessionSection as SessionSection,
+  RosterLoadMoreButton,
+} from "./app-sidebar-session-section-render.tsx";
 import { PersonalSessionGroups } from "./personal-session-groups.tsx";
 import { areSessionCatalogsSettled } from "./session-data-catalog.ts";
 
-function RosterLoadMore(props: {
-  host: SidebarSessionListHost;
-  hasMore: boolean;
-  loading: boolean;
-}) {
-  return (
-    <Show when={props.hasMore}>
-      <div class="sidebar-session-pagination sidebar-session-pagination--roster">
-        <button
-          type="button"
-          class="sidebar-session-pagination__button"
-          aria-label={
-            props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")
-          }
-          disabled={props.loading}
-          aria-busy={props.loading ? "true" : "false"}
-          onClick={() => void props.host.loadMoreSidebarSessions()}
-        >
-          {props.loading ? <span class="session-run-spinner" aria-hidden="true" /> : undefined}
-          {props.loading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
-        </button>
-      </div>
-    </Show>
-  );
+/** The flat list is one native section, so older roster pages continue at that
+ *  section's end. Grouped views place a page's rows across sections. */
+function flatListSectionId(params: Parameters<typeof renderSessionList>[0]): string | undefined {
+  return params.host.effectiveSessionsGrouping() === "none" &&
+    params.sections.some((section) => section.id === "ungrouped")
+    ? "ungrouped"
+    : undefined;
 }
 
 function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) {
@@ -101,7 +87,21 @@ function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) 
                 )
               }
             >
-              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
+              <SessionSection
+                host={host()}
+                section={section()}
+                personHeaders={personHeaders()}
+                roster={
+                  section().id === flatListSectionId(params)
+                    ? {
+                        hasMore: params.nativeSessionsHaveMore,
+                        loading: params.nativeSessionsLoading,
+                        // People order places older rows between existing ones.
+                        auto: host().effectiveSessionSortMode() !== "people",
+                      }
+                    : undefined
+                }
+              />
             </Show>
           }
         >
@@ -133,11 +133,11 @@ export function renderSessionList(params: {
     host,
     <div class="sidebar-recent-sessions">
       {renderSessionListBody(params)}
-      <RosterLoadMore
-        host={host()}
-        hasMore={params.nativeSessionsHaveMore}
-        loading={params.nativeSessionsLoading}
-      />
+      <Show when={params.nativeSessionsHaveMore && flatListSectionId(params) === undefined}>
+        <div class="sidebar-session-pagination sidebar-session-pagination--roster">
+          <RosterLoadMoreButton host={host()} loading={params.nativeSessionsLoading} />
+        </div>
+      </Show>
       {renderPersonalSessionEmpty(
         host(),
         params.empty && params.sections.every((section) => section.totalRowCount === 0),

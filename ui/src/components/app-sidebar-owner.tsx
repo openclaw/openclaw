@@ -389,9 +389,35 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     );
   }
 
+  /** This owner's request for older pages. Background list reads share the
+   *  roster's loading state without being work the user asked for. */
+  loadingMoreSidebarSessions = false;
+
   async loadMoreSidebarSessions(): Promise<void> {
-    if (this.sessionData.sessionsLoading) {
+    if (this.loadingMoreSidebarSessions) {
       return;
+    }
+    this.loadingMoreSidebarSessions = true;
+    this.invalidate();
+    try {
+      await this.appendSidebarSessionPages();
+    } finally {
+      this.loadingMoreSidebarSessions = false;
+      this.invalidate();
+    }
+  }
+
+  private async appendSidebarSessionPages(): Promise<void> {
+    // An in-flight list read owns the cursor; follow it instead of dropping the request.
+    if (this.sessionData.sessionsLoading) {
+      await new Promise<void>((resolve) => {
+        const stop = this.subscribe(() => {
+          if (!this.sessionData.sessionsLoading) {
+            stop();
+            resolve();
+          }
+        });
+      });
     }
     const sessions = this.context.sessions;
     const scope = sessions.captureConnectionScope();
@@ -496,7 +522,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           empty={visibleSessions().length === 0}
           sections={sections()}
           nativeSessionsHaveMore={host().sessionData.sessionsResult?.hasMore === true}
-          nativeSessionsLoading={host().sessionData.sessionsLoading}
+          nativeSessionsLoading={host().loadingMoreSidebarSessions}
           catalogRenderer={Catalog}
           catalogs={{
             catalogs: catalogs(),
