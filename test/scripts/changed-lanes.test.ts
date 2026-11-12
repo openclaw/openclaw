@@ -290,6 +290,7 @@ function runChangedCheckWithRecordedCommands(
   failingCommand: string | null,
   paths = ["docs/.generated/config-baseline.counts.json", "src/gateway/server-runtime-state.ts"],
   cwd = repoRoot,
+  options: { delegateCompilers?: boolean; failureCode?: number } = {},
 ) {
   const dir = tempDirs.make("openclaw-changed-check-order-");
   const binDir = path.join(dir, "bin");
@@ -312,7 +313,7 @@ exports.start = (bin, args) => {
 exports.result = (bin, args) => {
   if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
     console.error("Synthetic check failure: " + args[0]);
-    return 23;
+    return ${options.failureCode ?? 23};
   }
   return 0;
 };
@@ -338,7 +339,7 @@ if (require.main === module) {
   }
   const result = runRepoScript(
     "scripts/check-changed.mjs",
-    ["--", ...paths],
+    [...(options.delegateCompilers ? ["--delegate-compilers"] : []), "--", ...paths],
     syntheticCoreTestOwnerEnv(
       dir,
       {
@@ -471,6 +472,40 @@ describe("scripts/changed-lanes", () => {
     const args = buildChangedCheckCrabboxArgs(argv, { cwd: repoRoot });
     expect(args.slice(args.indexOf("check:changed") + 1)).toEqual(argv);
   });
+
+  it.each([23, 124, 143])(
+    "delegates only compiler work and preserves managed failure status %i",
+    (failureCode) => {
+      const { events, paths, result } = runChangedCheckWithRecordedCommands(
+        "check:no-conflict-markers",
+        undefined,
+        undefined,
+        { delegateCompilers: true, failureCode },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(failureCode);
+      const planned = createChangedCheckPlan(
+        detectChangedLanesForPaths({ paths, base: "HEAD", staged: true }),
+        { delegateCompilers: true },
+      ).commands.map((command) => ({ bin: command.bin ?? "pnpm", args: command.args }));
+      const admitted =
+        failureCode === 23
+          ? planned
+          : planned.slice(
+              0,
+              planned.findIndex(({ args }) => args[0] === "check:no-conflict-markers") + 1,
+            );
+      const starts = events.filter(({ event }) => event === "start");
+      expect(starts.map(({ bin, args }) => ({ bin, args }))).toEqual(admitted);
+      expect(starts.some(({ args }) => args[0]?.startsWith("tsgo:"))).toBe(false);
+      expect(events).toEqual(
+        admitted.flatMap(({ bin, args }) => [
+          { event: "start", bin, args },
+          { event: "finish", bin, args },
+        ]),
+      );
+    },
+  );
 
   it.each([{ failingCommand: "check:no-conflict-markers" }, { failingCommand: null }])(
     "retains serial execution and runs every selected check after $failingCommand fails",
