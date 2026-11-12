@@ -1,5 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ACT_MAX_BATCH_ACTIONS } from "../act-policy.js";
 import { BROWSER_ACT_ERROR_CODES } from "../errors.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
@@ -24,8 +24,7 @@ function normalizeOperatorInputs(value: unknown): BrowserOperatorInput[] {
     throw new Error(`inputs exceeds maximum of ${ACT_MAX_BATCH_ACTIONS}`);
   }
   return value.map((entry): BrowserOperatorInput => {
-    const record =
-      entry && typeof entry === "object" ? (entry as Record<string, unknown>) : undefined;
+    const record = isRecord(entry) ? entry : undefined;
     if (!record || !["press", "insertText", "clickCoords"].includes(String(record.kind))) {
       throw new Error("each input must be press, insertText or clickCoords");
     }

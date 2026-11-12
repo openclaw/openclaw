@@ -1,3 +1,4 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page, Request } from "playwright-core";
 import { getPageForTargetId } from "./pw-session.js";
@@ -329,7 +330,7 @@ export async function sendOperatorInputViaPlaywright(
       if (lateFailures.has(page)) {
         const failure = lateFailures.get(page);
         lateFailures.delete(page);
-        reject(failure);
+        reject(toErrorObject(failure, "Browser operator input failed"));
         return;
       }
       for (;;) {

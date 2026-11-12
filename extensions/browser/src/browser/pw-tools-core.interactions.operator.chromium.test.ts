@@ -21,7 +21,7 @@ const pages: Record<string, string> = {
 };
 
 const keys = (text: string): BrowserOperatorInput[] =>
-  [...text].map((key) => ({ kind: "press", key }));
+  Array.from(text, (key) => ({ kind: "press", key }));
 
 describe.runIf(runChromiumProof)("operator input sessions in Chromium", () => {
   const cleanup: Array<() => Promise<void>> = [];
