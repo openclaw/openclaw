@@ -16,6 +16,8 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   newSession: { modifiers: ["mod", "shift"], key: "o", platformSpecific: true },
   nativeNewSession: { modifiers: ["mod"], key: "n", platformSpecific: true },
   archiveSession: { modifiers: ["mod", "shift"], key: "a", platformSpecific: true },
+  previousSession: { modifiers: ["mod"], key: "[", platformSpecific: true },
+  nextSession: { modifiers: ["mod"], key: "]", platformSpecific: true },
   keyboardShortcuts: { modifiers: ["mod"], key: "/" },
   toggleSidebar: { modifiers: ["mod"], key: "b", platformSpecific: true },
   debugOverlay: { modifiers: ["mod", "shift"], key: "d" },
@@ -87,7 +89,9 @@ export function formatKeyboardShortcutParts(
 }
 
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
-  return matchesKeyboardShortcut(combo, event, isApplePlatform(), resolveAsciiShortcutKey(event));
+  // Bracket navigation follows the produced character, not US physical-key positions.
+  const key = combo.key === "[" || combo.key === "]" ? event.key : resolveAsciiShortcutKey(event);
+  return matchesKeyboardShortcut(combo, event, isApplePlatform(), key);
 }
 
 /** Runtime controls of the lazily loaded shortcuts dialog. */

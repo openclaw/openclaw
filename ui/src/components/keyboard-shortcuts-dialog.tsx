@@ -44,6 +44,8 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("closeDialog", KEYBOARD_SHORTCUT_COMBOS.escape),
   ]),
   keyboardShortcutSection("chat", [
+    keyboardShortcutEntry("previousSession", KEYBOARD_SHORTCUT_COMBOS.previousSession),
+    keyboardShortcutEntry("nextSession", KEYBOARD_SHORTCUT_COMBOS.nextSession),
     keyboardShortcutEntry("archiveSession", KEYBOARD_SHORTCUT_COMBOS.archiveSession),
     keyboardShortcutEntry("sendMessage", KEYBOARD_SHORTCUT_COMBOS.sendMessage),
     keyboardShortcutEntry("newline", KEYBOARD_SHORTCUT_COMBOS.newline),

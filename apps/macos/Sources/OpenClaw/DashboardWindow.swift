@@ -20,12 +20,14 @@ enum DashboardWindowLayout {
 enum DashboardNativeCommand: String {
     case newSession = "openclaw:native-new-session"
     case commandPalette = "openclaw:native-toggle-search"
+    case previousSession = "openclaw:native-previous-session"
+    case nextSession = "openclaw:native-next-session"
 
     /// Older gateway bundles lack the toggle listener; dispatch degrades to the
     /// open-only legacy event when the primary event goes unhandled.
     var legacyFallbackEventName: String? {
         switch self {
-        case .newSession: nil
+        case .newSession, .previousSession, .nextSession: nil
         case .commandPalette: "openclaw:native-open-search"
         }
     }

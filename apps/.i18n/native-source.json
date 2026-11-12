@@ -4779,6 +4779,8 @@
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.92bf6491280e006a","source":"Forward"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.15944dfde379d8b4","source":"New Gateway Window…"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.ede310e680a0a931","source":"New Thread"},
+    {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.8ab9be2adf84375c","source":"Next Session"},
+    {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.d25c8937e96d11ce","source":"Previous Session"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.9e5d17774e2e15d6","source":"Settings…"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-call","surface":"apple","id":"native.apple.2d12e01fc2bab388","source":"Systems"},
     {"path":"apps/macos/Sources/OpenClaw/MenuBar.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4b8aa5dbbf85ac82","source":"Reload"},

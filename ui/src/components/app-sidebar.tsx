@@ -377,6 +377,7 @@ function AppSidebarContent(
 }
 
 export type AppSidebarMethods = {
+  selectAdjacentSession(direction: -1 | 1): boolean;
   activeNavigationViewElement(): HTMLElement | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
@@ -404,6 +405,8 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
       });
     },
     methods: {
+      selectAdjacentSession: (host, direction) =>
+        sidebarOwners.get(host)?.selectAdjacentSession(direction) ?? false,
       snapshotCaptureStatus: (host) => sidebarOwners.get(host)?.snapshot.read().captureStatus,
       activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,

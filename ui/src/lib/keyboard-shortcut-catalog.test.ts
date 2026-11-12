@@ -17,6 +17,29 @@ const matches = (id: keyof typeof combos, init: KeyboardEventInit) =>
 describe("keyboard shortcut catalog matching", () => {
   afterEach(() => vi.restoreAllMocks());
   it.each(["MacIntel", "Win32"])(
+    "matches bracket characters without capturing other layout keys on %s",
+    (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const modifier = platform === "MacIntel" ? { metaKey: true } : { ctrlKey: true };
+      for (const combo of [combos.previousSession, combos.nextSession]) {
+        const init = { key: combo.key, code: "BracketLeft", ...modifier };
+        expect(matchesShortcutCombo(combo, keydown(init))).toBe(true);
+        for (const change of [
+          { key: "ü" },
+          { key: "Dead" },
+          { isComposing: true },
+          { keyCode: 229 },
+          { altKey: true },
+          { shiftKey: true },
+          { ctrlKey: true, metaKey: true },
+          { ctrlKey: platform === "MacIntel", metaKey: platform !== "MacIntel" },
+        ]) {
+          expect(matchesShortcutCombo(combo, keydown({ ...init, ...change }))).toBe(false);
+        }
+      }
+    },
+  );
+  it.each(["MacIntel", "Win32"])(
     "matches direct session shortcuts exactly on %s without taking New Window",
     (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);

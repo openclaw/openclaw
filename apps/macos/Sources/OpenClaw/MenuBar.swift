@@ -147,10 +147,22 @@ struct OpenClawApp: App {
                     Button("Back") {
                         DashboardManager.shared.navigateBack()
                     }
-                    .keyboardShortcut("[", modifiers: .command)
+                    .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
 
                     Button("Forward") {
                         DashboardManager.shared.navigateForward()
+                    }
+                    .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+
+                    Button("Previous Session") {
+                        guard NSApp.currentEvent?.isARepeat != true else { return }
+                        DashboardManager.shared.dispatchNativeCommand(.previousSession)
+                    }
+                    .keyboardShortcut("[", modifiers: .command)
+
+                    Button("Next Session") {
+                        guard NSApp.currentEvent?.isARepeat != true else { return }
+                        DashboardManager.shared.dispatchNativeCommand(.nextSession)
                     }
                     .keyboardShortcut("]", modifiers: .command)
 

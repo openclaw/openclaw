@@ -85,6 +85,8 @@ const enCommandPalette = {
       commandPalette: "Open command palette",
       newSession: "Open New Session",
       archiveSession: "Archive current session",
+      previousSession: "Previous session (outside text fields)",
+      nextSession: "Next session (outside text fields)",
       paletteStartSession: "Start a background session (in the command palette)",
       keyboardShortcuts: "Show keyboard shortcuts",
       toggleSidebar: "Toggle sidebar",

@@ -52,6 +52,7 @@ import {
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
+import { ShellSessionShortcuts } from "./app-shell-session-shortcuts.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   clearLazyShellAction,
@@ -103,6 +104,7 @@ export interface ShellChromeHost
 }
 
 export class ShellChromeOwner {
+  private readonly sessionShortcuts: ShellSessionShortcuts;
   readonly panels: ShellPanelOwner;
   private readonly palette: ShellCommandPaletteOwner;
   private pendingLazyAction = readLazyShellAction();
@@ -110,6 +112,7 @@ export class ShellChromeOwner {
   private listeners: (() => void)[] | undefined;
   private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
+    this.sessionShortcuts = new ShellSessionShortcuts(host, this.ignoreNavigationKey.bind(this));
     this.palette = new ShellCommandPaletteOwner(host, {
       request: (event) => this.requestShellComponent("palette", event),
       clear: (event) => this.clearPendingLazyAction(event),
@@ -131,6 +134,8 @@ export class ShellChromeOwner {
     this.listeners = [
       listen(host.element, COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget),
       listen(document, "keydown", this.handleDocumentKeydown, { capture: true }),
+      listen(document, "keyup", this.sessionShortcuts.release, { capture: true }),
+      listen(window, "blur", this.sessionShortcuts.release),
       listen(document, "keydown", this.handleDocumentKeydownBubble),
       listen(window, "dragover", this.handleUnhandledFileDrag),
       listen(window, "drop", this.handleUnhandledFileDrag),
@@ -150,6 +155,8 @@ export class ShellChromeOwner {
       ["openclaw:native-open-search", this.openPalette],
       ["openclaw:native-toggle-search", this.handleNativeToggleSearch],
       ["openclaw:native-new-session", this.handleNativeNewSession],
+      ["openclaw:native-previous-session", () => this.sessionShortcuts.dispatchNative("[")],
+      ["openclaw:native-next-session", () => this.sessionShortcuts.dispatchNative("]")],
       ["openclaw:native-navigate", this.handleNativeNavigate],
       [TERMINAL_PANEL_TOGGLE_EVENT, this.panels.handleDeferredTerminalToggle],
       [TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.panels.handleDeferredTerminalDock],
@@ -173,6 +180,7 @@ export class ShellChromeOwner {
   }
 
   disconnect(): void {
+    this.sessionShortcuts.release();
     this.commandPaletteLoading.clear();
     const listenerOwner = this.listeners;
     this.listeners?.forEach((stop) => stop());
@@ -388,19 +396,19 @@ export class ShellChromeOwner {
     if (event.defaultPrevented || !matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
       return;
     }
-    if (host.navDrawerOpen && isMobileNavLayout() && !this.shouldIgnoreSettingsEscape(event)) {
+    if (host.navDrawerOpen && isMobileNavLayout() && !this.ignoreNavigationKey(event)) {
       event.preventDefault();
       host.closeNavDrawer({ restoreFocus: true });
-    } else if (
-      isSettingsTakeover(host.routeState.routeId) &&
-      !this.shouldIgnoreSettingsEscape(event)
-    ) {
+    } else if (isSettingsTakeover(host.routeState.routeId) && !this.ignoreNavigationKey(event)) {
       event.preventDefault();
       host.shellNavigation.leaveSettingsLevel();
     }
   };
 
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
+    if (this.sessionShortcuts.handleKeydown(event)) {
+      return;
+    }
     const host = this.host;
     if (
       this.pendingDebugFrame &&
@@ -575,8 +583,8 @@ export class ShellChromeOwner {
     this.requestShellComponent("shortcuts", descriptor);
   };
 
-  // Only connected overlays and editable controls own Escape before Settings.
-  shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
+  // Connected overlays and editable controls own navigation keys before the shell.
+  ignoreNavigationKey(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
     if (
@@ -590,15 +598,17 @@ export class ShellChromeOwner {
     ) {
       return true;
     }
-    const target = event.target;
-    const control =
-      target instanceof Element
-        ? target.closest(
+    // Composed paths retain editable descendants inside open shadow roots.
+    return event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof Element &&
+          target !== host.navDrawerElement &&
+          target.matches(
             "input, textarea, select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
-          )
-        : null;
-    // The drawer owns Escape; its own dialog role is not a nested modal.
-    return control !== null && control !== host.navDrawerElement;
+          ),
+      );
   }
 
   get commandPaletteLoading() {

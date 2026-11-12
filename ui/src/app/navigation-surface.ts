@@ -23,7 +23,12 @@ export type ShellNavigationElements = {
 export type ShellNavigationSurfaces = {
   readonly element: HTMLElement;
   readonly navigationSidebar: HTMLElement &
-    Partial<Pick<AppSidebarElement, "dismissTransientMenus" | "activeNavigationViewElement">>;
+    Partial<
+      Pick<
+        AppSidebarElement,
+        "dismissTransientMenus" | "activeNavigationViewElement" | "selectAdjacentSession"
+      >
+    >;
   readonly queryRenderedElements: RouteElements["renderedElements"];
 };
 

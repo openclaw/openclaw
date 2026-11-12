@@ -27,6 +27,26 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+### Session keyboard navigation
+
+From a session, press **Cmd+[** / **Cmd+]** on macOS, or **Ctrl+[** / **Ctrl+]**
+elsewhere, to select the previous / next session in sidebar order. Traversal wraps
+at the ends and follows the current sidebar filters, expanded groups and children,
+and loaded rows. Repeated appearances of the same session are visited once.
+The sidebar must be in its Sessions view, with the current session in that list;
+no additional pages are loaded for this action.
+
+These shortcuts do not act while typing in the composer or another editable
+control, during IME composition, or while a dialog or menu is open. Held-key
+repeats are ignored. Focus a session link or the main area before traversing.
+When a traversal is handled, it replaces the browser's Back/Forward behavior for
+that keypress. It does not change gateways or claim digit shortcuts.
+In the Mac app, the Previous Session / Next Session menu actions use the same
+guards. Native Back / Forward remain available with **Cmd+Option+Left Arrow** /
+**Cmd+Option+Right Arrow**.
+Use **Cmd+K** (or **Ctrl+K**) to find a session by title, and **Cmd+/** (or **Ctrl+/**)
+to view keyboard shortcuts.
+
 Chat portraits keep a fixed frame while images load. Previously verified
 same-origin portrait URLs reuse the browser image cache within the admitted
 operator's connection scope when using ambient authentication. Unknown URLs and
