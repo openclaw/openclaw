@@ -64,6 +64,7 @@ import {
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
+import { ComposerMentionHighlights } from "../chat/components/composer-mention-highlights.tsx";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import {
   NewSessionPlusMenu,
@@ -390,6 +391,8 @@ export function NewSessionComposer(props: {
   );
   const visibleMessage = createMemo(() => frame().visibleMessage);
   const messageValue = createLiveValue(visibleMessage);
+  const [mentionScrollTop, setMentionScrollTop] = createSignal(0);
+  const highlightedMentions = () => (options().dictationActive ? [] : (options().mentions ?? []));
   let input: HTMLTextAreaElement | undefined;
   let composer: HTMLDivElement | undefined;
   let footer: HTMLDivElement | undefined;
@@ -517,7 +520,10 @@ export function NewSessionComposer(props: {
                 input = element;
                 messageValue(element);
               }}
-              class="new-session-page__message"
+              class={[
+                "new-session-page__message",
+                { "composer-has-mentions": highlightedMentions().length > 0 },
+              ]}
               rows="1"
               autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               disabled={options().submitting || options().messageLocked}
@@ -562,12 +568,20 @@ export function NewSessionComposer(props: {
                   end: target.selectionEnd,
                   inputType: event.inputType,
                 };
+                if (
+                  textarea.completeMentionPossessive(event, frame().mentionMenuHost.getMentions())
+                ) {
+                  return;
+                }
                 textarea.emojiMenu.complete(
                   event,
                   !frame().composerLocked && !options().nativeTerminal && !textarea.composing,
                 );
               }}
-              onScroll={handleTextareaOverflowScroll}
+              onScroll={(event) => {
+                handleTextareaOverflowScroll(event);
+                setMentionScrollTop(event.currentTarget.scrollTop);
+              }}
               onWheel={handleTextareaOverflowInteraction}
               onPointerDown={handleTextareaOverflowInteraction}
               onSelect={(event) => frame().handleSelect(event)}
@@ -610,6 +624,11 @@ export function NewSessionComposer(props: {
                   handleChatAttachmentPaste(event, frame().attachmentProps);
                 }
               }}
+            />
+            <ComposerMentionHighlights
+              text={frame().visibleMessage}
+              mentions={highlightedMentions()}
+              scrollTop={mentionScrollTop()}
             />
             <span class="agent-chat__composer-placeholder" aria-hidden="true">
               {placeholder()}

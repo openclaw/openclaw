@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { HumanMentionInput } from "../../lib/chat/human-mentions.ts";
 import { refreshSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
 import {
@@ -36,6 +37,42 @@ export function createNewSessionComposerTextarea() {
     composing: false,
     // SAFETY: Beforeinput fills this optional selection snapshot.
     mentionInput: undefined as HumanMentionInput | undefined,
+    completeMentionPossessive(event: InputEvent, mentions: readonly HumanMention[]) {
+      const target = event.target;
+      if (
+        !(target instanceof HTMLTextAreaElement) ||
+        event.isComposing ||
+        !event.cancelable ||
+        event.inputType !== "insertText" ||
+        (event.data !== "'" && event.data !== "’") ||
+        target.selectionStart !== target.selectionEnd
+      ) {
+        return false;
+      }
+      const caret = target.selectionStart;
+      if (
+        target.value[caret - 1] !== " " ||
+        !mentions.some((mention) => mention.end === caret - 1)
+      ) {
+        return false;
+      }
+      // Like emoji completion, replace through the browser editor to retain native undo.
+      target.setSelectionRange(caret - 1, caret);
+      const edit = control.mentionInput;
+      control.mentionInput = {
+        value: target.value,
+        start: caret - 1,
+        end: caret,
+        inputType: "insertReplacementText",
+      };
+      if (target.ownerDocument.execCommand?.("insertText", false, event.data)) {
+        event.preventDefault();
+        return true;
+      }
+      target.setSelectionRange(caret, caret);
+      control.mentionInput = edit;
+      return false;
+    },
     capabilityMenuOpen: false,
     // SAFETY: The closed menu starts at its root; navigation keeps this union.
     capabilityMenuView: "root" as ChatComposerPlusMenuView,
