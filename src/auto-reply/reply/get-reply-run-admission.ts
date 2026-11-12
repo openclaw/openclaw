@@ -199,6 +199,15 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     : !isNewSession && threadStarterBody
       ? `[Thread starter - for context]\n${threadStarterBody}`
       : undefined;
+  // A yielded tool's result continues the session's own work, so it drains passive notices
+  // like an ordinary turn. Other producer-owned turns (automations, hooks, explicit wakes)
+  // consume only their captured occurrence and leave unrelated notices queued.
+  const producerOwnedSelection =
+    opts?.internalEventExecution !== undefined &&
+    !(
+      ctx.InputProvenance?.kind === "internal_system" &&
+      ctx.InputProvenance.sourceTool === "tool_handoff"
+    );
   const drainedSystemEventBlocks: string[] = [];
   const drainSystemEventBlocks = async () => {
     if (useFastReplyRuntime) {
@@ -222,10 +231,8 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
-        // Internal event turns drain passive notices like ordinary turns. Producer-owned
-        // occurrences (claimed turns, deferred automations, held exec attempts) stay with
-        // their own owner: the drain skips turn-owned and delivery-held entries.
-        events: eventContext?.events,
+        // Ordinary drains still skip turn-owned and delivery-held entries.
+        events: producerOwnedSelection ? (eventContext?.events ?? []) : eventContext?.events,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
