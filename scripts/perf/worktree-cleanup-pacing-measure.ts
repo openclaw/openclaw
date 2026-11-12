@@ -29,6 +29,8 @@
  * synthetic background IO workload to measure deletion impact; trace admission alone
  * is not a physical pressure experiment. Acceptance: baseline near-zero scratch progress,
  * candidate positive progress, no commit/loop latency regression beyond A/A spread.
+ * PSI runs flush setup writes, settle for 30 seconds, then commit a small marker before
+ * timing. Report both flush durations; bulk fixture writeback is not cleanup IO.
  * Seed a large isolated DB once with --seed-transcript-gib <logical-gib>, close the process, then
  * reuse its reported agentDatabasePath with --agent-db-fixture for every measured arm.
  * The transcript owner compresses synthetic content; report physical DB bytes, not
@@ -279,6 +281,19 @@ for (let offset = 0; offset < sessions; offset += 100) {
 const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
 agentDatabase.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 const agentDatabaseBytes = fs.statSync(agentDatabase.path).size;
+const preparationFlushMs: number[] = [];
+if (values["psi-trace"]) {
+  assert.equal(process.platform, "linux", "PSI trace requires Linux; no platform spoofing");
+  for (let flush = 0; flush < 2; flush++) {
+    if (flush) {
+      await new Promise((resolve) => setTimeout(resolve, 30_000));
+      fs.writeFileSync(path.join(output, "setup-complete"), "synthetic preparation complete\n");
+    }
+    const started = performance.now();
+    execFileSync("sync", ["-f", output]);
+    preparationFlushMs.push(performance.now() - started);
+  }
+}
 let skippedWaitMs = 0;
 const now = () => Date.now() + skippedWaitMs;
 const scheduler = new GatewayScheduler({
@@ -332,7 +347,6 @@ const pressureFile = path.join(output, "synthetic-psi");
 const open = fsPromises.open;
 let pressureProbeReads = 0;
 if (values["psi-trace"]) {
-  assert.equal(process.platform, "linux", "PSI trace requires Linux; no platform spoofing");
   fsPromises.open = (file, flags, mode) => {
     if (file === "/proc/pressure/io") {
       pressureProbeReads++;
@@ -463,6 +477,7 @@ try {
     worktrees,
     sessions,
     agentDatabaseBytes,
+    preparationFlushMs,
     agentDatabasePath: agentDatabase.path,
     scratchClones,
     scratchRemaining:
