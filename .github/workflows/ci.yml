@@ -11,13 +11,13 @@ on:
         default: ""
         type: string
       runner_backend:
-        description: Runner qualification override for an exact-head canonical PR or exact main dispatch.
+        description: Qualify runners on an exact PR head or main revision.
         required: false
         default: default
         type: choice
         options: [default, hybrid, runson, boat]
       ci_shape:
-        description: Main coverage for an admitted exact-head qualification; default preserves ordinary dispatch behavior.
+        description: Use main coverage for an admitted qualification; otherwise keep default coverage.
         required: false
         default: default
         type: choice
