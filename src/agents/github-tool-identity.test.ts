@@ -1,4 +1,4 @@
-import { constants as fsConstants } from "node:fs";
+import fsSync, { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +63,21 @@ describe("GitHub tool identity", () => {
   });
   const statusFor = (config: OpenClawConfig, selectedScope: "system" | "agent" = "system") =>
     resolveGitHubToolIdentityStatus({ config, agentId: "main", selectedScope, env });
+  it("reads current managed credentials without synchronous filesystem work on the caller", async () => {
+    const profileDir = profilePath();
+    await writeProfile(profileDir, "synthetic-initial");
+    const config = { tools: { github: { profileId } } };
+    await statusFor(config);
+    const lstat = vi.spyOn(fsSync, "lstatSync");
+    for (const credential of ["synthetic-initial", "synthetic-replaced"]) {
+      await writeProfile(profileDir, credential);
+      expect((await statusFor(config)).effective.credentialState).toBe("available");
+      expectVerifiedToken(credential);
+    }
+    expect(lstat.mock.calls.filter(([target]) => String(target).startsWith(profileDir))).toEqual(
+      [],
+    );
+  });
   beforeEach(() => {
     root = tempDirs.make("openclaw-github-identity-");
     env = { OPENCLAW_STATE_DIR: root };
