@@ -93,6 +93,15 @@ export function setOpenClawIdTunnelPrincipalResolver(
   resolver = next;
 }
 
+/** Gateway admission for a currently listed peer; member names need a role policy. */
+export function isOpenClawIdTunnelPrincipalAdmitted(
+  principal: OpenClawIdTunnelPrincipal | undefined,
+): principal is OpenClawIdTunnelPrincipal {
+  return (
+    principal !== undefined && (principal.kind !== "member" || MEMBER_POLICIES.has(principal.role))
+  );
+}
+
 /**
  * Resolves the principal of a relayed connection. `null` means no resolver is
  * published (OpenClaw ID off); `undefined` means the key is not admitted.
@@ -104,9 +113,7 @@ export async function resolveOpenClawIdTunnelPrincipal(
     return null;
   }
   const principal = await resolver(peerKey);
-  return principal?.kind === "member" && !MEMBER_POLICIES.has(principal.role)
-    ? undefined
-    : principal;
+  return isOpenClawIdTunnelPrincipalAdmitted(principal) ? principal : undefined;
 }
 
 /** Publishes or clears the synchronous lookup, alongside the resolver. */
@@ -125,7 +132,7 @@ export function setOpenClawIdTunnelPrincipalLookup(
  * OpenClaw ID turning off (no lookup published) makes it false.
  */
 export function isOpenClawIdTunnelPrincipalCurrent(principal: OpenClawIdTunnelPrincipal): boolean {
-  if (principal.kind === "member" && !MEMBER_POLICIES.has(principal.role)) {
+  if (!isOpenClawIdTunnelPrincipalAdmitted(principal)) {
     return false;
   }
   const current = lookup?.(principal.peerKey);
