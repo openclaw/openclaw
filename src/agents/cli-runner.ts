@@ -36,6 +36,7 @@ import {
   settleCliPreparationError,
 } from "./cli-runner/cli-run-settlement.js";
 import {
+  buildCliAssistantTranscriptUsage,
   buildCliHookAssistantMessage,
   buildCliHookUserMessage,
   finalizeCliContextEngineTurn,
@@ -595,6 +596,13 @@ async function runPreparedCliAgentOwned(
                 },
               }
             : undefined;
+        const pricedUsage = buildCliAssistantTranscriptUsage({
+          runParams: params,
+          modelId: context.modelId,
+          agentDir: context.agentDir,
+          usage: output.usage,
+          turnUsage: output.diagnosticUsage,
+        });
         const assistantTranscript = await persistCliAssistantTranscript({
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
@@ -602,13 +610,16 @@ async function runPreparedCliAgentOwned(
           text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
           ...(nativeFinal ? { nativeIdentity: nativeFinal.identity } : {}),
           modelId: context.modelId,
-          usage: output.usage,
-          turnUsage: output.diagnosticUsage,
+          usage: pricedUsage.usage,
           stopReason: resolveCliAssistantStopReason(output),
           yielded: output.yielded,
         });
         const runResult = buildCliRunResult({
           ...resultContext,
+          preparedContextAgentMeta: {
+            ...resultContext.preparedContextAgentMeta,
+            ...(pricedUsage.costUsd !== undefined ? { costUsd: pricedUsage.costUsd } : {}),
+          },
           output,
           preparedReply,
           effectiveCliSessionId,

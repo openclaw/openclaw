@@ -234,14 +234,17 @@ export function capCliToolAvailability(
  * Keep an operator-managed native tool only while the run's tool policy allows every
  * capability it confers (WebSearch confers web_search), so profile, agent, group, sender,
  * sandbox, and session policy cover the native tool too. Native search also follows the
- * CLI web-search rule. Capability-free selections never resolve the policy profile.
+ * CLI web-search rule. A capability that OpenClaw's own catalog already serves (a
+ * configured search provider lists web_search) keeps priority, so the native duplicate is
+ * dropped. Capability-free selections never resolve the policy profile.
  */
 export async function retainPolicyAllowedManagedNativeTools(
-  params: RunCliAgentParams,
+  projection: { params: RunCliAgentParams; tools: readonly { name: string }[] },
   managedNativeTools: readonly string[],
   backend: Pick<ResolvedCliBackend, "bundleMcp" | "bundleMcpMode" | "projectNativeToolAuthority">,
   resolveCapabilityProfile: () => Promise<ResolvedConversationCapabilityProfile>,
 ): Promise<RunCliAgentParams> {
+  const { params } = projection;
   const conferred = managedNativeTools.map(
     (name) => [name, backend.projectNativeToolAuthority?.([name]) ?? []] as const,
   );
@@ -268,6 +271,7 @@ export async function retainPolicyAllowedManagedNativeTools(
           !capabilities.every(
             (capability) =>
               (capability !== "web_search" || nativeWebSearchEnabled) &&
+              !projection.tools.some((tool) => tool.name === capability) &&
               isConversationToolAllowed(profile, capability),
           ),
       )
