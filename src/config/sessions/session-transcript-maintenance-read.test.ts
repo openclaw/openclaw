@@ -22,6 +22,7 @@ import type {
 } from "./session-transcript-hydration.types.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import * as reportReads from "./session-transcript-report-read.js";
 
 const customType = "openclaw.code-mode-store";
 const storeWrite = (value: unknown) => ({
@@ -125,7 +126,34 @@ it("reads only append work and rejects later checkpoints across branches and adm
         leafEntryId,
         checkpoint: previous,
       });
-    const first = read(oldLeaf);
+    // Cold replay must fold an overwrite before decoding the next payload.
+    const readEvent = reportReads.readTranscriptReportEvent;
+    let buffered = 0;
+    let maxBuffered = 0;
+    const observe = vi
+      .spyOn(reportReads, "readTranscriptReportEvent")
+      .mockImplementation((...args) => {
+        const event = readEvent(...args);
+        if (event?.customType === customType) {
+          const data = event.data;
+          maxBuffered = Math.max(maxBuffered, ++buffered);
+          Object.defineProperty(event, "data", {
+            get() {
+              buffered--;
+              return data;
+            },
+          });
+        }
+        return event;
+      });
+    const first = (() => {
+      try {
+        return read(oldLeaf);
+      } finally {
+        observe.mockRestore();
+      }
+    })();
+    expect(maxBuffered).toBe(1);
     expect(first.store?.writes.get("key")).toEqual({
       value: "before admission",
       networkContent: true,

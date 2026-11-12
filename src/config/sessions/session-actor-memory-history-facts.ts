@@ -241,7 +241,7 @@ function maintenance(
               ? { writes: collectCodeModeStoreWrites(events), incremental: false }
               : undefined,
           }
-        : { events }),
+        : { events: events ? Array.from(events) : undefined }),
     };
   }
 
