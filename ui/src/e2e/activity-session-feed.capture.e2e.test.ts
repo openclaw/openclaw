@@ -198,6 +198,7 @@ suite.define(() => {
         await group.waitFor();
         await page.setViewportSize({ height: 844, width: 390 });
         await time.waitFor();
+        await expect.poll(() => activity.getByRole("searchbox").isVisible()).toBe(true);
         const buttonTops = await time
           .locator(".settings-segmented__btn")
           .evaluateAll((buttons) =>
@@ -227,7 +228,7 @@ suite.define(() => {
         expect(await phoneInspect.getAttribute("href")).toBe(
           "/activity?view=run&run=mock%20run%3Aa%2Fb",
         );
-        // The person filter keeps its active trigger and removable chip on phones.
+        // Phones keep the selected person on the filter trigger, without a separate chip.
         await people.click();
         await page.locator(`[data-activity-person="${alice.id}"]`).click();
         await waitForControlUiRoute(page, {
@@ -237,7 +238,7 @@ suite.define(() => {
         await expect
           .poll(() => people.evaluate((el) => el.classList.contains("active")))
           .toBe(true);
-        await activity.locator(".activity-feed__people-clear").waitFor();
+        expect(await activity.locator(".activity-feed__people-clear").count()).toBe(0);
         await people.click();
         await page.locator('[data-activity-person=""]').click();
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
@@ -255,7 +256,7 @@ suite.define(() => {
       },
     ));
 
-  it("keeps Live status filters and actions usable in the phone toolbar", () =>
+  it("folds Live activity controls into the filter popover and actions menu on phones", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
       async ({ page }) => {
@@ -278,50 +279,40 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activity = page.locator("openclaw-activity-page");
         await activity.locator(".activity-current-work__row").waitFor();
-        for (const [id, name, isError] of [
-          ["call-one", "read", false],
-          ["call-two", "exec", true],
+        for (const [id, isError] of [
+          ["call-one", false],
+          ["call-two", true],
         ] as const) {
           await gateway.emitGatewayEvent("session.tool", {
             stream: "tool",
             runId: "live-run",
             sessionKey: key,
-            data: { toolCallId: id, name, phase: "result", isError, result: { text: id } },
+            data: { toolCallId: id, name: "read", phase: "result", isError, result: { text: id } },
           });
         }
         const entries = activity.locator(".activity-entry");
         await expectCount(entries).toBe(2);
 
-        const toolbar = activity.locator(".activity-live-toolbar");
-        const trigger = toolbar.locator("#activity-live-filter-trigger");
-        const statuses = toolbar.locator(".activity-status-filter");
-        await expectCount(statuses).toBe(3);
-        for (const status of await statuses.all()) {
-          await status.waitFor();
-        }
-        await toolbar.locator(".activity-live-autofollow").getByRole("switch").waitFor();
-        await statuses.nth(1).click();
-        await expectCount(entries).toBe(1);
-        await expectAttribute(statuses.nth(1), "aria-pressed").toBe("false");
-        await statuses.nth(1).click();
-        await expectCount(entries).toBe(2);
-        await expectAttribute(statuses.nth(1), "aria-pressed").toBe("true");
+        const trigger = activity.locator("#activity-live-filter-trigger");
+        const statuses = activity.locator('.activity-status-filter input[type="checkbox"]');
 
         await trigger.click();
         const panel = activity.locator(".activity-live-filter-popover:popover-open");
-        await panel.getByRole("combobox").selectOption("read");
+        await expectCount(panel.locator('.activity-status-filter input[type="checkbox"]')).toBe(3);
+        await expectCount(panel.locator(".activity-live-autofollow").getByRole("switch")).toBe(1);
+        await statuses.nth(1).click();
         await expectCount(entries).toBe(1);
         await expect
           .poll(() => trigger.evaluate((el) => el.classList.contains("active")))
           .toBe(true);
-        await panel.getByRole("combobox").selectOption("");
+        await statuses.nth(1).click();
         await expectCount(entries).toBe(2);
         await expect
           .poll(() => trigger.evaluate((el) => el.classList.contains("active")))
           .toBe(false);
         await page.keyboard.press("Escape");
 
-        const actions = toolbar.locator(".activity-live-actions__trigger");
+        const actions = page.locator(".topnav-shell__page-actions .activity-live-actions__trigger");
         await actions.click();
         await page.getByRole("menuitem", { name: "Expand all" }).click();
         await expect

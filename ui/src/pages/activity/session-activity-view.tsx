@@ -45,6 +45,7 @@ registerEnglishCatalog(registerActivityEnglish);
 
 export type SessionActivityViewProps = {
   toolbarLeading?: JSX.Element;
+  phone?: boolean;
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
@@ -342,23 +343,51 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             ariaLabel={t("activityFeed.time")}
             options={ACTIVITY_TIME_FILTERS.map((time) => ({
               value: time,
-              label: time === "all" ? t("activityFeed.timeAllShort") : time,
+              label: props.phone
+                ? t(TIME_LABELS[time])
+                : time === "all"
+                  ? t("activityFeed.timeAllShort")
+                  : time,
+              compactLabel: props.phone
+                ? time === "all"
+                  ? t(TIME_LABELS[time])
+                  : time
+                : undefined,
               ariaLabel: t(TIME_LABELS[time]),
               title: t(TIME_LABELS[time]),
             }))}
             onChange={(time) => props.onFiltersChange({ ...props.filters, time })}
             onReselect={(time) => props.onFiltersChange({ ...props.filters, time })}
           />
-          <HeaderSearch
-            title=""
-            class="activity-toolbar__search activity-feed__search"
-            label={t("activityFeed.searchPlaceholder")}
-            query={props.filters.query}
-            open={searchOpen() || Boolean(props.filters.query)}
-            onOpenChange={setSearchOpen}
-            onQueryChange={(query) => props.onFiltersChange({ ...props.filters, query })}
-          />
+          <Show
+            when={props.phone}
+            fallback={
+              <HeaderSearch
+                title=""
+                class="activity-toolbar__search activity-feed__search"
+                label={t("activityFeed.searchPlaceholder")}
+                query={props.filters.query}
+                open={searchOpen() || Boolean(props.filters.query)}
+                onOpenChange={setSearchOpen}
+                onQueryChange={(query) => props.onFiltersChange({ ...props.filters, query })}
+              />
+            }
+          >
+            <label class="data-table-search activity-feed__search">
+              <Icon name="search" />
+              <input
+                type="search"
+                aria-label={t("activityFeed.searchPlaceholder")}
+                value={props.filters.query}
+                placeholder={t("activityFeed.searchPlaceholder")}
+                onInput={(event) =>
+                  props.onFiltersChange({ ...props.filters, query: event.currentTarget.value })
+                }
+              />
+            </label>
+          </Show>
           <PeopleControl
+            phone={props.phone}
             view={props}
             people={people()}
             selectedPerson={selectedPerson()}
@@ -366,7 +395,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           />
         </div>
       </div>
-      <Show when={selectedPerson()}>
+      <Show when={!props.phone && selectedPerson()}>
         {(person) => (
           <PersonFilterChip
             person={person()}

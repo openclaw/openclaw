@@ -117,6 +117,20 @@ a.activity-current-work__row:hover {
   padding-inline: var(--space-1);
 }
 
+.activity-feed__toolbar,
+.activity-live-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+
+.activity-feed__toolbar {
+  padding-inline: 0;
+}
+
 .activity-toolbar {
   display: flex;
   flex: 0 0 auto;
@@ -136,24 +150,24 @@ a.activity-current-work__row:hover {
   margin-inline-start: auto;
 }
 
-.activity-mode-tabs.hub-tabs {
+.activity-toolbar .activity-mode-tabs.hub-tabs {
   margin: 0;
   padding: 0;
 }
 
-.activity-mode-tabs .hub-tab {
+.activity-toolbar .activity-mode-tabs .hub-tab {
   min-height: var(--settings-control-height);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-md);
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-mode-tabs .hub-tab[active] {
+.activity-toolbar .activity-mode-tabs .hub-tab[active] {
   background: var(--bg-hover);
   box-shadow: none;
 }
 
-.activity-mode-tabs .hub-tab:focus-visible {
+.activity-toolbar .activity-mode-tabs .hub-tab:focus-visible {
   box-shadow: var(--focus-ring);
 }
 
@@ -184,6 +198,30 @@ a.activity-current-work__row:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.activity-feed__search:where(:not(.header-search)) {
+  position: relative;
+  flex: 1 1 240px;
+  min-width: 180px;
+}
+
+.activity-feed__search:where(:not(.header-search)) svg {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  translate: 0 -50%;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8px;
+  pointer-events: none;
+}
+
+.activity-feed__search:where(:not(.header-search)) input {
+  height: var(--settings-control-height);
+  padding-left: 30px;
 }
 
 .activity-toolbar__search.header-search {
@@ -226,9 +264,7 @@ a.activity-current-work__row:hover {
   display: flex;
 }
 
-.activity-feed__people-trigger,
-.activity-live-filter-trigger,
-.activity-live-actions__trigger {
+.activity-feed__people-trigger {
   width: var(--settings-control-height);
   min-width: var(--settings-control-height);
   height: var(--settings-control-height);
@@ -958,6 +994,13 @@ a.activity-current-work__row:hover {
   white-space: nowrap;
 }
 
+.activity-live-filter-trigger {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  height: var(--settings-control-height);
+  padding: 0;
+}
+
 .activity-live-filter-trigger.active,
 .activity-feed__people-trigger.active {
   border-color: var(--accent);
@@ -982,44 +1025,16 @@ a.activity-current-work__row:hover {
 .activity-status-filters {
   display: inline-flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--space-3);
 }
 
 .activity-status-filter {
+  display: inline-flex;
+  align-items: center;
   gap: var(--space-1);
   color: var(--text);
   font-size: var(--control-ui-text-sm);
-  border-radius: var(--radius-full);
-}
-
-.activity-status-filter::before {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--muted);
-  content: "";
-}
-
-.activity-toolbar .activity-status-filter[aria-pressed="true"] {
-  border-color: var(--border-strong);
-  background: var(--bg-elevated);
-  color: var(--text-strong);
-}
-
-.activity-status-filter[aria-pressed="true"][data-status="running"]::before {
-  background: var(--status-running);
-}
-
-.activity-status-filter[aria-pressed="true"][data-status="done"]::before {
-  background: var(--ok);
-}
-
-.activity-status-filter[aria-pressed="true"][data-status="error"]::before {
-  background: var(--danger);
-}
-
-.activity-live-toolbar {
-  margin-bottom: var(--space-5);
+  cursor: var(--cursor-action);
 }
 
 .activity-entry__summary:focus-visible {
@@ -1170,6 +1185,16 @@ a.activity-current-work__row:hover {
     overflow: visible;
   }
 
+  .activity-feed__search:where(:not(.header-search)),
+  .activity-live-search {
+    flex-basis: 100%;
+    order: -1;
+  }
+
+  .activity-live-filter-trigger {
+    margin-left: auto;
+  }
+
   .activity-feed__main {
     overflow: visible;
     padding-block: var(--space-4);
@@ -1222,42 +1247,91 @@ a.activity-current-work__row:hover {
 }
 
 @media (max-width: 640px) {
-  .activity-toolbar {
-    row-gap: var(--space-3);
-  }
-
-  .activity-toolbar > .activity-mode-tabs {
-    flex-basis: 100%;
-  }
-
   .activity-toolbar__actions {
-    flex: 1 1 auto;
+    display: contents;
   }
 
-  .activity-feed__toolbar .activity-toolbar__actions {
-    flex-basis: 100%;
+  .activity-feed__people-popover--phone .activity-feed__people-panel {
+    max-height: min(480px, 70vh);
+    overflow-y: auto;
   }
 
-  .activity-toolbar__search[data-searching] {
-    flex: 1 1 140px;
-    width: auto;
+  .activity-feed__people-popover--phone .activity-feed__people-list {
+    display: contents;
+  }
+
+  /* Search and person share a row; the time range takes the full row below. */
+  .activity-feed__search,
+  .activity-live-search {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .activity-feed__search input,
+  .activity-live-search input {
+    text-overflow: ellipsis;
+  }
+
+  .activity-feed__people-control {
+    margin-left: 0;
+  }
+
+  .activity-feed__time-filter {
+    display: flex;
+    flex: 1 0 100%;
+    order: 1;
   }
 
   .activity-feed__time-filter > .settings-segmented__btn {
-    padding-inline: var(--space-2);
+    flex: 1;
+    justify-content: center;
   }
 
-  .activity-live-toolbar .activity-status-filters {
-    flex-basis: 100%;
+  .activity-feed__people-trigger,
+  .activity-live-filter-trigger,
+  .activity-live-actions__trigger {
+    width: var(--settings-control-height);
+    min-width: 0;
+    max-width: none;
+    height: var(--settings-control-height);
+    padding: 0;
+    justify-content: center;
   }
 
-  .activity-live-autofollow {
-    margin-inline-end: auto;
+  .activity-feed__people-trigger svg,
+  .activity-live-actions__trigger svg {
+    width: 16px;
+    height: 16px;
   }
 
   .activity-live-actions__trigger .oc-menu-item__label {
     display: inline-flex;
     flex: none;
+  }
+
+  .activity-live-toolbar {
+    flex-wrap: nowrap;
+  }
+
+  .activity-live-filter-trigger {
+    margin-left: 0;
+  }
+
+  .activity-live-filter-popover__panel {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .activity-live-autofollow {
+    justify-content: space-between;
+  }
+
+  /* The panel's labels read as one set: statuses, Tool and Auto-follow. */
+  .activity-live-filter-popover__panel .field > span,
+  .activity-live-autofollow {
+    color: var(--text);
+    font-size: var(--control-ui-text-sm);
+    font-weight: var(--control-ui-font-weight-normal);
   }
 
   /* The page scrolls here, so Active sessions takes the height it needs instead of
@@ -1281,6 +1355,14 @@ a.activity-current-work__row:hover {
 
   .activity-entry + .activity-entry {
     margin-top: var(--space-1);
+  }
+
+  .activity-feed__toolbar {
+    padding-block: var(--space-3);
+  }
+
+  .activity-feed__main {
+    padding-top: 0;
   }
 
   /* Rows: title, one meta line, recap, with Inspect run closing the last line. */

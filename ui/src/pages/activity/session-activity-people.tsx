@@ -139,6 +139,7 @@ export function PersonFilterChip(props: {
 }
 
 export function PeopleControl(props: {
+  phone?: boolean;
   view: PeopleView;
   people: readonly ActivityPerson[];
   selectedPerson: PresenceViewer | null;
@@ -153,7 +154,7 @@ export function PeopleControl(props: {
     props.view.onFiltersChange({ ...props.view.filters, personId });
   };
   const matches = createMemo(() => {
-    const needle = query().trim().toLocaleLowerCase();
+    const needle = props.phone ? "" : query().trim().toLocaleLowerCase();
     return props.people.filter((person) =>
       compactPersonLabel(person).toLocaleLowerCase().includes(needle),
     );
@@ -169,8 +170,8 @@ export function PeopleControl(props: {
         id="activity-feed-people-trigger"
         type="button"
         class={[
-          "btn btn--sm btn--ghost activity-feed__people-trigger",
-          { active: Boolean(props.selectedPerson) },
+          "btn btn--sm activity-feed__people-trigger",
+          { "btn--ghost": !props.phone, active: Boolean(props.selectedPerson) },
         ]}
         aria-label={t("activityFeed.peopleButtonLabel")}
         aria-haspopup="dialog"
@@ -178,7 +179,7 @@ export function PeopleControl(props: {
         aria-expanded="false"
         onClick={() => popover?.overlay.request(!popover.overlay.open)}
       >
-        <Icon name="listFilter" />
+        <Icon name={props.phone ? "users" : "listFilter"} />
       </button>
       <Popover
         id="activity-feed-people-popover"
@@ -187,32 +188,41 @@ export function PeopleControl(props: {
         }}
         anchor={anchor}
         label={t("activityFeed.peopleButtonLabel")}
-        class="activity-feed__people-popover"
+        class={[
+          "activity-feed__people-popover",
+          { "activity-feed__people-popover--phone": props.phone },
+        ]}
         placement="bottom-end"
         onOpenChange={(open) => {
           if (open) {
-            searchInput?.focus({ preventScroll: true });
+            if (props.phone) {
+              popover?.overlay.surface.focus({ preventScroll: true });
+            } else {
+              searchInput?.focus({ preventScroll: true });
+            }
           } else {
             setQuery("");
           }
         }}
       >
         <div class="activity-feed__people-panel">
-          <div class="header-search activity-feed__people-search">
-            <Icon name="search" />
-            <HeaderSearchField
-              label={t("activityFeed.searchPeople")}
-              query={query()}
-              focus={false}
-              inputRef={(element) => {
-                searchInput = element;
-              }}
-              onQueryChange={setQuery}
-              onClose={() => popover?.overlay.request(false, "return")}
-            />
-          </div>
+          <Show when={!props.phone}>
+            <div class="header-search activity-feed__people-search">
+              <Icon name="search" />
+              <HeaderSearchField
+                label={t("activityFeed.searchPeople")}
+                query={query()}
+                focus={false}
+                inputRef={(element) => {
+                  searchInput = element;
+                }}
+                onQueryChange={setQuery}
+                onClose={() => popover?.overlay.request(false, "return")}
+              />
+            </div>
+          </Show>
           <div class="activity-feed__people-list">
-            <Show when={!query().trim()}>
+            <Show when={props.phone || !query().trim()}>
               <PersonRow
                 person={null}
                 view={props.view}
@@ -238,7 +248,7 @@ export function PeopleControl(props: {
                 </div>
               </>
             ) : undefined}
-            <Show when={query().trim() && matches().length === 0}>
+            <Show when={!props.phone && query().trim() && matches().length === 0}>
               <p class="activity-feed__footer">{t("common.pickerNoMatches")}</p>
             </Show>
           </div>

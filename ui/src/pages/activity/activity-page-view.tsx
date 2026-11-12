@@ -8,7 +8,6 @@ import "../../styles/identity-avatar.css";
 import "../../styles/agent-row-chip.css";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { JSX } from "@solidjs/web";
 import {
   createDeferred,
   createMemo,
@@ -22,9 +21,9 @@ import {
 } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { HeaderSearch } from "../../components/solid/header-search.tsx";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
-import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -47,12 +46,14 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { ActivityModeTabs } from "./activity-mode-tabs.tsx";
 import type { ActivityPageState } from "./activity-page-state.ts";
 import { renderCurrentWork as CurrentWork } from "./current-work-view.tsx";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import { renderRunInspector as RunInspector } from "./run-inspector-view.tsx";
 import { ACTIVITY_SUMMARY_ENSURE_METHOD } from "./session-activity-owner.ts";
 import { renderSessionActivityView as SessionActivityView } from "./session-activity-view.tsx";
+import { ACTIVITY_PHONE_QUERY } from "./session-activity.ts";
 import "../../styles/activity.css";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
 
@@ -153,7 +154,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
   });
   const update = (patch: Partial<typeof filters>) =>
     setFilters((draft) => Object.assign(draft, patch));
-  const [liveSearchOpen, setLiveSearchOpen] = createSignal(false);
+  const phone = createMediaQuery(ACTIVITY_PHONE_QUERY);
   const liveRevision = createMemo(() => liveSnapshot().revision);
   const [expandedIds, setExpandedIds] = createSignal(() => {
     liveRevision();
@@ -202,33 +203,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
       activityExpiry.disconnect();
     };
   });
-  function ModeTabs() {
-    return (
-      <HubTabs
-        id="activity-mode"
-        active={route()?.mode ?? "sessions"}
-        tabs={[
-          { value: "sessions", label: t("activityFeed.sessionsMode") },
-          { value: "live", label: t("activity.runInspector.liveMode") },
-        ]}
-        ariaLabel={t("activity.runInspector.activityView")}
-        panelId="activity-mode-panel"
-        class="activity-mode-tabs"
-        variant="sub"
-        onSelect={(selected) =>
-          state().context.navigate("activity", {
-            search: selected === "live" ? "?view=live" : "",
-          })
-        }
-      />
-    );
-  }
-
-  function LiveActivityView(liveProps: {
-    basePath: string;
-    entries: readonly ActivityEntry[];
-    children?: JSX.Element;
-  }) {
+  const selectMode = (selected: string) =>
+    state().context.navigate("activity", { search: selected === "live" ? "?view=live" : "" });
+  function LiveActivityView(liveProps: { basePath: string; entries: readonly ActivityEntry[] }) {
     onSettled(() => {
       // Wait for insertion, then capture both responsive owners within the page.
       const root = stream?.closest<HTMLElement>("main.content") ?? stream;
@@ -247,22 +224,20 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     });
     function StatusFilter(props: { status: ActivityStatus }) {
       return (
-        <button
-          type="button"
-          class="btn btn--sm activity-status-filter"
-          data-status={props.status}
-          aria-pressed={filters.statusFilters[props.status] ? "true" : "false"}
-          onClick={() =>
-            update({
-              statusFilters: {
-                ...filters.statusFilters,
-                [props.status]: !filters.statusFilters[props.status],
-              },
-            })
-          }
-        >
-          {t(`activity.status.${props.status}`)}
-        </button>
+        <label class="activity-status-filter">
+          <Checkbox
+            checked={filters.statusFilters[props.status]}
+            onChange={(event) =>
+              update({
+                statusFilters: {
+                  ...filters.statusFilters,
+                  [props.status]: event.currentTarget.checked,
+                },
+              })
+            }
+          />
+          <span>{t(`activity.status.${props.status}`)}</span>
+        </label>
       );
     }
 
@@ -295,14 +270,16 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
 
     function ToolFilter(props: { toolNames: string[] }) {
       let popover: PopoverHandle | undefined;
+      // On phones the trigger also stands in for the status and auto-follow controls it holds.
+      const active = () =>
+        Boolean(filters.toolFilter) ||
+        (phone() &&
+          (!filters.autoFollow || STATUS_ORDER.some((status) => !filters.statusFilters[status])));
       return (
         <Popover
           id="activity-live-filter-popover"
           triggerId="activity-live-filter-trigger"
-          triggerClass={[
-            "btn btn--sm btn--ghost activity-live-filter-trigger",
-            { active: Boolean(filters.toolFilter) },
-          ]}
+          triggerClass={["btn btn--sm activity-live-filter-trigger", { active: active() }]}
           triggerTitle={t("activity.filters")}
           trigger={<Icon name="listFilter" />}
           ref={(handle) => {
@@ -318,6 +295,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           }}
         >
           <div class="activity-live-filter-popover__panel">
+            <Show when={phone()}>
+              <StatusFilters />
+            </Show>
             <label class="field">
               <span>{t("activity.toolFilter")}</span>
               <SettingsSelect
@@ -330,6 +310,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
                 ]}
               />
             </label>
+            <Show when={phone()}>
+              <AutoFollow />
+            </Show>
           </div>
         </Popover>
       );
@@ -337,24 +320,25 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
 
     function LiveToolbar(props: { toolNames: string[] }) {
       return (
-        <div class="activity-toolbar activity-live-toolbar">
-          <ModeTabs />
-          <StatusFilters />
-          <div class="activity-toolbar__actions">
-            <AutoFollow />
-            <HeaderSearch
-              title={undefined}
-              class="activity-toolbar__search activity-live-search"
-              label={t("activity.search")}
+        <div class="activity-live-toolbar">
+          <div class="activity-feed__search activity-live-search">
+            <span aria-hidden="true">
+              <Icon name="search" />
+            </span>
+            <input
+              class="settings-input"
+              type="search"
+              aria-label={t("activity.search")}
+              value={filters.filterText}
               placeholder={t("activity.searchPlaceholder")}
-              query={filters.filterText}
-              open={liveSearchOpen() || Boolean(filters.filterText)}
-              onOpenChange={setLiveSearchOpen}
-              onQueryChange={(filterText) => update({ filterText })}
+              onInput={(event) => update({ filterText: event.currentTarget.value })}
             />
-            <ToolFilter toolNames={props.toolNames} />
-            {actionsMenu()}
           </div>
+          <Show when={!phone()}>
+            <StatusFilters />
+            <AutoFollow />
+          </Show>
+          <ToolFilter toolNames={props.toolNames} />
         </div>
       );
     }
@@ -472,7 +456,7 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
         label={t("browser.moreActions")}
         placement="bottom-end"
         trigger={<Icon name="moreHorizontal" />}
-        triggerClass="btn btn--sm btn--ghost activity-live-actions__trigger"
+        triggerClass="btn btn--sm activity-live-actions__trigger"
         triggerAttributes={{ title: t("browser.moreActions") }}
         items={[
           {
@@ -509,56 +493,88 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
     // (.settings-workspace--fill-height … .activity-page … .activity-group …
     // .activity-stream) works. The named <section> keeps the region landmark.
     return (
-      <>
-        <LiveToolbar toolNames={toolNames()} />
-        {liveProps.children}
-        <section class="activity-page" aria-label={t("activity.title")}>
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">{t("activity.title")}</h2>
-            <div class="settings-section__actions">
-              <span class="activity-count" aria-live="polite">
-                {t("activity.visibleCount", {
-                  visible: String(filtered().length),
-                  total: String(liveProps.entries.length),
-                })}
-              </span>
-            </div>
-          </div>
-          <div class="settings-group activity-group">
-            <div
-              class="activity-stream"
-              ref={(element) => {
-                stream = element;
-              }}
-              role="group"
-              aria-label={t("activity.streamLabel")}
+      <section class="activity-page" aria-label={t("activity.title")}>
+        <div class="settings-section__header">
+          <h2 class="settings-section__heading">{t("activity.title")}</h2>
+          <div class="settings-section__actions">
+            <span class="activity-count" aria-live="polite">
+              {t("activity.visibleCount", {
+                visible: String(filtered().length),
+                total: String(liveProps.entries.length),
+              })}
+            </span>
+            <Show
+              when={phone()}
+              fallback={
+                <>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    disabled={filtered().length === 0}
+                    onClick={expandAll}
+                  >
+                    {t("activity.expandAll")}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    disabled={expandedIds().size === 0}
+                    onClick={collapseAll}
+                  >
+                    {t("activity.collapseAll")}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn--sm danger"
+                    disabled={liveProps.entries.length === 0}
+                    onClick={clearAll}
+                  >
+                    {t("activity.clear")}
+                  </button>
+                </>
+              }
             >
-              {filtered().length === 0 ? (
-                <div class="activity-empty">
-                  {liveProps.entries.length === 0 ? (
-                    <div>
-                      <p>{t("activity.empty")}</p>
-                      <p>{t("activity.emptyDescription")}</p>
-                    </div>
-                  ) : (
-                    t("activity.emptyFiltered")
-                  )}
-                </div>
-              ) : (
-                <For each={filtered()} keyed={(entry) => entry.id}>
-                  {(entry, index) => (
-                    <ActivityEntryView
-                      entry={entry()}
-                      formatTimestamp={formatTimestamp()}
-                      immediate={index() < 10 || index() >= filtered().length - 10}
-                    />
-                  )}
-                </For>
-              )}
-            </div>
+              <FloatingHeaderActions fallback={actionsMenu()}>
+                {actionsMenu()}
+              </FloatingHeaderActions>
+            </Show>
           </div>
-        </section>
-      </>
+        </div>
+        <div class="settings-group activity-group">
+          <LiveToolbar toolNames={toolNames()} />
+          <div
+            class="activity-stream"
+            ref={(element) => {
+              stream = element;
+            }}
+            role="group"
+            aria-label={t("activity.streamLabel")}
+          >
+            {filtered().length === 0 ? (
+              <div class="activity-empty">
+                {liveProps.entries.length === 0 ? (
+                  <div>
+                    <p>{t("activity.empty")}</p>
+                    <p>{t("activity.emptyDescription")}</p>
+                  </div>
+                ) : (
+                  t("activity.emptyFiltered")
+                )}
+              </div>
+            ) : (
+              <For each={filtered()} keyed={(entry) => entry.id}>
+                {(entry, index) => (
+                  <ActivityEntryView
+                    entry={entry()}
+                    formatTimestamp={formatTimestamp()}
+                    immediate={index() < 10 || index() >= filtered().length - 10}
+                  />
+                )}
+              </For>
+            )}
+          </div>
+        </div>
+      </section>
     );
   }
 
@@ -572,6 +588,9 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
         />
       </ShellLayoutBoundary>
       <SettingsWorkspace fillHeight>
+        <Show when={route()?.mode !== "run" && (phone() || route()?.mode !== "sessions")}>
+          <ActivityModeTabs mode={route()?.mode ?? "sessions"} onSelect={selectMode} />
+        </Show>
         <div
           id="activity-mode-panel"
           role={route()?.mode === "run" ? undefined : "tabpanel"}
@@ -582,7 +601,12 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <Switch>
             <Match when={route()?.mode === "sessions"}>
               <SessionActivityView
-                toolbarLeading={<ModeTabs />}
+                phone={phone()}
+                toolbarLeading={
+                  <Show when={!phone()}>
+                    <ActivityModeTabs mode={route()?.mode ?? "sessions"} onSelect={selectMode} />
+                  </Show>
+                }
                 expandedAutomationDays={expandedAutomationDays()}
                 filters={{
                   ...(sessionRoute()?.filters ?? {
@@ -660,37 +684,36 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
             </Match>
             <Match when={route()?.mode === "live"}>
               <div id="activity-live-panel">
+                <CurrentWork
+                  basePath={state().context.basePath}
+                  fallbackAgentId={resolveUiDefaultAgentId(sessionHost())}
+                  mainKey={resolveUiConfiguredMainKey(sessionHost())}
+                  globalScope={isUiGlobalScopeConfigured(sessionHost())}
+                  navigate={state().context.navigate}
+                  connected={state().context.gateway.snapshot.phase === "connected"}
+                  result={state().sessionActivity.result}
+                  read={state().sessionActivity.read}
+                  loading={pending() || state().sessionActivity.incomplete}
+                  incomplete={state().sessionActivity.incomplete}
+                  error={state().sessionActivity.error}
+                  onRetry={() => pageProps.page.syncSessionActivity("retry")}
+                />
+                <Show when={liveSnapshot().error}>
+                  <div role="alert">
+                    <SettingsStatus kind="danger" label={liveSnapshot().error ?? ""} />
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() => pageProps.page.retryLiveActivity()}
+                    >
+                      {t("common.retry")}
+                    </button>
+                  </div>
+                </Show>
                 <LiveActivityView
                   basePath={state().context.basePath}
                   entries={liveSnapshot().entries}
-                >
-                  <CurrentWork
-                    basePath={state().context.basePath}
-                    fallbackAgentId={resolveUiDefaultAgentId(sessionHost())}
-                    mainKey={resolveUiConfiguredMainKey(sessionHost())}
-                    globalScope={isUiGlobalScopeConfigured(sessionHost())}
-                    navigate={state().context.navigate}
-                    connected={state().context.gateway.snapshot.phase === "connected"}
-                    result={state().sessionActivity.result}
-                    read={state().sessionActivity.read}
-                    loading={pending() || state().sessionActivity.incomplete}
-                    incomplete={state().sessionActivity.incomplete}
-                    error={state().sessionActivity.error}
-                    onRetry={() => pageProps.page.syncSessionActivity("retry")}
-                  />
-                  <Show when={liveSnapshot().error}>
-                    <div role="alert">
-                      <SettingsStatus kind="danger" label={liveSnapshot().error ?? ""} />
-                      <button
-                        type="button"
-                        class="btn btn--sm"
-                        onClick={() => pageProps.page.retryLiveActivity()}
-                      >
-                        {t("common.retry")}
-                      </button>
-                    </div>
-                  </Show>
-                </LiveActivityView>
+                />
               </div>
             </Match>
           </Switch>

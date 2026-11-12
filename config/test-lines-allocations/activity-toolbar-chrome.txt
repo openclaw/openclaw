@@ -1,2 +1,2 @@
-# Activity toolbar geometry and preserved filtering, actions, and lifecycle interactions.
-112
+# Desktop Sessions controls with retained mobile filtering and lifecycle coverage.
+84

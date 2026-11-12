@@ -19,19 +19,6 @@ const { activityGateway, bindActivity, cleanup } = createActivityPageHarness();
 
 afterEach(cleanup);
 
-function clickLiveAction(container: HTMLElement, label: string) {
-  const trigger = container.querySelector<HTMLButtonElement>(".activity-live-actions__trigger");
-  trigger?.click();
-  flush();
-  expect(trigger?.getAttribute("aria-expanded")).toBe("true");
-  const item = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
-    (button) => button.textContent?.trim() === label,
-  );
-  expect(item?.textContent?.trim()).toBe(label);
-  item?.click();
-  flush();
-}
-
 describe("ActivityPage toolbar and filters", () => {
   it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
     await i18n.setLocale("en");
@@ -40,9 +27,9 @@ describe("ActivityPage toolbar and filters", () => {
     current().testOptions.onEvent?.(toolEvent("Mu\u0308nchen", "main", "exec", "live run:a/b"));
     current().testOptions.onEvent?.(toolEvent("Caf\u00e9"));
     const toolbar = container.querySelector(".activity-live-toolbar");
-    expect(toolbar?.querySelectorAll("button.activity-status-filter[aria-pressed]")).toHaveLength(
-      3,
-    );
+    expect(
+      toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
+    ).toHaveLength(3);
     expect(
       toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
     ).not.toBeNull();
@@ -59,16 +46,14 @@ describe("ActivityPage toolbar and filters", () => {
     filterTrigger?.click();
     expect(document.activeElement).toBe(container.querySelector(".activity-live-filter-popover"));
 
-    const done = toolbar?.querySelectorAll<HTMLButtonElement>(
-      "button.activity-status-filter[aria-pressed]",
+    const done = toolbar?.querySelectorAll<HTMLInputElement>(
+      '.activity-status-filter input[type="checkbox"]',
     )[1];
     done?.click();
     flush();
-    expect(done?.getAttribute("aria-pressed")).toBe("false");
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
     done?.click();
     flush();
-    expect(done?.getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
 
     const follow = toolbar?.querySelector<HTMLInputElement>(
@@ -81,20 +66,21 @@ describe("ActivityPage toolbar and filters", () => {
     flush();
     expect(follow?.checked).toBe(true);
 
+    const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
+      ".activity-page .settings-section__actions button",
+    );
     const expansionState = () =>
       Array.from(
         container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
         (row) => row.open,
       );
-    clickLiveAction(container, "Expand all");
+    expand?.click();
+    flush();
     expect(expansionState()).toEqual([true, true]);
-    clickLiveAction(container, "Collapse all");
+    collapse?.click();
+    flush();
     expect(expansionState()).toEqual([false, false]);
 
-    toolbar
-      ?.querySelector<HTMLButtonElement>(".activity-live-search .header-search__toggle")
-      ?.click();
-    flush();
     const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
     if (!search) {
       throw new Error("Expected the live activity search input");
@@ -150,7 +136,7 @@ describe("ActivityPage toolbar and filters", () => {
       ),
     ).toEqual(["read"]);
 
-    clickLiveAction(container, "Clear");
+    container.querySelector<HTMLButtonElement>(".activity-page button.danger")?.click();
     current().testOptions.onEvent?.(toolEvent("read"));
     await waitForSolid(() => expect(previews(page)).toEqual(["read output"]));
     expect(tool?.value).toBe("read");
@@ -169,13 +155,7 @@ describe("ActivityPage toolbar and filters", () => {
   it("retains Current Work and local filters while the same client reconnects", async () => {
     const { gateway: source, current } = activityGateway();
     const page = await bindActivity(source);
-    page.container
-      .querySelector<HTMLButtonElement>(".activity-live-search .header-search__toggle")
-      ?.click();
-    flush();
-    const filter = page.container.querySelector<HTMLInputElement>(
-      ".activity-live-search input[type=search]",
-    )!;
+    const filter = page.container.querySelector<HTMLInputElement>("input[type=search]")!;
     filter.value = "my draft filter";
     filter.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
@@ -238,7 +218,9 @@ describe("ActivityPage toolbar and filters", () => {
     await waitForSolid(() => expect(previews(page)).toEqual(["original output", "other output"]));
 
     const container = page.container;
-    clickLiveAction(container, "Clear");
+    const clear = container.querySelector<HTMLButtonElement>(".activity-page button.danger");
+    expect(clear?.textContent?.trim()).toBe("Clear");
+    clear?.click();
     source.setSessionKey("main");
     await waitForSolid(() => expect(previews(page)).toEqual([]));
     current().testOptions.onEvent?.(toolEvent("after-clear", "agent:other:work"));

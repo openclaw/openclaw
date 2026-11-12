@@ -397,6 +397,7 @@ describe("session activity people filter", () => {
     const privateId = "private-login@example.test";
     const opaqueId = "0123456789abcdef";
     const input = props({
+      phone,
       filters: { personId: privateId, query: "", time: "7d" },
       rows: [
         row("Unresolved session", { id: privateId }, 1),

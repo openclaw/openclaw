@@ -58,7 +58,7 @@ it.each([
   "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
   async ({ personId, width }) => {
     await page.viewport(width, 700);
-    const props = activityProps(personId);
+    const props = { ...activityProps(personId), phone: width <= 640 };
     renderSessionActivityViewSolid(props, container);
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
     const content = main.querySelector<HTMLElement>(
