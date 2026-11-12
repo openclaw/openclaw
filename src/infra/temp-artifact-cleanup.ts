@@ -64,11 +64,16 @@ async function readRetainedUpdateRuntimeCreator(
   } catch {
     return undefined;
   }
-  return isRecord(value) &&
-    Number.isSafeInteger(value.pid) &&
-    (value.pid as number) > 0 &&
-    Number.isFinite(value.startTimeMicros)
-    ? { pid: value.pid as number, startTimeMicros: value.startTimeMicros as number }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const { pid, startTimeMicros } = value;
+  return typeof pid === "number" &&
+    Number.isSafeInteger(pid) &&
+    pid > 0 &&
+    typeof startTimeMicros === "number" &&
+    Number.isFinite(startTimeMicros)
+    ? { pid, startTimeMicros }
     : undefined;
 }
 
