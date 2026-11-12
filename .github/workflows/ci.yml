@@ -5454,9 +5454,7 @@ jobs:
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'release' }}
         run: |
           set -euo pipefail
-          # The macOS lane validates the desktop app build; the CLI product is
-          # intentionally left to its own narrower surfaces instead of making
-          # this lane rebuild the whole package graph.
+          # Build the desktop app; CLI validation has its own lane.
           if swift build --package-path apps/macos --product OpenClaw --configuration release; then
             exit 0
           fi
@@ -5474,10 +5472,7 @@ jobs:
           # Start clean once; SwiftPM invalidates trait-dependent modules for the following suite.
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
           echo "OPENCLAWKIT_SCRATCH=$openclawkit_scratch" >> "$GITHUB_ENV"
-          # Guard: chat-only consumers build OpenClawKit with the Talk trait
-          # disabled and must NOT link ElevenLabsKit. Assert that future sources
-          # under OpenClawKit cannot silently reintroduce an unconditional
-          # ElevenLabsKit dependency while the manifest still looks correct.
+          # Chat-only consumers must not link ElevenLabsKit when Talk is disabled.
           deps="$(swift package --package-path apps/shared/OpenClawKit --scratch-path "$openclawkit_scratch" show-dependencies --disable-default-traits)"
           echo "$deps"
           if grep -qi 'elevenlabs' <<<"$deps"; then
@@ -5620,8 +5615,7 @@ jobs:
             fi
             run_check "macOS named profile" run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
-            # Frozen release targets predate the resource-owner script and its tests.
-            # Their original suite still runs only on this disposable macOS worker.
+            # Frozen suites still require this disposable macOS worker.
             swift_test_args+=(--no-parallel)
             run_check "macOS frozen target tests" run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" swift test "${swift_test_args[@]}"
           else
