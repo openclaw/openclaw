@@ -93,7 +93,7 @@ No supported SQLite library for Bun on macOS (<arch>); unusable: <path> (<reason
 
 An x64 Bun running under Rosetta cannot load an arm64-only Homebrew library. Point `OPENCLAW_SQLITE_LIBRARY` at a universal or x86_64 build, such as the one `scripts/build-mac-sqlite.sh universal <runtime-directory>` produces from a source checkout.
 
-SQLite storage workers inherit the main process's selected library. Opening another database or restarting a storage worker reuses that selection without repeating Bun's one-shot library initialization.
+SQLite storage workers inherit the main process's selected library. Read-only child processes carry that selection even when their read context omits the initialization environment. Opening another database or restarting a storage worker reuses that selection without repeating Bun's one-shot library initialization.
 
 Package-update recovery retains the library selected during Bun admission. On macOS, copy the printed recovery command including its `OPENCLAW_SQLITE_LIBRARY` prefix; it works from a fresh shell without the service environment or custom `HOMEBREW_PREFIX`. If recovery cannot meet the SQLite safety floor, it refuses before opening the journal and names the recorded library input to restore. The version-1 recovery journal format is unchanged.
 
