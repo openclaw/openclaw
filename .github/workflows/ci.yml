@@ -4128,7 +4128,7 @@ jobs:
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
-        if: matrix.task == 'lint' && (needs.preflight.outputs.runner_profile != 'hybrid' || needs.preflight.outputs.frozen_target == 'true')
+        if: matrix.task == 'lint' && (needs.preflight.outputs.runner_profile != 'hybrid' || needs.preflight.outputs.frozen_target == 'true') && (needs.preflight.outputs.frozen_target == 'true' || needs.preflight.outputs.compatibility_target == 'true' || toJSON(matrix.requires_sdk_declarations) != 'false')
         shell: bash
         run: &extension_boundary_fingerprint_run |
           set -euo pipefail

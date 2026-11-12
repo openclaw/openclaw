@@ -61,6 +61,15 @@ of all workers. Startup logging never requests new worker samples.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
 
+File writes and rotation run in a lazily started worker, preserving queued record
+order without blocking the Gateway main thread on filesystem checks. Normal
+shutdown drains queued writes; forced process exit retains a synchronous rescue
+for records that have not started writing.
+
+By default, logging retains runtime call-site metadata without probing source-map
+files. The existing `TSLOG_SOURCE_MAPS=on` diagnostic override remains available;
+it enables tslog's synchronous source-map lookups.
+
 With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 `logging.maxFileBytes` apply to the next log record, including records from
 long-lived channel loggers. Queued records finish writing to their original file.

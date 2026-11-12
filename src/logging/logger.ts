@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -30,7 +29,7 @@ import {
 } from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { serializeFileLogRecord, type FileLogMessagePart } from "./logger-file-message.js";
-import { ensureLogDirectorySync, fileLogTransport } from "./logger-file-transport.js";
+import { fileLogTransport } from "./logger-file-transport.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
 import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -40,7 +39,6 @@ export type { LoggerSettings } from "./types.js";
 const DEFAULT_LOG_DIR = DEFAULT_POSIX_TMP_ROOT;
 const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-file path
 
-const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 let cachedHostname: string | null = null;
 
@@ -494,6 +492,10 @@ class RuntimeLogger extends TsLogger<LogObj> {
 }
 
 function buildLogger(): TsLogger<LogObj> {
+  // Keep raw callsites without tslog's synchronous source-map probes; explicit diagnostics opt in.
+  if (typeof process !== "undefined" && process.env) {
+    process.env.TSLOG_SOURCE_MAPS ??= "off";
+  }
   const logger = new RuntimeLogger({
     name: "openclaw",
     mask: { keys: [] },
@@ -503,6 +505,7 @@ function buildLogger(): TsLogger<LogObj> {
   });
   inheritLogLevel(logger, () => levelToMinLevel(getRuntimeSettings().level));
   let activeFile: string | undefined;
+  let targetPreparation: ReturnType<typeof fileLogTransport.prepareTarget> | undefined;
   logger.attachTransport({
     // OpenClaw owns JSON serialization; tslog's formatted line is unused.
     format: () => "",
@@ -515,14 +518,7 @@ function buildLogger(): TsLogger<LogObj> {
         const nextActiveFile = resolveActiveLogFileWithMode(settings.file, settings.rolling);
         if (nextActiveFile !== activeFile) {
           activeFile = nextActiveFile;
-          try {
-            ensureLogDirectorySync(path.dirname(activeFile));
-            if (settings.rolling) {
-              pruneOldRollingLogs(path.dirname(activeFile));
-            }
-          } catch {
-            // Still enqueue: the failed append reports this record through the transport warning.
-          }
+          targetPreparation = fileLogTransport.prepareTarget(activeFile, settings.rolling);
         }
         const time = formatTimestamp(logObj.date ?? new Date(), { style: "long" });
         const { fields, messageParts } = prepareFileLogRecord(logObj as TsLogRecord);
@@ -537,6 +533,7 @@ function buildLogger(): TsLogger<LogObj> {
         );
         fileLogTransport.enqueue({
           file: activeFile,
+          targetPreparation,
           hostname: fields.hostname,
           maxFileBytes: settings.maxFileBytes,
           payload: `${line}\n`,
@@ -642,30 +639,4 @@ export function resetLogger() {
 function resolveActiveLogFileWithMode(file: string, rolling: boolean): string {
   const expandedFile = expandHomePrefix(file);
   return rolling ? resolveRollingLogFilePathForDate(expandedFile, new Date()) : expandedFile;
-}
-
-function pruneOldRollingLogs(dir: string): void {
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    const cutoff = Date.now() - MAX_LOG_AGE_MS;
-    for (const entry of entries) {
-      if (!entry.isFile()) {
-        continue;
-      }
-      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) {
-        continue;
-      }
-      const fullPath = path.join(dir, entry.name);
-      try {
-        const stat = fs.statSync(fullPath);
-        if (stat.mtimeMs < cutoff) {
-          fs.rmSync(fullPath, { force: true });
-        }
-      } catch {
-        // ignore errors during pruning
-      }
-    }
-  } catch {
-    // ignore missing dir or read errors
-  }
 }
