@@ -1,0 +1,2 @@
+1090
+# Net +1490 test lines minus the current 400-line allowance. Covers model-selection/account compatibility, private-session visibility, CLI/tool transport, and real-Gateway/UI cancel/config-only acceptance.

@@ -5,6 +5,7 @@ import {
   type CronInferenceBinding,
   describeCronInferenceBinding,
   resolveCronRuntimeSessionEntry,
+  resolveCronInferenceCandidateMismatch,
 } from "./inference-binding.js";
 
 type CronPinnedRunParams = Pick<
@@ -68,8 +69,9 @@ function incompatibleCandidateError(params: {
   cause?: unknown;
 }): Error {
   const { binding } = params;
+  const mismatch = resolveCronInferenceCandidateMismatch(binding, params);
   const reason =
-    binding.runtime && params.runtime && params.runtime !== binding.runtime
+    mismatch === "runtime"
       ? `That account was recorded for runtime ${binding.runtime}, which this run can no longer use.`
       : params.cliExecution
         ? "The selected runtime signs in through its own CLI login and can't use that account."
@@ -146,7 +148,7 @@ export async function prepareCronRunInference(params: {
         return;
       }
       // A binding without a captured runtime keeps the runtime its run derives.
-      if (binding.runtime && runtime && runtime !== binding.runtime) {
+      if (resolveCronInferenceCandidateMismatch(binding, { provider, runtime })) {
         throw incompatibleCandidateError({ job, binding, provider, runtime, cliExecution });
       }
       candidateRuntime = runtime ?? candidateRuntime;

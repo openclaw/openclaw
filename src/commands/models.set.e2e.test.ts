@@ -106,7 +106,9 @@ describe("models set + fallbacks", () => {
     await modelsSetCommand(input, runtime);
     expectWrittenPrimaryModel(expected);
     if (checkWarnings) {
-      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Automation impact: unknown."),
+      );
     }
   });
 

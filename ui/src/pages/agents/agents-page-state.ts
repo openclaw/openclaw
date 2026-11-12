@@ -32,6 +32,7 @@ import { createAgentIdentityEditor } from "./agent-identity-editor.ts";
 import { createAgentModelCatalog } from "./agent-model-catalog.ts";
 import type { AgentsPageData, AgentsViewData } from "./agents-page-data.ts";
 import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
+import type { AgentChannelsReadState } from "./channels-read-state.ts";
 import { createAgentFilePanel } from "./files.ts";
 import { resetIdentityDraft } from "./identity-actions.ts";
 import type { AgentMemoryTarget } from "./memory/memory-panel-state.ts";
@@ -57,7 +58,7 @@ export function createAgentsPageState(
   const [skillsFilter, setSkillsFilter] = createSignal("");
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
   const channelCapability = context.acquireChannels(createChannelCapability);
-  const channels = projectOwner(channelCapability, (source) => source.state);
+  const channels = projectOwner(channelCapability, (c): AgentChannelsReadState => c.state);
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
   const observation = observeState<AgentsPageData>({
@@ -76,6 +77,7 @@ export function createAgentsPageState(
     agentFileSaving: false,
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,
+    modelImpact: null,
     identityOutcome: null,
     agentSkillsRead: null,
     agentSkillsReport: null,
@@ -109,10 +111,6 @@ export function createAgentsPageState(
   });
   const state = observation.state;
   const readData: () => AgentsViewData = observation.read;
-  const readChannels: () => Pick<
-    ReturnType<typeof channels.read>,
-    "channelsSnapshot" | "channelsRead" | "channelsError" | "channelsLastSuccess"
-  > = channels.read;
   const publish = observation.invalidate;
   const cron = createAgentCronPresenter({
     currentState: () => state.cron,
@@ -158,6 +156,11 @@ export function createAgentsPageState(
       agentId === state.agentsSelectedId && canCall("config.set", "operator.admin"),
     getReport: () => state.agentSkillsReport,
     onPrimaryChanged: () => effectiveTools.ensure(true),
+    modelChangeScope: () => presentation.retired(),
+    onModelImpact: (notice) => {
+      state.modelImpact = notice;
+      publish();
+    },
   });
   const githubIdentity = createGitHubIdentityView();
   let readAccessKey = "";
@@ -199,19 +202,17 @@ export function createAgentsPageState(
     ensureInitialData: () => ensureInitialData(),
     onPageActivation: () => effectiveTools.ensure(),
   });
-  const isCurrentToolsRead = (client: GatewayBrowserClient, generation: number, agentId: string) =>
-    isCurrentRequest(client, generation, agentId, {});
   const toolsCatalog = createAgentToolsCatalog({
     scope: () => state,
     canRead: () =>
       canPresentGatewayMethod(context.gateway.snapshot, "tools.catalog", "operator.read"),
-    isCurrent: isCurrentToolsRead,
+    isCurrent: isCurrentRequest,
   });
   const effectiveTools = createAgentEffectiveTools({
     scope: () => state,
     canRead: () =>
       canPresentGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read"),
-    isCurrent: isCurrentToolsRead,
+    isCurrent: isCurrentRequest,
     isSessionAgent: (agentId) => agentId === chatAgentId(),
     isPresented: () => state.agentsPanel === "tools",
     key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(state, { agentId, sessionKey }),
@@ -245,9 +246,8 @@ export function createAgentsPageState(
   }
 
   function syncSettingsSelection() {
-    const selection = context.settingsAgentSelection;
     const restoredIdentity = selectionDrafts.select({
-      selectedId: selection.state.selectedId,
+      selectedId: context.settingsAgentSelection.state.selectedId,
       profileId: context.gateway.snapshot.selfUser?.id ?? null,
     });
     if (restoredIdentity) {
@@ -265,6 +265,7 @@ export function createAgentsPageState(
 
   function invalidateTransientRequests() {
     presentation.retire();
+    state.modelImpact = null;
     gateway.invalidate();
     files.invalidate();
     state.identitySaving = false;
@@ -346,7 +347,7 @@ export function createAgentsPageState(
     client: GatewayBrowserClient,
     generation: number,
     agentId: string | undefined,
-    sources: Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>,
+    sources: Partial<Pick<ApplicationContext, "agents" | "agentIdentity">> = {},
   ): boolean {
     return (
       active &&
@@ -449,6 +450,7 @@ export function createAgentsPageState(
 
   function resetSelectionState() {
     presentation.retire();
+    state.modelImpact = null;
     identity.cancel();
     gateway.invalidate();
     modelCatalog.reset();
@@ -504,7 +506,6 @@ export function createAgentsPageState(
   }
 
   function viewProps() {
-    const configState = context.runtimeConfig.state;
     const selectedAgentId = state.agentsSelectedId;
     const access = {
       settings: settingsAccess(),
@@ -521,12 +522,12 @@ export function createAgentsPageState(
       access,
       readData,
       presentationRetired: presentation.retired,
-      readChannels,
+      readChannels: channels.read,
       basePath: context.basePath,
       listRead: context.agents.listRead,
       selectedAgentId,
       memoryTarget,
-      config: configState,
+      config: context.runtimeConfig.state,
       channels: {
         onRefresh: () => void channelCapability.refresh(false),
       },

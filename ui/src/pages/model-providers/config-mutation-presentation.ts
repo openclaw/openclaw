@@ -127,20 +127,29 @@ export function createModelProviderMutationPresentation(deps: {
     },
     async run<T>(
       kind: "apiKey" | ModelDefaultsSaveField,
-      operation: (onAdmitted: () => void) => Promise<T>,
+      operation: (onAdmitted: () => void, onDispatch: () => void) => Promise<T>,
       reportError: (error: unknown) => void,
     ): Promise<T | undefined> {
       const view = presentation();
       const retired = lifetime.promise;
       const defaultsSave = kind === "apiKey" ? null : { field: kind, retired };
       try {
-        const pending = operation(() => {
-          if (defaultsSave && isCurrent(view, retired)) {
-            // Publish the initiating field with admission, before the owner's busy frame.
-            view.setDefaultsSaving(defaultsSave);
-            view.setDefaultsSaved(false);
-          }
-        });
+        const admitted = Promise.withResolvers<void>();
+        const pending = operation(
+          () => {
+            if (defaultsSave && isCurrent(view, retired)) {
+              // Publish the initiating field with admission, before the owner's busy frame.
+              view.setDefaultsSaving(defaultsSave);
+              view.setDefaultsSaved(false);
+            }
+          },
+          () => admitted.resolve(),
+        );
+        // Default-model assessment may open a confirmation, including an already-loaded
+        // dialog. Do not hold that dialog inside the write transition it must release.
+        if (kind !== "apiKey") {
+          await Promise.race([admitted.promise, pending, retired]);
+        }
         // Let owner publication and any just-opened modal settle before joining.
         await new Promise<void>((resolve) => {
           onSettled(resolve);
@@ -162,6 +171,7 @@ export function createModelProviderMutationPresentation(deps: {
         }
       }
     },
+    retired: () => lifetime.promise,
     defaultsSaving: () => currentDefaultsSave() !== null,
     defaultsSavingField: () => currentDefaultsSave()?.field ?? null,
     defaultsSaved: () => presentation().defaultsSaved(),
