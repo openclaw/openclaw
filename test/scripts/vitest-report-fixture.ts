@@ -456,10 +456,17 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       write(output, "old report");
     }
     let command = [path.join(repoRoot, "scripts/run-vitest.mjs"), "run", ...targets, ...args];
-    if (options.entry === "projects" || mode === "overlap" || mode === "automatic") {
+    if (
+      options.entry === "projects" ||
+      mode === "overlap" ||
+      mode === "automatic" ||
+      mode === "file-backed-suites"
+    ) {
       if (mode === "overlap") {
         targets = [configs[0]!, `./${configs[0]}`];
       }
+      // Alternate roots disable automatic delegation; explicit config targets
+      // still belong to the multi-project runner, not native test filters.
       command = [
         "--import",
         path.join(repoRoot, "node_modules/tsx/dist/loader.mjs"),
