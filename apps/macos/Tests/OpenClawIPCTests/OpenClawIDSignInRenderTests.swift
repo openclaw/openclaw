@@ -103,8 +103,10 @@ private struct RenderService: OnboardingOpenClawIDService {
         self.step
     }
 
-    func perform(_: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
-        self.step
+    func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
+        // The approval wait stays pending until the render cancels it.
+        if case .checkApproval = action { try await Task.sleep(for: .seconds(3600)) }
+        return self.step
     }
 
     func cancel() {}
