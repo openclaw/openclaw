@@ -61,7 +61,7 @@ it("warns from the selected role's catalog policy and tracks backend and definit
   selectRole("viewer");
   flush();
   expect(warning()?.textContent).toContain(
-    "Members with this role cannot run anything until a sandbox backend is set up",
+    "A sandbox backend is unavailable. Set one up for this role's session exec and file tools.",
   );
   expect(warning()?.querySelector("a")?.getAttribute("href")).toBe(
     "https://docs.openclaw.ai/gateway/sandboxing",
@@ -100,7 +100,7 @@ it("uses custom role names and stays quiet for undefined roles or absent people 
     );
   });
   flush();
-  expect(container.textContent).toContain("Members with this role cannot run anything");
+  expect(container.textContent).toContain("this role's session exec and file tools");
   setDefined(false);
   flush();
   expect(container.textContent).toBe("");

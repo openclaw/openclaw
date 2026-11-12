@@ -28,7 +28,7 @@ function sandboxRoleClient(role: "view" | "write"): GatewayClient {
 
 describe("session sharing sandbox requirements", () => {
   it.each([false, true])(
-    "denies sandbox-required members host execution without changing session provenance (OpenClaw ID=%s)",
+    "session-run admission rejects unstamped targets without changing provenance (OpenClaw ID=%s)",
     (member) =>
       withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
         const cfg = rolePolicyConfig();
