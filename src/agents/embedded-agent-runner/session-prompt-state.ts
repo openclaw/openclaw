@@ -324,6 +324,7 @@ function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
         toolPolicy: data.toolPolicy,
         // SAFETY: this module alone writes the tool definitions and publication listing checkpoint.
         tools: data.tools as ToolDefinition[],
+        // SAFETY: this module alone checkpoints PublicationListing values; older pins omit the field.
         publicationListing: data.publicationListing as PublicationListing | undefined,
       }
     : undefined;
