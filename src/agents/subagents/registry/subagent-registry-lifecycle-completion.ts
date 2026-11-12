@@ -27,6 +27,10 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import {
+  supersedesProvisionalWaitExpiry,
+  withCancellationDisposition,
+} from "./subagent-registry-completion-disposition.js";
 import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
@@ -102,7 +106,20 @@ function resolveTerminalRequest(
   const effectiveEndedAt = resolveSubagentRunEffectiveEndedAt(entry, endedAt, observedStartedAt);
   if (effectiveEndedAt < endedAt) {
     endedAt = effectiveEndedAt;
-    completionOutcome = { status: "timeout" };
+    // Clamping the reported end to the deadline does not re-observe the run,
+    // so the caller's disposition is the only liveness evidence there is.
+    const clampedOutcome = {
+      status: "timeout" as const,
+      ...(completionOutcome.disposition ? { disposition: completionOutcome.disposition } : {}),
+    };
+    // The clamp also rewrites the reason to `complete`, and that reason is what
+    // the cancellation normalization below keys off. Stamp the producer's fact
+    // here or it is lost and the parent is told a killed child exited on its
+    // own. The clamped `timeout` status is the intended report and is kept.
+    completionOutcome =
+      completionReason === SUBAGENT_ENDED_REASON_KILLED
+        ? withCancellationDisposition(clampedOutcome)
+        : clampedOutcome;
     completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
   }
   // Reply evidence follows producer order; duplicate receipts may still drain cleanup.
@@ -405,7 +422,7 @@ function planTerminalCompletion(
         killIntent.lifecycleGeneration !== undefined &&
         isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration);
       completionReason = SUBAGENT_ENDED_REASON_KILLED;
-      completionOutcome = { status: "error", error: killIntent.reason };
+      completionOutcome = { status: "error", error: killIntent.reason, disposition: "killed" };
       entry.killIntent = undefined;
       if (
         killOwnsCurrentLifecycle &&
@@ -470,6 +487,12 @@ function planTerminalCompletion(
     clearDeliveryState(entry);
   }
 
+  if (supersedesProvisionalWaitExpiry(entry.execution.outcome, completionOutcome)) {
+    entry.cleanupHandled = false;
+    entry.cleanupCompletedAt = undefined;
+    clearDeliveryState(entry);
+  }
+
   if (observedStartedAt !== undefined && entry.execution.startedAt !== observedStartedAt) {
     entry.execution = { ...entry.execution, startedAt: observedStartedAt };
     if (typeof entry.sessionStartedAt !== "number") {
@@ -495,6 +518,12 @@ function planTerminalCompletion(
       completion.capturedAt = undefined;
     }
   }
+  // Captured before the required-reply rewrite below can retarget the reason:
+  // a cancellation stays a cancellation even when the child owed a reply. A
+  // cancellation clamped to the stored deadline was already stamped inside
+  // `resolveTerminalRequest`, because the clamp retires the killed reason
+  // before this point and the capture preimage has to agree with it.
+  const cancelledCompletion = completionReason === SUBAGENT_ENDED_REASON_KILLED;
   // Lifecycle events and agent.wait both settle here. A required success
   // needs producer evidence before any transcript fallback can freeze it.
   if (missingRequiredReply && completionOutcome.status === "ok") {
@@ -504,6 +533,9 @@ function planTerminalCompletion(
     }
     completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
     completionReason = SUBAGENT_ENDED_REASON_ERROR;
+  }
+  if (cancelledCompletion) {
+    completionOutcome = withCancellationDisposition(completionOutcome);
   }
   const outcome = withSubagentOutcomeTiming(completionOutcome, {
     startedAt: entry.execution.startedAt,

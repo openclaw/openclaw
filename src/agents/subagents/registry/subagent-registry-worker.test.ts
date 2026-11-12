@@ -585,11 +585,14 @@ it("settles a plugin-origin requester cohort and killed-child cleanup during shu
     stopped.attachmentId!,
   );
   await fs.mkdir(attachmentDir, { recursive: true });
-  const manager = createSubagentRunManager(
-    createSubagentManagerTestOptions(subagentRuns, async () => {
+  const manager = createSubagentRunManager({
+    ...createSubagentManagerTestOptions(subagentRuns, async () => {
       throw new Error("Stress fixture unexpectedly called the Gateway");
     }),
-  );
+    reportSubagentWaitExpiry: async () => {
+      throw new Error("Stress fixture unexpectedly reported a wait expiry");
+    },
+  });
   const context = captureOpenClawStateWorkerContext();
   const completions = children.map((child) =>
     change(child.runId, (row) => {

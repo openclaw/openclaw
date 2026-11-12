@@ -27,5 +27,6 @@ export function createSubagentManagerTestOptions(
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: async () => {},
     completeSubagentRun: async () => {},
+    reportSubagentWaitExpiry: async () => {},
   };
 }

@@ -23,6 +23,39 @@ describe("AgentParamsSchema", () => {
       idempotencyKey: "recovery-1",
     });
   });
+
+  // `status` records how the wait ended; `disposition` records who stopped. The
+  // wire schema is closed, so an unlisted disposition must be refused rather
+  // than forwarded to a parent run as an unknown liveness claim.
+  const withInternalEvent = (disposition?: string) => ({
+    message: "A subagent task reported back. Process the completion update now.",
+    sessionKey: "agent:main:main",
+    idempotencyKey: "subagent:run-1:timeout",
+    internalEvents: [
+      {
+        type: "task_completion",
+        source: "subagent",
+        childSessionKey: "agent:main:subagent:run-1",
+        childSessionId: "run-1",
+        announceType: "subagent task",
+        taskLabel: "audit the announce path",
+        status: "timeout",
+        statusLabel: "still running; the wait for it expired, it did not",
+        ...(disposition ? { disposition } : {}),
+        result: "(no result yet; child still running)",
+        replyInstruction: "Keep waiting; the child still owns its session.",
+      },
+    ],
+  });
+
+  it("accepts a producer-owned run disposition on internal completion events", () => {
+    accepts(S.AgentParamsSchema, withInternalEvent("still-running"));
+    accepts(S.AgentParamsSchema, withInternalEvent());
+  });
+
+  it("rejects unknown run dispositions on internal completion events", () => {
+    rejects(S.AgentParamsSchema, withInternalEvent("ambiguous"));
+  });
 });
 
 describe("MessageActionParamsSchema", () => {

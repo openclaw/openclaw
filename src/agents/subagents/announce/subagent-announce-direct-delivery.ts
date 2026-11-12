@@ -38,6 +38,8 @@ import {
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
+  isFailedTerminalSubagentCompletion,
+  isProvisionalSubagentCompletion,
   runAnnounceAgentCall,
 } from "./subagent-announce-completion-delivery.js";
 import {
@@ -149,7 +151,9 @@ async function sendSubagentAnnounceDirectlyBound(
       internalEvents: params.internalEvents,
     });
     const hasFailedTrustedSubagentCompletion =
-      trustedCompletionEvent !== undefined && trustedCompletionEvent.status !== "ok";
+      isFailedTerminalSubagentCompletion(trustedCompletionEvent);
+    const hasProvisionalTrustedSubagentCompletion =
+      isProvisionalSubagentCompletion(trustedCompletionEvent);
     const hasRequiredSubagentNoOutputCompletion =
       params.expectsCompletionMessage &&
       isSubagentCompletion &&
@@ -437,6 +441,7 @@ async function sendSubagentAnnounceDirectlyBound(
       isSubagentCompletion,
       hasSuccessfulTrustedSubagentNoOutputCompletion,
       hasRequiredSubagentNoOutputCompletion,
+      hasProvisionalTrustedSubagentCompletion,
       subagentDirectMessageCompletionRequiresMessageTool,
       effectiveDirectOrigin,
       requesterSessionOrigin,

@@ -137,6 +137,23 @@ describe("subagent announce timeout config", () => {
     waitForEnd.mockReset().mockResolvedValue(true);
   });
 
+  it("gives a provisional wait-expiry wake a distinct delivery identity", async () => {
+    await timeout("run-phased-delivery", {
+      outcome: { status: "timeout", disposition: "still-running" },
+      deliveryPhase: "wait-expiry",
+    });
+    const provisionalKey = deliver.mock.calls[0]?.[0].directIdempotencyKey;
+
+    deliver.mockClear();
+    await timeout("run-phased-delivery");
+    const terminalKey = deliver.mock.calls[0]?.[0].directIdempotencyKey;
+
+    expect(provisionalKey).toBe(
+      "announce:v1:agent:main:subagent:worker:run-phased-delivery:wait-expiry",
+    );
+    expect(terminalKey).toBe("announce:v1:agent:main:subagent:worker:run-phased-delivery");
+  });
+
   it("regression, keeps child announce internal when requester is a cron run session", async () => {
     const cronSessionKey = "agent:main:cron:daily-check:run:run-123";
 
@@ -244,5 +261,118 @@ describe("subagent announce timeout config", () => {
     expect(completionEvent()).not.toMatchObject({
       result: expect.stringContaining("private tool output"),
     });
+  });
+});
+
+// A wait that expires while the child keeps working produced an event reading
+// `status: timed out` / `(no output)` / `tokens 0`: three independent signals
+// all saying the child died. A parent acted on it and spawned a successor into
+// the live child's git worktree. Every one of those signals is pinned here.
+describe("subagent announce still-running disposition", () => {
+  beforeEach(() => {
+    callGateway.mockClear();
+    deliver.mockClear();
+    chatHistoryMessages = [];
+    // Token counters exist but are mid-turn zeros, exactly as observed: the
+    // child had not flushed usage because it had not finished.
+    sessionStore = {
+      "agent:main:subagent:worker": { sessionId: "child-session", inputTokens: 0, outputTokens: 0 },
+    };
+    isActive.mockReset().mockReturnValue(false);
+    waitForEnd.mockReset().mockResolvedValue(true);
+  });
+
+  const waitExpiry = (
+    childRunId: string,
+    disposition?: "still-running",
+    error?: string,
+  ): ReturnType<typeof runSubagentAnnounceFlow> =>
+    timeout(childRunId, {
+      outcome: {
+        status: "timeout",
+        ...(error ? { error } : {}),
+        ...(disposition ? { disposition } : {}),
+      },
+      startedAt: 1_000,
+      endedAt: 5_401_000,
+    });
+
+  // The rendered prompt is what a parent actually reads, so assert there too.
+  const triggerMessage = () => deliver.mock.calls[0]?.[0].triggerMessage ?? "";
+
+  it("reports a live child as still running instead of timed out", async () => {
+    await waitExpiry("run-wait-expiry-live", "still-running");
+
+    expect(completionEvent()).toMatchObject({
+      disposition: "still-running",
+      statusLabel: "still running; the wait for it expired, it did not",
+      result: "(no result yet; child still running)",
+      statsLine: "Stats: waited 1h30m • child tokens not yet reported",
+    });
+    expect(triggerMessage()).toContain(
+      "status: still running; the wait for it expired, it did not",
+    );
+    expect(triggerMessage()).toContain("disposition: still-running");
+    expect(triggerMessage()).not.toContain("timed out");
+    expect(triggerMessage()).not.toContain("(no output)");
+    expect(triggerMessage()).not.toContain("tokens 0");
+  });
+
+  it("tells the parent not to replace a child that has not stopped", async () => {
+    await waitExpiry("run-wait-expiry-instruction", "still-running");
+
+    expect(triggerMessage()).toContain("has NOT finished");
+    expect(triggerMessage()).toContain("do not start a replacement");
+  });
+
+  it("preserves the last retry-grace error while reporting the child as live", async () => {
+    await waitExpiry(
+      "run-wait-expiry-error-grace",
+      "still-running",
+      "model returned an unrecoverable tool-call sequence",
+    );
+
+    expect(completionEvent()).toMatchObject({
+      statusLabel:
+        "still running; last error while retrying: model returned an unrecoverable tool-call sequence",
+    });
+    expect(triggerMessage()).toContain("last error while retrying");
+    expect(triggerMessage()).toContain("model returned an unrecoverable tool-call sequence");
+  });
+
+  it("still reports a genuinely stopped child as timed out", async () => {
+    await waitExpiry("run-wait-expiry-exited");
+
+    expect(completionEvent()).toMatchObject({
+      disposition: "exited",
+      statusLabel: "timed out",
+      result: "(no output)",
+      statsLine: "Stats: runtime 1h30m • tokens 0 (in 0 / out 0)",
+    });
+    expect(triggerMessage()).toContain("status: timed out");
+    expect(triggerMessage()).toContain("disposition: exited");
+  });
+
+  it("never submits delete cleanup for a session the live child still owns", async () => {
+    // onBeforeDeleteChildSession is the delete-submission fence; reaching it at
+    // all means the flow was about to remove a running child's session.
+    const onBeforeDeleteChildSession = vi.fn(() => true);
+
+    await timeout("run-wait-expiry-no-delete", {
+      outcome: { status: "timeout", disposition: "still-running" },
+      cleanup: "delete",
+      onBeforeDeleteChildSession,
+    });
+
+    expect(onBeforeDeleteChildSession).not.toHaveBeenCalled();
+  });
+
+  it("keeps a terminal timeout exited when the embedded active map lags", async () => {
+    isActive.mockReset().mockReturnValue(true);
+    waitForEnd.mockReset().mockResolvedValue(false);
+
+    await timeout("run-wait-expiry-embedded-active", { cleanup: "keep" });
+
+    expect(completionEvent()).toMatchObject({ disposition: "exited" });
   });
 });

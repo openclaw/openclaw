@@ -1,8 +1,19 @@
 export * from "./subagent-announce-delivery.js";
 
 import { expect, it, vi } from "vitest";
+import type { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
 import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+
+export function createSendMessageMock() {
+  return vi.fn(async () => ({
+    channel: "slack",
+    to: "channel:C123",
+    via: "direct" as const,
+    mediaUrl: null,
+    result: { messageId: "msg-1" },
+  })) as unknown as typeof runtimeSendMessage;
+}
 
 export const testing = {
   setDepsForTest: setSubagentAnnounceDeliveryDepsForTest,

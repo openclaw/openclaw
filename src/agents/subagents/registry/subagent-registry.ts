@@ -51,6 +51,7 @@ import {
   createSubagentRegistrySweeper,
   retireSupersededSubagentRun as retireSupersededSubagentRunForSweep,
 } from "./subagent-registry-sweeper.js";
+import { reportSubagentWaitExpiry } from "./subagent-registry-wait-expiry.js";
 import type { RegisterSubagentRunOptions, SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   isRequesterRetirementCustodyCurrent,
@@ -504,6 +505,8 @@ const subagentRunManager = createSubagentRunManager({
   completeSubagentRun: async (params) => {
     await completionRuntime.completeSubagentRunWithRecovery(params, "subagent-wait");
   },
+  reportSubagentWaitExpiry: (params) =>
+    reportSubagentWaitExpiry({ ...params, announceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS }),
 });
 
 export const replaceSubagentRunAfterSteerCore = subagentRunManager.replaceSubagentRunAfterSteer;

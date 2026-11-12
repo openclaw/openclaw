@@ -1,0 +1,6 @@
+1294
+# Subagent wait-expiry disposition: the provisional wait-expiry registry suite, the
+# still-running announce cases, and the killed/exited disposition pins on the
+# cancellation producers and the wire schema.
+# Exact measured amount this change is over the ceiling; shared scalar unchanged and
+# no spare ceiling credit.

@@ -238,6 +238,28 @@ it.each([
   expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
 });
 
+it.each([
+  { disposition: "still-running", failed: false },
+  { disposition: "exited", failed: true },
+  { disposition: "killed", failed: true },
+  { disposition: undefined, failed: true },
+] as const)(
+  "classifies a no-output timeout with $disposition disposition",
+  ({ disposition, failed }) => {
+    // A wait expiry reports the waiter, not the child, so it is not evidence
+    // that the child failed to produce output.
+    const event = {
+      type: "task_completion",
+      source: "subagent",
+      status: "timeout",
+      result: "(no output)",
+      noVisibleResult: true,
+      disposition,
+    } as const;
+    expect(hasFailedSubagentNoOutputCompletion([event])).toBe(failed);
+  },
+);
+
 it("reports nothing for an absent or empty event list", () => {
   expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
   expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);

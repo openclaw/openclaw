@@ -142,3 +142,12 @@ it("removes only the typed producer's duplicate carrier and retains supplemental
     expect(plain.endsWith("Follow up.")).toBe(true);
   }
 });
+
+it("omits the disposition line for producers without a child run", () => {
+  // Media/cron completions own no run, so an invented disposition would be a
+  // liveness claim about something that was never a process.
+  expect(renderEvents([completionEvent("done")])).not.toContain("disposition:");
+  expect(renderEvents([completionEvent("done", { disposition: "still-running" })])).toContain(
+    "disposition: still-running",
+  );
+});

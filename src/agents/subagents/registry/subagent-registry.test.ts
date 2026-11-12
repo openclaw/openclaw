@@ -42,6 +42,7 @@ import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
+import { registerSubagentWaitExpiryTests } from "./subagent-registry-wait-expiry.test-support.js";
 import { registerYieldFollowupAdoptionTests } from "./subagent-registry-yield-followup-adoption.test-support.js";
 import { registerYieldedParentCleanupCase } from "./subagent-registry-yielded-cleanup.test-support.js";
 import { activateSubagentRegistryWithLifecycleRuntime } from "./subagent-registry.activation.test-support.js";
@@ -220,6 +221,10 @@ describe("subagent registry seam flow", () => {
   });
   const activateRegistry = () =>
     activateSubagentRegistryWithLifecycleRuntime(mod, lifecycleRuntime);
+  const hydrateAndActivateRegistry = async () => {
+    await mod.initSubagentRegistry();
+    await activateRegistry();
+  };
   const findRequesterRun = (runId: string, requesterSessionKey = "agent:main:main") =>
     mod.listSubagentRunsForRequester(requesterSessionKey).find((entry) => entry.runId === runId);
   const expectUnsettled = (run: SubagentRunRecord | undefined) => {
@@ -697,7 +702,7 @@ describe("subagent registry seam flow", () => {
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
   });
 
-  it("keeps published timeout stable when pre-deadline success arrives late", async () => {
+  it("settles from the child's real end after a provisional wait expiry", async () => {
     const runId = "run-timeout-late-lifecycle-predeadline-ok";
     const startedAt = Date.now();
     mockAgentWait({ status: "timeout" });
@@ -721,38 +726,37 @@ describe("subagent registry seam flow", () => {
     expectUnsettled(findRequesterRun(runId));
 
     await vi.advanceTimersByTimeAsync(5_000);
+    // The stored deadline elapsed on our own clock and `agent.wait` returned no
+    // terminal snapshot, so the expiry is published provisionally: the run stays
+    // live and keeps its session until its lifecycle owner reports the end.
     await waitForFast(() => {
-      expect(findRequesterRun(runId)).toMatchObject({
-        execution: {
-          status: "terminal",
-          endedAt: startedAt + 1_000,
-          outcome: {
-            status: "timeout",
-            startedAt,
-            endedAt: startedAt + 1_000,
-            elapsedMs: 1_000,
-          },
-        },
-      });
+      const observed = findRequesterRun(runId);
+      expect(observed?.execution.status).toBe("running");
+      expect(observed?.execution.endedAt).toBeUndefined();
+      expect(observed?.waitExpiryObservedAt).toBe(startedAt + 1_000);
     });
     await settleRootWork();
-    expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
-    expect(
-      mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent.wait").length,
-    ).toBeGreaterThanOrEqual(2);
     emitLifecycle(runId, { phase: "end", startedAt: startedAt + 10, endedAt: startedAt + 500 });
     await waitForFast(() => {
       const run = findRequesterRun(runId);
-      expect(run?.execution.endedAt).toBe(startedAt + 1_000);
+      expect(run?.execution.endedAt).toBe(startedAt + 500);
       expect(run?.execution.outcome).toEqual(
         expect.objectContaining({
-          status: "timeout",
-          startedAt,
-          endedAt: startedAt + 1_000,
-          elapsedMs: 1_000,
+          status: "ok",
+          startedAt: startedAt + 10,
+          endedAt: startedAt + 500,
+          elapsedMs: 490,
         }),
       );
-      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      // The wait expired on our own clock while the child session was still
+      // live, so the parent is woken provisionally first and terminally second.
+      // Assert the phases rather than a bare count: two *terminal* publications
+      // would be the regression this PR removes.
+      expect(
+        (mocks.runSubagentAnnounceFlow.mock.calls as unknown as Record<string, unknown>[][]).map(
+          ([announceParams]) => announceParams?.deliveryPhase,
+        ),
+      ).toEqual(["wait-expiry", undefined]);
     });
     expect(mocks.captureSubagentCompletionReply).toHaveBeenCalledTimes(1);
   });
@@ -826,12 +830,14 @@ describe("subagent registry seam flow", () => {
       source: "lifecycle",
       duration: 1_000,
     },
-    {
-      name: "caps boundary wait timeouts to the explicit deadline",
-      source: "boundary wait",
-      duration: 1_000,
-      waitNow: 999,
-    },
+    // The "boundary wait" and "restored wait" cases asserted that a bare
+    // `agent.wait` timeout past the stored deadline terminalizes the run. That
+    // is the false-death this change removes: the clock is our own budget, not
+    // evidence the child stopped. Their successors —
+    // "keeps boundary wait expiry provisional until the lifecycle owner reports
+    // child end" and "caps restored waits to the remaining explicit run
+    // timeout" — assert the replacement contract, including the same terminal
+    // outcome once the lifecycle owner does report the end.
     {
       name: "ignores stale session-store start time for fresh terminal completions",
       source: "session",
@@ -863,22 +869,20 @@ describe("subagent registry seam flow", () => {
         source === "session" ? "2026-03-24T12:00:00Z" : "2026-03-24T11:59:00Z",
       );
       vi.setSystemTime(createdAt);
-      const waitTimeouts: unknown[] = [];
       if (source === "lifecycle") {
         mockPendingAgentWait();
       } else {
-        mockAgentWait((request) => {
-          waitTimeouts.push(request.params?.timeoutMs);
+        mockAgentWait(() => {
           if (waitNow !== undefined) {
             vi.setSystemTime(createdAt + waitNow);
           }
           return { status: "timeout" };
         });
       }
-      if (source === "boundary wait" || source === "session") {
+      if (source === "session") {
         mocks.entries = {
           "agent:main:subagent:child": createSessionEntry({
-            status: source === "session" ? "done" : undefined,
+            status: "done",
             updatedAt: createdAt + (sessionEnd ?? 0),
             ...(sessionStart === undefined ? {} : { startedAt: createdAt + sessionStart }),
             ...(sessionEnd === undefined ? {} : { endedAt: createdAt + sessionEnd }),
@@ -914,68 +918,9 @@ describe("subagent registry seam flow", () => {
       } finally {
         await settleRootWork();
       }
-      if (source === "boundary wait") {
-        expect(waitTimeouts).toHaveLength(1);
-      }
       expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("uses running session-store start time for plain wait timeouts", async () => {
-    const runId = "run-plain-timeout-session-store-start";
-    const createdAt = Date.parse("2026-03-24T11:59:00Z");
-    const observedStartedAt = createdAt + 10_000;
-    vi.setSystemTime(createdAt);
-    let waitAttempts = 0;
-    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
-      if (request.method !== "agent.wait") {
-        return {};
-      }
-      waitAttempts += 1;
-      if (waitAttempts === 1) {
-        vi.setSystemTime(createdAt + 61_000);
-      }
-      return { status: "timeout" };
-    });
-    mocks.entries = {
-      "agent:main:subagent:child": createSessionEntry({
-        status: undefined,
-        updatedAt: createdAt + 61_000,
-        startedAt: observedStartedAt,
-      }),
-    };
-
-    const settleRootWork = observeRootWork();
-    await mod.registerSubagentRun({
-      runId,
-      runTimeoutSeconds: 60,
-    });
-
-    await waitForFast(() => {
-      const run = findRequesterRun(runId);
-      expect(waitAttempts).toBeGreaterThanOrEqual(1);
-      expectUnsettled(run);
-      expect(run?.execution.startedAt).toBe(observedStartedAt);
-    });
-
-    vi.setSystemTime(observedStartedAt + 60_000);
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    await waitForFast(() => {
-      const run = findRequesterRun(runId);
-      expect(run?.execution.endedAt).toBe(observedStartedAt + 60_000);
-      expect(run?.execution.outcome).toEqual(
-        expect.objectContaining({
-          status: "timeout",
-          startedAt: observedStartedAt,
-          endedAt: observedStartedAt + 60_000,
-          elapsedMs: 60_000,
-        }),
-      );
-    });
-    await settleRootWork();
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-  });
 
   it("ignores stale terminal session-store rows from older child runs", async () => {
     let waitAttempts = 0;
@@ -1429,6 +1374,16 @@ describe("subagent registry seam flow", () => {
   });
 
   registerYieldedParentCleanupCase({ getRegistry: () => mod, mocks });
+  registerSubagentWaitExpiryTests({
+    getRegistry: () => mod,
+    getLifecycleHandler,
+    findRequesterRun,
+    mockRestoredRuns: mocks.mockRestoredRuns,
+    hydrateAndActivateRegistry,
+    mockPendingAgentWait,
+    updateFixtureRun,
+    mocks,
+  });
 
   it("defers the killed hook until the provisional result reconciles", async () => {
     mockPendingAgentWait();

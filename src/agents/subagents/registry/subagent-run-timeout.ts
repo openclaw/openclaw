@@ -82,7 +82,13 @@ export function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeco
 export function shouldPreservePublishedExplicitRunTimeout(entry: SubagentRunRecord): boolean {
   if (
     entry.execution.outcome?.status !== "timeout" ||
-    typeof entry.execution.endedAt !== "number"
+    typeof entry.execution.endedAt !== "number" ||
+    // A wait-expiry publication describes the waiter, not the run. Fencing the
+    // run behind it would discard the child's own terminal callback and leave
+    // the parent's last word "timed out" for a child that went on to finish.
+    // Mirrors `isSubagentRunStillRunning`, inlined to keep this timeout-math
+    // module free of an announce-layer import.
+    entry.execution.outcome.disposition === "still-running"
   ) {
     return false;
   }

@@ -47,6 +47,7 @@ import {
 } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   testing,
+  createSendMessageMock,
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
   registerDescendantWakeCurrencyTests,
@@ -54,6 +55,7 @@ import {
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
 import type { SubagentAnnounceDeliveryTestDeps } from "./subagent-announce-overrides.test-support.js";
 import { privateCompletionCases } from "./subagent-announce-private-completion.test-fixtures.js";
+import { registerProvisionalExpiryDeliveryTests } from "./subagent-announce-provisional-expiry.test-support.js";
 import { createRequesterSettleCases } from "./subagent-announce-requester-settle.test-fixtures.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
@@ -350,16 +352,6 @@ function createRoleRestrictedInProcessGatewayMock(response: Record<string, unkno
     },
   ) as unknown as typeof runtimeDispatchGatewayMethodInProcess;
   return { cfg, dispatchGatewayMethodInProcess };
-}
-
-function createSendMessageMock() {
-  return vi.fn(async () => ({
-    channel: "slack",
-    to: "channel:C123",
-    via: "direct" as const,
-    mediaUrl: null,
-    result: { messageId: "msg-1" },
-  })) as unknown as typeof runtimeSendMessage;
 }
 
 const committedSessionSpawnEvidence = {
@@ -1114,6 +1106,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     createRoleRestrictedInProcessGatewayMock,
     createGatewayMock,
     runDescendantWake,
+  });
+
+  registerProvisionalExpiryDeliveryTests({
+    createGatewayMock,
+    // `deliverDiscordDirectMessageCompletion` was folded into the route table;
+    // the DM fallback these cases exercise is the `discord` route's fixture.
+    deliverDiscordDirectMessageCompletion: (fixture) => deliverFixture("discord", fixture),
   });
 
   it.each<[string, Record<string, unknown>, string?]>([
