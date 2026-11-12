@@ -1,0 +1,2 @@
+2
+# Seed exact original modes independently of the runner umask in launchd authority recovery tests.

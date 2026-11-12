@@ -89,6 +89,8 @@ it.each<[string, boolean, string | null | undefined, string[], number]>([
   for (const [file, contents, mode] of originals) {
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     await fs.writeFile(file, contents, { mode });
+    // The restoration baseline must not inherit the test runner's umask.
+    await fs.chmod(file, mode);
   }
   const args = {
     env,
