@@ -1,2 +1,2 @@
-# Keep exported tool catalogs that exceed the shared 64-object diagnostic budget.
-31
+# The catalog regression cannot grow the grandfathered export test, so it lives in a sibling file.
+89

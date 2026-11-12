@@ -2,7 +2,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import {
   isSessionFileEntry,
@@ -43,11 +42,8 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import {
-  TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
-  safeTrajectorySessionFileName,
-} from "./paths.js";
+import { sanitizeTrajectoryExportPayload } from "./export-payload.js";
+import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES, safeTrajectorySessionFileName } from "./paths.js";
 import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import type {
   TrajectoryBundleManifest,
@@ -543,15 +539,6 @@ function redactTrajectoryExportObjectKeys(
     );
   }
   return next;
-}
-
-// Capture keeps every object that fits one event. The shared diagnostic
-// projector defaults to 64 objects, which drops later fields such as tool
-// catalogs and replaces them with "[Truncated]".
-const TRAJECTORY_EXPORT_MAX_NODES = TRAJECTORY_RUNTIME_EVENT_MAX_BYTES / 2;
-
-function sanitizeTrajectoryExportPayload(value: unknown): unknown {
-  return sanitizeDiagnosticPayload(value, { maxNodes: TRAJECTORY_EXPORT_MAX_NODES });
 }
 
 function redactTrajectoryExportValue(
