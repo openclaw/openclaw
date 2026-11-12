@@ -159,6 +159,7 @@ it("reports only the committed config with a projected hash and redacted secrets
         gateway: { auth: { token: "__OPENCLAW_REDACTED__" } },
       },
     },
+    application: { status: "failed" },
   });
   expect(queueFollowUp).toHaveBeenCalledOnce();
 });
