@@ -254,7 +254,7 @@ describe("task facts", () => {
     expect(v2.models.find((model: Row) => model.id === "chat-0")).not.toHaveProperty("inference");
   });
 
-  it("hosts every bundled Decision provider with a fixed model list", async () => {
+  it("serves every fixed-list bundled Decision provider from the hosted catalog", async () => {
     const manifests = readModelCatalogManifests();
     const bundle = await assembleModelCatalogBundle({
       manifests,
@@ -270,11 +270,25 @@ describe("task facts", () => {
       3,
     );
     const hosted = new Set(v3.models.flatMap((m) => (m.inference?.decision ? [m.provider] : [])));
-    // ONNX presets are local artifacts pinned in plugin code; Rerank has no fixed list.
-    const unhosted = manifests
-      .flatMap(({ manifest }) => manifest.contracts?.decisionProviders ?? [])
-      .filter((provider: string) => !hosted.has(provider));
-    expect(unhosted).toEqual(["onnx", "rerank"]);
+    // Gateways take runtime/refreshable providers' rows from live listing, never the hosted feed.
+    const unhosted = manifests.flatMap(({ manifest }) =>
+      (manifest.contracts?.decisionProviders ?? []).filter(
+        (provider: string) =>
+          !hosted.has(provider) ||
+          ["runtime", "refreshable"].includes(manifest.modelCatalog?.discovery?.[provider]),
+      ),
+    );
+    // Baseten, ClawRouter, Levanto, OpenAI and OpenRouter declare runtime listing; ONNX
+    // presets are local artifacts pinned in plugin code; Rerank has no fixed list.
+    expect(unhosted).toEqual([
+      "baseten",
+      "clawrouter",
+      "levanto",
+      "onnx",
+      "openai",
+      "openrouter",
+      "rerank",
+    ]);
   });
 
   it("does not use native-only rows to satisfy the released chat catalog floor", async () => {
