@@ -15,14 +15,35 @@ afterEach(async () => {
 const p = (...parts: string[]) => state.path(...parts);
 const observe = (owner: MemoryWatchPolicy) => owner.observations(new AbortController().signal);
 type ExtraPaths = ConstructorParameters<typeof MemoryWatchPolicy>[1]["extraPaths"];
-function policy(extraPaths: ExtraPaths = [], media = false, workspace = state.workspaceDir) {
+function policy(
+  extraPaths: ExtraPaths = [],
+  media = false,
+  workspace = state.workspaceDir,
+  excludePaths: string[] = [],
+) {
   const modalities: ("image" | "audio")[] = media ? ["image", "audio"] : [];
   return new MemoryWatchPolicy(workspace, {
     extraPaths,
+    excludePaths,
     multimodal: { enabled: media, modalities, maxFileBytes: 10485760 },
     sync: { watchDebounceMs: 0 },
   });
 }
+
+it("does not observe generated dreaming reports but still selects adjacent memory", async () => {
+  const memoryDir = path.join(state.workspaceDir, "memory");
+  await fs.mkdir(path.join(memoryDir, "dreaming", "light"), { recursive: true });
+  await fs.writeFile(path.join(memoryDir, "current.md"), "Current truth");
+  const owner = policy([], false, state.workspaceDir, ["memory/dreaming/**"]);
+  const group = (await observe(owner)).find((entry) =>
+    entry.selections.some((selection) => selection.lexical === memoryDir),
+  )!;
+  const relative = (name: string) => path.relative(group.root.rootDir, path.join(memoryDir, name));
+  expect(owner.exclude(group, { path: relative("dreaming"), kind: "directory" })).toBe(true);
+  expect(owner.select(group, relative("dreaming/light/report.md"), false)).toBeUndefined();
+  expect(owner.exclude(group, { path: relative("current.md"), kind: "file" })).toBe(false);
+  expect(owner.select(group, relative("current.md"), false)).toBeDefined();
+});
 
 it("observes root-entry links without following sources the indexer rejects", async () => {
   await fs.mkdir(p("target"));

@@ -34,7 +34,7 @@ its stable declaration key in the active cron store.
 
 - **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).
 - **Rewrite preimages** in SQLite-backed plugin state before an accepted `MEMORY.md` rewrite.
-- **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`.
+- **Human-readable output** in `DREAMS.md` (or an existing `dreams.md`) and optional phase report files under `memory/dreaming/<phase>/YYYY-MM-DD.md`. Memory search indexes these report files like other `memory/` notes; to keep them out of search, set [`memory.search.excludePaths`](/reference/memory-config#additional-memory-paths) to `["memory/dreaming/**"]`.
 
 Dreaming preserves existing workspace directory permissions without attempting
 to change their modes. Missing output directories are created with mode `0700`;

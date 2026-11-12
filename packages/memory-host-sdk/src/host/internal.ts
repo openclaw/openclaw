@@ -98,11 +98,25 @@ function expandHomePath(value: string): string {
 
 type NormalizedExtraMemoryPath = { path: string; pattern?: string; evergreen?: true };
 
+// One glob contract for every configured memory pattern; runtime globbers (Bun.Glob) differ.
+const memoryGlobOptions: MinimatchOptions = {
+  dot: false,
+  nonegate: true,
+  nocomment: true,
+  windowsPathsNoEscape: true,
+  optimizationLevel: 2,
+  // Configured globs use slash-separated relative paths on every host.
+  platform: "linux",
+  nocase: process.platform === "win32" || process.platform === "darwin",
+  nocaseMagicOnly: true,
+};
+
 // Parsed patterns live only as long as their configured scan/read entry.
 const extraMemoryPathMatchers = new WeakMap<
   NormalizedExtraMemoryPath,
   { file: Minimatch; directories?: Minimatch[] }
 >();
+const excludePathMatchers = new WeakMap<readonly string[], Minimatch[]>();
 
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
@@ -151,30 +165,20 @@ export function matchesExtraMemoryPathEntry(
     const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
     let matchers = extraMemoryPathMatchers.get(entry);
     if (!matchers || matchers.file.pattern !== entry.pattern) {
-      const matcherOptions: MinimatchOptions = {
-        dot: false,
-        nonegate: true,
-        nocomment: true,
-        windowsPathsNoEscape: true,
-        optimizationLevel: 2,
-        // Configured globs use slash-separated relative paths on every host.
-        platform: "linux",
-        nocase: process.platform === "win32" || process.platform === "darwin",
-        nocaseMagicOnly: true,
-      };
       const segments = entry.pattern.split("/");
       const conservative =
         /[{[(]/.test(entry.pattern) ||
         segments.some((segment) => segment === "." || segment === "..");
       const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
       matchers = {
-        file: new Minimatch(entry.pattern, matcherOptions),
+        file: new Minimatch(entry.pattern, memoryGlobOptions),
         // Prefix matches preserve dot rules; partial matches can enter hidden directories.
         directories: conservative
           ? undefined
           : Array.from(
               { length: parentCount },
-              (_, index) => new Minimatch(segments.slice(0, index + 1).join("/"), matcherOptions),
+              (_, index) =>
+                new Minimatch(segments.slice(0, index + 1).join("/"), memoryGlobOptions),
             ),
       };
       extraMemoryPathMatchers.set(entry, matchers);
@@ -186,6 +190,33 @@ export function matchesExtraMemoryPathEntry(
   } catch {
     return false;
   }
+}
+
+/** Match workspace-relative paths only; outside extra roots are not governed by workspace globs. */
+export function shouldSkipConfiguredMemorySearchPath(params: {
+  workspaceDir: string;
+  absPath: string;
+  excludePaths?: readonly string[];
+}): boolean {
+  if (!params.excludePaths?.length) {
+    return false;
+  }
+  const relative = path.relative(params.workspaceDir, params.absPath);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return false;
+  }
+  const normalized = relative.replaceAll(path.sep, "/");
+  let matchers = excludePathMatchers.get(params.excludePaths);
+  if (!matchers) {
+    matchers = params.excludePaths.map((pattern) => new Minimatch(pattern, memoryGlobOptions));
+    excludePathMatchers.set(params.excludePaths, matchers);
+  }
+  return matchers.some(
+    (matcher) =>
+      // "dir/**" does not match "dir"; match the directory so scans and watchers prune it.
+      (matcher.pattern.endsWith("/**") && normalized === matcher.pattern.slice(0, -3)) ||
+      matcher.match(normalized),
+  );
 }
 
 export function isMemoryPath(relPath: string): boolean {
@@ -283,16 +314,18 @@ export async function listMemoryFiles(
   extraPaths?: MemoryExtraPath[],
   multimodal?: MemoryMultimodalSettings,
   onSkippedSymlinkRoot?: (root: string) => void,
+  excludePaths?: readonly string[],
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryDir = path.join(workspaceDir, "memory");
 
   const shouldSkipWorkspaceMemoryPath = (absPath: string): boolean =>
-    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath });
+    shouldSkipRootMemoryAuxiliaryPath({ workspaceDir, absPath }) ||
+    shouldSkipConfiguredMemorySearchPath({ workspaceDir, absPath, excludePaths });
 
   const addMarkdownFile = async (absPath: string) => {
     const stat = await scanMemorySource(absPath, () => statEnumerableMemoryFile(absPath));
-    if (!stat || !absPath.endsWith(".md")) {
+    if (!stat || !absPath.endsWith(".md") || shouldSkipWorkspaceMemoryPath(absPath)) {
       return;
     }
     result.push(absPath);
