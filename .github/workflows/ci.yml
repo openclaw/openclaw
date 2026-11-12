@@ -7129,6 +7129,7 @@ jobs:
 
       - name: Run Docker seed tier
         env:
+          npm_config_logs_dir: ${{ runner.temp }}/docker-seed-npm-logs
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
           OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
           OPENCLAW_DOCKER_ALL_FAIL_FAST: "0"
@@ -7137,6 +7138,14 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: &docker_parallelism ${{ (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: *docker_parallelism
         run: pnpm test:docker:all
+
+      - name: Upload Docker seed npm diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-seed-npm-diagnostics
+          path: ${{ runner.temp }}/docker-seed-npm-logs
+          if-no-files-found: ignore
 
       - name: Upload sanitized upgrade survivor proof
         if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
