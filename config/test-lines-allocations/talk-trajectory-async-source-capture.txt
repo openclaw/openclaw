@@ -1,4 +1,0 @@
-# Exact net growth for Talk/trajectory main-thread filesystem regression proof.
-# Real worker persistence, pending creation, selector FIFO, and direct/actor alias refusal.
-# Existing fixture/harness reused; tests split by entry-source ownership, no new helper layer.
-249

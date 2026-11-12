@@ -297,6 +297,7 @@
 
 .ocid-access__row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
@@ -352,6 +353,7 @@
 }
 
 .ocid-access__node-info {
+  flex: 1 1 240px;
   min-width: 0;
 }
 
@@ -363,6 +365,13 @@
 
 .ocid-access__node-info + .ocid-access__actions {
   flex-shrink: 0;
+  max-width: 100%;
+}
+
+.ocid-access__node-info + .ocid-access__actions .btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .ocid-access__title {

@@ -1,2 +1,0 @@
-# Cold reader fs guard plus ordinary/inspection alias custody and physical FIFO.
-26

@@ -348,6 +348,8 @@ describe("Talk catalog boundaries", () => {
     const input = triggerInput(page);
     initial.reject(new Error("catalog temporarily unavailable"));
     await waitForSolid(() => expect(page.textContent).toContain(t("talkPage.status.unavailable")));
+    expect(page.textContent).toContain("catalog temporarily unavailable");
+    expect(page.textContent).not.toContain(t("talkPage.status.unavailableHint"));
     expect(page.textContent).toContain("gpt-realtime-2.1");
     expect(triggerInput(page)).toBe(input);
 

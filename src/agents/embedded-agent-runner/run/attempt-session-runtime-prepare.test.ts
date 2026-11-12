@@ -1,15 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SessionEntryCohortReader } from "../../../config/sessions/session-entry-read-runtime.types.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptReader,
 } from "../../../config/sessions/transcript-write-context.js";
+import * as processExec from "../../../process/exec.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
@@ -17,11 +22,26 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
+import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { commandResult } from "../../github-identity.test-support.js";
+import {
+  clearNativeGitHubTokenCache,
+  refreshNativeGitHubConfiguration,
+} from "../../github-read-identity.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createGitHubPublishTool } from "../../tools/github-publish-tool.js";
+import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
+import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 
 const mocks = vi.hoisted(() => ({
   createAnthropicPayloadLogger: vi.fn(),
@@ -251,6 +271,7 @@ function createFixture() {
     },
     toolBase: { codeModeControlsEnabledForRun: false },
     toolCatalog: {
+      installToolListingPin: vi.fn(async () => false),
       effectiveTools: [],
       toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
     },
@@ -289,6 +310,169 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it.each([false, true])(
+    "keeps established GitHub listing through async discovery and refreshes on config change (codeMode=%s)",
+    async (codeMode) => {
+      const fixture = createHistoryFixture();
+      const owner = await vi.importActual<typeof import("../session-prompt-state.js")>(
+        "../session-prompt-state.js",
+      );
+      mocks.retainSessionPromptState.mockImplementation(owner.retainEmbeddedSessionPromptState);
+      vi.stubEnv("GH_TOKEN", undefined);
+      vi.stubEnv("GITHUB_TOKEN", undefined);
+      const native = vi
+        .spyOn(processExec, "runCommandBuffered")
+        .mockResolvedValue(commandResult("", 1));
+      clearNativeGitHubTokenCache();
+      onTestFinished(() => {
+        native.mockRestore();
+        clearNativeGitHubTokenCache();
+        clearRuntimeConfigSnapshot();
+        fixture.resources.promptStateLease?.[Symbol.dispose]();
+        owner.clearEmbeddedSessionPromptStates([fixture.input.attempt.sessionId]);
+      });
+      let emitted = "";
+      const createSession = mocks.prepareAgentSession.getMockImplementation()!;
+      mocks.prepareAgentSession.mockImplementation(async (input) => {
+        const prepared = prepareEmbeddedAttemptClientTools({
+          attempt: input.attempt,
+          ...input.clientToolPreparation,
+        });
+        emitted = JSON.stringify(
+          prepared.allCustomTools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          })),
+        );
+        return createSession(input);
+      });
+      const baseConfig = {
+        agents: { entries: { main: {} } },
+        tools: { codeMode, toolSearch: false },
+      };
+      let config: NonNullable<PrepareInput["attempt"]["config"]> = baseConfig;
+      setRuntimeConfigSnapshot(config);
+      const render = async (trigger: "user" | "event", sandboxed = false) => {
+        fixture.resources.promptStateLease?.[Symbol.dispose]();
+        Object.assign(fixture.input.attempt, {
+          config,
+          trigger,
+          model: makeProviderModelFixture({
+            provider: "openai",
+            id: "listing-proof",
+            baseUrl: "http://127.0.0.1:1",
+            api: "openai-responses",
+          }),
+        });
+        const sandbox = sandboxed ? createSandboxTestContext() : null;
+        fixture.input.setup = createAttemptSetupFixture({ sandbox });
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          config,
+          agentId: "main",
+          sessionKey: fixture.input.attempt.sessionKey,
+          modelToolsEnabled: true,
+        });
+        onTestFinished(runtime.cleanup);
+        const tools = createOpenClawCodingToolsInternal({
+          config,
+          sessionKey: fixture.input.attempt.sessionKey,
+          githubPublicationAvailable: true,
+          githubPublicationConfigurationAware: true,
+          wrapBeforeToolCallHook: false,
+        })
+          .filter((tool) => tool.name.startsWith("github_"))
+          .map((tool) =>
+            sandbox && tool.name === "github_publish" ? createGitHubPublishTool({ sandbox }) : tool,
+          );
+        fixture.input.bundleTools.uncompactedEffectiveTools = tools;
+        Object.assign(fixture.input.toolBase, {
+          toolSurfaceRuntime: runtime,
+          toolsEnabled: true,
+          codeModeControlsEnabledForRun: codeMode,
+          toolSearchControlsEnabledForRun: false,
+          toolSearchConfig: runtime.plan.toolSearchConfig,
+          toolSearchRuntimeConfig: config,
+          toolSearchCatalogRef: runtime.toolSearchCatalogRef,
+          localModelLeanPreserveToolNames: [],
+          runtimeCapabilityProfile: resolveConversationCapabilityProfile({
+            config,
+            agentId: "main",
+          }),
+        });
+        fixture.input.toolCatalog = await prepareEmbeddedAttemptToolCatalog({
+          attempt: fixture.input.attempt,
+          setup: fixture.input.setup,
+          preparedToolBase: fixture.input.toolBase,
+          bundleTools: fixture.input.bundleTools,
+          abortSignal: fixture.input.runAbortSignal,
+          executeCodeModeTool: async () => ({ content: [], details: {} }),
+        });
+        fixture.input.systemPrompt.prepareToolPrompt = async () => (prompt) => prompt;
+        const prepared = await fixture.prepare();
+        const publication =
+          runtime.toolSearchCatalogRef?.current?.entries.find(
+            (entry) => entry.name === "github_publish",
+          )?.tool ??
+          fixture.input.toolCatalog.effectiveTools.find((tool) => tool.name === "github_publish");
+        const result = {
+          publicationSchema: publication?.parameters,
+          definitions: emitted,
+          catalog: buildCodeModeCatalogPrompt(
+            { config, catalogRef: runtime.toolSearchCatalogRef },
+            runtime.toolSearchCatalogRef?.current?.entries ?? [],
+          ),
+        };
+        await owner.persistSessionToolSurface(prepared.sessionPromptState, (customType, data) =>
+          fixture.appendCustomEntryAsync(customType, structuredClone(data)),
+        );
+        return result;
+      };
+      const initial = await render("user");
+      native.mockImplementation(async (argv) =>
+        commandResult(argv[2] === "status" ? '{"hosts":{}}' : "", argv[2] === "status" ? 0 : 1),
+      );
+      await refreshNativeGitHubConfiguration();
+      expect(await render("event")).toEqual(initial);
+      native.mockResolvedValue(commandResult("", 1));
+      await refreshNativeGitHubConfiguration();
+      expect(await render("user")).toEqual(initial);
+      native.mockImplementation(async (argv) =>
+        commandResult(argv[2] === "status" ? '{"hosts":{}}' : "", argv[2] === "status" ? 0 : 1),
+      );
+      await refreshNativeGitHubConfiguration();
+      config = {
+        ...config,
+        tools: { ...config.tools, github: { profileId: "ghp_11111111111111111111111111111111" } },
+      };
+      setRuntimeConfigSnapshot(config);
+      await render("user");
+      const rebound = await render("event", true);
+      expect(rebound.publicationSchema).not.toHaveProperty("properties.workspacePath");
+      config = baseConfig;
+      setRuntimeConfigSnapshot(config);
+      const refreshed = await render("user");
+      expect(refreshed).not.toEqual(initial);
+      expect(refreshed.publicationSchema).toMatchObject({
+        properties: { action: { enum: ["readiness"] } },
+      });
+      native.mockResolvedValue(commandResult("", 1));
+      await refreshNativeGitHubConfiguration();
+      expect(await render("event")).toEqual(refreshed);
+      expect(await render("user")).toEqual(refreshed);
+      fixture.input.toolCatalog.refreshTools(() => {});
+      const latest = mocks.prepareAgentSession.mock.calls.at(-1)![0];
+      const toolRefresh = prepareEmbeddedAttemptClientTools({
+        attempt: latest.attempt,
+        ...latest.clientToolPreparation,
+      });
+      expect(
+        toolRefresh.allCustomTools.find((tool) => tool.name === "github_publish")?.parameters,
+      ).toMatchObject({
+        properties: { action: { enum: expect.arrayContaining(["publish"]) } },
+      });
+    },
+  );
   it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
     const fixture = createHistoryFixture();
     const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);

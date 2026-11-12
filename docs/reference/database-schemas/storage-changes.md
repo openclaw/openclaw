@@ -3094,9 +3094,9 @@ Quarter grain is exact for zones whose offsets and transitions fall on quarter
 hours (including +05:30, +05:45 and DST changes). A per-day p95 is the largest
 quarter p95. Ranges or zones that split a quarter with activity report
 `aggregate-boundary` for the overview; `usage.cost` replays those transcripts
-within its bounded allowance. Overview freshness compares the checkpoint with the
-session window's last mutation time and rewrite generation instead of transcript
-statistics. Session detail reads keep using the month partitions.
+within its bounded allowance. Overview and summary freshness compare the checkpoint
+with the session window's last mutation time and rewrite generation instead of
+transcript statistics. Session detail reads keep using the month partitions.
 
 Upgraded installs have partitions without quarter rows. The usage refresh owner
 finds partitions without a paired quarter row with one anti-join, derives the
@@ -3104,15 +3104,22 @@ rows from the stored partitions (no transcript scan) in its bounded batches, and
 inserts each row only while the partition header it decoded is still current.
 The work is idempotent and resumes after a restart.
 
-Both reports first let pending transcript publications land. When a pass finds
-instances without quarter rows, with invalid rows or older than their
-transcript, it asks the refresh owner for exactly those sessions (which also
-runs the upgrade backfill for them), waits up to 10 seconds inside the
-15-second usage request budget, and runs once more, so the answer includes
-them. Only a refresh that outlasts that wait leaves the second answer `partial`
-with reason `summarizing` and the summarized/total counts. Archived JSONL
-transcripts resolve through the same read cache as session detail reads and
-count in both reports.
+Overview reports return recorded aggregates immediately and request background
+refresh for missing or stale instances. Cost summaries first let pending transcript
+publications land, then request missing or stale instances, wait up to 10 seconds
+inside the 15-second RPC budget, and read once more. Incomplete coverage remains
+explicit in cache status. Cost RPC-owned refresh work is cancelled when the response
+is sent; publication-owned updates retain their own lifetime. Archived JSONL
+transcripts resolve through the same read cache as session detail reads and count
+in both reports.
+
+Refresh discovery limits its selected files before reading their statistics.
+SQLite statistics use fixed-tail keyset pages and release native custody between
+pages, so cancellation can stop the next read. Cold archives use their recorded
+statistics. Unchanged checkpoints skip those pages entirely; appended transcripts
+count only the suffix. Pacing uses kernel-accounted reads when available, with
+bounded scalar-page estimates otherwise. Rewrites during a paged recount discard
+the incomplete result; a later publication retries it.
 
 Transcripts remain authoritative; the projection changes neither retention nor
 billing data. Exact partial-quarter ranges and arithmetic that cannot be

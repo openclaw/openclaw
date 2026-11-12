@@ -1,2 +1,0 @@
-99
-# Async validation capture: main-thread filesystem, pending qualification, and receipt retirement regressions.

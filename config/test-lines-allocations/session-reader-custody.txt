@@ -1,2 +1,0 @@
-# Actual readonly source/current guards, alias refusal and restoration, and canonical symlink replacement.
-65

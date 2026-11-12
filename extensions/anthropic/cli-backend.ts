@@ -224,6 +224,9 @@ export function buildAnthropicCliBackend(
         return instructions ? `/compact ${instructions}` : "/compact";
       },
       input: "arg",
+      // Live turns send OpenClaw's prompt as Claude Code's replacement system prompt;
+      // the resumed compaction process must too, or its prefix misses their cache.
+      systemPromptFileArg: "--system-prompt-file",
       validateOutput: (rawOutput) => {
         for (const line of rawOutput.split("\n")) {
           try {

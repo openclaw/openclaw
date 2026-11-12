@@ -53,6 +53,7 @@ import {
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 
 const ownerStartTime = getFileLockProcessStartTime(process.pid);
+const MAX_CONCURRENT_CONDITION_CHECKS = 3;
 
 function query(db: EngineConnection) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(db);
@@ -385,6 +386,13 @@ function drainCronQueueInDatabase(
     preparing: [],
     skipped: cancelled,
   };
+  // A condition check is the opening phase of a run. At most this many runs are in that phase;
+  // the rest stay queued in due order with no running marker, so they hold no run slot, spend
+  // no run budget, and keep their occurrence across a restart.
+  const isCheckingCondition = (job: CronStoredJob) =>
+    job.state.runningAtMs !== undefined &&
+    job.state.conditionCheckReceiptId === job.state.runningReceiptId;
+  let checkingCount = [...jobs.values()].filter(isCheckingCondition).length;
   for (const receipt of queued) {
     const handle = receiptHandle(receipt);
     const job = jobs.get(receipt.jobId)!;
@@ -435,14 +443,23 @@ function drainCronQueueInDatabase(
       );
       continue;
     }
-    if (input.preparingAgentIds?.includes(agentId)) {
-      // Keep durable custody without spending capacity while the host awaits admission.
+    const checksCondition =
+      job.trigger !== undefined &&
+      (context.mode === "scheduled" || context.evaluateTrigger === true);
+    if (
+      input.preparingAgentIds?.includes(agentId) ||
+      (timed && input.busyConversationJobIds?.includes(job.id))
+    ) {
+      // Keep durable custody without spending capacity while the host awaits admission or an idle
+      // conversation. Only timed occurrences wait here for their conversation: startup recovers
+      // them from the queue, and an event's source needs its transfer acknowledged at once.
       result.preparing.push({ job, runReceipt: { ...handle, agentId } });
       continue;
     }
     if (
       (input.schedulingPaused && context.mode === "scheduled") ||
-      activeCount >= Math.max(1, input.maxConcurrentRuns)
+      activeCount >= Math.max(1, input.maxConcurrentRuns) ||
+      (checksCondition && checkingCount >= MAX_CONCURRENT_CONDITION_CHECKS)
     ) {
       continue;
     }
@@ -503,6 +520,13 @@ function drainCronQueueInDatabase(
     delete job.state.queuedAtMs;
     job.state.runningAtMs = input.nowMs;
     job.state.runningReceiptId = runReceipt.receiptId;
+    if (checksCondition) {
+      // Bound to this receipt, so it lapses with the run and needs no cleanup elsewhere.
+      job.state.conditionCheckReceiptId = runReceipt.receiptId;
+      checkingCount += 1;
+    } else {
+      delete job.state.conditionCheckReceiptId;
+    }
     delete job.state.runningScheduleChangeId;
     updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);
     result.launches.push({ job, runReceipt, migrationPending });
@@ -521,6 +545,7 @@ export function requestAndDrainCronRunsInWorker(
     | "maxConcurrentRuns"
     | "schedulingPaused"
     | "preparingAgentIds"
+    | "busyConversationJobIds"
     | "hostProcessId"
     | "pluginCommandHosts"
   >,
@@ -602,5 +627,24 @@ export function cancelCronRequestsInWorker(
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.cancel-requests" },
+  );
+}
+
+export function settleCronConditionCheckInWorker(
+  database: OpenClawStateDatabase,
+  input: CronRunQueueOperations["cron.settleConditionCheck"]["input"],
+): CronRunQueueOperations["cron.settleConditionCheck"]["output"] {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const job = loadJobs(db, input.storeKey).get(input.jobId);
+      if (job?.state.conditionCheckReceiptId !== input.receiptId) {
+        return {};
+      }
+      delete job.state.conditionCheckReceiptId;
+      updateCronRuntimeRow(db, input.storeKey, job);
+      return { job };
+    },
+    { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+    { operationLabel: "cron.settle-condition-check" },
   );
 }
