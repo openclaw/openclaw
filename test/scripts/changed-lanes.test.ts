@@ -484,10 +484,15 @@ describe("scripts/changed-lanes", () => {
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(failureCode);
-      const planned = createChangedCheckPlan(
+      const plan = createChangedCheckPlan(
         detectChangedLanesForPaths({ paths, base: "HEAD", staged: true }),
         { delegateCompilers: true },
-      ).commands.map((command) => ({ bin: command.bin ?? "pnpm", args: command.args }));
+      );
+      expect(plan.delegatedTypeGraphs).toEqual(["core"]);
+      const planned = plan.commands.map((command) => ({
+        bin: command.bin ?? "pnpm",
+        args: command.args,
+      }));
       const admitted =
         failureCode === 23
           ? planned
@@ -497,7 +502,11 @@ describe("scripts/changed-lanes", () => {
             );
       const starts = events.filter(({ event }) => event === "start");
       expect(starts.map(({ bin, args }) => ({ bin, args }))).toEqual(admitted);
-      expect(starts.some(({ args }) => args[0]?.startsWith("tsgo:"))).toBe(false);
+      expect(
+        starts
+          .filter(({ args }) => args[0]?.startsWith("tsgo:"))
+          .map(({ bin, args }) => ({ bin, args })),
+      ).toEqual(failureCode === 23 ? [{ bin: "pnpm", args: ["tsgo:core:test"] }] : []);
       expect(events).toEqual(
         admitted.flatMap(({ bin, args }) => [
           { event: "start", bin, args },

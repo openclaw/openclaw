@@ -67,9 +67,11 @@ it("assigns the complete delegated graph union once using native stripes and roo
   for (const row of plan.core_type_matrix.include) {
     names.push(...JSON.parse(row.type_graph_names_json ?? "[]"));
     if (row.root_type_stripe) {
-      const [index, count] = row.root_type_stripe.split("/").map(Number);
+      const [indexText, countText] = row.root_type_stripe.split("/");
+      const index = Number(indexText);
+      const count = Number(countText);
       names.push(
-        ...TSGO_ROOT_TEST_SHARDS.filter((_, offset) => offset % count! === index! - 1).map(
+        ...TSGO_ROOT_TEST_SHARDS.filter((_, offset) => offset % count === index - 1).map(
           ({ name }) => name,
         ),
       );
@@ -87,11 +89,12 @@ it("assigns the complete delegated graph union once using native stripes and roo
 
 it.each([
   ["narrow core tests", ["src/config/runtime-snapshot.test.ts"], "tsgo:core:test"],
-  ["aggregate project references", ["tsconfig.json"], "tsgo:all"],
+  ["aggregate project references", ["pnpm-lock.yaml"], "tsgo:all"],
 ] as const)("keeps %s with its original execution owner", (_, selected, task) => {
   const result = detectChangedLanes([...selected]);
   const inline = createChangedCheckPlan(result, options);
   const delegated = createChangedCheckPlan(result, { ...options, delegateCompilers: true });
+  expect(inline.commands.some(({ args }) => args[0] === task)).toBe(true);
   expect(delegated.commands).toEqual(inline.commands);
   expect(delegated.delegatedTypeGraphs).toEqual([]);
   expect(delegated.commands.some(({ args }) => args[0] === task)).toBe(true);
