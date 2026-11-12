@@ -1,0 +1,180 @@
+--- a/apps/macos/Sources/OpenClaw/ExecApprovalsSocket.swift
++++ b/apps/macos/Sources/OpenClaw/ExecApprovalsSocket.swift
+@@ -1,4 +1,5 @@
+ import Darwin
++import Dispatch
+ import Foundation
+ import OpenClawKit
+ import OSLog
+@@ -364,3 +365,13 @@
+         return delay
+     }
+ }
++
++// LOCAL DIAGNOSTIC OVERLAY ONLY. Not a production fix or performance measurement.
++enum MacDiagnosticTrace {
++    static func emit(_ stage: String, fd: Int32 = -1, detail: String = "") {
++        let savedErrno = errno
++        defer { errno = savedErrno }
++        let line = "MAC_DIAG t=\(DispatchTime.now().uptimeNanoseconds) stage=\(stage) fd=\(fd) main=\(Thread.isMainThread) errno=\(savedErrno) \(detail)\n"
++        line.withCString { _ = Darwin.write(STDERR_FILENO, $0, strlen($0)) }
++    }
++}
+--- a/apps/macos/Sources/OpenClaw/LocalSocketServer.swift
++++ b/apps/macos/Sources/OpenClaw/LocalSocketServer.swift
+@@ -241,15 +241,20 @@
+             return
+         }
+ 
++        MacDiagnosticTrace.emit("listener.ready", fd: fd, detail: "socketHash=\(self.socketPath.hashValue)")
+         onReady(true)
+         while self.stateLock.withLock({ self.isRunning }), !Task.isCancelled {
+             var addr = sockaddr_un()
+             var len = socklen_t(MemoryLayout.size(ofValue: addr))
++            MacDiagnosticTrace.emit("accept.begin", fd: fd)
+             let client = withUnsafeMutablePointer(to: &addr) { ptr in
+                 ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { rebound in
+                     accept(fd, rebound, &len)
+                 }
+             }
++            let diagnosticAcceptErrno = errno
++            MacDiagnosticTrace.emit("accept.end", fd: fd, detail: "client=\(client)")
++            errno = diagnosticAcceptErrno
+             if client < 0 {
+                 if errno == EINTR {
+                     continue
+--- a/apps/macos/Sources/OpenClaw/ExecApprovalsSocketClientSession.swift
++++ b/apps/macos/Sources/OpenClaw/ExecApprovalsSocketClientSession.swift
+@@ -52,7 +52,9 @@
+         onFinished: @escaping @Sendable () -> Void)
+     {
+         self.lock.withLock {
++            MacDiagnosticTrace.emit("handler.submit", fd: self.handle.fileDescriptor)
+             self.task = Task.detached { [self] in
++                MacDiagnosticTrace.emit("handler.enter", fd: self.handle.fileDescriptor)
+                 if !self.lock.withLock({ self.cancelled }) {
+                     await operation(self.handle)
+                 }
+--- a/apps/macos/Sources/OpenClaw/ExecApprovalsSocketServer.swift
++++ b/apps/macos/Sources/OpenClaw/ExecApprovalsSocketServer.swift
+@@ -62,11 +62,13 @@
+             }
+             try configureSocketTimeouts(fd, timeoutMs: execApprovalsSocketTimeoutMs)
+             // Keep aligned with EXEC_HOST_MAX_REQUEST_BYTES in src/infra/exec-host.ts.
++            MacDiagnosticTrace.emit("server.read.begin", fd: fd)
+             guard let line = try readLineFromSocket(fd, maxBytes: 1024 * 1024),
+                   let data = line.data(using: .utf8)
+             else {
+                 return
+             }
++            MacDiagnosticTrace.emit("server.read.end", fd: fd)
+             try Task.checkCancellation()
+             guard
+                 let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+@@ -95,6 +97,7 @@
+                 return
+             }
+         } catch {
++            MacDiagnosticTrace.emit("server.error", fd: fd, detail: "code=\((error as NSError).code)")
+             if !Task.isCancelled {
+                 self.logger
+                     .error("exec approvals socket handling failed: \(error.localizedDescription, privacy: .public)")
+@@ -114,7 +117,9 @@
+     private func sendResponse(handle: FileHandle, response: some Encodable) throws {
+         var payload = try JSONEncoder().encode(response)
+         payload.append(0x0A)
++        MacDiagnosticTrace.emit("server.write.begin", fd: handle.fileDescriptor)
+         try handle.write(contentsOf: payload)
++        MacDiagnosticTrace.emit("server.write.end", fd: handle.fileDescriptor)
+     }
+ 
+     private func isAllowedPeer(fd: Int32) -> Bool {
+--- a/apps/macos/Tests/OpenClawIPCTests/ExecApprovalsSocketTestSupport.swift
++++ b/apps/macos/Tests/OpenClawIPCTests/ExecApprovalsSocketTestSupport.swift
+@@ -120,10 +120,14 @@
+         response: Response.Type,
+         timeoutMs: Int = 1000) async throws -> Response
+     {
+-        try await self.withBlockingSocketIO {
++        MacDiagnosticTrace.emit("client.queue", detail: "socketHash=\(socketPath.hashValue)")
++        return try await self.withBlockingSocketIO {
++            MacDiagnosticTrace.emit("client.enter")
+             let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+             guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+             defer { close(fd) }
++            var stage = "configure"
++            defer { MacDiagnosticTrace.emit("client.exit", fd: fd, detail: "lastStage=\(stage)") }
+             try configureSocketTimeouts(fd, timeoutMs: timeoutMs)
+             var noSigPipe: Int32 = 1
+             guard setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size)) == 0
+@@ -140,17 +144,29 @@
+                     }
+                 }
+             }
++            stage = "connect"
++            MacDiagnosticTrace.emit("client.connect.begin", fd: fd)
+             let connected = withUnsafePointer(to: &address) {
+                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                     connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                 }
+             }
++            let diagnosticConnectErrno = errno
++            MacDiagnosticTrace.emit("client.connect.end", fd: fd, detail: "result=\(connected)")
++            errno = diagnosticConnectErrno
+             guard connected == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+ 
+             var payload = try JSONEncoder().encode(message)
+             payload.append(0x0A)
++            stage = "write"
++            MacDiagnosticTrace.emit("client.write.begin", fd: fd)
+             try FileHandle(fileDescriptor: fd, closeOnDealloc: false).write(contentsOf: payload)
++            MacDiagnosticTrace.emit("client.write.end", fd: fd)
++            stage = "read"
++            MacDiagnosticTrace.emit("client.read.begin", fd: fd)
+             guard let line = try readLineFromSocket(fd, maxBytes: 256_000) else { throw POSIXError(.ECONNRESET) }
++            MacDiagnosticTrace.emit("client.read.end", fd: fd)
++            stage = "decode"
+             return try JSONDecoder().decode(response, from: Data(line.utf8))
+         }
+     }
+--- a/apps/macos/Tests/OpenClawIPCTests/ExecApprovalsSocketAuthTests.swift
++++ b/apps/macos/Tests/OpenClawIPCTests/ExecApprovalsSocketAuthTests.swift
+@@ -23,6 +23,7 @@
+ 
+     @Test(arguments: [false, true])
+     func `minimum timestamp is rejected before authentication without overflow`(atRequestLimit: Bool) async throws {
++        MacDiagnosticTrace.emit("timestamp.case", detail: "atRequestLimit=\(atRequestLimit)")
+         #expect(!execHostTimestampIsFresh(nowMs: 1_700_000_000_000, requestMs: Int.min))
+         let root = try ExecApprovalsSocketTestSupport.makeRoot()
+         defer { try? FileManager().removeItem(at: root) }
+--- a/apps/macos/Tests/OpenClawIPCTests/DashboardExperienceTests.swift
++++ b/apps/macos/Tests/OpenClawIPCTests/DashboardExperienceTests.swift
+@@ -228,6 +228,20 @@
+     func `reopening preserves a manually refocused Gateway after backgrounding`(
+         _ automaticGatewayProfileRefreshEnabled: Bool) async throws
+     {
++        MacDiagnosticTrace.emit("focus.case", detail: "automaticRefresh=\(automaticGatewayProfileRefreshEnabled)")
++        let diagnosticObservers = [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification].map { name in
++            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { note in
++                MainActor.assumeIsolated {
++                    let changed = note.object as? NSWindow
++                    let owner = changed?.windowController.map { String(describing: type(of: $0)) } ?? "none"
++                    MacDiagnosticTrace.emit("focus.notification", detail: "name=\(note.name.rawValue) changed=\(changed?.windowNumber ?? -1) key=\(NSApp.keyWindow?.windowNumber ?? -1) owner=\(owner)")
++                    if name == NSWindow.didBecomeKeyNotification {
++                        MacDiagnosticTrace.emit("focus.stack", detail: Thread.callStackSymbols.prefix(16).joined(separator: " | "))
++                    }
++                }
++            }
++        }
++        defer { diagnosticObservers.forEach { NotificationCenter.default.removeObserver($0) } }
+         try await AppKitTestSupport.startApplication()
+         let server = try await DashboardHTTPFixture.start()
+         defer { server.stop() }
+@@ -248,6 +262,7 @@
+             // The user clicks an existing window, without going through a manager presentation.
+             window.makeKeyAndOrderFront(nil)
+         }
++        MacDiagnosticTrace.emit("focus.after-await", detail: "expected=\(window.windowNumber) actual=\(NSApp.keyWindow?.windowNumber ?? -1) isKey=\(window.isKeyWindow)")
+         try #require(window.isKeyWindow)
+         #expect(manager.lastFrontmostWindow === window)
+         let activationChanges = AsyncTestSignal()
