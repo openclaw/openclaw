@@ -228,7 +228,8 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
               if (maintenanceSnapshot && preservation) {
                 // Explicit replacement/removal retains its intentional lifecycle semantics.
                 const automatic = changes.filter(
-                  ({ sessionKey }) => !replacements.some((entry) => entry.sessionKey === sessionKey),
+                  ({ sessionKey }) =>
+                    !replacements.some((entry) => entry.sessionKey === sessionKey),
                 );
                 assertMaintenancePreservationCompatible(
                   maintenanceSnapshot,
@@ -236,12 +237,15 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
                   [
                     {
                       archivedEntries: automatic.flatMap(({ sessionKey, before, after }) =>
-                        before?.entry?.archivedAt === undefined && after?.entry?.archivedAt !== undefined
+                        before?.entry?.archivedAt === undefined &&
+                        after?.entry?.archivedAt !== undefined
                           ? [{ sessionKey, sessionId: after.entry.sessionId }]
                           : [],
                       ),
                       entryRemovals: automatic.flatMap(({ sessionKey, before, after }) =>
-                        before?.entry && !after?.entry ? [{ sessionKey, expectedEntry: before.entry }] : [],
+                        before?.entry && !after?.entry
+                          ? [{ sessionKey, expectedEntry: before.entry }]
+                          : [],
                       ),
                       stateDeletePlans: [],
                     },

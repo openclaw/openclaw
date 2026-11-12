@@ -176,11 +176,14 @@ async function patchSessionActorEntry(
             const automatic = changes.filter((change) => change.sessionKey !== sessionKey);
             assertMaintenancePreservationCompatible(
               maintenanceSnapshot,
-              maintenancePreservation.refreshCandidates(automatic.map((change) => change.sessionKey)),
+              maintenancePreservation.refreshCandidates(
+                automatic.map((change) => change.sessionKey),
+              ),
               [
                 {
                   archivedEntries: automatic.flatMap(({ sessionKey: changedKey, before, after }) =>
-                    before?.entry?.archivedAt === undefined && after?.entry?.archivedAt !== undefined
+                    before?.entry?.archivedAt === undefined &&
+                    after?.entry?.archivedAt !== undefined
                       ? [{ sessionKey: changedKey, sessionId: after.entry.sessionId }]
                       : [],
                   ),

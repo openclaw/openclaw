@@ -500,7 +500,10 @@ describe("openshell sandbox backend e2e", () => {
           await fs.writeFile(path.join(protectedPath, "host-only.txt"), "private\n", "utf8");
         }
         await fs.mkdir(path.join(mirrorWorkspaceDir, "nested-repo/.git"), { recursive: true });
-        await fs.writeFile(path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"), "private\n");
+        await fs.writeFile(
+          path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"),
+          "private\n",
+        );
         const hostLinkTarget = path.join(rootDir, "host-link-target.txt");
         await fs.writeFile(hostLinkTarget, "host-only-link-target\n");
         const hostLinks = [
@@ -641,7 +644,10 @@ describe("openshell sandbox backend e2e", () => {
             "mkdir -p nested-repo/.git fresh-repo/.git spaced && printf sandbox > nested-repo/.git/config && printf sandbox > fresh-repo/.git/config && printf ordinary > 'spaced/ .git '",
         });
         expect(
-          await fs.readFile(path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"), "utf8"),
+          await fs.readFile(
+            path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"),
+            "utf8",
+          ),
         ).toBe("private\n");
         expect(await fs.readFile(path.join(mirrorWorkspaceDir, "spaced/ .git "), "utf8")).toBe(
           "ordinary",
@@ -649,12 +655,17 @@ describe("openshell sandbox backend e2e", () => {
         await expect(
           fs.lstat(path.join(mirrorWorkspaceDir, "nested-repo/.git/config")),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(fs.lstat(path.join(mirrorWorkspaceDir, "fresh-repo/.git"))).rejects.toMatchObject({
+        await expect(
+          fs.lstat(path.join(mirrorWorkspaceDir, "fresh-repo/.git")),
+        ).rejects.toMatchObject({
           code: "ENOENT",
         });
         await runBackendExec({ backend: mirrorBackend, command: "rm -rf nested-repo" });
         expect(
-          await fs.readFile(path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"), "utf8"),
+          await fs.readFile(
+            path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"),
+            "utf8",
+          ),
         ).toBe("private\n");
         await expect(
           runBackendExec({
@@ -663,7 +674,10 @@ describe("openshell sandbox backend e2e", () => {
           }),
         ).rejects.toThrow(/download the sandbox file directly/u);
         expect(
-          await fs.readFile(path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"), "utf8"),
+          await fs.readFile(
+            path.join(mirrorWorkspaceDir, "nested-repo/.git/host-only.txt"),
+            "utf8",
+          ),
         ).toBe("private\n");
         expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
         expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);

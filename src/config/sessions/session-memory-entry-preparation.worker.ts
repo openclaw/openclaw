@@ -11,7 +11,10 @@ import {
   SessionTranscriptExportChangedError,
 } from "./session-accessor.sqlite-export-slices.js";
 import { readTranscriptExportSnapshotFromDatabase } from "./session-accessor.sqlite-read.js";
-import { resolveSqliteTranscriptReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  resolveSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
@@ -116,10 +119,10 @@ export async function prepareSessionMemoryEntries(
                 ...options,
                 sessionId: resolved.sessionId,
                 batchHead: snapshot,
-                transaction: (read) =>
+                transaction: (readSlice) =>
                   withOpenClawAgentDatabaseReadOnly(
                     (database) =>
-                      runSqliteReadSnapshotSync(database.db, () => read(database), {
+                      runSqliteReadSnapshotSync(database.db, () => readSlice(database), {
                         operationLabel: "session transcript export slice",
                       }),
                     toDatabaseOptions(resolved),
@@ -156,7 +159,9 @@ export async function prepareSessionMemoryEntries(
             : null;
         value = {
           summary,
-          resetRecallCutoff: summary ? readSessionEntryResetRecallCutoff(summary) : { state: "absent" },
+          resetRecallCutoff: summary
+            ? readSessionEntryResetRecallCutoff(summary)
+            : { state: "absent" },
         };
         break;
       } catch (error) {
@@ -165,7 +170,10 @@ export async function prepareSessionMemoryEntries(
           value = { cold: true };
           break;
         }
-        if (!(error instanceof SessionTranscriptExportChangedError) || attempt >= MAX_EXPORT_ATTEMPTS) {
+        if (
+          !(error instanceof SessionTranscriptExportChangedError) ||
+          attempt >= MAX_EXPORT_ATTEMPTS
+        ) {
           throw error;
         }
         await reset();

@@ -164,7 +164,9 @@ it.each([
         if (!active && !shorter) {
           expect(outcome).toMatchObject({
             terminal: {
-              error: { message: expect.stringContaining("Inspect the native session or use /reset") },
+              error: {
+                message: expect.stringContaining("Inspect the native session or use /reset"),
+              },
             },
           });
         }
@@ -179,7 +181,9 @@ it.each([
           await harness.dispose();
           await reopenState();
           harness = registerHarness(state.env);
-          expect(await harness.runAttempt({ ...params, runId: "recovered-native-turn" })).toMatchObject({
+          expect(
+            await harness.runAttempt({ ...params, runId: "recovered-native-turn" }),
+          ).toMatchObject({
             terminal: { kind: "ok" },
           });
           expect(await openStore().lookup(params.sessionId)).toEqual(saved);

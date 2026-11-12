@@ -13,7 +13,11 @@ describe("setup inference activation recovery", () => {
     { status: "applied-restart-required", requireApplied: true, outcome: "restored" },
     { status: "restart-pending", requireApplied: undefined, outcome: "restart" },
     {
-      status: { status: "deferred", reason: "Plugin fixture is busy.", appliesWhen: "Wait for retained work." },
+      status: {
+        status: "deferred",
+        reason: "Plugin fixture is busy.",
+        appliesWhen: "Wait for retained work.",
+      },
       requireApplied: true,
       outcome: "restored",
     },
@@ -85,7 +89,9 @@ describe("setup inference activation recovery", () => {
       requireApplied: true,
       assertCurrent: () => {},
       activate,
-      deferCompletion: (run) => { complete = run; },
+      deferCompletion: (run) => {
+        complete = run;
+      },
       configTarget: {
         read: async () => ({ config: {}, write: async () => ({}) }),
         write: async (config, { writeOptions, captureUndo }) => {

@@ -13,8 +13,8 @@ import { resolveStateDir } from "../config/state-dir.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { applyPrivateModeSync, applyPrivateModeToFdSync } from "../infra/private-mode.js";
-import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveOpenClawStateSqliteDir,

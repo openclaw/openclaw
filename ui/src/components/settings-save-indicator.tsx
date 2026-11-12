@@ -75,7 +75,9 @@ function SaveIndicatorContent(input: { props?: SettingsSaveIndicatorProps }) {
       return "applying";
     }
     if (
-      ["saving", "recovery", "rejected", "error", "deferred", "paused", "conflict"].includes(props.status)
+      ["saving", "recovery", "rejected", "error", "deferred", "paused", "conflict"].includes(
+        props.status,
+      )
     ) {
       return props.status;
     }

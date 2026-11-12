@@ -49,7 +49,10 @@ export function scopePreparedModelRuntimeLease(lease: PreparedModelRuntimeLease)
 }
 
 /** Enter a lease's capability collector without changing generation inheritance. */
-export function runInPreparedModelRuntimeLease<T>(lease: PreparedModelRuntimeLease, run: () => T): T {
+export function runInPreparedModelRuntimeLease<T>(
+  lease: PreparedModelRuntimeLease,
+  run: () => T,
+): T {
   return lease.run ? lease.run(run) : run();
 }
 

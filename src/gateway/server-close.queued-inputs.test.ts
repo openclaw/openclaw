@@ -107,11 +107,13 @@ function holdInputStage() {
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const stage = inputMedia.stageUserTurnPendingInput;
-  const spy = vi.spyOn(inputMedia, "stageUserTurnPendingInput").mockImplementation(async (...args) => {
-    entered.resolve();
-    await release.promise;
-    return stage(...args);
-  });
+  const spy = vi
+    .spyOn(inputMedia, "stageUserTurnPendingInput")
+    .mockImplementation(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return stage(...args);
+    });
   return { entered, release, spy };
 }
 
@@ -121,13 +123,13 @@ function holdRecoveryCapture(
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const capture = kernel.shutdownRuntime.markRestartAbortedMainSessions;
-  const spy = vi.spyOn(kernel.shutdownRuntime, "markRestartAbortedMainSessions").mockImplementation(
-    async (...args) => {
+  const spy = vi
+    .spyOn(kernel.shutdownRuntime, "markRestartAbortedMainSessions")
+    .mockImplementation(async (...args) => {
       entered.resolve();
       await release.promise;
       return capture(...args);
-    },
-  );
+    });
   return { entered, release, spy };
 }
 
@@ -158,15 +160,15 @@ it.for(["restart", "stop"] as const)(
     const releaseDispatch = createDeferredCore();
     let closing: Promise<void> | undefined;
     let sending: Promise<unknown> | undefined;
-    const dispatch = vi.spyOn(inbound, "dispatchInboundMessageWithProjectedDispatcher").mockImplementation(
-      async ({ replyOptions }) => {
+    const dispatch = vi
+      .spyOn(inbound, "dispatchInboundMessageWithProjectedDispatcher")
+      .mockImplementation(async ({ replyOptions }) => {
         assert(replyOptions);
         dispatched.resolve(replyOptions);
         await releaseDispatch.promise;
         replyOptions.abortSignal?.throwIfAborted();
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      },
-    );
+      });
     try {
       const binding = await fixture.bind();
       let acked = false;
@@ -175,7 +177,11 @@ it.for(["restart", "stop"] as const)(
         return ack;
       });
       await withinTest(
-        awaitGateBeforeSettlement(stage.entered.promise, sending, "chat.send skipped durable staging"),
+        awaitGateBeforeSettlement(
+          stage.entered.promise,
+          sending,
+          "chat.send skipped durable staging",
+        ),
         signal,
       );
       expect(acked).toBe(false);
@@ -194,7 +200,11 @@ it.for(["restart", "stop"] as const)(
       });
       if (mode === "restart") {
         await withinTest(
-          awaitGateBeforeSettlement(capture.entered.promise, closing, "close skipped recovery capture"),
+          awaitGateBeforeSettlement(
+            capture.entered.promise,
+            closing,
+            "close skipped recovery capture",
+          ),
           signal,
         );
         // New intake is fenced, but accepted principal and execution authority
@@ -311,7 +321,9 @@ it.for(["restart", "stop"] as const)(
   },
 );
 
-it("rejects an uncommitted ingress input when its grant is revoked during restart capture", async ({ signal }) => {
+it("rejects an uncommitted ingress input when its grant is revoked during restart capture", async ({
+  signal,
+}) => {
   const fixture = await createQueuedInputCloseFixture();
   const stage = holdInputStage();
   const capture = holdRecoveryCapture(fixture.kernel);

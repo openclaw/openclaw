@@ -4,16 +4,16 @@ import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
-import {
-  expectSessionAutomationSource,
-  markSessionAutomationSourceUnavailable,
-} from "./session-automation-index.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type {
   buildGatewayCronService,
   GatewayCronExitWatcherHandoff,
   GatewayCronState,
 } from "./server-cron.js";
+import {
+  expectSessionAutomationSource,
+  markSessionAutomationSourceUnavailable,
+} from "./session-automation-index.js";
 
 type LoadedGatewayCronState = {
   state: GatewayCronState;

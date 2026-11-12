@@ -83,7 +83,8 @@ function createPersistedFailureTransport(
         frames.push(frame);
         void server.request(frame.method, frame.params).then(
           async (payload) => {
-            const persistedFailure = frame.method === (options.method ?? "config.patch") && failAfterPersist;
+            const persistedFailure =
+              frame.method === (options.method ?? "config.patch") && failAfterPersist;
             if (persistedFailure) {
               failAfterPersist = false;
               await options.beforeFailure?.();
@@ -154,11 +155,13 @@ describe("config patch recovery", () => {
     async (method) => {
       vi.useFakeTimers();
       const application = {
-        status: "deferred", reason: "Plugin fixture has retained work.",
+        status: "deferred",
+        reason: "Plugin fixture has retained work.",
         appliesWhen: "Applies when that work settles.",
       };
       const server = createPersistedFailureTransport({
-        method, failureDetails: (ack) => ({ persistedConfig: ack, application }),
+        method,
+        failureDetails: (ack) => ({ persistedConfig: ack, application }),
       });
       const { runtimeConfig, publish } = createRecoveryCapability(server.request);
       try {
@@ -166,16 +169,20 @@ describe("config patch recovery", () => {
         if (method === "config.set") {
           runtimeConfig.setRaw('{ "count": 1, "enabled": false }');
         }
-        await expect(method === "config.set"
-          ? runtimeConfig.save()
-          : runtimeConfig.patch({ raw: { enabled: false }, note: "Disable" }))
-          .resolves.toBe(false);
+        await expect(
+          method === "config.set"
+            ? runtimeConfig.save()
+            : runtimeConfig.patch({ raw: { enabled: false }, note: "Disable" }),
+        ).resolves.toBe(false);
         expect(runtimeConfig.state).toMatchObject({
           configSnapshot: { hash: "hash-2", config: { count: 1, enabled: false } },
           configFormDirty: false,
           configNeedsApply: true,
           configAutoSaveStatus: "deferred",
-          configDeferredApplication: { reason: application.reason, appliesWhen: application.appliesWhen },
+          configDeferredApplication: {
+            reason: application.reason,
+            appliesWhen: application.appliesWhen,
+          },
         });
         await runtimeConfig.refresh();
         publish(false);
@@ -204,12 +211,17 @@ describe("config patch recovery", () => {
     const persisted = deferred();
     const reply = deferred();
     const application = {
-      status: "deferred", reason: "Plugin fixture has retained work.", appliesWhen: "Wait for it.",
+      status: "deferred",
+      reason: "Plugin fixture has retained work.",
+      appliesWhen: "Wait for it.",
     };
     const server = createPersistedFailureTransport({
       method: "config.set",
       failureDetails: (ack) => ({ persistedConfig: ack, application }),
-      beforeFailure: async () => { persisted.resolve(); await reply.promise; },
+      beforeFailure: async () => {
+        persisted.resolve();
+        await reply.promise;
+      },
     });
     const { runtimeConfig } = createRecoveryCapability(server.request);
     try {
@@ -220,7 +232,10 @@ describe("config patch recovery", () => {
       runtimeConfig.setRaw('{ "count": 3 }');
       reply.resolve();
       await expect(save).resolves.toBe(false);
-      expect(runtimeConfig.state.configSnapshot).toMatchObject({ hash: "hash-2", config: { count: 2 } });
+      expect(runtimeConfig.state.configSnapshot).toMatchObject({
+        hash: "hash-2",
+        config: { count: 2 },
+      });
       expect(JSON.parse(runtimeConfig.state.configRaw)).toEqual({ count: 3 });
       expect(runtimeConfig.state.configFormDirty).toBe(true);
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("deferred");

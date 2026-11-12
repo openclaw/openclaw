@@ -44,7 +44,11 @@ describe("readServiceStatusSummary", () => {
       const service = createService({
         isLoaded: vi.fn(async () => true),
         readCommand: vi.fn(async () => ({
-          programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+          programArguments: [
+            process.execPath,
+            path.join(serviceRoot, "dist", "index.js"),
+            "gateway",
+          ],
           ...(launcherOverride ? { managedOverrides: { launcher: "command" as const } } : {}),
         })),
         readRuntime: vi.fn(async () => ({ status: "running" })),
@@ -90,9 +94,9 @@ describe("readServiceStatusSummary", () => {
       await fs.symlink(serviceRoot, alias, "dir");
       const aligned = await readServiceStatusSummary(service, "Daemon", undefined, alias);
       expect(aligned.installationDrift).toBeUndefined();
-      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: aligned })).not.toContain(
-        "different OpenClaw install",
-      );
+      expect(
+        getStatusOverviewRowValue("Gateway service", { gatewayService: aligned }),
+      ).not.toContain("different OpenClaw install");
     },
   );
   it("marks running unmanaged services as externally managed", async () => {

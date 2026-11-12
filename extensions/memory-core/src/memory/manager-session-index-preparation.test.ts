@@ -45,8 +45,14 @@ function expectedSessionChunks(source: MemoryIndexPreparationInput) {
 
 const provenance = { originClass: "untrusted", sessionKind: "interactive", observedAt: 7 } as const;
 const summary: SessionEntrySummary = {
-  path: "synthetic-session", absPath: "/synthetic-session", mtimeMs: 7, size: 0,
-  hash: "fixture", lineCount: 0, lineOriginClasses: [], sessionKind: "interactive",
+  path: "synthetic-session",
+  absPath: "/synthetic-session",
+  mtimeMs: 7,
+  size: 0,
+  hash: "fixture",
+  lineCount: 0,
+  lineOriginClasses: [],
+  sessionKind: "interactive",
 };
 
 /** A paged export whose lines are produced lazily, as the transcript worker delivers them. */

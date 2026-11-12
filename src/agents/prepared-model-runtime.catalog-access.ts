@@ -483,7 +483,8 @@ export async function createFullModelCatalogAccess(
         const latest = published;
         const latestInventory = latest.inventory;
         const auth =
-          getPreparedModelFullCatalogAuth(latest.inventory?.catalog ?? staticCatalog) ?? currentAuth;
+          getPreparedModelFullCatalogAuth(latest.inventory?.catalog ?? staticCatalog) ??
+          currentAuth;
         const nativeScope = preparedSyntheticAuthProviderScope(discoveredProviders);
         const catalogAuth = nativeAuth
           ? replacePreparedModelCatalogAuth(auth, nativeAuth, (provider) =>

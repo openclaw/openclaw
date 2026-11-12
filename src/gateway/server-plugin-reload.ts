@@ -8,8 +8,8 @@ import { prepareDecisionProviderReload } from "../decisions/runtime.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
-import type { PluginHostCleanupResult } from "../plugins/host-hook-cleanup.types.js";
 import { withPluginHostCleanupTimeout } from "../plugins/host-hook-cleanup-timeout.js";
+import type { PluginHostCleanupResult } from "../plugins/host-hook-cleanup.types.js";
 import {
   createPluginRuntimeApplication,
   getPluginRuntimeGeneration,
@@ -17,8 +17,8 @@ import {
 } from "../plugins/lifecycle.js";
 import { PluginLoadFailureError } from "../plugins/loader-shared.js";
 import { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
-import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
@@ -483,7 +483,10 @@ export async function reloadGatewayPlugins(
           publishMetadata();
           runtime.pluginMetadataSnapshot = nextMetadata;
           reservedReplacement.commit();
-          kernel.pluginRuntimeGeneration.publishServices(reservedReplacement.claim, startedServices);
+          kernel.pluginRuntimeGeneration.publishServices(
+            reservedReplacement.claim,
+            startedServices,
+          );
           // Compare handshake descriptors before the prepared credentials replace them.
           // Changed nodes stay invalidated while their connections close.
           for (const client of clients) {
@@ -623,7 +626,9 @@ export async function reloadGatewayPlugins(
           if (previousStopStarted) {
             // Stop is not reversible for all plugins (for example, aborted controllers).
             // Re-register captured old code instead of reopening a stopped registration.
-            await drainForRecovery(restartDrainSignal, (status) => replacement?.setReloadStatus(status));
+            await drainForRecovery(restartDrainSignal, (status) =>
+              replacement?.setReloadStatus(status),
+            );
             if (!previousHooksStopped) {
               previousHooksStopped = true;
               await runLifecycleHooks(

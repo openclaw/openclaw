@@ -52,7 +52,9 @@ export function createInitialConfigState(
     configAutoSaveStatus: initialConfigValue<ConfigAutoSaveStatus>("idle"),
     configRecoveryError: initialConfigValue<string | null>(null),
     configNeedsApply: false,
-    configDeferredApplication: initialConfigValue<{ reason: string; appliesWhen: string } | null>(null),
+    configDeferredApplication: initialConfigValue<{ reason: string; appliesWhen: string } | null>(
+      null,
+    ),
     configSnapshot: initialConfigValue<ConfigSnapshot | null>(null),
     configDraftBaseHash: initialConfigValue<string | null>(null),
     configSchema: initialConfigValue<unknown>(null),
@@ -203,7 +205,12 @@ export function resolveEditableSnapshotConfig(
 
 /** Stored provenance never comes from a draft, bootstrap data, or a retired connection. */
 export function currentStoredConfigSnapshot(state: RuntimeConfigState): ConfigSnapshot | null {
-  if (!state.connected || state.configLoading || state.lastError || staleConfigSnapshots.has(state)) {
+  if (
+    !state.connected ||
+    state.configLoading ||
+    state.lastError ||
+    staleConfigSnapshots.has(state)
+  ) {
     return null;
   }
   return state.configSnapshot;

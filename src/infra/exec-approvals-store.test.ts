@@ -170,7 +170,11 @@ describe("exec approvals SQLite store", () => {
       fs.writeFileSync(legacyPath, source);
     }
     const before = fs.statSync(legacyPath);
-    for (const load of [loadExecApprovals, loadExecApprovalsReadOnly, loadExecApprovalsReadOnlyAsync]) {
+    for (const load of [
+      loadExecApprovals,
+      loadExecApprovalsReadOnly,
+      loadExecApprovalsReadOnlyAsync,
+    ]) {
       expect((await load()).defaults?.security).toBe("deny");
     }
     expect((await readExecApprovalsSnapshotAsync()).raw).toBe(raw);
@@ -208,7 +212,9 @@ describe("exec approvals SQLite store", () => {
       const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR!, "exec-approvals.json") + suffix;
       fs.writeFileSync(legacyPath, "{retained-source");
       expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
-      await expect(loadExecApprovalsReadOnlyAsync()).rejects.toThrow(ExecApprovalsMigrationRequiredError);
+      await expect(loadExecApprovalsReadOnlyAsync()).rejects.toThrow(
+        ExecApprovalsMigrationRequiredError,
+      );
       await expect(ensureExecApprovalsSnapshot()).rejects.toThrow(/Legacy exec approvals/);
       await expect(
         updateExecApprovals({ update: { kind: "replace", file: { version: 1 } } }),
@@ -264,13 +270,19 @@ describe("exec approvals SQLite store", () => {
     fs.writeFileSync(path.join(selected, "exec-approvals.json"), "{retained-selected");
     const context = captureOpenClawStateWorkerContext({ env });
     createStateDir();
-    fs.writeFileSync(path.join(process.env.OPENCLAW_STATE_DIR!, "exec-approvals.json"), "{other-owner");
+    fs.writeFileSync(
+      path.join(process.env.OPENCLAW_STATE_DIR!, "exec-approvals.json"),
+      "{other-owner",
+    );
     expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
     const native = updateExecApprovalsForMaintenance({ update: (file) => file }, { env });
     expect(native?.file.defaults?.security).toBe("deny");
-    const updated = await updateExecApprovals({
-      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
-    }, context);
+    const updated = await updateExecApprovals(
+      {
+        update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
+      },
+      context,
+    );
     expect(updated?.file.defaults?.security).toBe("deny");
     expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
   });

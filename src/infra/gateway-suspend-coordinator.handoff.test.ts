@@ -107,11 +107,13 @@ describe("gateway suspend coordinator", () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
       const fixture = setup(false);
       const timers = vi.getTimerCount();
-      await expect(requestGatewaySuspendHandoff({
-        suspensionId: "external-lease",
-        owner: fixture.owner,
-        assertCurrent: vi.fn(),
-      })).resolves.toMatchObject({ ok: true, value: { status: "armed" } });
+      await expect(
+        requestGatewaySuspendHandoff({
+          suspensionId: "external-lease",
+          owner: fixture.owner,
+          assertCurrent: vi.fn(),
+        }),
+      ).resolves.toMatchObject({ ok: true, value: { status: "armed" } });
       expect(vi.getTimerCount()).toBe(timers);
     });
 
@@ -120,7 +122,10 @@ describe("gateway suspend coordinator", () => {
       const fixture = setup(true);
       fixture.persist();
       const request = requestGatewaySuspendHandoff({
-        suspensionId: "external-lease", owner: fixture.owner, commit: true, assertCurrent: vi.fn(),
+        suspensionId: "external-lease",
+        owner: fixture.owner,
+        commit: true,
+        assertCurrent: vi.fn(),
       });
       await vi.advanceTimersByTimeAsync(23_750);
       expect(fixture.commitStop).not.toHaveBeenCalled();
@@ -136,8 +141,14 @@ describe("gateway suspend coordinator", () => {
       fixture.persist();
       let settled = false;
       const request = requestGatewaySuspendHandoff({
-        suspensionId: "external-lease", owner: fixture.owner, commit: true, assertCurrent: vi.fn(),
-      }).then((result) => { settled = true; return result; });
+        suspensionId: "external-lease",
+        owner: fixture.owner,
+        commit: true,
+        assertCurrent: vi.fn(),
+      }).then((result) => {
+        settled = true;
+        return result;
+      });
       for (let renewal = 0; renewal < 4; renewal++) {
         await vi.advanceTimersByTimeAsync(5_000);
         fixture.advance(5_000);
@@ -149,33 +160,41 @@ describe("gateway suspend coordinator", () => {
       expect(settled).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       await expect(request).resolves.toMatchObject({
-        ok: false, error: { details: { terminalPersistence: { count: 1 } } },
+        ok: false,
+        error: { details: { terminalPersistence: { count: 1 } } },
       });
       expect(fixture.commitStop).not.toHaveBeenCalled();
     });
 
-    it.each(["wall", "monotonic"] as const)("never waits past shorter %s lease expiry", async (clock) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
-      const fixture = setup(true);
-      if (clock === "wall") {
-        fixture.advance(119_000);
-      } else {
-        await vi.advanceTimersByTimeAsync(119_000);
-      }
-      fixture.persist();
-      const request = requestGatewaySuspendHandoff({
-        suspensionId: "external-lease", owner: fixture.owner, commit: true, assertCurrent: vi.fn(),
-      });
-      if (clock === "wall") {
-        fixture.advance(1_000);
-      }
-      await vi.advanceTimersByTimeAsync(1_000);
-      await expect(request).resolves.toMatchObject({ ok: false });
-      expect(fixture.commitStop).not.toHaveBeenCalled();
-    });
+    it.each(["wall", "monotonic"] as const)(
+      "never waits past shorter %s lease expiry",
+      async (clock) => {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+        const fixture = setup(true);
+        if (clock === "wall") {
+          fixture.advance(119_000);
+        } else {
+          await vi.advanceTimersByTimeAsync(119_000);
+        }
+        fixture.persist();
+        const request = requestGatewaySuspendHandoff({
+          suspensionId: "external-lease",
+          owner: fixture.owner,
+          commit: true,
+          assertCurrent: vi.fn(),
+        });
+        if (clock === "wall") {
+          fixture.advance(1_000);
+        }
+        await vi.advanceTimersByTimeAsync(1_000);
+        await expect(request).resolves.toMatchObject({ ok: false });
+        expect(fixture.commitStop).not.toHaveBeenCalled();
+      },
+    );
 
     it.each(["host", "replacement", "recovering", "revoked", "cancelled"] as const)(
-      "does not inspect or stop under changed %s ownership after await", async (change) => {
+      "does not inspect or stop under changed %s ownership after await",
+      async (change) => {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
         const fixture = setup(true);
         fixture.persist();
@@ -183,9 +202,15 @@ describe("gateway suspend coordinator", () => {
         const controller = new AbortController();
         const inspect = vi.spyOn(fixture.params.inspect, "getTerminalPersistence");
         const request = requestGatewaySuspendHandoff({
-          suspensionId: "external-lease", owner: fixture.owner, commit: true,
+          suspensionId: "external-lease",
+          owner: fixture.owner,
+          commit: true,
           signal: controller.signal,
-          assertCurrent: () => { if (!authorized) { throw new Error("revoked"); } },
+          assertCurrent: () => {
+            if (!authorized) {
+              throw new Error("revoked");
+            }
+          },
         }).catch((error: unknown) => error);
         const inspections = inspect.mock.calls.length;
         if (change === "host") {
@@ -194,8 +219,12 @@ describe("gateway suspend coordinator", () => {
           resumeGatewaySuspend("external-lease");
           prepareGatewaySuspend(fixture.params);
         } else if (change === "recovering") {
-          fixture.params.resumeScheduling.mockImplementation(() => { throw new Error("resume failed"); });
-          expect(resumeGatewaySuspend("external-lease")).toMatchObject({ reason: "scheduler-resume-failed" });
+          fixture.params.resumeScheduling.mockImplementation(() => {
+            throw new Error("resume failed");
+          });
+          expect(resumeGatewaySuspend("external-lease")).toMatchObject({
+            reason: "scheduler-resume-failed",
+          });
         } else if (change === "revoked") {
           authorized = false;
         } else {
@@ -221,13 +250,17 @@ describe("gateway suspend coordinator", () => {
       const fixture = setup(true);
       fixture.persist();
       const request = requestGatewaySuspendHandoff({
-        suspensionId: "external-lease", owner: fixture.owner, commit: true, assertCurrent: vi.fn(),
+        suspensionId: "external-lease",
+        owner: fixture.owner,
+        commit: true,
+        assertCurrent: vi.fn(),
       });
       fixture.finishPersistence();
       fixture.mutate();
       await vi.advanceTimersByTimeAsync(250);
       await expect(request).resolves.toMatchObject({
-        ok: false, error: { message: "gateway write custody is still pending" },
+        ok: false,
+        error: { message: "gateway write custody is still pending" },
       });
       expect(fixture.commitStop).not.toHaveBeenCalled();
     });
@@ -238,16 +271,22 @@ describe("gateway suspend coordinator", () => {
       expect(fixture.arm().ok).toBe(true);
       fixture.persist();
       const timers = vi.getTimerCount();
-      await expect(requestGatewaySuspendHandoff({
-        suspensionId: "external-lease", owner: { isCurrent: () => true }, assertCurrent: vi.fn(),
-      })).resolves.toMatchObject({
-        ok: false, error: { message: "gateway suspension already belongs to another host iteration" },
+      await expect(
+        requestGatewaySuspendHandoff({
+          suspensionId: "external-lease",
+          owner: { isCurrent: () => true },
+          assertCurrent: vi.fn(),
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { message: "gateway suspension already belongs to another host iteration" },
       });
       expect(vi.getTimerCount()).toBe(timers);
     });
 
     it.each(["freeze", "inspector", "custody", "unsupported", "uncertain"] as const)(
-      "does not turn immediate %s refusal into a wait or stop retry", async (reason) => {
+      "does not turn immediate %s refusal into a wait or stop retry",
+      async (reason) => {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
         const fixture = setup(false, reason !== "freeze");
         if (reason === "freeze") {
@@ -259,12 +298,19 @@ describe("gateway suspend coordinator", () => {
         } else if (reason === "unsupported") {
           delete fixture.owner.commitStop;
         } else {
-          fixture.commitStop.mockImplementation(() => { throw new Error("uncertain stop"); });
+          fixture.commitStop.mockImplementation(() => {
+            throw new Error("uncertain stop");
+          });
         }
         const timers = vi.getTimerCount();
-        await expect(requestGatewaySuspendHandoff({
-          suspensionId: "external-lease", owner: fixture.owner, commit: true, assertCurrent: vi.fn(),
-        })).resolves.toMatchObject({ ok: false });
+        await expect(
+          requestGatewaySuspendHandoff({
+            suspensionId: "external-lease",
+            owner: fixture.owner,
+            commit: true,
+            assertCurrent: vi.fn(),
+          }),
+        ).resolves.toMatchObject({ ok: false });
         expect(vi.getTimerCount()).toBe(timers);
         expect(fixture.commitStop).toHaveBeenCalledTimes(reason === "uncertain" ? 1 : 0);
       },

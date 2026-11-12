@@ -109,10 +109,7 @@ export const execPolicyMutationOperations = {
     }),
   "execApprovals.ensureSnapshot": (_input: undefined, context: WorkerWriteOperationContext) => {
     const options = context.stateOptions();
-    const snapshot = snapshotFromExecApprovalsDatabase(
-      context.open().db,
-      options.env,
-    );
+    const snapshot = snapshotFromExecApprovalsDatabase(context.open().db, options.env);
     const socketPath = resolveExecApprovalsSocketPath(options.env);
     const ensureSocket = (file: ExecApprovalsFile): ExecApprovalsFile => {
       const next = normalizeExecApprovalsInternal(file);

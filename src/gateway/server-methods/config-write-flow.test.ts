@@ -59,13 +59,23 @@ it("renders deferred agent configuration outcomes through the shared adapter", (
     reason: "Plugin fixture is in use.",
     appliesWhen: "Applies after its work settles.",
   };
-  expect(respondConfigWriteApplicationOutcome({
-    outcome, mode: "Agent configuration", client: null, respond, success: {},
-  })).toBe(true);
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({
-    message: expect.stringContaining(outcome.reason),
-    details: { application: outcome },
-  }));
+  expect(
+    respondConfigWriteApplicationOutcome({
+      outcome,
+      mode: "Agent configuration",
+      client: null,
+      respond,
+      success: {},
+    }),
+  ).toBe(true);
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      message: expect.stringContaining(outcome.reason),
+      details: { application: outcome },
+    }),
+  );
 });
 
 it("awaits transcript additions and title edits only when the reload owner can apply them", () => {

@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
-import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
@@ -36,6 +35,7 @@ import {
 import type { PluginLoadOptions } from "./loader-types.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { projectPluginContributions } from "./registry-contributions.js";

@@ -546,7 +546,13 @@ export function createPdfTool(options?: {
           const message = modelSignal ? await abortable(modelSignal, completion) : await completion;
           assertModelCurrent();
           const text = coercePdfAssistantText({ message, provider, model: modelId });
-          return { text, provider, model: modelId, native: false, extractions: effectiveExtractions };
+          return {
+            text,
+            provider,
+            model: modelId,
+            native: false,
+            extractions: effectiveExtractions,
+          };
         },
       });
 

@@ -268,13 +268,16 @@ describe("config application settlement", () => {
       settle(outcome);
       await operation;
       expect(harness.respond).toHaveBeenCalledExactlyOnceWith(
-        false, undefined, expect.objectContaining({
+        false,
+        undefined,
+        expect.objectContaining({
           code: "UNAVAILABLE",
           message: expect.stringContaining(outcome.reason),
           details: expect.objectContaining({
             application: outcome,
             persistedConfig: expect.objectContaining({
-              hash: expect.any(String), config: { hooks: { enabled: true } },
+              hash: expect.any(String),
+              config: { hooks: { enabled: true } },
             }),
           }),
         }),

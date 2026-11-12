@@ -55,8 +55,8 @@ import {
   listModelCatalogObservedRoutes,
 } from "./model-catalog-view.js";
 import type { ModelRef } from "./model-ref-shared.js";
-import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
 import { runInPreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
+import { readAdmittedPublishedModelCatalog } from "./prepared-model-runtime.capture.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,

@@ -106,7 +106,9 @@ describe("prepared subagent publication ownership", () => {
     expect(loadSubagentRegistryFromSqlite().get(suspended.runId)).toMatchObject({
       delivery: { status: "suspended" },
     });
-    expect(loadSubagentRegistryFromSqlite().get(suspended.runId)?.cleanupCompletedAt).toBeUndefined();
+    expect(
+      loadSubagentRegistryFromSqlite().get(suspended.runId)?.cleanupCompletedAt,
+    ).toBeUndefined();
   });
 
   it.each(["run", "session"] as const)(

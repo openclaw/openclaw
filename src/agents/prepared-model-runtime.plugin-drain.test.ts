@@ -116,9 +116,11 @@ it("does not confuse a same-ID replacement with the exact admitted instance", as
   const releaseReplacement = replacement.reserveReplacement();
   const drain = beginPreparedModelRuntimePluginDrain();
   let settled = false;
-  const acquisition = scope.run(() => acquireAgentRunPreparedModelRuntime(input)).finally(() => {
-    settled = true;
-  });
+  const acquisition = scope
+    .run(() => acquireAgentRunPreparedModelRuntime(input))
+    .finally(() => {
+      settled = true;
+    });
   try {
     await prepareModelRuntimeSnapshot(input, { readPublished: true });
     expect(settled).toBe(false);

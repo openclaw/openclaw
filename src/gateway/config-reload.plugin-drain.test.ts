@@ -128,7 +128,9 @@ describe("plugin drain recovery", () => {
           appliesWhen: expect.stringContaining("cleanup"),
         });
         expect(harness.onConfigApplied).not.toHaveBeenCalled();
-        expect(harness.onConfigAccepted.mock.lastCall?.[3]).toMatchObject({ runtimeApplied: false });
+        expect(harness.onConfigAccepted.mock.lastCall?.[3]).toMatchObject({
+          runtimeApplied: false,
+        });
         const scopesAtReceipt = writerScope.mock.calls.length;
         writerActive = false;
         if (outcome === "stop") {

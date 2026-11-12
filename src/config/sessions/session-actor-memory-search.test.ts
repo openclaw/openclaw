@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { streamSessionEntry } from "../../../packages/memory-host-sdk/src/host/session-files.js";
 import type { SessionLeafControl } from "../../agents/sessions/session-manager-types.js";
 import { readTranscriptStatsBatchReadOnlySync } from "../../plugin-sdk/memory-core-host-transcript-stats.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionActorAuthority, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { streamSessionEntry } from "../../../packages/memory-host-sdk/src/host/session-files.js";
-import { runWithSessionActorStorage, acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import {
+  runWithSessionActorStorage,
+  acquireSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import type { SessionActorStorageOutcome } from "./session-actor-storage-contract.js";
 import { readSessionTranscriptIndexStatus } from "./session-transcript-projection-writer.js";
 import {
@@ -278,7 +281,6 @@ it.each([false, true])(
   },
 );
 
-
 it("blocks the next export page after its consumer revokes incognito disclosure", async () => {
   const { create } = await fixture();
   const { binding, sessionKey } = await create("paged-export", [
@@ -297,14 +299,21 @@ it("blocks the next export page after its consumer revokes incognito disclosure"
   const pages: string[] = [];
   await expect(
     runWithSessionActorStorage({ ...binding, authority: selectedAuthority }, () =>
-      streamSessionEntry(sessionKey, {
-        agentId, storePath, sessionKey, sessionId: "paged-export",
-      }, {
-        onPage(page) {
-          pages.push(page.lines[0]!.slice(0, 11));
-          allowed = false;
+      streamSessionEntry(
+        sessionKey,
+        {
+          agentId,
+          storePath,
+          sessionKey,
+          sessionId: "paged-export",
         },
-      }),
+        {
+          onPage(page) {
+            pages.push(page.lines[0]!.slice(0, 11));
+            allowed = false;
+          },
+        },
+      ),
     ),
   ).rejects.toThrow("Memory disclosure was revoked");
   expect(pages).toEqual(["User: first"]);

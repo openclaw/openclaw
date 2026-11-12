@@ -500,7 +500,8 @@ function handoffRefusal(
       ...(held.inspect.getTerminalPersistenceDiagnostics?.() ?? { oldestAgeMs: null, runIds: [] }),
     };
     return {
-      message: "gateway terminal persistence is still pending: " + JSON.stringify(terminalPersistence),
+      message:
+        "gateway terminal persistence is still pending: " + JSON.stringify(terminalPersistence),
       details: { terminalPersistence },
     };
   }

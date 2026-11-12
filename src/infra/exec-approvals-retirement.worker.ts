@@ -38,10 +38,7 @@ function retireAgentPolicies(
       assertOpenClawStateLeaseWorkerOwnedInTransaction(database.db, guard.lease);
       assertAgentDeletionWorkerPredicate(database, guard.predicate);
       const captured = execApprovalsPublication.capture(database.db, () => {
-        const current = snapshotFromExecApprovalsDatabase(
-          database.db,
-          context.stateOptions().env,
-        );
+        const current = snapshotFromExecApprovalsDatabase(database.db, context.stateOptions().env);
         const matches = (key: string) => {
           const normalized = normalizeAgentIdStrict(key);
           return normalized.ok && normalized.value === agentId;

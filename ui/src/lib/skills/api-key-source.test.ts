@@ -57,7 +57,9 @@ describe("skill API key source admission", () => {
           skillApiKeyReplaceable(currentStoredConfigSnapshot(owner.state), "github"),
         );
         expect(request.mock.calls.filter(([method]) => method === "skills.update")).toEqual(
-          allowed ? [["skills.update", { skillKey: "github", apiKey: "replacement-not-real" }]] : [],
+          allowed
+            ? [["skills.update", { skillKey: "github", apiKey: "replacement-not-real" }]]
+            : [],
         );
         expect(state.skillMessages.github?.kind).toBe(allowed ? "success" : "error");
         if (name === "denied") {

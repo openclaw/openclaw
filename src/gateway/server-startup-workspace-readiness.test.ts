@@ -111,7 +111,9 @@ describe("Gateway workspace migration readiness", () => {
       await fs.writeFile(legacyPath, legacy);
       const before = await fs.stat(legacyPath);
       const preflight = await runStartupConfigPreflight({ gateway: true });
-      expect(readStartupMigrationWarning()).toContain("Canonical SQLite approvals remain authoritative");
+      expect(readStartupMigrationWarning()).toContain(
+        "Canonical SQLite approvals remain authoritative",
+      );
       expect(readStartupMigrationWarning(false)).not.toContain(legacyPath);
       expect(readStartupMigrationWarning()).not.toContain("synthetic-retained-private-marker");
       const port = await getFreePort();
@@ -122,9 +124,13 @@ describe("Gateway workspace migration readiness", () => {
       await server.startupSettled;
       expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
       if (canonical) {
-        expect((await loadExecApprovalsReadOnlyAsync({ env: state.env })).defaults?.security).toBe("deny");
+        expect((await loadExecApprovalsReadOnlyAsync({ env: state.env })).defaults?.security).toBe(
+          "deny",
+        );
       } else {
-        await expect(loadExecApprovalsReadOnlyAsync({ env: state.env })).rejects.toThrow(/Legacy exec approvals/);
+        await expect(loadExecApprovalsReadOnlyAsync({ env: state.env })).rejects.toThrow(
+          /Legacy exec approvals/,
+        );
       }
       expect(await fs.readFile(legacyPath, "utf8")).toBe(legacy);
       expect(await fs.stat(legacyPath)).toMatchObject({

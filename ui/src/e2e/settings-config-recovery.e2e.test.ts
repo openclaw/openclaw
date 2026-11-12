@@ -54,16 +54,25 @@ suite.define(() => {
       await gateway.waitForRequest("config.set");
       const savedConfig = { ...config, messages: { responsePrefix: "saved deferred" } };
       const saved = {
-        ...snapshot, config: savedConfig, raw: JSON.stringify(savedConfig),
-        hash: "saved-deferred", configRevisionHash: "saved-deferred", appliedConfigHash: "initial",
+        ...snapshot,
+        config: savedConfig,
+        raw: JSON.stringify(savedConfig),
+        hash: "saved-deferred",
+        configRevisionHash: "saved-deferred",
+        appliedConfigHash: "initial",
       };
       await gateway.setMethodResponse("config.get", saved);
       const reason = "Plugin fixture still has retained work.";
       await gateway.rejectDeferred("config.set", {
-        code: "UNAVAILABLE", message: reason,
+        code: "UNAVAILABLE",
+        message: reason,
         details: {
           persistedConfig: { hash: saved.hash, config: savedConfig },
-          application: { status: "deferred", reason, appliesWhen: "Applies after the work settles." },
+          application: {
+            status: "deferred",
+            reason,
+            appliesWhen: "Applies after the work settles.",
+          },
         },
       });
       const indicator = page.locator("openclaw-settings-save-indicator");
@@ -77,7 +86,9 @@ suite.define(() => {
       expect(await gateway.getRequests("config.set")).toHaveLength(1);
       // The reconnect read can carry a new public token for the same saved document.
       await gateway.setMethodResponse("config.get", {
-        ...saved, hash: "applied-deferred", configRevisionHash: "applied-deferred",
+        ...saved,
+        hash: "applied-deferred",
+        configRevisionHash: "applied-deferred",
         appliedConfigHash: "applied-deferred",
       });
       await gateway.setOnline(false);

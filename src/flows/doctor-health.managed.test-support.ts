@@ -122,10 +122,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
           defaults: { security: "deny" as const },
           agents: {},
         };
-        const approvalsBefore =
-          outcome.startsWith("approvals-malformed")
-            ? '{"version":1,"agents":'
-            : serializeExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+        const approvalsBefore = outcome.startsWith("approvals-malformed")
+          ? '{"version":1,"agents":'
+          : serializeExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
         if (approvalsCase) {
           fs.writeFileSync(approvalsPath, approvalsBefore);
           if (outcome === "approvals-conflicting" || outcome === "approvals-malformed-canonical") {
@@ -536,7 +535,9 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             if (approvalsRetained) {
               expect(fs.readFileSync(approvalsPath, "utf8")).toBe(approvalsBefore);
               if (approvalsBlocked) {
-                expect(() => loadExecApprovalsReadOnly()).toThrow(ExecApprovalsMigrationRequiredError);
+                expect(() => loadExecApprovalsReadOnly()).toThrow(
+                  ExecApprovalsMigrationRequiredError,
+                );
               } else {
                 expect(loadExecApprovalsReadOnly().defaults?.security).toBe("deny");
               }
@@ -544,7 +545,10 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
               expect(fs.existsSync(approvalsPath)).toBe(false);
               expect(loadExecApprovalsReadOnly().defaults?.security).toBe("full");
             }
-            if (outcome === "approvals-conflicting" || outcome === "approvals-malformed-canonical") {
+            if (
+              outcome === "approvals-conflicting" ||
+              outcome === "approvals-malformed-canonical"
+            ) {
               expect(
                 readExecApprovalsConfigRow(openOpenClawStateDatabase({ env: state.env }).db)
                   ?.raw_json,

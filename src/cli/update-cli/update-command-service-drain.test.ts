@@ -457,7 +457,8 @@ it("allows a 24-second handoff without extending other RPC timeouts", async () =
 });
 
 it.each(["timeout", "terminal-refusal"] as const)(
-  "preserves a %s handoff error without replaying the stop", async (reason) => {
+  "preserves a %s handoff error without replaying the stop",
+  async (reason) => {
     const f = fixture({ observations: [ready()] });
     const terminalPersistence = { count: 1, oldestAgeMs: 25_000, runIds: ["fixture-run"] };
     const failure =
@@ -484,10 +485,7 @@ it.each(["timeout", "terminal-refusal"] as const)(
       return original(request);
     });
     await expect(
-      withGatewayMaintenanceDrain(
-        { ...f.params, drainPolicy: "interrupt-after-drain" },
-        f.stop,
-      ),
+      withGatewayMaintenanceDrain({ ...f.params, drainPolicy: "interrupt-after-drain" }, f.stop),
     ).rejects.toBe(failure);
     expect(
       mocks.call.mock.calls.filter(([request]) => request.method === "gateway.suspend.handoff"),

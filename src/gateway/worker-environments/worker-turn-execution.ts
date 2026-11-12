@@ -167,19 +167,18 @@ export async function executeWorkerTurn(
       blocked = true;
     },
   };
-  await using contextEngineAdmission = await withRuntimeScope(
-    () =>
-      admitEmbeddedContextEngine(
-        {
-          runParams: turn,
-          agentDir: preparedRuntime.snapshot.agentDir,
-          workspaceDir: turn.workspaceDir,
-        },
-        {
-          id: WORKER_CONTEXT_ENGINE_HOST.id,
-          contextEngineHostCapabilities: WORKER_CONTEXT_ENGINE_HOST.capabilities,
-        },
-      ),
+  await using contextEngineAdmission = await withRuntimeScope(() =>
+    admitEmbeddedContextEngine(
+      {
+        runParams: turn,
+        agentDir: preparedRuntime.snapshot.agentDir,
+        workspaceDir: turn.workspaceDir,
+      },
+      {
+        id: WORKER_CONTEXT_ENGINE_HOST.id,
+        contextEngineHostCapabilities: WORKER_CONTEXT_ENGINE_HOST.capabilities,
+      },
+    ),
   );
   assertContextCurrent();
   const context = await readWorkerTurnInputContext(inputContext);
@@ -426,10 +425,7 @@ export async function executeWorkerTurn(
           tools: tools.map((tool) =>
             copyAgentToolMetadata(tool, {
               ...tool,
-              execute: (...args) =>
-                withRuntimeScope(() =>
-                  tool.execute(...args),
-                ),
+              execute: (...args) => withRuntimeScope(() => tool.execute(...args)),
             }),
           ),
         };
@@ -476,9 +472,7 @@ export async function executeWorkerTurn(
       },
       assertCurrent: assertActive,
     };
-    const promptContext = await withRuntimeScope(() =>
-      prepareWorkerTurnPrompt(promptPreparation),
-    );
+    const promptContext = await withRuntimeScope(() => prepareWorkerTurnPrompt(promptPreparation));
     const allowedToolNames = surface.tools.map((tool) => tool.definition.name);
     await params.placements.authorizeWorkerTurnTools(
       params.turnClaim,

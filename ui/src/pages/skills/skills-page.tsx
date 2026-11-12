@@ -546,7 +546,8 @@ class SkillsPageState {
                   this.revision();
                   return this.context.runtimeConfig.state.lastError;
                 },
-                retry: () => void this.context.runtimeConfig.refresh({ preservePendingChanges: true }),
+                retry: () =>
+                  void this.context.runtimeConfig.refresh({ preservePendingChanges: true }),
               }}
               onSaveKey={(key) => {
                 if (this.canUpdateSkills()) {

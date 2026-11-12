@@ -111,7 +111,8 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
       (_sessionKey: string, _childAgentId?: string) => false,
     ),
     countPendingDescendantRuns: vi.fn(
-      (_sessionKey: string, _assert?: unknown, _options?: { excludeSuspendedDelivery?: boolean }) => 0,
+      (_sessionKey: string, _assert?: unknown, _options?: { excludeSuspendedDelivery?: boolean }) =>
+        0,
     ),
     latestRunForChild: vi.fn((_childSessionKey: string): MockSubagentRun | undefined => undefined),
     listSubagentRunsForRequester: vi.fn(
@@ -1808,8 +1809,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("bubbles completion past a missing requester without deleting suspended descendants", async () => {
-    subagentRegistryMock.countPendingDescendantRuns.mockImplementation(
-      (_key, _assert, options) => (options?.excludeSuspendedDelivery ? 0 : 1),
+    subagentRegistryMock.countPendingDescendantRuns.mockImplementation((_key, _assert, options) =>
+      options?.excludeSuspendedDelivery ? 0 : 1,
     );
     subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
     subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({

@@ -75,10 +75,12 @@ export function createPluginReloadCleanup({
   waitForDrain = false,
   priorCleanup,
 }: {
-  priorCleanup?: () => {
-    settled: Promise<unknown>;
-    instances: readonly PluginInstanceHandle[];
-  } | undefined;
+  priorCleanup?: () =>
+    | {
+        settled: Promise<unknown>;
+        instances: readonly PluginInstanceHandle[];
+      }
+    | undefined;
   waitForDrain?: boolean;
   previousRegistry: PluginRegistry;
   changedPluginIds: Set<string>;

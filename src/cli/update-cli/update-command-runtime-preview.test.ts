@@ -14,8 +14,8 @@ import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
-import * as commandRun from "./update-command-run.js";
 import * as packageUpdate from "./update-command-package.js";
+import * as commandRun from "./update-command-run.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { updateCommand } from "./update-command.js";
 

@@ -123,9 +123,24 @@ describe("renderSkills", () => {
   );
 
   it.each([
-    { name: "literal", apiKey: "__OPENCLAW_REDACTED__", expected: "Stored in openclaw.json.", disabled: false },
-    { name: "environment", apiKey: "${SET_TOKEN}", expected: "From environment · SET_TOKEN", disabled: true },
-    { name: "reference", apiKey: { source: "env", provider: "default", id: "SET_TOKEN" }, expected: "Set by a reference", disabled: true },
+    {
+      name: "literal",
+      apiKey: "__OPENCLAW_REDACTED__",
+      expected: "Stored in openclaw.json.",
+      disabled: false,
+    },
+    {
+      name: "environment",
+      apiKey: "${SET_TOKEN}",
+      expected: "From environment · SET_TOKEN",
+      disabled: true,
+    },
+    {
+      name: "reference",
+      apiKey: { source: "env", provider: "default", id: "SET_TOKEN" },
+      expected: "Set by a reference",
+      disabled: true,
+    },
     { name: "unknown", apiKey: undefined, expected: "Key source unknown", disabled: true },
   ])("shows and locks the $name key source", async ({ name, apiKey, expected, disabled }) => {
     const container = createContainer();

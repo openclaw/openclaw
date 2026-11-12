@@ -21,11 +21,11 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
-import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
+import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 import {
   addClientToolsToToolCatalog,
@@ -321,7 +321,9 @@ describe("Tool Search input schemas", () => {
 
     const input = { path: "nonexistent.txt", optional: true };
     await expect(runtime.call("read", input)).resolves.toBeDefined();
-    await expect(runtime.call("read", { path: "nonexistent.txt", optional: false })).rejects.toThrow();
+    await expect(
+      runtime.call("read", { path: "nonexistent.txt", optional: false }),
+    ).rejects.toThrow();
     expect(readTool.execute).toHaveBeenCalledOnce();
   });
 

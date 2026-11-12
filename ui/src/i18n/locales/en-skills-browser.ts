@@ -50,8 +50,7 @@ const catalog = {
       "From environment · {name}. Change it at its source; no key will be saved here.",
     apiKeyFromSecretRef:
       "Set by a reference or an unverified source. Change it in the config file; no key will be saved here.",
-    apiKeyConfigError:
-      "Couldn't read the configuration, so this key's source is unknown: {error}",
+    apiKeyConfigError: "Couldn't read the configuration, so this key's source is unknown: {error}",
     retry: "Retry",
     source: "Source:",
     refreshing: "Refreshing…",

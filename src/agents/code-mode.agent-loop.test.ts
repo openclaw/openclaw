@@ -243,14 +243,18 @@ describe("Code Mode agent-loop error recovery", () => {
     async (executor, { signal }) => {
       const started = createDeferred();
       let enqueueFollowUp!: () => void;
-      const held = pluginToolWithExecute("held_action", "Held sibling", async (_id, _args, abort) => {
-        enqueueFollowUp();
-        started.resolve();
-        if (!abort) {
-          throw new Error("Expected bridge cancellation signal");
-        }
-        return await withinTest(createDeferred<never>().promise, abort);
-      });
+      const held = pluginToolWithExecute(
+        "held_action",
+        "Held sibling",
+        async (_id, _args, abort) => {
+          enqueueFollowUp();
+          started.resolve();
+          if (!abort) {
+            throw new Error("Expected bridge cancellation signal");
+          }
+          return await withinTest(createDeferred<never>().promise, abort);
+        },
+      );
       const failing = pluginToolWithExecute("failing_action", "Rejected sibling", async () => {
         await started.promise;
         throw new Error("bridge unavailable");

@@ -253,7 +253,9 @@ function decideAndRecordMigration(params: {
         message,
         removeSource,
         sourceKey,
-        canonicalPolicyValid: Boolean(canonical && tryParsePersistedExecApprovals(canonical.raw_json)),
+        canonicalPolicyValid: Boolean(
+          canonical && tryParsePersistedExecApprovals(canonical.raw_json),
+        ),
       };
     },
     { env: params.env },

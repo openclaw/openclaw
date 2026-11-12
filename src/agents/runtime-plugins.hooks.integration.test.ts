@@ -16,12 +16,12 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "../plugin
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolvePluginTools } from "../plugins/tools.js";
+import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import {
   createPreparedModelRuntimeLease,
   retainPreparedPluginGeneration,
 } from "./prepared-model-runtime.plugin-lifetime.js";
-import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   loadAgentRuntimePluginRegistryHandle,
   withAgentPluginRegistry,
@@ -198,8 +198,8 @@ it("keeps exact deferred capabilities and resolved tools, not an unused installe
     inlineProviderModels: [],
     configuredCatalogEntries: [],
   };
-  const instances = plugins.map(
-    ({ id }) => getPluginInstance(registry.plugins.find((record) => record.id === id)!)!,
+  const instances = plugins.map(({ id }) =>
+    getPluginInstance(registry.plugins.find((record) => record.id === id)!)!,
   );
   const physical = retainPreparedPluginGeneration(generation);
   expect(instances.map((instance) => instance.retainedWorkCount)).toEqual([0, 0, 0, 0]);

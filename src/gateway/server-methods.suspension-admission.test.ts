@@ -19,9 +19,9 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
-import { getGatewayProcessInstanceId } from "./process-instance.js";
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import { getGatewayProcessInstanceId } from "./process-instance.js";
 import { runWithGatewayRequestEnvelope, type handleGatewayRequest } from "./server-methods.js";
 import { dispatchSuspensionRequest as dispatch } from "./server-methods.suspension-admission.test-support.js";
 import {
@@ -190,25 +190,39 @@ describe("gateway request suspension admission", () => {
         chatQueuedTurns: new Map(),
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
       const prepare = dispatch({
-        method: "gateway.suspend.prepare", core: true, scope: "operator.admin", context,
+        method: "gateway.suspend.prepare",
+        core: true,
+        scope: "operator.admin",
+        context,
         handler: suspendHandlers["gateway.suspend.prepare"]!,
         requestParams: { requestId: "late-terminal-write", drain: true },
       });
       await prepare.request;
-      const { suspensionId } = expectDefined(prepare.respond.mock.calls[0], "prepare receipt")[1] as { suspensionId: string };
+      const { suspensionId } = expectDefined(
+        prepare.respond.mock.calls[0],
+        "prepare receipt",
+      )[1] as { suspensionId: string };
       for (let index = 0; index < 10; index++) {
         context.chatAbortControllers.set("run-" + index + "\n" + "x".repeat(300), {
-          controller: new AbortController(), sessionKey: "private-session-" + index,
-          registrationCleanupRequested: true, controlUiVisible: true,
-          projectSessionTerminalPending: true, projectSessionTerminalObservedAt: Date.now() - 1_000,
+          controller: new AbortController(),
+          sessionKey: "private-session-" + index,
+          registrationCleanupRequested: true,
+          controlUiVisible: true,
+          projectSessionTerminalPending: true,
+          projectSessionTerminalObservedAt: Date.now() - 1_000,
         } as Parameters<typeof context.chatAbortControllers.set>[1]);
       }
       const scopes = ["operator.admin"];
       const handoff = dispatch({
-        method: "gateway.suspend.handoff", core: true, scope: "operator.admin", context,
-        handler: suspendHandlers["gateway.suspend.handoff"]!, clientScopes: scopes,
+        method: "gateway.suspend.handoff",
+        core: true,
+        scope: "operator.admin",
+        context,
+        handler: suspendHandlers["gateway.suspend.handoff"]!,
+        clientScopes: scopes,
         requestParams: {
-          suspensionId, commit: true,
+          suspensionId,
+          commit: true,
           target: { pid: process.pid, processInstanceId: getGatewayProcessInstanceId() },
         },
       });
@@ -226,22 +240,34 @@ describe("gateway request suspension admission", () => {
         await vi.advanceTimersByTimeAsync(outcome === "pending" ? 24_000 : 250);
         await handoff.request;
         if (outcome === "settles") {
-          expect(handoff.respond).toHaveBeenCalledWith(true, expect.objectContaining({ status: "committed" }));
+          expect(handoff.respond).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({ status: "committed" }),
+          );
           expect(commitStop).toHaveBeenCalledOnce();
         } else {
           expect(commitStop).not.toHaveBeenCalled();
           expect(isGatewayRestartDraining()).toBe(false);
-          expect(handoff.respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining({
-            code: outcome === "revoked" ? "FORBIDDEN" : "UNAVAILABLE",
-          }));
+          expect(handoff.respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              code: outcome === "revoked" ? "FORBIDDEN" : "UNAVAILABLE",
+            }),
+          );
           if (outcome === "pending") {
             const error = expectDefined(handoff.respond.mock.calls[0], "refusal")[2];
-            expect(error.details.terminalPersistence).toMatchObject({ count: 10, oldestAgeMs: 26_000 });
+            expect(error.details.terminalPersistence).toMatchObject({
+              count: 10,
+              oldestAgeMs: 26_000,
+            });
             expect(error.details.terminalPersistence.runIds).toHaveLength(8);
             expect(JSON.stringify(error)).not.toContain("private-session");
-            expect(error.details.terminalPersistence.runIds.every((id: string) =>
-              id.length <= 256 && !/\p{Cc}/u.test(id),
-            )).toBe(true);
+            expect(
+              error.details.terminalPersistence.runIds.every(
+                (id: string) => id.length <= 256 && !/\p{Cc}/u.test(id),
+              ),
+            ).toBe(true);
             expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining(error.message));
           }
         }

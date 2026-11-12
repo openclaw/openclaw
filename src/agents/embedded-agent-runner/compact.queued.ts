@@ -467,7 +467,8 @@ async function compactEmbeddedAgentSessionImpl(
         }
         const attemptNativeHarnessCompaction =
           selectedNativeHarnessCompaction && preparedHarnessRuntime !== "openclaw";
-        const runtimeAuthPlan = preparedAuth?.runtimeAuthPreparation.plan ?? reusableRuntimeAuthPlan;
+        const runtimeAuthPlan =
+          preparedAuth?.runtimeAuthPreparation.plan ?? reusableRuntimeAuthPlan;
         const effectiveRuntimeModel = runtimeAuthPlan
           ? await materializePreparedRuntimeModel<ProviderRuntimeModel>({
               plan: runtimeAuthPlan,
@@ -533,7 +534,11 @@ async function compactEmbeddedAgentSessionImpl(
           model: effectiveRuntimeModel,
           requestedTokenBudget: params.contextTokenBudget,
         });
-        const { sessionFile: _sessionFile, contextEngineAgentId, ...runtimeParams } = preparedParams;
+        const {
+          sessionFile: _sessionFile,
+          contextEngineAgentId,
+          ...runtimeParams
+        } = preparedParams;
         const contextEngineRuntimeContext: ContextEngineRuntimeContext = {
           ...runtimeParams,
           sessionTarget: projectQueuedCompactionSessionTarget(preparedParams),
@@ -560,7 +565,8 @@ async function compactEmbeddedAgentSessionImpl(
           requestedModel: params.model,
           resolvedModel: ceModelId,
           selectedContextEngineId: contextEngine.info.id,
-          contextEngineSelectionSource: contextEngine.info.id === "legacy" ? "default" : "configured",
+          contextEngineSelectionSource:
+            contextEngine.info.id === "legacy" ? "default" : "configured",
           promptTokenBudget: contextTokenBudget,
         });
         const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;

@@ -195,21 +195,19 @@ export function ownPreparedPluginGeneration(
     ),
   );
   const acquisitionFailures: unknown[] = [];
-  const lifetime = createLifetime(
-    async () => {
-      const results = await Promise.allSettled(releases.map(async (release) => await release()));
-      releaseMetadata();
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
+  const lifetime = createLifetime(async () => {
+    const results = await Promise.allSettled(releases.map(async (release) => await release()));
+    releaseMetadata();
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length) {
+      throw aggregatePluginRuntimeCloseErrors(
+        [...acquisitionFailures, ...failures],
+        "Prepared plugin generation cleanup failed",
       );
-      if (failures.length) {
-        throw aggregatePluginRuntimeCloseErrors(
-          [...acquisitionFailures, ...failures],
-          "Prepared plugin generation cleanup failed",
-        );
-      }
-    },
-  );
+    }
+  });
   try {
     for (const registry of selectedRegistries) {
       const release = retainPreparedPluginRegistry(registry);
@@ -250,7 +248,9 @@ export function createPreparedModelRuntimeLease(
   ].filter((registry) => registry !== undefined);
   const registryByInstance = new Map(
     registries.flatMap((registry) =>
-      [...collectRegistryInvocationInstances(registry)].map((instance) => [instance, registry] as const),
+      [...collectRegistryInvocationInstances(registry)].map(
+        (instance) => [instance, registry] as const,
+      ),
     ),
   );
   let scope: PluginInvocationScope | undefined;

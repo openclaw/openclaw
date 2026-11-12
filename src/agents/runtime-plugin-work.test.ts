@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import { PluginInstance } from "../plugins/plugin-instance.js";
 import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
 import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
@@ -109,12 +109,9 @@ it("does not release exact work when physical cleanup remains retained", async (
   work.retain(instance);
   const error = new PluginRuntimeCloseRetainedError(new Error("cleanup pending"));
   await expect(
-    releaseRuntimePluginWork(
-      async () => {
-        throw error;
-      },
-      work.release,
-    ),
+    releaseRuntimePluginWork(async () => {
+      throw error;
+    }, work.release),
   ).rejects.toBe(error);
   expect(instance.retainedWorkCount).toBe(1);
   work.release();

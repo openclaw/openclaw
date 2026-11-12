@@ -68,7 +68,12 @@ function message(id: string, parentId: string | null, role: string, content: str
 const ids = (events: readonly unknown[]) =>
   events.flatMap((event) => (isRecord(event) ? [event.id] : []));
 
-function control(type: string, id: string, parentId: string | null, fields: Record<string, unknown>) {
+function control(
+  type: string,
+  id: string,
+  parentId: string | null,
+  fields: Record<string, unknown>,
+) {
   return { type, id, parentId, timestamp: "2026-10-11T00:00:00.000Z", ...fields };
 }
 

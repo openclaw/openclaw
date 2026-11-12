@@ -91,14 +91,12 @@ describe("automatic plugin reload pre-fence admission", () => {
     const { instance, cleanup } = fixture();
     const foreign = fixture().instance;
     const ids = new Set(["selected"]);
-    pluginInvocationContext.run(
-      { lookup: () => undefined, retainedInstances: [foreign] },
-      () => cleanup.assertResourceHandoff(ids)(),
+    pluginInvocationContext.run({ lookup: () => undefined, retainedInstances: [foreign] }, () =>
+      cleanup.assertResourceHandoff(ids)(),
     );
     expect(instance.replacementPending).toBe(false);
-    pluginInvocationContext.run(
-      { lookup: () => undefined, retainedInstances: [instance] },
-      () => expect(() => cleanup.assertResourceHandoff(ids)).toThrow("own active turn"),
+    pluginInvocationContext.run({ lookup: () => undefined, retainedInstances: [instance] }, () =>
+      expect(() => cleanup.assertResourceHandoff(ids)).toThrow("own active turn"),
     );
     expect(instance.replacementPending).toBe(false);
   });

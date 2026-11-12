@@ -92,7 +92,9 @@ async function reconcileMirrorDirectory(params: {
   const nestedExcludeDirs = isExcluded(".git") ? NESTED_GIT_EXCLUDE_DIRS : undefined;
   await runLimitedFs(fs.mkdir, params.targetDir, { recursive: true });
   const sourceEntries = new Set(sourceDir ? await runLimitedFs(() => fs.readdir(sourceDir)) : []);
-  const targetEntries = params.replace ? await runLimitedFs(() => fs.readdir(params.targetDir)) : [];
+  const targetEntries = params.replace
+    ? await runLimitedFs(() => fs.readdir(params.targetDir))
+    : [];
   // Finish every mutation before returning an error and releasing the workspace lease.
   const results = await Promise.allSettled(
     [...new Set([...sourceEntries, ...targetEntries])]

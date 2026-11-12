@@ -35,6 +35,7 @@ import { TranscriptsStore } from "../transcripts/store.js";
 import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { createChannelManager } from "./server-channels.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
+import { PluginReloadDeferredError } from "./server-plugin-reload-cleanup.js";
 import {
   verifyIndependentPostCommitActivation,
   verifyLifecycleHookSettlement,
@@ -76,7 +77,6 @@ import {
   registerPluginRetainedWorkReloadTests,
   verifySharedResourceReplacement,
 } from "./server-plugin-reload.resources.test-support.js";
-import { PluginReloadDeferredError } from "./server-plugin-reload-cleanup.js";
 import { registerPluginServiceRecoveryTests } from "./server-plugin-reload.service-recovery.test-support.js";
 import {
   createTranscriptFixtures,
@@ -163,7 +163,9 @@ it("automatically replaces an unused owner while an unrelated admitted lease kee
   const first = getPluginInstance(registry.plugins.find(({ id }) => id === "first")!);
   const sibling = getPluginInstance(registry.plugins.find(({ id }) => id === "sibling")!);
   assert(first && sibling);
-  const snapshot = createModelRuntimeChoiceOwnerFixture({}, () => true, { pluginRegistry: registry });
+  const snapshot = createModelRuntimeChoiceOwnerFixture({}, () => true, {
+    pluginRegistry: registry,
+  });
   const lease = createPreparedModelRuntimeLease(snapshot, {
     pluginRegistry: registry,
     pluginMetadataSnapshot: snapshot.metadataSnapshot,

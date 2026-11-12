@@ -58,8 +58,8 @@ import type { GatewayRequestHandler } from "./server-methods/types.js";
 import * as bootstrap from "./server-plugin-bootstrap.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
-import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { PluginReloadDeferredError } from "./server-plugin-reload-cleanup.js";
+import { reloadGatewayPlugins } from "./server-plugin-reload.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import {
   GatewayConfigReloadSupersededError,
@@ -441,7 +441,10 @@ describe("prepared Gateway plugin borrowing", () => {
                       );
                       await publicationEntered.promise;
                       publicationBarrier = getPendingPreparedModelRuntimeReplacement();
-                      assert(publicationBarrier, "Suspended publication must own a replacement barrier");
+                      assert(
+                        publicationBarrier,
+                        "Suspended publication must own a replacement barrier",
+                      );
                     } else if (preparedCheckpoints === 2) {
                       if (change === "automatic busy") {
                         releaseWork = oldInstance.retainWork();
@@ -970,9 +973,11 @@ describe("published Gateway plugin services", () => {
           );
           const tool = runLease.run!(() => resolveTools().find(({ name }) => name === toolName));
           assert(tool, "enabled tool must resolve for the owner agent");
-          const result = await runLease.run!(() => tool.execute("visitor-revoke-call", {
-            email: "absent@example.test",
-          }));
+          const result = await runLease.run!(() =>
+            tool.execute("visitor-revoke-call", {
+              email: "absent@example.test",
+            }),
+          );
           expect(result).toMatchObject({
             content: [
               {

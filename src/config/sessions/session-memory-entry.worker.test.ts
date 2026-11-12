@@ -63,17 +63,26 @@ it.each([true, false])("resets a changed sliced export (rendered pages: %s)", as
       expect(exported.entry.content.startsWith("User: row0 row0")).toBe(true);
       expect(exported.entry.lineCount).toBe(exported.entry.content.split("\n").length);
     } else {
-      expect(observedMessages).toEqual(["row0", "row1", "row2", "row3", "row4", "row5", "Concurrent"]);
+      expect(observedMessages).toEqual([
+        "row0",
+        "row1",
+        "row2",
+        "row3",
+        "row4",
+        "row5",
+        "Concurrent",
+      ]);
     }
   });
 });
-
 
 it("waits for an acknowledged entry before reading the next source", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-backpressure" }, async (state) => {
     const requests = ["first", "second"].map((sessionId) => {
       const options = {
-        agentId: "main", sessionId, sessionKey: "agent:main:chat:" + sessionId,
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:chat:" + sessionId,
         storePath: path.join(state.sessionsDir(), "sessions.json"),
       };
       replaceSessionEntrySync(options, { sessionId, updatedAt: 1 });
@@ -91,11 +100,16 @@ it("waits for an acknowledged entry before reading the next source", async () =>
     try {
       await Promise.race([
         entered.promise,
-        pending.then(() => { throw new Error("Export completed before acknowledgement"); }),
+        pending.then(() => {
+          throw new Error("Export completed before acknowledgement");
+        }),
       ]);
-      expect(appendTranscriptMessageSync(requests[1]!.options, {
-        eventId: "after-ack", message: { role: "assistant", content: "Added while first blocked." },
-      })).toMatchObject({ ok: true });
+      expect(
+        appendTranscriptMessageSync(requests[1]!.options, {
+          eventId: "after-ack",
+          message: { role: "assistant", content: "Added while first blocked." },
+        }),
+      ).toMatchObject({ ok: true });
     } finally {
       resume.resolve();
     }

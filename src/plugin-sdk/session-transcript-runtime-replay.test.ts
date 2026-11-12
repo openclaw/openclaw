@@ -53,29 +53,26 @@ describe("canonical transcript replay groups", () => {
     const databaseOptions = toDatabaseOptions(resolveSqliteTranscriptReadScope(scope));
     // Corrupt only the compressed body, leaving the committed navigation and byte facts intact.
     // Decompressing before admission would fail with a codec error rather than the budget error.
-    runOpenClawAgentWriteTransaction(
-      (database) => {
-        const rows = getSessionKysely(database.db);
-        const row = executeSqliteQueryTakeFirstSync(
-          database.db,
-          rows
-            .selectFrom("transcript_events")
-            .select("event_zstd")
-            .where("session_id", "=", scope.sessionId)
-            .where("seq", "=", anchor.rawSeq),
-        );
-        expect(row?.event_zstd).toBeInstanceOf(Uint8Array);
-        executeSqliteQuerySync(
-          database.db,
-          rows
-            .updateTable("transcript_events")
-            .set({ event_zstd: new Uint8Array([0]) })
-            .where("session_id", "=", scope.sessionId)
-            .where("seq", "=", anchor.rawSeq),
-        );
-      },
-      databaseOptions,
-    );
+    runOpenClawAgentWriteTransaction((database) => {
+      const rows = getSessionKysely(database.db);
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        rows
+          .selectFrom("transcript_events")
+          .select("event_zstd")
+          .where("session_id", "=", scope.sessionId)
+          .where("seq", "=", anchor.rawSeq),
+      );
+      expect(row?.event_zstd).toBeInstanceOf(Uint8Array);
+      executeSqliteQuerySync(
+        database.db,
+        rows
+          .updateTable("transcript_events")
+          .set({ event_zstd: new Uint8Array([0]) })
+          .where("session_id", "=", scope.sessionId)
+          .where("seq", "=", anchor.rawSeq),
+      );
+    }, databaseOptions);
     await expect(
       readSessionTranscriptReplayGroups({
         ...scope,

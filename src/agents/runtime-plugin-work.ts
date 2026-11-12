@@ -1,4 +1,7 @@
-import { getPluginValueInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
+import {
+  getPluginValueInstance,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";

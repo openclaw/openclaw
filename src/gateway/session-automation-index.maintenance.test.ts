@@ -156,7 +156,11 @@ it("invalidates archive plans when a loaded snapshot becomes unavailable, but al
     const sent = prepared.capture();
     markSessionAutomationSourceUnavailable(epoch);
     const current = prepared.refreshCandidates([parent]);
-    const plan = { archivedEntries: [{ sessionKey: parent }], entryRemovals: [], stateDeletePlans: [] };
+    const plan = {
+      archivedEntries: [{ sessionKey: parent }],
+      entryRemovals: [],
+      stateDeletePlans: [],
+    };
     expect(() => assertMaintenancePreservationCompatible(sent, current, [plan])).toThrow(
       "session maintenance",
     );
