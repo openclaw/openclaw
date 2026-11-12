@@ -151,6 +151,8 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
     ),
   );
   const navigation = () => props.workspace.navigation;
+  // Default Files leaves catalog visibility to its panel, not desktop navigation.
+  const treeVisible = () => defaultCatalog() || navigation()?.treeVisible !== false;
   const searching = () =>
     defaultCatalog() ? Boolean(props.workspace.browserSearch.trim()) : navigation()?.searchOpen;
   const root = () => props.workspace.browserPath;
@@ -222,7 +224,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
   const sessionAttachments = createTranscriptAttachmentsView(
     () =>
       presented() &&
-      navigation()?.treeVisible !== false &&
+      treeVisible() &&
       navigation()?.sessionExpanded !== false &&
       !navigation()?.searchOpen &&
       attachmentsVisible()
@@ -341,7 +343,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
           <Show
             when={
               !defaultCatalog() &&
-              navigation()?.treeVisible !== false &&
+              treeVisible() &&
               navigation()?.searchOpen &&
               Boolean(props.workspace.browserSearch.trim()) &&
               props.workspace.transcriptAttachments
@@ -460,7 +462,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                     : root().split("/").at(-1) || t("chat.workspaceFiles.browser")
                 }
                 animate
-                active={navigation()?.treeVisible !== false && (defaultCatalog() || !searching())}
+                active={treeVisible() && (defaultCatalog() || !searching())}
                 expanded={(defaultCatalog() && searching()) || expanded().includes(root())}
                 onToggle={() => props.workspace.onToggleDirectory?.(root())}
               >
@@ -479,7 +481,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
                   viewport={treeScroll()}
                   content={treeContent()}
                   active={
-                    navigation()?.treeVisible !== false &&
+                    treeVisible() &&
                     (defaultCatalog() || !searching()) &&
                     ((defaultCatalog() && searching()) || expanded().includes(root()))
                   }
@@ -528,7 +530,7 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
         },
       ]}
       aria-label={t("chat.workspaceFiles.label")}
-      hidden={navigation()?.treeVisible === false}
+      hidden={!treeVisible()}
     >
       <Show when={defaultCatalog() && props.workspace.list?.root}>
         {(path) => (
