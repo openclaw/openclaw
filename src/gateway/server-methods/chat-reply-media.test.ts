@@ -336,6 +336,40 @@ it.each(["invalid data", "unknown file"] as const)(
   },
 );
 
+it("keeps a distinct underlying cause in the warning for a long attachment name", async () => {
+  const { workspaceDir } = createMediaTestContext();
+  const longName = `voice_${"x".repeat(200)}.ogg`;
+  const localPath = await writeMedia(
+    path.join(workspaceDir, longName),
+    Buffer.from([0xff, 0xfb, 0x90, 0x01]),
+  );
+  const errors: string[] = [];
+  const { assistantContent } = await buildContent({
+    agentId: "main",
+    payloads: [
+      {
+        text: "Voice",
+        mediaUrls: [localPath],
+        attachments: [{ name: longName, trustedLocalMedia: false, mimeType: "audio/ogg" }],
+      },
+    ],
+    managedMediaLocalRoots: [workspaceDir],
+    onManagedMediaPrepareError: (message) => errors.push(message),
+  });
+  // The untrusted local audio cannot be embedded; the sanitized wrapper alone exceeds
+  // the old 240-char log display limit, so the distinct underlying cause must survive
+  // through the shared error-coercion formatter instead of being truncated away.
+  const failureBlock = assistantContent?.find((block) => block.type === "attachment_error");
+  expect(failureBlock).toMatchObject({
+    type: "attachment_error",
+    attachment: { code: "delivery-failed", kind: "audio", label: longName },
+  });
+  expect(errors).toHaveLength(1);
+  expect(errors[0]).toContain(longName);
+  expect(errors[0]).toContain("could not be prepared");
+  expect(errors[0]).toContain("requires an explicitly trusted reply payload");
+});
+
 it.each(["paragraphs", "reply caption"] as const)(
   "preserves %s beside the corresponding image in saved replies",
   async (kind) => {

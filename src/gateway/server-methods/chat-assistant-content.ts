@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getReplyPayloadMetadata,
@@ -256,8 +257,11 @@ export async function buildAssistantReplyContentFromInputs(
       },
       onPrepareError: (error) => {
         // Managed errors already carry an actionable message; preserved prepare causes
-        // surface through the canonical formatter so the log keeps the underlying reason.
-        params.onManagedMediaPrepareError?.(error.cause ? formatForLog(error) : error.message);
+        // surface through the shared error-coercion formatter, which keeps the whole
+        // cause chain without this WebSocket display limit or pre-log redaction.
+        params.onManagedMediaPrepareError?.(
+          error.cause ? formatErrorMessage(error, { includeCode: true }) : error.message,
+        );
       },
     });
     if (payload.audioAsVoice === true) {
