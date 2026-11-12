@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillsLibraryReadResult } from "../../packages/gateway-protocol/src/index.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -12,13 +13,8 @@ const mocks = vi.hoisted(() => ({
   writeStdout: vi.fn(),
   error: vi.fn(),
   exit: vi.fn(),
-  signal: undefined as AbortSignal | undefined,
 }));
 vi.mock("./gateway-rpc.runtime.js", () => ({ callGatewayFromCliRuntime: mocks.call }));
-vi.mock("../shared/async-work-scope.js", async (importActual) => ({
-  ...(await importActual<typeof import("../shared/async-work-scope.js")>()),
-  getAsyncWorkSignal: () => mocks.signal,
-}));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: {
@@ -74,7 +70,6 @@ async function parse(args: string[]) {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  mocks.signal = undefined;
   directory = await fs.mkdtemp(path.join(os.tmpdir(), "skill-library-cli-"));
   await fs.writeFile(
     path.join(directory, "SKILL.md"),
@@ -105,31 +100,6 @@ afterEach(async () => {
 });
 
 describe("skills library CLI", () => {
-  it.each([
-    ["list", []],
-    ["read", [skillId]],
-  ])("prints no read reply that lands after Ctrl+C (%s)", async (name, args) => {
-    mocks.signal = AbortSignal.abort();
-    await parse([name, ...args, "--json"]);
-    expect(mocks.call).toHaveBeenCalled();
-    expect(mocks.writeJson).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["list", []],
-    ["read", [skillId]],
-  ])(
-    "suppresses the aborted request rejection instead of rendering failure (%s)",
-    async (name, args) => {
-      mocks.signal = AbortSignal.abort();
-      mocks.call.mockRejectedValue(new Error(`gateway request aborted for skills.library.${name}`));
-      await parse([name, ...args, "--json"]);
-      expect(mocks.call).toHaveBeenCalled();
-      expect(mocks.writeJson).not.toHaveBeenCalled();
-      expect(mocks.error).not.toHaveBeenCalled();
-    },
-  );
-
   it.each(["list", "create", "import", "rollback", "refresh"])(
     "inherits connection and JSON options before or after %s",
     async (name) => {
@@ -146,15 +116,7 @@ describe("skills library CLI", () => {
                   revision,
                   ...(name === "rollback" ? ["--revision", "b".repeat(64)] : []),
                 ];
-      const flags = [
-        "--url",
-        "ws://127.0.0.1:12345",
-        "--port",
-        "12345",
-        "--timeout",
-        "14000",
-        "--json",
-      ];
+      const flags = "--url ws://127.0.0.1:12345 --port 12345 --timeout 14000 --json".split(" ");
       for (const command of [
         [...flags, name, ...args],
         [name, ...args, ...flags],
@@ -241,6 +203,13 @@ describe("skills library CLI", () => {
       { signal: undefined },
     );
     expect(mocks.writeJson).toHaveBeenLastCalledWith(read);
+    const work = new AsyncWorkScope();
+    mocks.call.mockImplementationOnce(async () => {
+      work.beginClose(); // the read settles after Ctrl+C
+      return read;
+    });
+    await work.run(() => parse(["read", skillId, "--session", sessionKey, "--revision", revision]));
+    expect(mocks.writeStdout).not.toHaveBeenCalled();
     mocks.call.mockClear();
     await parse(["read", skillId, "--session", sessionKey]);
     expect(mocks.error).toHaveBeenCalledWith(

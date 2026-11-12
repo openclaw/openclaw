@@ -84,13 +84,12 @@ export function registerSkillsLibraryCli(skills: Command): void {
         expectFinal: value("expectFinal"),
         json: value("json"),
       };
+      // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
       const signal = readOnly ? getAsyncWorkSignal() : undefined;
       let result: T;
       try {
         result = await action(opts, signal);
       } catch (error) {
-        // A cancellation rejection races the output guard: swallowing it keeps an
-        // interrupted read from rendering failure output (callGatewayReadOnlyCliUnlessAborted pattern).
         if (signal?.aborted) {
           return;
         }
