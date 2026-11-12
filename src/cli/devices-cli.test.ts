@@ -460,6 +460,15 @@ describe("mutations", () => {
     expect(output()).toBe("");
     expect(runtime.writeJson).not.toHaveBeenCalled();
   });
+  it("suppresses the aborted request rejection instead of rendering failure", async () => {
+    mocks.signal = AbortSignal.abort();
+    callGateway.mockRejectedValue(new Error("gateway request aborted for device.pair.setupCode"));
+    await run("join-code");
+    expect(callGateway).toHaveBeenCalled();
+    expect(output()).toBe("");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+  });
   it("returns Gateway commands without a version note or text in JSON mode", async () => {
     callGateway.mockResolvedValueOnce({ joinUrl, ...joinCommands });
     await run("join-code", "--json");

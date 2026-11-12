@@ -9,18 +9,28 @@ import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
 export async function runDevicesJoinCodeCommand(opts: GatewayRpcOpts): Promise<void> {
   const signal = getAsyncWorkSignal();
-  const result = await callGatewayFromCliWithTransport<DevicePairSetupCodeResult>(
-    "device.pair.setupCode",
-    opts,
-    { bootstrapProfile: "node", includeQr: false, joinUrl: true },
-    {
-      label: "Devices device.pair.setupCode",
-      defaultTimeoutMs: 10_000,
-      scopes: [ADMIN_SCOPE],
-      sharedStateMode: "read-only",
-      signal,
-    },
-  );
+  let result: DevicePairSetupCodeResult;
+  try {
+    result = await callGatewayFromCliWithTransport<DevicePairSetupCodeResult>(
+      "device.pair.setupCode",
+      opts,
+      { bootstrapProfile: "node", includeQr: false, joinUrl: true },
+      {
+        label: "Devices device.pair.setupCode",
+        defaultTimeoutMs: 10_000,
+        scopes: [ADMIN_SCOPE],
+        sharedStateMode: "read-only",
+        signal,
+      },
+    );
+  } catch (error) {
+    // A cancellation rejection races the output guard: swallowing it keeps an
+    // interrupted read from rendering failure output (callGatewayReadOnlyCliUnlessAborted pattern).
+    if (signal?.aborted) {
+      return;
+    }
+    throw error;
+  }
   if (signal?.aborted) {
     return;
   }
