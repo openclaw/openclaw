@@ -17,6 +17,8 @@ export type BundledModelIdentityFacts = {
   mediaInput?: ModelMediaInputConfig;
   /** Canonical developer lineage the bundled catalog declares for this exact model. */
   family?: string;
+  /** Display name the bundled catalog declares for this exact model. */
+  name?: string;
 };
 
 export type BundledModelIdentityLookup = {
@@ -56,6 +58,8 @@ export function createBundledModelIdentityFactsResolver(): (
       ...(Object.keys(compat).length > 0 ? { compat } : {}),
       ...(model.mediaInput ? { mediaInput: model.mediaInput } : {}),
       ...(model.family ? { family: model.family } : {}),
+      // Static rows without a name fall back to their id; that is not a display name.
+      ...(model.name && model.name !== model.id ? { name: model.name } : {}),
     };
     return Object.keys(facts).length > 0 ? facts : undefined;
   };
