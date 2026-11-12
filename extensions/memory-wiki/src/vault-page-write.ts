@@ -4,7 +4,50 @@ import {
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { decodeWikiPageUtf8, parseWikiMarkdown } from "./markdown.js";
+import {
+  decodeWikiPageUtf8,
+  parseWikiMarkdown,
+  slugifyWikiPageStem,
+  slugifyWikiSegment,
+} from "./markdown.js";
+
+/**
+ * Derive the identity for a page write. New pages get a canonical (NFC) stem so
+ * NFC/NFD spellings of one visual title cannot create two files. A released
+ * vault may already hold the same visual title under any normalization form
+ * (NFC, fully decomposed NFD, or a mixed spelling such as `café-naïve` where
+ * some characters are composed and others decomposed). Reuse that exact stem so
+ * upgrades keep the path, frontmatter ID, and hand-written Notes instead of
+ * creating a duplicate page.
+ */
+export async function resolveWikiPageIdentity(params: {
+  rootDir: string;
+  relativeDir: string;
+  title: string;
+}): Promise<{ slug: string; stem: string }> {
+  const canonicalTitle = params.title.normalize("NFC");
+  const canonicalStem = slugifyWikiPageStem(canonicalTitle);
+  const targetNfc = canonicalStem.normalize("NFC");
+  // Reuse an already-published page whose slug is canonically (NFC) equivalent
+  // to this title, regardless of how it was originally normalized. Enumerating
+  // the directory and comparing on the NFC-normalized stem is the only way to
+  // catch mixed-form spellings, which no single decomposed candidate covers.
+  const root = await fsRoot(params.rootDir);
+  let entries: string[] = [];
+  try {
+    entries = await root.list(params.relativeDir);
+  } catch {
+    entries = [];
+  }
+  for (const name of entries) {
+    if (!name.endsWith(".md") || name === "index.md") continue;
+    const stem = name.slice(0, -3);
+    if (stem.normalize("NFC") === targetNfc) {
+      return { slug: slugifyWikiSegment(stem), stem };
+    }
+  }
+  return { slug: slugifyWikiSegment(canonicalStem), stem: canonicalStem };
+}
 
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 

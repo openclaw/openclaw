@@ -37,6 +37,22 @@ it.each([
   expect(slugifyWikiSegment(input)).toBe(expected);
 });
 
+it("keeps published slug bytes stable across Unicode normalization forms", () => {
+  // Imported identities and released vault filenames derive straight from this
+  // helper, so it must not rewrite existing bytes. Canonicalization belongs to
+  // new-page identity resolution, not to this byte-preserving primitive.
+  const nfc = "café"; // U+00E9 precomposed
+  const nfd = "cafe\u0301"; // e + U+0301 combining acute
+  expect(slugifyWikiSegment(nfc)).toBe(nfc);
+  expect(slugifyWikiSegment(nfd)).toBe(nfd);
+  expect(slugifyWikiSegment(nfd)).not.toBe(slugifyWikiSegment(nfc));
+
+  const spacedNfc = "naïve".normalize("NFC");
+  const spacedNfd = "naïve".normalize("NFD");
+  expect(slugifyWikiSegment(spacedNfd)).toBe(spacedNfd);
+  expect(slugifyWikiSegment(spacedNfd)).not.toBe(slugifyWikiSegment(spacedNfc));
+});
+
 describe("human Notes blocks", () => {
   const start = "<!-- openclaw:human:start -->";
   const end = "<!-- openclaw:human:end -->";

@@ -74,7 +74,8 @@ function normalizeLintTarget(value: string, stripQuery = true): string {
     .replace(/^\.\/+/, "")
     .replace(/^\/+/, "")
     .replace(/\/+$/, "")
-    .trim();
+    .trim()
+    .normalize("NFC");
 }
 
 function addPathTarget(index: WikiLinkTargetIndex, raw: string | undefined) {

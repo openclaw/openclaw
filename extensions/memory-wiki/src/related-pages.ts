@@ -24,7 +24,7 @@ function normalizeComparableTarget(value: string): string {
       .replace(/\.md$/i, "")
       .replace(/^\.\/+/, "")
       .replace(/\/+$/, ""),
-  );
+  ).normalize("NFC");
 }
 
 function uniquePages(pages: WikiPageSummary[]): WikiPageSummary[] {
