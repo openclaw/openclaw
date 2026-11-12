@@ -58,7 +58,7 @@ let stdoutWrite: ReturnType<typeof vi.fn>;
 const synthesisArgs = ["apply", "synthesis", "CLI Alpha", "--body", "Alpha from CLI."];
 const assistantReply = "Noted. I will keep travel options close to the airport.";
 const warnings = (message: string): MemoryWikiStatus["warnings"] => [
-  { code: "bridge-artifacts-missing", message },
+  { code: "bridge-disabled", message },
 ];
 
 const emptyBridgeImport = {
@@ -223,6 +223,7 @@ describe("memory-wiki cli", () => {
       vaultExists: true,
       bridge: config.bridge,
       bridgePublicArtifactCount: 2,
+      snapshot: { state: "published", compiledAt: null },
       obsidianCli: { enabled: false, requested: false, available: false, command: null },
       unsafeLocal: { allowPrivateMemoryCoreAccess: false, pathCount: 0 },
       pageCounts: { source: 0, entity: 0, concept: 0, synthesis: 0, report: 0 },
@@ -342,8 +343,8 @@ describe("memory-wiki cli", () => {
     }
 
     expect(gatewayCall.mock.calls.map(([method, , params]) => [method, params])).toEqual([
-      ["wiki.status", { agentId: "marketing" }],
-      ["wiki.doctor", { agentId: "marketing" }],
+      ["wiki.status", { agentId: "marketing", statusMode: "snapshot" }],
+      ["wiki.doctor", { agentId: "marketing", statusMode: "snapshot" }],
       ["wiki.bridge.import", { agentId: "marketing" }],
     ]);
   });
@@ -491,6 +492,25 @@ describe("memory-wiki cli", () => {
     await expect(runWiki(config, ["status"])).rejects.toThrow(
       "Invalid Gateway response for wiki.status.",
     );
+  });
+
+  it.each(["legacy", "unknown"])("accepts %s Gateway status and doctor responses", async (mode) => {
+    const { config } = await createBridgeCliVault();
+    const status = createGatewayStatus(config);
+    status.snapshot = mode === "legacy" ? undefined : { state: "unavailable", compiledAt: null };
+    if (mode === "unknown") {
+      status.bridgePublicArtifactCount = null;
+      for (const key of ["source", "entity", "concept", "synthesis", "report"] as const) {
+        status.pageCounts[key] = null;
+      }
+      for (const key of ["native", "bridge", "bridgeEvents", "unsafeLocal", "other"] as const) {
+        status.sourceCounts[key] = null;
+      }
+    }
+    const report = { healthy: true, warningCount: 0, status, fixes: [] };
+    gatewayCall.mockResolvedValueOnce(status).mockResolvedValueOnce(report);
+    expect(JSON.parse(await runWiki(config, ["status", "--json"]))).toEqual(status);
+    expect(JSON.parse(await runWiki(config, ["doctor", "--json"]))).toEqual(report);
   });
 
   it("truncates gateway status text output without splitting surrogate pairs", async () => {
@@ -823,6 +843,7 @@ describe("memory-wiki cli", () => {
       const { rootDir, config } = await createCliVault({ config: { vault: { scope: "agent" } } });
       for (const agent of ["marketing", "support"]) {
         await runWiki(config, ["init", "--agent", agent], appConfig, true);
+        await runWiki(config, ["compile", "--agent", agent], appConfig, true);
         const output = await runWiki(config, ["doctor", "--agent", agent], appConfig, true);
         expect(output).toContain("Wiki doctor: healthy");
         expect(output).toContain(`Vault scope: agent (${agent})`);

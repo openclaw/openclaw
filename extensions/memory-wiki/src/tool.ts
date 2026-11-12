@@ -126,10 +126,9 @@ export function createWikiStatusTool(
     name: "wiki_status",
     label: "Wiki Status",
     description:
-      "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
+      "Inspect memory wiki configuration and the last published page counts without importing or compiling. Use an explicit bridge import or compile to refresh the wiki.",
     parameters: WikiStatusSchema,
     execute: async () => {
-      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
         callerAgentId: memoryContext.agentId,
