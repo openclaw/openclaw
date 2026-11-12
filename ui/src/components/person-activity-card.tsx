@@ -5,6 +5,7 @@ import { createMemo, createSignal, Errored, For, Loading, runWithOwner, Show } f
 import type { GatewaySessionRow } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -14,11 +15,14 @@ import {
   presenceViewerActivity,
   presenceViewerLastActivity,
   presenceUserLabel,
+  profilePresenceViewer,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
+import type { ProfileRead } from "../lib/profile-directory.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { registerEnglishCatalog, getLocale, i18nRevision, t } from "../lib/reactive/i18n.ts";
 import { createResizeObserver } from "../lib/reactive/observers.ts";
+import { projectProfileDirectory } from "../lib/reactive/profile-directory.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionPreferredFace,
@@ -232,7 +236,59 @@ function PersonPermissionLink(props: {
 
 function PersonActivityCard(props: { input: PersonCardInput }) {
   const user = () => props.input.user;
-  const label = createMemo(() => presenceUserLabel(user(), t("presence.card.person")));
+  const gateway = createMemo(() =>
+    props.input.gateway ? projectGateway(props.input.gateway) : undefined,
+  );
+  const canReadProfile = () => {
+    const snapshot = gateway()?.read().snapshot;
+    return (
+      snapshot?.phase === "connected" &&
+      (hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
+        (hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null) &&
+          snapshot.selfUser?.identity?.id === user().identity?.id))
+    );
+  };
+  const directory = createMemo(() => {
+    const source = props.input.gateway;
+    return source && canReadProfile() ? projectProfileDirectory(source) : undefined;
+  });
+  const profileRead = createMemo<ProfileRead | undefined>(() => {
+    const source = gateway();
+    const identity = user().identity;
+    if (!source || identity?.type !== "profile") {
+      return undefined;
+    }
+    if (source.read().snapshot.phase !== "connected") {
+      return { status: "disconnected" };
+    }
+    if (!canReadProfile()) {
+      return { status: "denied" };
+    }
+    return directory()?.read().readProfile(identity.id);
+  });
+  const profile = () => {
+    const read = profileRead();
+    return read?.status === "ready" ? read.profile : undefined;
+  };
+  const label = createMemo(() => {
+    const current = profile();
+    return presenceUserLabel(
+      current ? profilePresenceViewer(current) : user(),
+      t("presence.card.person"),
+    );
+  });
+  const savedRole = () => {
+    const read = profileRead();
+    if (!read) {
+      return "";
+    }
+    if (read.status !== "ready") {
+      return t("presence.card.roleStates." + read.status);
+    }
+    return label().isSharedOwner
+      ? t("presence.card.ownerRole")
+      : (read.profile.role ?? t("presence.card.noAssignedRole"));
+  };
   const activityLink = createMemo(() =>
     personActivityLink(user().identity?.id, props.input.routing, label().name),
   );
@@ -299,6 +355,14 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
         />
         <div>
           <h2>{label().name}</h2>
+          <Show when={profileRead()}>
+            <p
+              class="person-activity-card__role person-activity-card__muted"
+              title={t("presence.card.assignedRole")}
+            >
+              {t("presence.card.assignedRole")}: {savedRole()}
+            </p>
+          </Show>
           <Show when={user().entries !== undefined}>
             <span
               class={[
@@ -383,10 +447,10 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
                 : undefined
             }
           >
-            {(gateway) => (
+            {(source) => (
               <PersonPermissionLink
-                gateway={gateway()}
-                personId={user().identity!.id}
+                gateway={source()}
+                personId={profile()?.id ?? user().identity!.id}
                 basePath={props.input.routing.basePath}
                 open={(id) => props.input.openPermissions?.(id)}
               />

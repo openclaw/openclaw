@@ -50,16 +50,21 @@ const runtime = {
   },
 };
 
-async function fixture(scopes = ["operator.read"], personId = "alice", failDirectory = false) {
+async function fixture(
+  scopes = ["operator.read"],
+  personId = "alice",
+  failDirectory = false,
+  options: { profiles?: UserProfile[]; runtime?: unknown } = {},
+) {
   const request = vi.fn(async (method: string) => {
     if (method === "users.list") {
       if (failDirectory) {
         throw new Error("Directory failed");
       }
-      return { profiles: [alice, bob] };
+      return { profiles: options.profiles ?? [alice, bob] };
     }
     if (method === "config.get") {
-      return { exists: true, valid: true, config: {}, runtimeConfig: runtime };
+      return { exists: true, valid: true, config: {}, runtimeConfig: options.runtime ?? runtime };
     }
     throw new Error("Unexpected RPC: " + method);
   });
@@ -76,7 +81,9 @@ async function fixture(scopes = ["operator.read"], personId = "alice", failDirec
   if (scopes.includes("operator.read")) {
     await runtimeConfig.ensureDisplayLoaded();
   }
-  const [route, setRoute] = createSignal(personId ? "?person=" + encodeURIComponent(personId) : "");
+  const [route, setRoute] = createSignal<string | undefined>(
+    personId ? "?person=" + encodeURIComponent(personId) : "",
+  );
   const provider = createSolidApplicationContextProvider(context);
   const page = mountSolid(() => <PeoplePage routeData={route()} />, { wrapper: provider.wrapper });
   await waitForSolid(() => expect(page.container.textContent).not.toContain("Loading…"));
@@ -101,6 +108,24 @@ it("uses Gateway-resolved role mappings, preserves selected detail while filteri
   expect(request.mock.calls.some(([method]) => method === "users.setRole")).toBe(false);
 });
 
+it("retains technical disclosure through a query loader transition and local filtering", async () => {
+  const { page, setRoute } = await fixture();
+  const details = () => page.container.querySelector<HTMLDetailsElement>("details")!;
+  await waitForSolid(() => expect(details()).not.toBeNull());
+  details().open = true;
+  details().dispatchEvent(new Event("toggle"));
+  setRoute(undefined);
+  flush();
+  setRoute("?view=roles&role=guest");
+  flush();
+  expect(details().open).toBe(true);
+  const search = page.container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  search.value = "maintainer";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(details().open).toBe(true);
+});
+
 it("never reads directory or configured policy for a guest, including another-person deep links", async () => {
   const { page, request, setRoute } = await fixture([
     "operator.sessions.read",
@@ -116,6 +141,22 @@ it("never reads directory or configured policy for a guest, including another-pe
   expect(page.container.textContent).toContain("operator.sessions.read, operator.sessions.write");
   expect(request).not.toHaveBeenCalled();
 });
+
+it.each([
+  [undefined, "Not reported"],
+  [[], "None"],
+] as const)(
+  "distinguishes unreported and empty connection scope grants: %s",
+  async (scopes, expected) => {
+    const test = await fixture([], "");
+    test.emitHello(scopes ? gatewayHelloForMethods(["users.list", "config.get"], scopes) : null);
+    flush();
+    const row = [...test.page.container.querySelectorAll(".settings-row")].find((element) =>
+      element.textContent?.includes("Granted scopes"),
+    );
+    expect(row?.textContent).toContain(expected);
+  },
+);
 
 it("retires policy and profile presentation immediately when directory access is lost", async () => {
   const test = await fixture();
@@ -143,4 +184,34 @@ it("loads configured policy when broad read access becomes available on the open
   test.emitHello(gatewayHelloForMethods(["users.list", "config.get"], ["operator.read"]));
   await waitForSolid(() => expect(test.page.container.textContent).toContain("Required"));
   expect(test.request.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
+});
+
+it("distinguishes a retired saved assignment from an unreported effective role", async () => {
+  const { page, setRoute } = await fixture(["operator.read"], "alice", false, {
+    profiles: [{ ...alice, role: "retired", effectiveRole: undefined, roleSource: undefined }],
+  });
+  await waitForSolid(() =>
+    expect(page.container.textContent).toContain("This saved role is no longer configured."),
+  );
+  const effective = [...page.container.querySelectorAll(".settings-row")].find(
+    (row) => row.querySelector(".settings-row__title")?.textContent === "Effective role",
+  );
+  expect(effective?.querySelector(".settings-row__value")?.textContent).toBe("Not reported");
+  setRoute("?view=roles&role=retired");
+  flush();
+  expect(page.container.textContent).toContain("This role is not configured.");
+});
+
+it("keeps empty authorized directories distinct from unavailable reads", async () => {
+  const { page, setRoute } = await fixture(["operator.read"], "", false, {
+    profiles: [],
+    runtime: {},
+  });
+  await waitForSolid(() =>
+    expect(page.container.textContent).toContain("No people are available."),
+  );
+  expect(page.container.textContent).not.toContain("Couldn’t load people");
+  setRoute("?view=roles");
+  flush();
+  expect(page.container.textContent).toContain("Named roles are not configured");
 });

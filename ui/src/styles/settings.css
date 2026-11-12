@@ -446,6 +446,7 @@ openclaw-appearance-background .settings-background-preview .session-background_
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-8);
+  overflow-wrap: anywhere;
 }
 .people-permissions__columns > div {
   flex: 1 1 20rem;
@@ -453,7 +454,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
 }
 .people-permissions__policy {
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .settings-page__intro {

@@ -14,6 +14,16 @@ const catalog = {
       noRecentSessions: "No recent visible sessions.",
       ago: "ago",
       viewPermissions: "View permissions",
+      assignedRole: "Saved role assignment",
+      noAssignedRole: "No saved role",
+      ownerRole: "Gateway owner — no named role",
+      roleStates: {
+        unknown: "Not reported",
+        loading: "Loading…",
+        unavailable: "Unavailable",
+        denied: "Not available with your access",
+        disconnected: "Reconnect to inspect",
+      },
     },
   },
   chat: {

@@ -255,6 +255,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       presenceCard.viewPermissions = cardBody.viewPermissions;
     }
   }
+  Object.assign(presenceCard, cardBody);
   const newSession: TranslationMap = {};
   for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
     newSession[key] = value;

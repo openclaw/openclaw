@@ -1,5 +1,8 @@
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import type {
+  UserProfile,
+  UsersListResult,
+} from "../../../packages/gateway-protocol/src/schema/users.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
@@ -28,6 +31,7 @@ function fixture(
   initial?: (typeof photo)[],
   overrides: Partial<ApplicationGateway["snapshot"]> = {},
   handler?: GatewayRequestHandler,
+  selfRead?: ApplicationGateway["loadSelfProfile"],
 ) {
   const reply = createDeferred<UsersListResult>();
   const request = vi.fn(handler ?? (() => reply.promise));
@@ -44,6 +48,9 @@ function fixture(
     client: createTestGatewayClient(request),
     ...overrides,
   });
+  if (selfRead) {
+    gateway.loadSelfProfile = selfRead;
+  }
   const directory = profileDirectory(gateway);
   const stop = directory.subscribe(vi.fn());
   onTestFinished(stop);
@@ -83,8 +90,10 @@ it("retains profiles during a blip and clears them on fresh access loss", async 
   await directory.load();
   publish({ phase: "reconnecting", hello: null });
   expect(directory.get("photo")).toEqual(photo);
+  expect(directory.readProfile("photo").status).toBe("disconnected");
   publish({ phase: "connected", hello });
   expect(directory.get("photo")).toEqual(photo);
+  expect(directory.readProfile("photo").status).toBe("loading");
   publish({ hello: rosterHello([]) });
   expect(directory.get("photo")).toBeUndefined();
   reply.resolve({ profiles: [photo] });
@@ -179,3 +188,100 @@ it("refreshes canonical role facts and retires a reply started before a profile 
   await pending;
   expect(directory.get("photo")?.role).toBe("maintainer");
 });
+
+const selfSnapshot = () => ({
+  hello: rosterHello(["operator.sessions.read"]),
+  selfUser: { id: "self", name: "Self", identity: { type: "profile" as const, id: "self" } },
+});
+
+it("keeps self reads opt-in, self-scoped and separate from directory enumeration", async () => {
+  const reply = createDeferred<UserProfile | null>();
+  const loadSelf = vi.fn(() => reply.promise);
+  const { directory, request } = fixture(undefined, selfSnapshot(), undefined, loadSelf);
+  expect(loadSelf).not.toHaveBeenCalled();
+  const stop = directory.subscribe(vi.fn(), true);
+  onTestFinished(stop);
+  const read = directory.load();
+  expect(loadSelf).toHaveBeenCalledTimes(1);
+  expect(directory.readProfile("other").status).toBe("denied");
+  expect(directory.readProfile("self").status).toBe("loading");
+  reply.resolve({ ...photo, id: "self", role: "guest" });
+  await read;
+  expect(directory.readProfile("self")).toMatchObject({
+    status: "ready",
+    profile: { role: "guest" },
+  });
+  expect(directory.currentResult).toBeUndefined();
+  expect(request).not.toHaveBeenCalled();
+  stop();
+  expect(directory.get("self")).toBeUndefined();
+});
+
+it("refreshes self assignments on profile changes without accepting an earlier reply", async () => {
+  const stale = createDeferred<UserProfile | null>();
+  const own = { ...photo, id: "self", role: "guest" };
+  const changed = { ...own, role: "maintainer" };
+  const loadSelf = vi
+    .fn<ApplicationGateway["loadSelfProfile"]>()
+    .mockResolvedValueOnce(own)
+    .mockReturnValueOnce(stale.promise)
+    .mockResolvedValue(changed);
+  const test = fixture(undefined, selfSnapshot(), undefined, loadSelf);
+  onTestFinished(test.directory.subscribe(vi.fn(), true));
+  await test.directory.load();
+  const old = test.directory.load(true);
+  test.publishEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: { reason: "profile-identity" },
+  });
+  await test.directory.load();
+  expect(test.directory.readProfile("self")).toMatchObject({ profile: { role: "maintainer" } });
+  stale.resolve(own);
+  await old;
+  expect(test.directory.readProfile("self")).toMatchObject({ profile: { role: "maintainer" } });
+  const merged = { ...changed, id: "merged" };
+  loadSelf.mockResolvedValue(merged);
+  test.publish({
+    selfUser: { id: "merged", name: "Merged", identity: { type: "profile", id: "merged" } },
+  });
+  await test.directory.load();
+  expect(test.directory.readProfile("self").status).toBe("denied");
+  expect(test.directory.readProfile("merged")).toMatchObject({ profile: { id: "merged" } });
+  const reads = loadSelf.mock.calls.length;
+  test.publish({ hello: rosterHello([]) });
+  expect(test.directory.readProfile("merged").status).toBe("denied");
+  expect(loadSelf).toHaveBeenCalledTimes(reads);
+});
+
+it.each(["disconnect", "close", "reconnect"])(
+  "retires a pending self read after %s",
+  async (retirement) => {
+    const stale = createDeferred<UserProfile | null>();
+    const fresh = { ...photo, id: "self", role: "maintainer" };
+    const loadSelf = vi
+      .fn<ApplicationGateway["loadSelfProfile"]>()
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValue(fresh);
+    const test = fixture(undefined, selfSnapshot(), undefined, loadSelf);
+    const stop = test.directory.subscribe(vi.fn(), true);
+    onTestFinished(stop);
+    const old = test.directory.load();
+    if (retirement === "close") {
+      stop();
+    } else {
+      test.publish({ phase: "reconnecting" });
+    }
+    if (retirement === "reconnect") {
+      test.publish({ phase: "connected" });
+      await test.directory.load();
+    }
+    stale.resolve({ ...fresh, role: "guest" });
+    await old;
+    expect(test.directory.readProfile("self")).toEqual(
+      retirement === "reconnect"
+        ? { status: "ready", profile: fresh }
+        : { status: retirement === "close" ? "unknown" : "disconnected" },
+    );
+  },
+);

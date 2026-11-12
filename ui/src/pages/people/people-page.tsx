@@ -44,6 +44,8 @@ export function PeoplePage(props: { routeData: string | undefined }) {
   const config = projectRuntimeConfig(context.runtimeConfig);
   const [peopleQuery, setPeopleQuery] = createSignal("");
   const [rolesQuery, setRolesQuery] = createSignal("");
+  // Query-loader transitions may retire the detail subtree, not the user’s disclosure choice.
+  const [policyDetailsOpen, setPolicyDetailsOpen] = createSignal(false);
   const query = createMemo(() => new URLSearchParams(props.routeData));
   const personId = () => query().get("person") ?? "";
   const snapshot = () => gateway.read().snapshot;
@@ -65,14 +67,15 @@ export function PeoplePage(props: { routeData: string | undefined }) {
   const requestedId = () => personId() || selfId() || "";
   const rows = createMemo(() =>
     canList()
-      ? (people.read().result?.profiles ?? [])
+      ? (people.read().currentResult?.profiles ?? [])
           .filter((person) => !person.mergedInto)
           .toSorted((a, b) => personName(a).localeCompare(personName(b)))
       : [],
   );
   const selectedPerson = createMemo(() => {
     people.read();
-    return canList() ? directory.get(requestedId()) : undefined;
+    const read = canList() ? directory.readProfile(requestedId()) : undefined;
+    return read?.status === "ready" ? read.profile : undefined;
   });
   const matchingPeople = createMemo(() =>
     rows().filter((person) =>
@@ -101,6 +104,11 @@ export function PeoplePage(props: { routeData: string | undefined }) {
   const selectedRole = () =>
     query().get("role") ||
     (typeof roles()?.default === "string" ? String(roles()?.default) : (names()[0] ?? ""));
+  const savedRoleMissing = (person: UserProfile) => {
+    const role = person.role;
+    const configured = definitions();
+    return role && configured && !Object.hasOwn(configured, role);
+  };
   const selectedPolicy = () =>
     asOptionalRecord(
       definitions()?.[
@@ -128,7 +136,9 @@ export function PeoplePage(props: { routeData: string | undefined }) {
         ? "rolesOff"
         : config.read().state.configLoading
           ? "policyLoading"
-          : "policyUnavailable",
+          : definitions()
+            ? "roleNotConfigured"
+            : "policyUnavailable",
     );
   const refresh = () => {
     void directory.load(true);
@@ -177,7 +187,11 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                 >
                   <PolicyFact
                     title={copy("scopes")}
-                    value={snapshot().hello?.auth?.scopes?.join(", ") || copy("none")}
+                    value={
+                      snapshot().hello?.auth?.scopes
+                        ? snapshot().hello?.auth?.scopes?.join(", ") || copy("none")
+                        : copy("unknown")
+                    }
                   />
                   <PolicyFact
                     title={copy("otherSessions")}
@@ -235,7 +249,11 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                               each={names().filter((name) =>
                                 name.toLowerCase().includes(rolesQuery().trim().toLowerCase()),
                               )}
-                              fallback={<SettingsEmpty message={copy("noMatches")} />}
+                              fallback={
+                                <SettingsEmpty
+                                  message={copy(names().length ? "noMatches" : "rolesOff")}
+                                />
+                              }
                             >
                               {(name) => (
                                 <SettingsNavRow
@@ -254,7 +272,7 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                     >
                       <SettingsSection title={copy("directory")} count={rows().length}>
                         <Show
-                          when={people.read().result}
+                          when={people.read().currentResult}
                           fallback={
                             people.read().loading ? (
                               <SettingsLoadingSkeleton rows={3} />
@@ -266,7 +284,11 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                           <For
                             each={matchingPeople()}
                             keyed={(person) => person.id}
-                            fallback={<SettingsEmpty message={copy("noMatches")} />}
+                            fallback={
+                              <SettingsEmpty
+                                message={copy(rows().length ? "noMatches" : "noPeople")}
+                              />
+                            }
                           >
                             {(person) => (
                               <SettingsNavRow
@@ -274,7 +296,7 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                                 description={
                                   person().id === GATEWAY_OWNER_PROFILE_ID
                                     ? copy("owner")
-                                    : (person().effectiveRole ?? copy("noRole"))
+                                    : (person().effectiveRole ?? copy("unknown"))
                                 }
                                 selected={person().id === selectedPerson()?.id}
                                 onClick={() => navigate("people", person().id)}
@@ -308,10 +330,13 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                               <PolicyFact
                                 title={copy("assignedRole")}
                                 value={person().role ?? copy("noRole")}
+                                description={
+                                  savedRoleMissing(person()) ? copy("retiredRole") : undefined
+                                }
                               />
                               <PolicyFact
                                 title={copy("role")}
-                                value={person().effectiveRole ?? copy("noRole")}
+                                value={person().effectiveRole ?? copy("unknown")}
                                 description={roleSource(person())}
                               />
                             </Show>
@@ -337,6 +362,8 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                                   : (selectedPerson()?.effectiveRole ?? "")
                               }
                               policy={policy()}
+                              detailsOpen={policyDetailsOpen()}
+                              onDetailsToggle={setPolicyDetailsOpen}
                             />
                           )}
                         </Show>
@@ -344,7 +371,7 @@ export function PeoplePage(props: { routeData: string | undefined }) {
                       <Show when={selectedView() === "roles" && selectedPolicy()}>
                         <SettingsSection title={copy("members")} description={copy("membersHint")}>
                           <Show
-                            when={people.read().result}
+                            when={people.read().currentResult}
                             fallback={
                               people.read().loading ? (
                                 <SettingsLoadingSkeleton rows={3} />
