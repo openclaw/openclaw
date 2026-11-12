@@ -55,7 +55,8 @@ export async function prepareSessionMemoryEntries(
         request.pages || request.messages
           ? async (page) => {
               const lines = request.pages && page.lines.length > 0;
-              delivered ||= lines;
+              // Message-only pages must also be discarded when this snapshot changes.
+              delivered = true;
               await publish({
                 index,
                 page: lines

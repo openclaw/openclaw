@@ -51,7 +51,9 @@ export async function collectSessionMemoryEntries(
         if ("reset" in update) {
           lines[update.index] = [];
         } else if ("page" in update) {
-          expect(update.page.startLine).toBe(lines[update.index]!.length);
+          if (update.page.lines.length > 0) {
+            expect(update.page.startLine).toBe(lines[update.index]!.length);
+          }
           lines[update.index]!.push(...update.page.lines);
           pages[update.index]!++;
         } else {

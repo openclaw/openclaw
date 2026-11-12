@@ -11,7 +11,7 @@ function userEvent(id: string, content: string) {
   return { type: "message", id, message: { role: "user", content } };
 }
 
-it("restarts a sliced export after a concurrent change and discards its delivered pages", async () => {
+it.each([true, false])("resets a changed sliced export (rendered pages: %s)", async (pages) => {
   await withOpenClawTestState({ label: "session-memory-entry-restart" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -26,12 +26,23 @@ it("restarts a sliced export after a concurrent change and discards its delivere
     );
     expect(replaceTranscriptEventsSync(scope, rows)).toBe(true);
     const updates: string[] = [];
+    const observedMessages: string[] = [];
     let appended = false;
     const [exported] = await collectSessionMemoryEntries(
-      [{ absPath: scope.sessionKey, options: scope }],
+      [{ absPath: scope.sessionKey, options: scope, pages, messages: !pages }],
       undefined,
       (_index, update) => {
         updates.push("reset" in update ? "reset" : "page");
+        if ("reset" in update) {
+          observedMessages.length = 0;
+        } else if (!pages) {
+          expect(update.page.lines).toEqual([]);
+          for (const { message } of update.page.messages ?? []) {
+            assert(message && typeof message === "object" && "content" in message);
+            assert(typeof message.content === "string");
+            observedMessages.push(message.content.split(" ")[0]!);
+          }
+        }
         if (!appended) {
           appended = true;
           expect(
@@ -47,9 +58,13 @@ it("restarts a sliced export after a concurrent change and discards its delivere
     // The restarted export reads the transcript current at its fresh head.
     expect(updates).toContain("reset");
     expect(updates.indexOf("reset")).toBeGreaterThan(0);
-    expect(exported.entry.content.endsWith("\nAssistant: Concurrent answer.")).toBe(true);
-    expect(exported.entry.content.startsWith("User: row0 row0")).toBe(true);
-    expect(exported.entry.lineCount).toBe(exported.entry.content.split("\n").length);
+    if (pages) {
+      expect(exported.entry.content.endsWith("\nAssistant: Concurrent answer.")).toBe(true);
+      expect(exported.entry.content.startsWith("User: row0 row0")).toBe(true);
+      expect(exported.entry.lineCount).toBe(exported.entry.content.split("\n").length);
+    } else {
+      expect(observedMessages).toEqual(["row0", "row1", "row2", "row3", "row4", "row5", "Concurrent"]);
+    }
   });
 });
 
