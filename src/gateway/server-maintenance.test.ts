@@ -256,6 +256,8 @@ describe("startGatewayMaintenanceTimers", () => {
         }
         expect(harness.stops).toEqual(["first"]);
         expect(harness.starts).toEqual(["first", "second", "first"]);
+        // Settle the startup cleanup queued by the first wake before testing idle recovery.
+        await harness.advance(0);
         harness.state.busy = false;
         await harness.advance(TICK_INTERVAL_MS);
         expect(harness.stops).toEqual(["first", "second"]);
@@ -567,7 +569,7 @@ describe("startGatewayMaintenanceTimers", () => {
     await stopMaintenanceTimers(timers);
   });
 
-  it("delays worktree cleanup until the first hourly tick and joins slow sweeps", async () => {
+  it("starts worktree cleanup immediately and joins slow sweeps across hourly ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
     const deps = createMaintenanceTimerDeps();
@@ -576,8 +578,6 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
 
     await Promise.resolve();
-    expect(deps.worktreeGc).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
     expect(deps.worktreeGc).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2);
     expect(deps.worktreeGc).toHaveBeenCalledTimes(1);

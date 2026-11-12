@@ -22,7 +22,7 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
 
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
-const { readScheduledMemoryParent, readScheduledToolTargets } =
+const { readScheduledMemoryParent, readScheduledToolTargets, resolveScheduledRunMemoryReceipt } =
   await import("./execution-context-registry.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
 const { sessionChanges } = await import("../sessions/session-row-changes.js");
@@ -210,24 +210,41 @@ describe("admitScheduledOccurrence", () => {
     });
     const admitted = await admission.preparedRunAdmission.admit("embedded");
     const targets = readScheduledToolTargets(admitted);
-    expect(targets).toMatchObject({ boardSessionKey: PARENT_KEY });
+    // Spawned sessions record the same non-owner bit the run's memory uses.
+    expect(targets).toMatchObject({ boardSessionKey: PARENT_KEY, spawnSenderIsOwner: false });
     expect(() => targets?.assertCurrent()).not.toThrow();
     generationAssert.mockImplementationOnce(() => {
       throw new Error("parent reset");
     });
     expect(() => targets?.assertCurrent()).toThrow("parent reset");
     // No requester check ran for this occurrence, so the parent's audience is not owner-private.
-    expect(readScheduledMemoryParent(admitted.operationalRunInstance)).toEqual({
+    const memoryParent = {
       sessionKey: PARENT_KEY,
       sessionId: "parent-session",
       lifecycleRevision: "rev-1",
       senderIsOwner: false,
-    });
+    };
+    expect(readScheduledMemoryParent(admitted.operationalRunInstance)).toEqual(memoryParent);
+    // The child-placement run row records the same parent for sessions it spawns.
+    expect(resolveScheduledRunMemoryReceipt(minted.result)).toEqual(memoryParent);
     admission.close();
     expect(readScheduledToolTargets(admitted)).toBeUndefined();
     expect(readScheduledMemoryParent(admitted.operationalRunInstance)).toBeUndefined();
     // Tools built during the run keep the assertion; it must refuse after the run settles.
     expect(() => targets?.assertCurrent()).toThrow("settled");
+    occurrence.release();
+  });
+
+  it("records no run-row receipt for an in-session run, which executes on its parent's row", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const { occurrence, minted } = await mint(
+      job({ ...LINKED_JOB, sessionTarget: `session:${PARENT_KEY}` }),
+    );
+    expect(minted.result).toMatchObject({ status: "ready", facts: { placement: "in-session" } });
+    expect(resolveScheduledRunMemoryReceipt(minted.result)).toBeUndefined();
     occurrence.release();
   });
 

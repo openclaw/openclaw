@@ -22,6 +22,19 @@ const enProfile = {
       startFailed: "Couldn’t start Discord sign-in. Try again.",
       incomplete: "Couldn’t complete Discord sign-in. Try again.",
     },
+    openclawId: {
+      title: "OpenClaw ID",
+      notLinked: "Not linked",
+      unavailable: "Link over a personal sign-in, such as Tailscale",
+      loadFailed: "Couldn’t load your OpenClaw ID link.",
+      link: "Link OpenClaw ID",
+      linkShort: "Link",
+      unlink: "Unlink",
+      ownerOf: "{email} · Owner of {claw}",
+      linkedElsewhere:
+        "This OpenClaw ID is already linked to another profile. Merge that profile into this one in Users, or unlink it there first.",
+      failed: "Couldn’t update the OpenClaw ID link. Try again.",
+    },
     access: {
       title: "Your access",
       admin: "You have admin access.",
@@ -97,7 +110,10 @@ const enProfile = {
 export const registerProfileEnglish = Object.assign(
   () => {
     // Shared menu/search labels stay eager; editor copy loads with its consumers.
-    Object.assign(en.profilePage, { discord: enProfile.profilePage.discord });
+    Object.assign(en.profilePage, {
+      discord: enProfile.profilePage.discord,
+      openclawId: enProfile.profilePage.openclawId,
+    });
     en.profilePage.access = enProfile.profilePage.access;
     Object.assign(en.profilePage.identity, enProfile.profilePage.identity);
   },
