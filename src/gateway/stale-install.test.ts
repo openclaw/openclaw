@@ -87,7 +87,10 @@ describe("running installation replacement", () => {
     await writeIdentity("2026.9.4", "build-before");
     const counts: Record<string, number> = {};
     const restore: Array<() => void> = [];
-    for (const key of Object.keys(syncFs).filter((name) => name.endsWith("Sync"))) {
+    // Linux exposes unsupported methods such as lchmodSync as undefined.
+    for (const key of Object.keys(syncFs).filter(
+      (name) => name.endsWith("Sync") && typeof Reflect.get(syncFs, name) === "function",
+    )) {
       const descriptor = Object.getOwnPropertyDescriptor(syncFs, key)!;
       Object.defineProperty(syncFs, key, {
         ...descriptor,
