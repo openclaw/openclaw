@@ -2,10 +2,12 @@
   "id": "zai",
   "categories": ["models"],
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onAgentHarnesses": ["zai-claude-agent-sdk"]
   },
   "enabledByDefault": true,
   "providers": ["zai"],
+  "cliBackends": ["zai-claude-agent-sdk"],
   "providerEndpoints": [
     {
       "endpointClass": "zai-native",

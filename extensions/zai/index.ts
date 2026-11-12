@@ -25,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildZaiClaudeAgentSdkBackend } from "./cli-backend.js";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import {
@@ -286,6 +287,7 @@ export default defineSingleProviderPluginEntry({
     isCacheTtlEligible: () => true,
   },
   register(api) {
+    api.registerCliBackend(buildZaiClaudeAgentSdkBackend());
     api.registerMediaUnderstandingProvider({
       id: "zai",
       capabilities: ["image"],

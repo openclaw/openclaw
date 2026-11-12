@@ -131,6 +131,7 @@
   "cli-state-owner",
   "node-cli-runtime",
   "cli-backend",
+  "claude-agent-sdk-runtime",
   "claude-model-runtime",
   "codex-client-version-runtime",
   "codex-mcp-projection",

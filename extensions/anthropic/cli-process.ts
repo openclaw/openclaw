@@ -20,7 +20,12 @@ export type ClaudeCliProcessContext = Pick<
   "command" | "argv0" | "args" | "cwd" | "env" | "abortSignal" | "assertCurrent"
 > & { prepareCredentialUse?: () => Promise<void> };
 
-export type ClaudeCliSecretInput = { fd: 3; createData: () => Buffer };
+export type ClaudeCliSecretInput = {
+  fd: 3;
+  createData: () => Buffer;
+  /** Anthropic-protocol providers whose endpoint only accepts a bearer env var. */
+  envName?: "ANTHROPIC_AUTH_TOKEN";
+};
 
 const STDERR_CAPTURE_CHARS = 8_192;
 const STDERR_PREVIEW_CHARS = 2_000;
@@ -85,16 +90,27 @@ export function createClaudeCliProcessOwner(
     spawn: async (options: ClaudeCliSpawnOptions) => {
       assertCurrent();
       environment = options.env;
+      // Z.AI-style endpoints only accept a bearer env var; Claude's own routes
+      // keep the credential on the protected descriptor instead.
+      const envDelivery =
+        secretInput?.envName && credential
+          ? {
+              [secretInput.envName]: credential.toString("utf8"),
+              // Claude keeps host-managed credentials out of native tool and MCP children.
+              CLAUDE_CODE_HOST_AUTH_ENV_VAR: secretInput.envName,
+              CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
+            }
+          : undefined;
       const spawned = await createOwnedStdioProcess({
         argv: [options.command, ...options.args],
         argv0: options.argv0,
         cwd: options.cwd,
-        env: options.env,
+        env: envDelivery ? { ...options.env, ...envDelivery } : options.env,
         exactEnv: true,
         abortSignal: options.signal,
         assertCurrent,
         prepareTargetSpawn: () => currentContext()?.prepareCredentialUse?.(),
-        secretInput,
+        secretInput: envDelivery ? undefined : secretInput,
         terminateOnHostLoss: true,
         stdoutConsumption: "awaited",
       });

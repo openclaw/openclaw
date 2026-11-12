@@ -1,11 +1,19 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import setupPlugin from "./setup-api.js";
+
+const ZAI_CLAUDE_AGENT_SDK_BACKEND_ID = "zai-claude-agent-sdk";
+const ZAI_ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic";
 
 function expectFields(model: unknown, fields: Record<string, unknown>) {
   expect(model).toEqual(expect.objectContaining(fields));
@@ -80,6 +88,79 @@ async function createStreamCapture(
 }
 
 describe("zai provider plugin", () => {
+  it("declares lazy activation ownership for its Agent SDK backend", () => {
+    expect(manifest.activation.onAgentHarnesses).toEqual([ZAI_CLAUDE_AGENT_SDK_BACKEND_ID]);
+  });
+
+  it.each([
+    ["runtime", plugin],
+    ["setup", setupPlugin],
+  ] as const)(
+    "%s registers an Agent SDK backend with provider-scoped authentication",
+    (_entry, entry) => {
+      const captured = capturePluginRegistration({ register: entry.register });
+      expect(captured.cliBackends.map((candidate) => candidate.id)).toContain(
+        ZAI_CLAUDE_AGENT_SDK_BACKEND_ID,
+      );
+
+      const backend = captured.cliBackends.find(
+        (candidate) => candidate.id === ZAI_CLAUDE_AGENT_SDK_BACKEND_ID,
+      );
+      if (!backend) {
+        throw new Error("Z.AI entry did not register its Agent SDK backend.");
+      }
+
+      expect(backend).toMatchObject({
+        id: ZAI_CLAUDE_AGENT_SDK_BACKEND_ID,
+        modelProvider: "zai",
+        bundleMcp: true,
+        bundleMcpMode: "claude-config-file",
+        nativeToolMode: "selectable",
+        ownsNativeCompaction: true,
+        subscriptionAuthDispatch: false,
+        config: {
+          command: "claude",
+          jsonlDialect: "claude-stream-json",
+          liveSession: "claude-stdio",
+          clearEnv: expect.arrayContaining([
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ZAI_API_KEY",
+            "Z_AI_API_KEY",
+          ]),
+        },
+      });
+      const prepared = backend.prepareExecution?.({
+        provider: "zai",
+        modelId: "glm-4.7",
+        workspaceDir: "/tmp/openclaw-zai-agent-sdk",
+        executionMode: "agent",
+        authCredential: { type: "api_key", key: "zai-test-key" },
+      } as never);
+      expect(prepared).toBeDefined();
+      return Promise.resolve(prepared).then((execution) => {
+        // The credential descriptor is provider-private and intentionally absent
+        // from the public prepared-execution contract.
+        const privateExecution = execution as
+          | (NonNullable<typeof execution> & {
+              secretInput?: { createData: () => Buffer };
+            })
+          | undefined;
+        expect(execution).toMatchObject({
+          env: {
+            ANTHROPIC_BASE_URL: ZAI_ANTHROPIC_BASE_URL,
+          },
+          secretInput: {
+            envName: "ANTHROPIC_AUTH_TOKEN",
+          },
+        });
+        expect(privateExecution?.secretInput?.createData().toString("utf8")).toBe("zai-test-key");
+        expect(execution?.execute).toBeTypeOf("function");
+        return execution?.cleanup?.();
+      });
+    },
+  );
+
   it("uses catalog metadata over the template and honors a custom endpoint", async () => {
     const baseUrl = "https://proxy.example.test/zai";
     expectFields(await resolveModel("glm-5.3-flash", baseUrl), {

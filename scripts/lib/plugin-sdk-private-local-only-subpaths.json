@@ -36,6 +36,7 @@
   "chat-channel-ids",
   "claude-model-runtime",
   "cli-backend",
+  "claude-agent-sdk-runtime",
   "cli-runtime",
   "codex-client-version-runtime",
   "codex-mcp-projection",

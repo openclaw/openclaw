@@ -7,6 +7,7 @@ import * as oauth from "../auth-profiles/oauth.js";
 import * as bootstrap from "../bootstrap-files.js";
 import * as transcript from "../command/attempt-execution.helpers.js";
 import * as referencePaths from "../docs-path.js";
+import * as modelAuthProvider from "../model-auth-provider.js";
 import * as catalog from "../model-catalog.js";
 import * as workspace from "../workspace.js";
 import * as skills from "./claude-skills-plugin.js";
@@ -41,6 +42,7 @@ const installSpies = {
     vi.spyOn(transcript, "claudeCliSessionTranscriptHasOrphanedToolUse"),
   getCliLiveSessionGeneration: () => vi.spyOn(liveSessions, "getCliLiveSessionGeneration"),
   resolveApiKeyForProfile: () => vi.spyOn(oauth, "resolveApiKeyForProfile"),
+  resolveApiKeyForProviderCore: () => vi.spyOn(modelAuthProvider, "resolveApiKeyForProviderCore"),
   loadManifestModelCatalog: () => vi.spyOn(catalog, "loadManifestModelCatalog"),
 };
 

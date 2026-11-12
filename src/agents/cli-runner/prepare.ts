@@ -90,6 +90,7 @@ import {
 } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
+import { resolveApiKeyForProviderCore } from "../model-auth-provider.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
@@ -303,6 +304,7 @@ async function prepareCliRunContextWithinReadFence(
   }
   params = prepareCliRunModelAuthority(params);
   const backendAuthPolicy = resolveBundledCliBackendAuthPolicy(backendResolved.id);
+  const backendAuthProvider = backendResolved.modelProvider?.trim() || params.provider;
   const canEnforceExactToolAvailability = cliBackendSupportsExactToolAvailability(backendResolved);
   using callerToolAuthorityResources = new DisposableStack();
   const callerToolAuthority = callerToolAuthorityResources.use(
@@ -425,6 +427,21 @@ async function prepareCliRunContextWithinReadFence(
     })
   ) {
     throw new Error("This saved sign-in is inactive. Test and activate it in Model Setup.");
+  }
+  if (!authCredential && backendAuthPolicy?.providerConfigApiKey) {
+    const resolvedAuth = await resolveApiKeyForProviderCore({
+      provider: backendAuthProvider,
+      cfg: params.config,
+      agentDir,
+      allowAuthProfileFallback: false,
+    });
+    params.assertCurrent?.();
+    authCredential = {
+      type: "api_key",
+      provider: backendAuthProvider,
+      key: resolvedAuth.apiKey,
+    };
+    resolvedProfileAuth = resolvedAuth;
   }
   // Claude owns its native login and single-use refresh-token family. Never
   // preflight, refresh, or forward OpenClaw's snapshot; the installed Claude

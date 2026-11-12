@@ -817,6 +817,103 @@ describe("prepareCliRunContext", () => {
     expect(context.authBindingSkipsLocalCredential).toBe(true);
   });
 
+  it("still materializes selected API keys for Gemini CLI preparation", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "google:api-key";
+    const prepareExecution = vi.fn(async () => ({
+      env: { GEMINI_CLI_HOME: path.join(agentDir, "gemini-home") },
+    }));
+    const resolveApiKeyForProfile = vi.fn(async () => ({
+      apiKey: "resolved-api-key",
+      profileId: authProfileId,
+      profileType: "api_key" as const,
+      provider: "google",
+    }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      createAuthProfileStoreFixture({
+        [authProfileId]: createApiKeyCredential("google", "stored-api-key"),
+      }),
+      agentDir,
+    );
+    setRawCliBackendForPrepareTest({
+      id: "google-gemini-cli",
+      pluginId: "google",
+      bundleMcp: false,
+      authEpochMode: "profile-only",
+      prepareExecution,
+      config: createArgBackendConfig("gemini", ["--prompt", "{prompt}"], "json"),
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
+
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+      authProfileId,
+      config: {},
+    });
+
+    expect(resolveApiKeyForProfile).toHaveBeenCalledOnce();
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId,
+        authCredential: expect.objectContaining({
+          type: "api_key",
+          provider: "google",
+          key: "resolved-api-key",
+        }),
+      }),
+    );
+  });
+
+  it("resolves ZAI provider config auth through the backend model provider", async () => {
+    const prepareExecution = vi.fn(async () => undefined);
+    const resolveApiKeyForProviderCore = vi.fn(async () => ({
+      apiKey: "configured-zai-key",
+      source: "models.json",
+      mode: "api-key" as const,
+    }));
+    setRawCliBackendForPrepareTest({
+      id: "zai-claude-agent-sdk",
+      pluginId: "zai",
+      modelProvider: "zai",
+      bundleMcp: false,
+      prepareExecution,
+      config: {
+        command: "claude",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+    setCliRunnerPrepareTestDeps({ resolveApiKeyForProviderCore });
+
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      provider: "zai-claude-agent-sdk",
+      model: "glm-5.3-flash",
+      config: {},
+    });
+
+    expect(resolveApiKeyForProviderCore).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "zai", allowAuthProfileFallback: false }),
+    );
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authCredential: expect.objectContaining({
+          type: "api_key",
+          provider: "zai",
+          key: "configured-zai-key",
+        }),
+      }),
+    );
+  });
+
   it("preserves a selected Gemini profile when backend auth preparation fails", async () => {
     const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
