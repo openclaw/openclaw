@@ -248,8 +248,8 @@ describe("remote Control UI memory transport", () => {
   it.each(["retained", "revoked", "retired"] as const)(
     "keeps accepted HTTP separate from admission while its grant is %s",
     async (state) => {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
+      const entered = createDeferred();
+      const release = createDeferred();
       const admission = new AbortController();
       const retained = new AbortController();
       const { transport, input, revoke } = fixture({

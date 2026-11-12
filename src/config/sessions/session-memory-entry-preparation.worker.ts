@@ -6,11 +6,11 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { SessionTranscriptExportChangedError } from "./session-accessor.sqlite-export-slices.js";
 import {
-  openTranscriptExportReadOnly,
-  readTranscriptExportSnapshotFromDatabase,
-} from "./session-accessor.sqlite-read.js";
+  openTranscriptExportInSlices,
+  SessionTranscriptExportChangedError,
+} from "./session-accessor.sqlite-export-slices.js";
+import { readTranscriptExportSnapshotFromDatabase } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTranscriptReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -112,7 +112,27 @@ export async function prepareSessionMemoryEntries(
         }
         const opened = snapshot?.deferred
           ? runWithSessionTranscriptReadFence(request.admission, () =>
-              openTranscriptExportReadOnly(request.options, options, snapshot),
+              openTranscriptExportInSlices({
+                ...options,
+                sessionId: resolved.sessionId,
+                batchHead: snapshot,
+                transaction: (read) =>
+                  withOpenClawAgentDatabaseReadOnly(
+                    (database) =>
+                      runSqliteReadSnapshotSync(database.db, () => read(database), {
+                        operationLabel: "session transcript export slice",
+                      }),
+                    toDatabaseOptions(resolved),
+                  ),
+                readHead: (database, slicing) =>
+                  readTranscriptExportSnapshotFromDatabase(
+                    database,
+                    resolved,
+                    request.options,
+                    options,
+                    slicing,
+                  ),
+              }),
             )
           : snapshot && { snapshot, events: snapshot.events };
         // Lazy advancement reads its next slice under the same admitted user-turn fence.

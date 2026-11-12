@@ -404,7 +404,7 @@ export async function createFullModelCatalogAccess(
       };
       const readyCatalog = readReadyCatalog();
       if (readyCatalog) {
-        return Promise.resolve(readyCatalog);
+        return readyCatalog;
       }
       const previousNative = nativePending;
       let failedProviders: readonly string[] | undefined;

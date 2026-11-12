@@ -185,8 +185,6 @@ export async function assertDoctorMaintenanceReady(
   }
   const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
   await assertConfiguredWorkspaceStateReady({ cfg, operation: "doctor" });
-  const { ExecApprovalsMigrationRequiredError } =
-    await import("../infra/exec-approvals-migration-gate.js");
   const { readExecApprovalsPolicyReadOnlyAsync } = await import("../infra/exec-approvals-store.js");
   try {
     const policy = await readExecApprovalsPolicyReadOnlyAsync({ env });

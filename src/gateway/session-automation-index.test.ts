@@ -4,7 +4,7 @@ import type { CronJob } from "../cron/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   invalidateSessionAutomationIndex,
-  claimSessionAutomationEpoch,
+  expectSessionAutomationSource,
   registerSessionAutomationSource,
   sessionHasAutomation,
   unregisterSessionAutomationSource,
@@ -150,13 +150,13 @@ describe("session automation index", () => {
     const changes: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
     try {
-      const staleEpoch = claimSessionAutomationEpoch();
+      const staleEpoch = expectSessionAutomationSource(cfg, true);
       const staleSource = {
         getJobs: () => [job({ id: "stale" })],
         getConfig: () => cfg,
         getDefaultAgentId: () => "main",
       };
-      const freshEpoch = claimSessionAutomationEpoch();
+      const freshEpoch = expectSessionAutomationSource(cfg, true);
       const freshSource = {
         getJobs: () => [job({ id: "fresh" })],
         getConfig: () => cfg,

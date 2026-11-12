@@ -5,7 +5,7 @@ import { validateConfiguredBindings } from "../channels/plugins/configured-bindi
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { PluginHostCleanupResult } from "../plugins/host-hook-cleanup.types.js";
@@ -179,7 +179,7 @@ export async function reloadGatewayPlugins(
   const { channelTargets, startReplacedChannels, releaseChannelHandoffs } = channels;
   // Observe cleanup during planning, without reserving or fencing the serving generation.
   let pendingPriorCleanup: Promise<unknown> | undefined;
-  let priorCleanupFailure: unknown;
+  let priorCleanupFailure: Error | undefined;
   let priorCleanupResult: PluginHostCleanupResult | undefined;
   const priorCleanup = kernel.pluginMetadata.waitForRetirement();
   pendingPriorCleanup = priorCleanup;
@@ -189,7 +189,7 @@ export async function reloadGatewayPlugins(
       pendingPriorCleanup = undefined;
     },
     (error: unknown) => {
-      priorCleanupFailure = error;
+      priorCleanupFailure = toErrorObject(error, "Plugin runtime cleanup failed");
       pendingPriorCleanup = undefined;
     },
   );

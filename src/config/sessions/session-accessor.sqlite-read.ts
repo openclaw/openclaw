@@ -30,10 +30,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
-import {
-  openTranscriptExportInSlices,
-  readTranscriptExportInSlices,
-} from "./session-accessor.sqlite-export-slices.js";
+import { readTranscriptExportInSlices } from "./session-accessor.sqlite-export-slices.js";
 import {
   getSessionKysely,
   resolveSqliteTranscriptReadScope,
@@ -197,30 +194,6 @@ export function readTranscriptExportSnapshotReadOnlySync(
         (database) =>
           runSqliteReadSnapshotSync(database.db, () => read(database), {
             operationLabel: "session transcript export snapshot",
-          }),
-        toDatabaseOptions(resolved),
-      ),
-    readHead: (database, slicing) =>
-      readTranscriptExportSnapshotFromDatabase(database, resolved, scope, options, slicing),
-  });
-}
-
-/** Opens a lazy export whose subsequent slices release their read transaction before yielding. */
-export function openTranscriptExportReadOnly(
-  scope: SessionTranscriptReadScope,
-  options: TranscriptExportOptions = {},
-  batchHead?: TranscriptExportSnapshot,
-) {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  return openTranscriptExportInSlices({
-    ...options,
-    sessionId: resolved.sessionId,
-    batchHead,
-    transaction: (read) =>
-      withOpenClawAgentDatabaseReadOnly(
-        (database) =>
-          runSqliteReadSnapshotSync(database.db, () => read(database), {
-            operationLabel: "session transcript export slice",
           }),
         toDatabaseOptions(resolved),
       ),

@@ -60,12 +60,12 @@ export async function withSessionTranscriptDeltaReader<T>(
       const result = await consume({
         replayGroups: async (selection) => {
           assertActive();
-          selection = prepareReplaySelection(selection);
+          const prepared = prepareReplaySelection(selection);
           if (memory.missing) {
             memory.assertCurrent();
             throw new Error("Canonical session transcript is unavailable");
           }
-          return memory.read("session.history.replay-groups", { selection });
+          return memory.read("session.history.replay-groups", { selection: prepared });
         },
         raw: async (limits) => {
           assertActive();

@@ -50,7 +50,7 @@ import type {
   MemorySessionKind,
 } from "./types.js";
 
-export { readSessionEntryResetRecallCutoff, sessionPathForSessionIdentity } from "./session-entry-render.js";
+export { sessionPathForSessionIdentity } from "./session-entry-render.js";
 export {
   listSessionTranscriptCorpusEntriesForAgent,
   type SessionTranscriptCorpusEntry,

@@ -19,7 +19,7 @@ export function createRuntimePluginWork() {
         instances.add(instance);
       }
     },
-    release() {
+    release: () => {
       closed = true;
       releases.splice(0).forEach((release) => release());
       instances.clear();

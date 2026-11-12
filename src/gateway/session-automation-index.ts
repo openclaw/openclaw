@@ -37,7 +37,7 @@ let publishedKeys: ReadonlySet<string> | undefined;
  * order: a stale service whose start resolves after a config reload cannot
  * clobber the replacement's registration.
  */
-export function claimSessionAutomationEpoch(): number {
+function claimSessionAutomationEpoch(): number {
   return ++epochCounter;
 }
 

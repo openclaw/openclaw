@@ -539,9 +539,9 @@ describe("prepared Gateway plugin borrowing", () => {
                 rollback: async () => {},
               }),
               env,
-              commitRuntime: async (publication) => {
-                publication?.publish();
-                publication?.afterCommit?.();
+              commitRuntime: async (nextPublication) => {
+                nextPublication?.publish();
+                nextPublication?.afterCommit?.();
               },
             });
           if (change === "tool handoff") {
