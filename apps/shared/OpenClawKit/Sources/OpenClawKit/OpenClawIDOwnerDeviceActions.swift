@@ -50,10 +50,13 @@ public struct OpenClawIDOwnerDeviceActions: Sendable {
             "expires_at": .null,
             "root_epoch": .integer(1),
         ]), signer: self.device)
-        try await self.submit(OpenClawIDStatement.sign("MembershipChange", body: OpenClawIDOwnerEnrollmentClient
-            .addOwnerDevice(
-                clawID: view.clawID, seq: view.seq + 1, cert: cert, nodeKey: node, label: label, node: description,
-                issuedAt: self.now()), signer: self.device))
+        try await self.submit(OpenClawIDStatement.sign(
+            "MembershipChange",
+            body: OpenClawIDOwnerEnrollmentClient
+                .addOwnerDevice(
+                    clawID: view.clawID, seq: view.seq + 1, cert: cert, nodeKey: node, label: label, node: description,
+                    issuedAt: self.now()),
+            signer: self.device))
     }
 
     /// "Remove this Mac": revokes this owner device, which also removes its node.

@@ -79,7 +79,9 @@ struct OpenClawIDOwnerEnrollmentTests {
         var typo = Array(text)
         typo[7] = typo[7] == "1" ? "2" : "1"
         #expect(throws: OpenClawIDNodeEnrollmentError.malformed) { try OpenClawIDRecoveryKit.decode(String(typo)) }
-        #expect(throws: OpenClawIDNodeEnrollmentError.malformed) { try OpenClawIDRecoveryKit.decode("OCK2-" + text.dropFirst(5)) }
+        #expect(throws: OpenClawIDNodeEnrollmentError.malformed) {
+            try OpenClawIDRecoveryKit.decode("OCK2-" + text.dropFirst(5))
+        }
     }
 
     @Test func `SAS start commitment code and handoff match the TypeScript vectors`() throws {
@@ -108,7 +110,8 @@ struct OpenClawIDOwnerEnrollmentTests {
         let other = try attempt.accepted(
             ephemeralE: vectors.text("sas", "eph_e_pub_hex"), devicePubE: vectors.text("keys", "device_pub"))
         #expect(try other.open(
-            nonce: vectors.text("sas", "sealed", "nonce"), ciphertext: vectors.text("sas", "sealed", "ciphertext")) == nil)
+            nonce: vectors.text("sas", "sealed", "nonce"), ciphertext: vectors.text("sas", "sealed", "ciphertext")) ==
+            nil)
     }
 
     @Test func `kit and device statements match the TypeScript vectors`() throws {
@@ -155,9 +158,15 @@ struct OpenClawIDOwnerEnrollmentTests {
     @Test func `handoff must name this claw and this device`() throws {
         let vectors = try Vectors()
         let keys = try vectors.keys
-        let binding = try #require(vectors.node["response"]).fields(["descriptor", "snapshot"])["descriptor"]!
-            .fields(["v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at"])["binding"]!
-        let cert = try OpenClawIDStatement.sign("OwnerDeviceCert", body: Self.certBody(keys, now: vectors.now), signer: keys.device)
+        let binding = try #require(#require(vectors.node["response"]).fields([
+            "descriptor",
+            "snapshot",
+        ])["descriptor"]?
+            .fields(["v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at"])["binding"])
+        let cert = try OpenClawIDStatement.sign(
+            "OwnerDeviceCert",
+            body: Self.certBody(keys, now: vectors.now),
+            signer: keys.device)
         let handoff = try OpenClawIDCanonicalJSON.object([
             "root_pub": .string(vectors.text("kit", "root_pub")), "binding": binding, "cert": cert,
         ])
@@ -191,7 +200,11 @@ struct OpenClawIDOwnerEnrollmentTests {
                 try await discovery.publish(seq: 3, listed: false)
                 try await discovery.mail(.object([
                     "message_id": .string("1"), "to": .string(OpenClawIDStatement.fingerprint(keys.device.signingKey)),
-                    "payload": .object(["kind": .string("notice"), "event": .string("seq_conflict"), "ref": .string("3")]),
+                    "payload": .object([
+                        "kind": .string("notice"),
+                        "event": .string("seq_conflict"),
+                        "ref": .string("3"),
+                    ]),
                 ]))
             } else {
                 try await discovery.publish(seq: seq, listed: true)
@@ -207,11 +220,11 @@ struct OpenClawIDOwnerEnrollmentTests {
         for (change, seq) in zip(changes, [Int64(3), 4]) {
             let body = try change.fields(["v", "type", "body", "signer", "alg", "sig"])
             #expect(body["signer"] == .string(root.signingKey))
-            let fields = try body["body"]!.fields(["claw_id", "seq", "target", "issued_at"])
+            let fields = try #require(body["body"]?.fields(["claw_id", "seq", "target", "issued_at"]))
             #expect(fields["seq"] == .integer(seq))
-            let target = try fields["target"]!.fields(["op", "cert", "node"])
+            let target = try #require(fields["target"]?.fields(["op", "cert", "node"]))
             #expect(try target["node"]!.fields(["peer_key", "label", "description"])["peer_key"] ==
-                .string(keys.node!.peerKey))
+                .string(#require(keys.node?.peerKey)))
             _ = try OpenClawIDNodeTrust.envelope(change, type: "MembershipChange", signer: root.signingKey)
         }
         #expect(await deviceStore.saved?.peerKey == keys.peer.peerKey)
@@ -266,7 +279,8 @@ struct OpenClawIDOwnerEnrollmentTests {
                 start["commit"] = nil
                 start["request_id"] = .string(requestID)
                 let ephN = try OpenClawIDNodeIdentity.unhex(data["eph_pub"]!.text())
-                #expect(OpenClawIDNodeIdentity.hex(SHA256.hash(data: ephN + OpenClawIDCanonicalJSON.object(start).encoded)) == commit)
+                #expect(OpenClawIDNodeIdentity
+                    .hex(SHA256.hash(data: ephN + OpenClawIDCanonicalJSON.object(start).encoded)) == commit)
                 let shared = try ephemeralE.sharedSecretFromKeyAgreement(
                     with: .init(rawRepresentation: ephN)).withUnsafeBytes { Data($0) }
                 let transcript = Data(SHA256.hash(data: OpenClawIDCanonicalJSON.object([
@@ -279,7 +293,15 @@ struct OpenClawIDOwnerEnrollmentTests {
                     info: Data(("openclaw/sas-mac/v1" + OpenClawIDNodeIdentity.hex(transcript)).utf8),
                     outputByteCount: 32)
                 let binding = try vectors.node["response"]!.fields(["descriptor", "snapshot"])["descriptor"]!
-                    .fields(["v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at"])["binding"]!
+                    .fields([
+                        "v",
+                        "claw_id",
+                        "transport",
+                        "relay_url",
+                        "root_pub",
+                        "binding",
+                        "published_at",
+                    ])["binding"]!
                 let cert = try OpenClawIDStatement.sign(
                     "OwnerDeviceCert", body: Self.certBody(keys, now: vectors.now), signer: approver)
                 let handoff = try OpenClawIDCanonicalJSON.object([
@@ -461,7 +483,14 @@ struct OpenClawIDOwnerEnrollmentTests {
 
         /// Re-signs the snapshot at `seq`, listing this Mac's W and W_node when admitted.
         func publish(seq: Int64, listed: Bool) throws {
-            guard case var .object(body) = try self.snapshot.fields(["v", "type", "body", "signer", "alg", "sig"])["body"]!
+            guard case var .object(body) = try self.snapshot.fields([
+                "v",
+                "type",
+                "body",
+                "signer",
+                "alg",
+                "sig",
+            ])["body"]!
             else { return }
             body["seq"] = .integer(seq)
             body["issued_at"] = .integer(self.now)
@@ -470,7 +499,8 @@ struct OpenClawIDOwnerEnrollmentTests {
                     "device_pub": .string(self.keys.device.signingKey),
                     "caps": .array(OpenClawIDOwnerEnrollmentClient.ownerCapabilities.map { .string($0) }),
                 ])])
-                body["owner_peer_keys"] = try .array(body["owner_peer_keys"]!.list() + [.string(self.keys.peer.peerKey)])
+                body["owner_peer_keys"] = try .array(body["owner_peer_keys"]!
+                    .list() + [.string(self.keys.peer.peerKey)])
                 body["node_peer_keys"] = try .array(body["node_peer_keys"]!.list() + [.string(self.keys.node!.peerKey)])
             }
             let signature = try self.gateway.signature(
@@ -484,19 +514,24 @@ struct OpenClawIDOwnerEnrollmentTests {
 
         func send(_ request: URLRequest) async throws -> OpenClawIDNodeEnrollmentHTTPResponse {
             let path = request.url?.path ?? ""
-            let ok = { (body: OpenClawIDCanonicalJSON) in OpenClawIDNodeEnrollmentHTTPResponse(status: 200, body: body.encoded) }
+            let ok = { (body: OpenClawIDCanonicalJSON) in OpenClawIDNodeEnrollmentHTTPResponse(
+                status: 200,
+                body: body.encoded) }
             switch (request.httpMethod ?? "GET", path) {
-            case ("GET", let path) where path.hasSuffix("/descriptor"): return ok(.object(["descriptor": self.descriptor]))
-            case ("GET", let path) where path.hasSuffix("/snapshot"): return ok(.object(["snapshot": self.snapshot]))
+            case let ("GET", path)
+                where path.hasSuffix("/descriptor"): return ok(.object(["descriptor": self.descriptor]))
+            case let ("GET", path) where path.hasSuffix("/snapshot"): return ok(.object(["snapshot": self.snapshot]))
             case ("POST", "/v1/devices"):
                 let body = try OpenClawIDCanonicalJSON.parse(request.httpBody ?? Data())
                     .fields(["device_pub", "peer_key", "label", "ts", "peer_key_proof"])
                 #expect(request.value(forHTTPHeaderField: "openclaw-signature") != nil)
                 try self.bound.append(body["device_pub"]!.text())
                 return .init(status: 201, body: Data("{}".utf8))
-            case ("POST", let path) where path.hasSuffix("/mailbox"):
+            case let ("POST", path) where path.hasSuffix("/mailbox"):
                 let mail = try OpenClawIDCanonicalJSON.parse(request.httpBody ?? Data()).fields(["to", "payload"])
-                let payload = try mail["payload"]!.fields(["kind"], optional: ["statements", "request_id", "step", "data"])
+                let payload = try mail["payload"]!.fields(
+                    ["kind"],
+                    optional: ["statements", "request_id", "step", "data"])
                 switch try payload["kind"]!.text() {
                 case "root_statement":
                     let change = try payload["statements"]!.list()[0]
@@ -509,7 +544,7 @@ struct OpenClawIDOwnerEnrollmentTests {
                 default: break
                 }
                 return .init(status: 201, body: Data(#"{"message_id":"m","expires_at":1}"#.utf8))
-            case ("GET", let path) where path.hasSuffix("/mailbox/device"):
+            case let ("GET", path) where path.hasSuffix("/mailbox/device"):
                 let pending = Array(self.inbox[self.cursor...])
                 self.cursor = self.inbox.count
                 return ok(.object(["messages": .array(pending), "cursor": .string(String(self.cursor))]))

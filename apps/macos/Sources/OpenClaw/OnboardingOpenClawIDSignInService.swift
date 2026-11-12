@@ -11,11 +11,13 @@ struct OnboardingOpenClawIDSignInEnvironment {
     var discovery: (MacOpenClawIDConfiguration) -> any OpenClawIDNodeEnrollmentHTTP = { _ in
         OpenClawIDNodeEnrollmentURLSession()
     }
+
     var describeNode: () async throws -> OpenClawIDNodeEnrollmentDescription
     var deviceName: () -> String = { InstanceIdentity.displayName }
     var keyStore: (UUID, OpenClawIDKeyPurpose) -> any OpenClawIDNodeIdentityStore = {
         OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: $1)
     }
+
     var readKitFile: () async -> String? = { await OnboardingOpenClawIDSignInService.chooseKitFile() }
     /// Saves the device, selects it for the operator route and starts its node.
     var install: (MacOpenClawIDDevice, OpenClawIDDiscoverySession) -> Void

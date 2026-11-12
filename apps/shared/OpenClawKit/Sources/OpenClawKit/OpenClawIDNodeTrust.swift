@@ -297,13 +297,13 @@ public enum OpenClawIDNodeTrust {
         as admission: OpenClawIDAdmission?) throws -> Bool
     {
         switch admission {
-        case .node: return try self.strings(snapshot["node_peer_keys"]!).contains(peerKey)
-        case .owner: return try self.strings(snapshot["owner_peer_keys"]!).contains(peerKey)
+        case .node: try self.strings(snapshot["node_peer_keys"]!).contains(peerKey)
+        case .owner: try self.strings(snapshot["owner_peer_keys"]!).contains(peerKey)
         case .member:
-            return try snapshot["members"]!.list().contains { member in
+            try snapshot["members"]!.list().contains { member in
                 try self.strings(member.fields(["account_id", "role", "peer_keys"])["peer_keys"]!).contains(peerKey)
             }
-        case nil: return true
+        case nil: true
         }
     }
 

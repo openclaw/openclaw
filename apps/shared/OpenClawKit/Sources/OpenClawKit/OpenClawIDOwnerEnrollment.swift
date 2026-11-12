@@ -162,15 +162,27 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             "root_epoch": .integer(1),
         ]), signer: root)
         let ownFingerprint = try OpenClawIDStatement.fingerprint(keys.device.signingKey)
-        try await self.sendRootChange(cert: cert, seq: seq + 1, root: root, session: session, claw: claw, keys: keys,
-                                      label: label, node: node)
+        try await self.sendRootChange(
+            cert: cert,
+            seq: seq + 1,
+            root: root,
+            session: session,
+            claw: claw,
+            keys: keys,
+            label: label,
+            node: node)
         var signedSeq = seq + 1
         var retries = 0
         var pendingRef: Int64?
         var cursor: String?
         var seen = Set<String>()
         while self.now() < deadline {
-            if let enrolled = try await self.admitted(session: session, claw: claw, rootFingerprint: rootFingerprint, keys: keys) {
+            if let enrolled = try await self.admitted(
+                session: session,
+                claw: claw,
+                rootFingerprint: rootFingerprint,
+                keys: keys)
+            {
                 return enrolled
             }
             let (messages, next) = try await self.discovery.receive(
@@ -187,8 +199,15 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             guard retries < 3 else { throw OpenClawIDOwnerEnrollmentError.expired }
             seq = try await self.snapshotSequence(session: session, claw: claw, rootFingerprint: rootFingerprint)
             guard seq >= ref else { continue }
-            try await self.sendRootChange(cert: cert, seq: seq + 1, root: root, session: session, claw: claw, keys: keys,
-                                          label: label, node: node)
+            try await self.sendRootChange(
+                cert: cert,
+                seq: seq + 1,
+                root: root,
+                session: session,
+                claw: claw,
+                keys: keys,
+                label: label,
+                node: node)
             signedSeq = seq + 1
             retries += 1
             pendingRef = nil
@@ -306,7 +325,12 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         until deadline: Int64) async throws -> OpenClawIDOwnerEnrolled
     {
         while self.now() < deadline {
-            if let enrolled = try await self.admitted(session: session, claw: claw, rootFingerprint: rootFingerprint, keys: keys) {
+            if let enrolled = try await self.admitted(
+                session: session,
+                claw: claw,
+                rootFingerprint: rootFingerprint,
+                keys: keys)
+            {
                 return enrolled
             }
             try await self.sleep(3_000_000_000)

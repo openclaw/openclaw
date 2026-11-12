@@ -23,7 +23,9 @@ enum OpenClawIDStatement {
     /// `fp:<hex SHA-256 of the raw key>` for an `ed25519:` or `iroh:` key.
     static func fingerprint(_ key: String) throws -> String {
         let prefix = key.hasPrefix("iroh:") ? "iroh:" : "ed25519:"
-        return try "fp:" + OpenClawIDNodeIdentity.hex(SHA256.hash(data: OpenClawIDNodeIdentity.unhex(key, prefix: prefix)))
+        return try "fp:" + OpenClawIDNodeIdentity.hex(SHA256.hash(data: OpenClawIDNodeIdentity.unhex(
+            key,
+            prefix: prefix)))
     }
 
     /// W's proof that it belongs with D for `bindDevice` (discovery.md, Device binding).
@@ -36,7 +38,8 @@ enum OpenClawIDStatement {
             "peer_key": .string(peer.peerKey),
             "ts": .integer(ts),
         ])
-        return try OpenClawIDNodeIdentity.base64URL(peer.sign(Data("openclaw/peer-key-proof/v1\0".utf8) + parts.encoded))
+        return try OpenClawIDNodeIdentity
+            .base64URL(peer.sign(Data("openclaw/peer-key-proof/v1\0".utf8) + parts.encoded))
     }
 }
 

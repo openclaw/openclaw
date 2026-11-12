@@ -284,7 +284,9 @@ struct OpenClawIDConfirmationSheet: View {
                 Your assistant on \(claw) can no longer run commands or use the screen, camera or \
                 notifications on this Mac. Running tool calls stop.
                 """)
-                self.bullet("This Mac stays your device. Chat and the dashboard keep working.", icon: "checkmark.circle")
+                self.bullet(
+                    "This Mac stays your device. Chat and the dashboard keep working.",
+                    icon: "checkmark.circle")
                 self.bullet("You can turn it back on here.", icon: "arrow.uturn.backward.circle")
                 self.buttons(cancel: "Cancel", confirm: "Stop using for tools", destructive: true)
             case let .startTools(claw, device):

@@ -24,12 +24,14 @@ struct OnboardingOpenClawIDSignInTests {
 
     @Test func `callback must carry this attempt's state and issuer`() throws {
         let issuer = Self.configuration.issuer
-        let good = try #require(URL(string: "ai.openclaw.mac:/oauth/callback?code=abc&state=s1&iss=\(issuer.absoluteString)"))
+        let good =
+            try #require(URL(string: "ai.openclaw.mac:/oauth/callback?code=abc&state=s1&iss=\(issuer.absoluteString)"))
         #expect(try MacOpenClawIDSignIn.code(from: good, state: "s1", issuer: issuer) == "abc")
         #expect(throws: MacOpenClawIDSignInError.stateMismatch) {
             try MacOpenClawIDSignIn.code(from: good, state: "s2", issuer: issuer)
         }
-        let foreign = try #require(URL(string: "ai.openclaw.mac:/oauth/callback?code=abc&state=s1&iss=https://evil.test"))
+        let foreign =
+            try #require(URL(string: "ai.openclaw.mac:/oauth/callback?code=abc&state=s1&iss=https://evil.test"))
         #expect(throws: MacOpenClawIDSignInError.issuerMismatch) {
             try MacOpenClawIDSignIn.code(from: foreign, state: "s1", issuer: issuer)
         }
@@ -104,7 +106,7 @@ struct OnboardingOpenClawIDSignInTests {
         #expect(await http.mailboxPosts == 0)
     }
 
-    @Test func `the model waits for approval on its own and finishes the join`() async throws {
+    @Test func `the model waits for approval on its own and finishes the join`() async {
         let service = ApprovalService()
         var joined: [String] = []
         let model = OnboardingOpenClawIDModel(service: service, onJoined: { joined.append($0) })
@@ -123,7 +125,7 @@ struct OnboardingOpenClawIDSignInTests {
         #expect(model.step == .ownerConnected(claw: "studio-fixture", device: "Fixture Mac", approvedWith: "Approved"))
     }
 
-    @Test func `switching to the recovery kit cancels the approval wait`() async throws {
+    @Test func `switching to the recovery kit cancels the approval wait`() async {
         let service = ApprovalService()
         var joined: [String] = []
         let model = OnboardingOpenClawIDModel(service: service, onJoined: { joined.append($0) })
@@ -200,7 +202,9 @@ struct OnboardingOpenClawIDSignInTests {
         }
 
         func send(_ request: URLRequest) throws -> OpenClawIDNodeEnrollmentHTTPResponse {
-            let bearer = request.value(forHTTPHeaderField: "authorization")?.replacingOccurrences(of: "Bearer ", with: "")
+            let bearer = request.value(forHTTPHeaderField: "authorization")?.replacingOccurrences(
+                of: "Bearer ",
+                with: "")
             if let bearer, self.bearers.last != bearer { self.bearers.append(bearer) }
             let json = { (value: Any) in
                 OpenClawIDNodeEnrollmentHTTPResponse(
@@ -243,7 +247,11 @@ struct OnboardingOpenClawIDSignInTests {
         func perform(_ action: OnboardingOpenClawIDAction) async throws -> OnboardingOpenClawIDStep {
             switch action {
             case .approveFromDevice:
-                return .ownerCompareCode(claw: "studio-fixture", device: "Fixture Mac", code: "123 456", approvalURL: nil)
+                return .ownerCompareCode(
+                    claw: "studio-fixture",
+                    device: "Fixture Mac",
+                    code: "123 456",
+                    approvalURL: nil)
             case .checkApproval:
                 return try await withCheckedThrowingContinuation { self.decision = $0 }
             case .useRecoveryKit:
