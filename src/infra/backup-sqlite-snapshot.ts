@@ -506,12 +506,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
           manifestSha256: (await sha256File(path.join(directory, "manifest.json"))).digest,
         });
       };
-      if (archiveSourcePath === globalPath && !globalExport) {
-        // The shared export is joined after the other stores are captured alongside it.
-        globalExport = exportStore();
-        return;
+      if (archiveSourcePath !== globalPath || globalExport) {
+        await globalExport;
+        return exportStore();
       }
-      await exportStore();
+      // Captured alongside the other stores; their exports wait, as each takes the state owner.
+      globalExport = exportStore();
       return;
     }
     snapshots.push({

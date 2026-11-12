@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { createBackupResourcePlan } from "../commands/backup-resource-inventory.js";
 import {
@@ -309,5 +310,43 @@ it("stops agent captures when the PostgreSQL export fails", async () => {
     expect(
       agentCapture.spy.mock.calls.some(([params]) => params.sourcePath === fixture.mainAgentPath),
     ).toBe(false);
+  });
+});
+
+it("runs another PostgreSQL store export only after the shared export settles", async () => {
+  await withBackupFixture({ prefix: "backup-concurrent-postgres-stores-" }, async (state) => {
+    const fixture = await preparePostgresState(state);
+    // The agent store is a second PostgreSQL anchor; its export takes the same state owner.
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await fs.rm(`${fixture.mainAgentPath}${suffix}`, { force: true });
+    }
+    withDatabase(fixture.mainAgentPath, (database) => {
+      database.exec(
+        "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)",
+      );
+      database.exec("INSERT INTO openclaw_engine_anchor VALUES ('agent', 'postgres', 'agent_ns')");
+    });
+    let running = 0;
+    const overlaps: string[] = [];
+    mocks.exportPostgres.mockImplementation(async (params: ExportParams) => {
+      if (running > 0) {
+        overlaps.push(params.sourcePath);
+      }
+      running += 1;
+      try {
+        await delay(50);
+        await fixture.writeExport(params);
+      } finally {
+        running -= 1;
+      }
+    });
+
+    const result = await fixture.capture();
+
+    expect(overlaps).toEqual([]);
+    expect(result.postgresSnapshots.map(({ sourcePath }) => sourcePath)).toEqual([
+      fixture.globalPath,
+      fixture.mainAgentPath,
+    ]);
   });
 });
