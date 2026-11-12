@@ -323,9 +323,8 @@ export async function createFullModelCatalogAccess(
               normalizeProvider,
             );
           providerSources.set(provider, source);
-          const cacheExpiresAt = providerExpiries.get(provider);
-          const expiresAt =
-            cacheExpiresAt === undefined ? undefined : Math.max(cacheExpiresAt, renewalFloor);
+          const expiry = providerExpiries.get(provider);
+          const expiresAt = expiry === undefined ? undefined : Math.max(expiry, renewalFloor);
           const failed = workerCatalog.providerOutcomes?.some(
             (outcome) =>
               normalizeProvider(outcome.provider) === provider && outcome.status !== "ready",
