@@ -97,62 +97,71 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-it("manual compaction resends the turn's cached prefix without tool authority", async () => {
-  const { dir, sessionTarget } = fixture.session;
-  vi.stubEnv("HOME", dir);
-  const config: OpenClawConfig = {
-    agents: { defaults: { workspace: dir } },
-    session: { store: sessionTarget.storePath },
-    plugins: { enabled: false },
-    tools: { allow: ["read"] },
-  };
-  setRuntimeConfigSnapshot(config);
-  const run = async (overrides: Parameters<typeof fixture.prepare>[0]) => {
-    const context = await fixture.prepare({
-      config,
-      sessionKey: sessionTarget.sessionKey,
-      provider: "claude-cli",
-      model: "opus",
-      cliSessionId: nativeSessionId,
-      cliSessionBinding: { sessionId: nativeSessionId },
-      ...overrides,
+it.each([
+  ["default tools", false],
+  ["workspace-only tools with a managed native tool", true],
+])(
+  "manual compaction resends the turn's cached prefix without tool authority (%s)",
+  async (_name, workspaceOnly) => {
+    const { dir, sessionTarget } = fixture.session;
+    vi.stubEnv("HOME", dir);
+    const managedNativeTools = { default: ["Agent"] };
+    const config: OpenClawConfig = {
+      agents: { defaults: { workspace: dir } },
+      session: { store: sessionTarget.storePath },
+      plugins: workspaceOnly
+        ? { enabled: false, entries: { anthropic: { config: { managedNativeTools } } } }
+        : { enabled: false },
+      tools: { allow: ["read"], ...(workspaceOnly ? { fs: { workspaceOnly: true } } : {}) },
+    };
+    setRuntimeConfigSnapshot(config);
+    const run = async (overrides: Parameters<typeof fixture.prepare>[0]) => {
+      const context = await fixture.prepare({
+        config,
+        sessionKey: sessionTarget.sessionKey,
+        provider: "claude-cli",
+        model: "opus",
+        cliSessionId: nativeSessionId,
+        cliSessionBinding: { sessionId: nativeSessionId },
+        ...overrides,
+      });
+      try {
+        await executePreparedCliRun(context, nativeSessionId);
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    };
+    // Only the reply pipeline knows inbound metadata; compaction must still send it.
+    await run({ prompt: "follow-up", extraSystemPrompt: "TURN-ONLY-INBOUND-METADATA" });
+    // Compaction runs as its own resumed process; read what that process receives.
+    let compaction: { argv: string[]; systemPrompt: string } | undefined;
+    supervisorSpawnMock.mockImplementationOnce(async (spawn) => {
+      if (spawn.mode !== "child") {
+        throw new Error("compaction must run as a child process");
+      }
+      const { argv } = spawn;
+      const file = argv.indexOf("--append-system-prompt-file") + 1;
+      compaction = { argv, systemPrompt: file ? fs.readFileSync(argv[file] ?? "", "utf8") : "" };
+      const stdout = [
+        { type: "system", subtype: "compact_boundary", session_id: nativeSessionId },
+        { type: "result", result: "", session_id: nativeSessionId },
+      ];
+      return createManagedRun({
+        ...createSuccessfulProcessExit(),
+        stdout: stdout.map((record) => JSON.stringify(record)).join("\n"),
+      });
     });
-    try {
-      await executePreparedCliRun(context, nativeSessionId);
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
-  };
-  // Only the reply pipeline knows inbound metadata; compaction must still send it.
-  await run({ prompt: "follow-up", extraSystemPrompt: "TURN-ONLY-INBOUND-METADATA" });
-  // Compaction runs as its own resumed process; read what that process receives.
-  let compaction: { argv: string[]; systemPrompt: string } | undefined;
-  supervisorSpawnMock.mockImplementationOnce(async (spawn) => {
-    if (spawn.mode !== "child") {
-      throw new Error("compaction must run as a child process");
-    }
-    const { argv } = spawn;
-    const file = argv.indexOf("--append-system-prompt-file") + 1;
-    compaction = { argv, systemPrompt: file ? fs.readFileSync(argv[file] ?? "", "utf8") : "" };
-    const stdout = [
-      { type: "system", subtype: "compact_boundary", session_id: nativeSessionId },
-      { type: "result", result: "", session_id: nativeSessionId },
-    ];
-    return createManagedRun({
-      ...createSuccessfulProcessExit(),
-      stdout: stdout.map((record) => JSON.stringify(record)).join("\n"),
-    });
-  });
-  await run({ prompt: "/compact", controlOperation: "compact" });
+    await run({ prompt: "/compact", controlOperation: "compact" });
 
-  const [turn] = sent;
-  expect(turn?.systemPrompt).toContain("TURN-ONLY-INBOUND-METADATA");
-  expect(compaction?.systemPrompt).toBe(turn?.systemPrompt);
-  expect(compaction?.argv.at(-1)).toBe("/compact");
-  expect(compaction?.argv).toEqual(expect.arrayContaining(["--resume", nativeSessionId]));
-  const tools = (args: readonly string[]) => args[args.indexOf("--tools") + 1];
-  expect(tools(compaction?.argv ?? [])).toBe(tools(turn?.args ?? []));
-  expect(turn?.args).toContain("--disable-slash-commands");
-  expect(compaction?.argv).not.toContain("--disable-slash-commands");
-  expect(grantContexts.map((context) => context.toolCallsRefused)).toEqual([undefined, true]);
-});
+    const [turn] = sent;
+    expect(turn?.systemPrompt).toContain("TURN-ONLY-INBOUND-METADATA");
+    expect(compaction?.systemPrompt).toBe(turn?.systemPrompt);
+    expect(compaction?.argv.at(-1)).toBe("/compact");
+    expect(compaction?.argv).toEqual(expect.arrayContaining(["--resume", nativeSessionId]));
+    const tools = (args: readonly string[]) => args[args.indexOf("--tools") + 1];
+    expect(tools(compaction?.argv ?? [])).toBe(tools(turn?.args ?? []));
+    expect(turn?.args).toContain("--disable-slash-commands");
+    expect(compaction?.argv).not.toContain("--disable-slash-commands");
+    expect(grantContexts.map((context) => context.toolCallsRefused)).toEqual([undefined, true]);
+  },
+);
