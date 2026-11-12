@@ -72,11 +72,12 @@ including activated plugins' declared backup resources. It runs while the
 Gateway serves requests, including `create --to`. Each PostgreSQL store is
 exported from one `REPEATABLE READ READ ONLY` snapshot, the same per-store
 consistency as the live SQLite snapshots in the archive; separate stores are
-captured one after another, not at one shared instant. Rows committed after a
-store's snapshot belong to the next backup. With the Gateway stopped, the command
-holds offline custody instead. Restore, Git backups, and generic local snapshots
-that select PostgreSQL still require the Gateway stopped and refuse while it is
-running: “stop through the service owner, then rerun.”
+captured independently, not at one shared instant. The shared state export runs
+alongside the other stores, which are captured one at a time. Rows committed
+after a store's snapshot belong to the next backup. With the Gateway stopped,
+the command holds offline custody instead. Restore, Git backups, and generic
+local snapshots that select PostgreSQL still require the Gateway stopped and
+refuse while it is running: “stop through the service owner, then rerun.”
 
 Mixed-engine installations use the same commands and archive format. Each
 store's physical engine and selected shared connection determine its capture;

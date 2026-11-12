@@ -138,7 +138,11 @@ export async function runOfflineDatabaseBackup<T>(
   });
 }
 
-async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Promise<T> {
+async function runBackupTask<T>(
+  task: BackupTask,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<T> {
   assertCurrent();
   // This one-shot worker is joined before publication; it never survives a runtime swap.
   const { WorkerTaskPool } = await import("../infra/worker-task-pool.js");
@@ -155,7 +159,8 @@ async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Pr
       maxWorkers: 1,
     });
     try {
-      const result = await pool.run(task, {});
+      // Aborting terminates the worker; close() joins it before the caller cleans up.
+      const result = await pool.run(task, { signal });
       assertCurrent();
       return result;
     } finally {
@@ -166,16 +171,18 @@ async function runBackupTask<T>(task: BackupTask, assertCurrent: () => void): Pr
 
 export function capturePostgresBackup(
   params: Capture | Pick<Capture, "sourcePath" | "directory">,
+  options?: { signal?: AbortSignal },
 ): Promise<PostgresExportEnvelope> {
   if (!("config" in params)) {
     return runOfflineDatabaseBackup(params.sourcePath, ({ config, assertCurrent }) =>
-      capturePostgresBackup({ ...params, config, assertCurrent, profile: "user-backup" }),
+      capturePostgresBackup({ ...params, config, assertCurrent, profile: "user-backup" }, options),
     );
   }
   const { assertCurrent, ...input } = params;
   return runBackupTask<PostgresExportEnvelope>(
     { operation: "capture", params: input },
     assertCurrent,
+    options?.signal,
   );
 }
 

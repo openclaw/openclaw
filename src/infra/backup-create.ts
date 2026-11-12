@@ -52,6 +52,10 @@ import {
   writeArchiveStreamToFile,
 } from "./backup-create-stream.js";
 import {
+  createLegacyAuditStateSnapshotPlan,
+  type BackupStateSnapshotPlan,
+} from "./backup-legacy-audit-snapshot.js";
+import {
   createBackupScratchDirectory,
   finishBackupScratch,
   maintainBackupScratch,
@@ -59,8 +63,6 @@ import {
 import {
   classifyBackupSqliteSource,
   createBackupSqliteSnapshotPlan,
-  createLegacyAuditStateSnapshotPlan,
-  type BackupStateSnapshotPlan,
 } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";

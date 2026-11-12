@@ -54,7 +54,7 @@ import { readEngineAnchor } from "./database-engine/open.js";
 import { listDatabaseEngineStores, selectDatabaseEngine } from "./database-engine/registry.js";
 import { sha256File } from "./directory-durability.js";
 import { hasErrnoCode, ignoreMissingPath as ignoreMissingSource } from "./errno.js";
-import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
+import { formatErrorMessage } from "./errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
@@ -66,13 +66,11 @@ import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,
-  createLegacyAuditBackupCapture,
-  legacyAuditBackupCapturesMatch,
+  findLegacyAuditBackupStateChange,
   LegacyAuditBackupStateChangedError,
   rewriteLegacyAuditBackupCheckpoints,
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
-import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 import { collectStateDatabasePaths } from "./update-candidate-state.js";
 import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
 
@@ -81,17 +79,6 @@ type SqliteBackupAsset = {
   archiveSourcePath: string;
   skippedSourcePaths: Set<string>;
 };
-
-function findLegacyAuditBackupStateChange(
-  error: unknown,
-): LegacyAuditBackupStateChangedError | undefined {
-  return collectErrorGraphCandidates(error, (candidate) =>
-    candidate instanceof Error ? [candidate.cause] : [],
-  ).find(
-    (candidate): candidate is LegacyAuditBackupStateChangedError =>
-      candidate instanceof LegacyAuditBackupStateChangedError,
-  );
-}
 
 // The sealed inventory also bounds header answers to one backup capture.
 const sqliteHeaderAnswers = new WeakMap<BackupResourceInventory, Map<string, boolean>>();
@@ -299,6 +286,13 @@ export async function discoverBackupDatabasePaths(params: {
   return [...new Set(existing)].toSorted();
 }
 
+type SqliteCaptureOutputs = {
+  directory: string;
+  snapshots: SqliteBackupAsset[];
+  postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }>;
+  postgresAnchors: BackupManifestPostgresAnchor[];
+};
+
 export async function createBackupSqliteSnapshotPlan(params: {
   resources: BackupResourcePlan;
   tempDir: string;
@@ -316,9 +310,16 @@ export async function createBackupSqliteSnapshotPlan(params: {
   sharedDatabaseSourcePath?: string;
 }> {
   const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
-  const snapshots: SqliteBackupAsset[] = [];
-  const postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }> = [];
-  const postgresAnchors: BackupManifestPostgresAnchor[] = [];
+  const globalOutputs: SqliteCaptureOutputs = {
+    directory: params.tempDir,
+    snapshots: [],
+    postgresSnapshots: [],
+    postgresAnchors: [],
+  };
+  // One failed capture stops the other: the export worker aborts, the snapshot loop stops.
+  const stopCapture = new AbortController();
+  let stagedCount = 0;
+  let globalExport: Promise<void> | undefined;
   let sharedDatabaseSourcePath: string | undefined;
   let capturedAgents: Array<{ role: "agent"; agentId: string; sourcePath: string }> = [];
   function captureAgentRegistry(database: DatabaseSync, archiveSourcePath: string) {
@@ -333,8 +334,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
   async function captureSource(
     archiveSourcePath: string,
     sourceGroup: BackupSqliteSourceGroup | undefined,
-    canonicalSource?: CanonicalSqliteSource,
+    canonicalSource: CanonicalSqliteSource | undefined,
+    outputs: SqliteCaptureOutputs,
   ): Promise<void> {
+    const { snapshots, postgresSnapshots, postgresAnchors } = outputs;
     if (!sourceGroup) {
       throw new Error(`SQLite ownership changed after discovery: ${archiveSourcePath}`);
     }
@@ -350,7 +353,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     const sourceDatabasePath = sourceGroup.sourcePath;
     assertNotUpdateCapturePath(archiveSourcePath, params.resources.stateDir);
     assertNotUpdateCapturePath(sourceDatabasePath, params.resources.stateDir);
-    const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
+    const sourcePath = path.join(outputs.directory, `openclaw-state-db-${stagedCount++}.sqlite`);
     let hasPostgresAnchor: boolean | undefined;
     try {
       const capture = () =>
@@ -361,7 +364,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
             ? {
                 sourceAcquisition: {
                   mode: "isolated-process" as const,
-                  stagingRoot: params.tempDir,
+                  stagingRoot: outputs.directory,
                   preserveSourceArtifacts: true,
                 },
                 preserveRowIds: true,
@@ -468,35 +471,47 @@ export async function createBackupSqliteSnapshotPlan(params: {
         path.basename(`${archiveSourcePath}.postgres`),
       );
       await fs.mkdir(path.dirname(directory), { mode: 0o700 });
-      await capturePostgresBackup({ sourcePath: sourceDatabasePath, directory });
-      if (canonicalSource?.role === "global") {
-        using database = openNodeSqliteDatabase(path.join(directory, "database.sqlite"), {
-          readOnly: true,
-        });
-        captureAgentRegistry(database, canonicalSource.archiveSourcePath);
-      }
-      for (const name of ["anchor.sqlite", "database.sqlite", "manifest.json"]) {
+      const exportStore = async () => {
+        await capturePostgresBackup(
+          { sourcePath: sourceDatabasePath, directory },
+          { signal: stopCapture.signal },
+        );
+        // Aliases export the same store again; only the canonical image supplies the agents.
+        if (canonicalSource?.role === "global" && archiveSourcePath === globalPath) {
+          using database = openNodeSqliteDatabase(path.join(directory, "database.sqlite"), {
+            readOnly: true,
+          });
+          captureAgentRegistry(database, canonicalSource.archiveSourcePath);
+        }
+        for (const name of ["anchor.sqlite", "database.sqlite", "manifest.json"]) {
+          snapshots.push({
+            sourcePath: path.join(directory, name),
+            archiveSourcePath: `${archiveSourcePath}.postgres/${name}`,
+            skippedSourcePaths: new Set(),
+          });
+        }
+        const anchorPath = `${sourcePath}.anchor`;
+        await fs.copyFile(
+          path.join(directory, "anchor.sqlite"),
+          anchorPath,
+          fs.constants.COPYFILE_EXCL,
+        );
         snapshots.push({
-          sourcePath: path.join(directory, name),
-          archiveSourcePath: `${archiveSourcePath}.postgres/${name}`,
-          skippedSourcePaths: new Set(),
+          sourcePath: anchorPath,
+          archiveSourcePath,
+          skippedSourcePaths: new Set(resolveSqliteDatabaseFilePaths(sourceDatabasePath)),
         });
+        postgresSnapshots.push({
+          sourcePath: archiveSourcePath,
+          manifestSha256: (await sha256File(path.join(directory, "manifest.json"))).digest,
+        });
+      };
+      if (archiveSourcePath === globalPath && !globalExport) {
+        // The shared export is joined after the other stores are captured alongside it.
+        globalExport = exportStore();
+        return;
       }
-      const anchorPath = `${sourcePath}.anchor`;
-      await fs.copyFile(
-        path.join(directory, "anchor.sqlite"),
-        anchorPath,
-        fs.constants.COPYFILE_EXCL,
-      );
-      snapshots.push({
-        sourcePath: anchorPath,
-        archiveSourcePath,
-        skippedSourcePaths: new Set(resolveSqliteDatabaseFilePaths(sourceDatabasePath)),
-      });
-      postgresSnapshots.push({
-        sourcePath: archiveSourcePath,
-        manifestSha256: (await sha256File(path.join(directory, "manifest.json"))).digest,
-      });
+      await exportStore();
       return;
     }
     snapshots.push({
@@ -543,7 +558,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
       ),
     );
     globalGroup = groups.get(globalSource.sourcePath);
-    await captureSource(globalPath, globalGroup, globalSource);
+    await captureSource(globalPath, globalGroup, globalSource, globalOutputs);
     sharedDatabaseSourcePath = globalSource.sourcePath;
   } else {
     for (const sidecar of resolveSqliteDatabaseFilePaths(globalPath).slice(1)) {
@@ -555,86 +570,152 @@ export async function createBackupSqliteSnapshotPlan(params: {
       }
     }
   }
-  const coreDatabases: BackupCoreDatabase[] = [
-    { role: "global", sourcePath: globalPath, identity: globalIdentity },
-  ];
-  const defaultDatabases = await listDefaultAgentDatabasePaths(params.resources.stateDir);
-  const discoveredDatabasePaths: string[] = [];
-  const candidates: Array<BackupCoreDatabase & { discoveredPath?: string }> = [
-    {
-      role: "client",
-      sourcePath: resolveClientCredentialStorePath({
-        OPENCLAW_STATE_DIR: params.resources.stateDir,
-      }),
-    },
-    {
-      role: "services",
-      sourcePath: resolveDaemonRuntimePinStorePath({
-        OPENCLAW_STATE_DIR: params.resources.stateDir,
-      }),
-    },
-    {
-      role: "quarantine" as const,
-      sourcePath: resolveQuarantineStorePath({
-        ...process.env,
-        OPENCLAW_STATE_DIR: params.resources.stateDir,
-      }),
-    },
-    ...capturedAgents,
-    ...params.resources.agentRoots.map(({ agentId, databasePath }) => ({
-      role: "agent" as const,
-      agentId,
-      sourcePath: databasePath,
-    })),
-    ...defaultDatabases
-      .toSorted((a, b) => a.path.localeCompare(b.path))
-      .map(({ agentId, path: sourcePath }) => ({
+  // Ownership reads capturedAgents, so it is sealed again once the shared export supplies them.
+  const sealCoreInventory = async () => {
+    const coreDatabases: BackupCoreDatabase[] = [
+      { role: "global", sourcePath: globalPath, identity: globalIdentity },
+    ];
+    const defaultDatabases = await listDefaultAgentDatabasePaths(params.resources.stateDir);
+    const discoveredDatabasePaths: string[] = [];
+    const candidates: Array<BackupCoreDatabase & { discoveredPath?: string }> = [
+      {
+        role: "client",
+        sourcePath: resolveClientCredentialStorePath({
+          OPENCLAW_STATE_DIR: params.resources.stateDir,
+        }),
+      },
+      {
+        role: "services",
+        sourcePath: resolveDaemonRuntimePinStorePath({
+          OPENCLAW_STATE_DIR: params.resources.stateDir,
+        }),
+      },
+      {
+        role: "quarantine" as const,
+        sourcePath: resolveQuarantineStorePath({
+          ...process.env,
+          OPENCLAW_STATE_DIR: params.resources.stateDir,
+        }),
+      },
+      ...capturedAgents,
+      ...params.resources.agentRoots.map(({ agentId, databasePath }) => ({
         role: "agent" as const,
-        agentId: normalizeAgentId(agentId),
-        sourcePath,
-        discoveredPath: sourcePath,
+        agentId,
+        sourcePath: databasePath,
       })),
-  ];
-  for (const { discoveredPath, ...database } of candidates) {
-    const identity = await fs
-      .stat(database.sourcePath, { bigint: true })
-      .catch(ignoreMissingSource);
-    if (identity && !identity.isFile()) {
-      throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
+      ...defaultDatabases
+        .toSorted((a, b) => a.path.localeCompare(b.path))
+        .map(({ agentId, path: sourcePath }) => ({
+          role: "agent" as const,
+          agentId: normalizeAgentId(agentId),
+          sourcePath,
+          discoveredPath: sourcePath,
+        })),
+    ];
+    for (const { discoveredPath, ...database } of candidates) {
+      const identity = await fs
+        .stat(database.sourcePath, { bigint: true })
+        .catch(ignoreMissingSource);
+      if (identity && !identity.isFile()) {
+        throw new Error(`Core SQLite path must resolve to a regular file: ${database.sourcePath}`);
+      }
+      if (discoveredPath && !identity) {
+        continue;
+      }
+      if (discoveredPath) {
+        discoveredDatabasePaths.push(discoveredPath);
+        // Keep directory links as links; publish the database at its real archive path.
+        database.sourcePath = await fs.realpath(database.sourcePath);
+      }
+      coreDatabases.push(Object.freeze({ ...database, identity }));
     }
-    if (discoveredPath && !identity) {
-      continue;
+    const inventory = sealBackupResourceInventory(
+      {
+        ...params.resources,
+        protectedPaths: [...params.resources.protectedPaths, ...discoveredDatabasePaths],
+      },
+      coreDatabases,
+    );
+    return { coreDatabases, inventory };
+  };
+  const capturePlan = async (
+    directory: string,
+    sealed: Awaited<ReturnType<typeof sealCoreInventory>>,
+  ) => {
+    const discovery = await discoverBackupSqliteSources({ inventory: sealed.inventory });
+    const { sources, groups } = await planBackupSqliteSources(
+      sealed.inventory,
+      discovery.snapshotPaths,
+    );
+    const outputs: SqliteCaptureOutputs = {
+      directory,
+      snapshots: [],
+      postgresSnapshots: [],
+      postgresAnchors: [],
+    };
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    for (const source of sources) {
+      if (source.archiveSourcePath !== globalPath) {
+        stopCapture.signal.throwIfAborted();
+        await captureSource(
+          source.archiveSourcePath,
+          source.canonicalSource?.role === "global" ? globalGroup : groups.get(source.path),
+          source.canonicalSource,
+          outputs,
+        );
+      }
     }
-    if (discoveredPath) {
-      discoveredDatabasePaths.push(discoveredPath);
-      // Keep directory links as links; publish the database at its real archive path.
-      database.sourcePath = await fs.realpath(database.sourcePath);
+    return { ...sealed, discovery, outputs };
+  };
+  let captured: Awaited<ReturnType<typeof capturePlan>>;
+  if (globalExport) {
+    // The other stores are captured alongside the shared export, planned before it supplies
+    // the registry, and kept only if that registry leaves the plan unchanged.
+    const failures: unknown[] = [];
+    const stopOnFailure = (error: unknown) => {
+      failures.push(error);
+      stopCapture.abort(error);
+    };
+    // On failure the caller removes tempDir with concurrentDir in it: backup create
+    // finishes its scratch directory, the legacy audit retry removes its attempt directory.
+    const concurrentDir = path.join(params.tempDir, "concurrent");
+    const [, concurrent] = await Promise.all([
+      globalExport.catch(stopOnFailure),
+      (async () => capturePlan(concurrentDir, await sealCoreInventory()))().catch(stopOnFailure),
+    ]);
+    if (!concurrent || failures.length > 0) {
+      throw failures[0];
     }
-    coreDatabases.push(Object.freeze({ ...database, identity }));
-  }
-  const inventory = sealBackupResourceInventory(
-    {
-      ...params.resources,
-      protectedPaths: [...params.resources.protectedPaths, ...discoveredDatabasePaths],
-    },
-    coreDatabases,
-  );
-  const discovery = await discoverBackupSqliteSources({ inventory });
-  const { sources, groups } = await planBackupSqliteSources(inventory, discovery.snapshotPaths);
-  for (const source of sources) {
-    if (source.archiveSourcePath !== globalPath) {
-      // The archived registry must remain the image that supplied capturedAgents.
-      await captureSource(
-        source.archiveSourcePath,
-        source.canonicalSource?.role === "global" ? globalGroup : groups.get(source.path),
-        source.canonicalSource,
+    const sealed = await sealCoreInventory();
+    // Rows naming an owner already sealed under that path leave ownership and discovery unchanged.
+    const plannedRegistry = capturedAgents.every(({ agentId, sourcePath }) => {
+      const owner = concurrent.inventory.resolveSqliteSource(sourcePath);
+      return (
+        owner?.role === "agent" &&
+        owner.agentId === agentId &&
+        owner.identity !== undefined &&
+        owner.sourcePath === path.resolve(sourcePath)
       );
+    });
+    if (plannedRegistry) {
+      // The final identity check uses the pre-capture coreDatabases; the sealed inventory
+      // supplies ownership order and classification, reusing this capture's header answers.
+      const answers = sqliteHeaderAnswers.get(concurrent.inventory);
+      if (answers) {
+        sqliteHeaderAnswers.set(sealed.inventory, answers);
+      }
+      captured = { ...concurrent, inventory: sealed.inventory };
+    } else {
+      await fs.rm(concurrentDir, { recursive: true, force: true });
+      captured = await capturePlan(params.tempDir, sealed);
     }
+  } else {
+    captured = await capturePlan(params.tempDir, await sealCoreInventory());
   }
   if (globalGroup) {
     await assertBackupSqliteSourceGroup(globalGroup);
   }
-  for (const source of coreDatabases) {
+  for (const source of captured.coreDatabases) {
     if (
       source.identity &&
       !sameFileIdentity(source.identity, await fs.stat(source.sourcePath, { bigint: true }))
@@ -643,69 +724,11 @@ export async function createBackupSqliteSnapshotPlan(params: {
     }
   }
   return {
-    inventory,
-    snapshots,
-    postgresSnapshots,
-    postgresAnchors,
-    discoveredSourcePaths: discovery.discoveredSourcePaths,
+    inventory: captured.inventory,
+    snapshots: [...globalOutputs.snapshots, ...captured.outputs.snapshots],
+    postgresSnapshots: [...globalOutputs.postgresSnapshots, ...captured.outputs.postgresSnapshots],
+    postgresAnchors: [...globalOutputs.postgresAnchors, ...captured.outputs.postgresAnchors],
+    discoveredSourcePaths: captured.discovery.discoveredSourcePaths,
     sharedDatabaseSourcePath,
   };
-}
-
-const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
-
-export type BackupStateSnapshotPlan = {
-  legacyAuditSnapshots: LegacyAuditBackupSnapshot[];
-  stateSqliteBackup: Awaited<ReturnType<typeof createBackupSqliteSnapshotPlan>>;
-};
-
-export async function createLegacyAuditStateSnapshotPlan(params: {
-  resources: BackupResourcePlan;
-  stateDir: string;
-  tempDir: string;
-  preserveSourceArtifacts?: boolean;
-}): Promise<BackupStateSnapshotPlan> {
-  const stateDir = params.stateDir;
-  // Legacy audit reconciliation takes a source write lease, unlike private-image capture.
-  if (params.preserveSourceArtifacts) {
-    throw new Error(
-      "Source-artifact-preserving backup requires legacy audit migration to finish before capture; no source write lease was acquired.",
-    );
-  }
-
-  let lastStateChangeMessage: string | undefined;
-  for (let attempt = 0; attempt < MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS; attempt += 1) {
-    const attemptDir = path.join(params.tempDir, `state-snapshot-attempt-${attempt + 1}`);
-    const verificationDir = path.join(attemptDir, "legacy-verification");
-    await fs.mkdir(attemptDir, { recursive: true });
-    try {
-      const firstCapture = await withLegacyAuditMigrationLease(stateDir, () =>
-        createLegacyAuditBackupCapture({ stateDir, tempDir: attemptDir }),
-      );
-      const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
-        resources: params.resources,
-        tempDir: attemptDir,
-        legacyAuditSnapshots: firstCapture.snapshots,
-        legacyAuditDatabaseWitness: firstCapture.databaseWitness,
-      });
-      await fs.mkdir(verificationDir, { recursive: true });
-      const secondCapture = await withLegacyAuditMigrationLease(stateDir, () =>
-        createLegacyAuditBackupCapture({ stateDir, tempDir: verificationDir }),
-      );
-      if (!legacyAuditBackupCapturesMatch(firstCapture, secondCapture)) {
-        throw new LegacyAuditBackupStateChangedError();
-      }
-      await fs.rm(verificationDir, { recursive: true, force: true });
-      return { legacyAuditSnapshots: firstCapture.snapshots, stateSqliteBackup };
-    } catch (error) {
-      await fs.rm(attemptDir, { recursive: true, force: true });
-      if (!(error instanceof LegacyAuditBackupStateChangedError)) {
-        throw error;
-      }
-      lastStateChangeMessage = error.message;
-    }
-  }
-  throw new LegacyAuditBackupStateChangedError(
-    `${lastStateChangeMessage ?? "Legacy audit state changed while backup was capturing it"}; retry backup after legacy audit migration settles`,
-  );
 }

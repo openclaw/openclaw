@@ -8,6 +8,7 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { SYSTEM_AGENT_AUDIT_SCOPE } from "../system-agent/audit.js";
 import { engineStringPosition } from "./database-engine/scalar.js";
+import { collectErrorGraphCandidates } from "./errors.js";
 import { root as createFsSafeRoot } from "./fs-safe.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import type { EngineConnection } from "./sql-connection.js";
@@ -51,6 +52,17 @@ export class LegacyAuditBackupStateChangedError extends Error {
     super(message);
     this.name = "LegacyAuditBackupStateChangedError";
   }
+}
+
+export function findLegacyAuditBackupStateChange(
+  error: unknown,
+): LegacyAuditBackupStateChangedError | undefined {
+  return collectErrorGraphCandidates(error, (candidate) =>
+    candidate instanceof Error ? [candidate.cause] : [],
+  ).find(
+    (candidate): candidate is LegacyAuditBackupStateChangedError =>
+      candidate instanceof LegacyAuditBackupStateChangedError,
+  );
 }
 
 const LEGACY_AUDIT_RAW_CHECKPOINT_SCOPE = "migration.legacy-audit-raw";
