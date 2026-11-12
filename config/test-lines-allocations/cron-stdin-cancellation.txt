@@ -1,0 +1,2 @@
+# Regression coverage for cancelling all three automation stdin readers.
+23

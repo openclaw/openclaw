@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { ExpectedCliError } from "../expected-cli-error.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 
@@ -370,20 +371,42 @@ async function rejectAdd(options: Record<string, string | true>, message: string
   await reject([...addArgs, ...flags({ every: "30s", ...options })], message);
 }
 
+const cronInputReaders = [
+  ["Trigger script", readCronTriggerScript],
+  ["Script payload", readCronPayloadScript],
+  ["Cron scratch", readCronScratchContent],
+] as const;
+
 describe("cron trigger CLI options", () => {
-  it.each([
-    ["Trigger script", readCronTriggerScript],
-    ["Script payload", readCronPayloadScript],
-    ["Cron scratch", readCronScratchContent],
-  ] as const)("rejects malformed UTF-8 for %s from files and stdin", async (label, read) => {
-    const bytes = Buffer.from([0x78, 0xff, 0x79]);
-    const file = await fixture("invalid.txt", bytes);
-    await expect(read(file)).rejects.toThrow(`${label} must be valid UTF-8`);
-    vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(() =>
-      Readable.from([bytes])[Symbol.asyncIterator](),
-    );
-    await expect(read("-")).rejects.toThrow(`${label} must be valid UTF-8`);
-  });
+  it.each(cronInputReaders)(
+    "rejects malformed UTF-8 for %s from files and stdin",
+    async (label, read) => {
+      const bytes = Buffer.from([0x78, 0xff, 0x79]);
+      const file = await fixture("invalid.txt", bytes);
+      await expect(read(file)).rejects.toThrow(`${label} must be valid UTF-8`);
+      vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(() =>
+        Readable.from([bytes])[Symbol.asyncIterator](),
+      );
+      await expect(read("-")).rejects.toThrow(`${label} must be valid UTF-8`);
+    },
+  );
+
+  it.each(cronInputReaders)(
+    "cancels %s stdin instead of accepting later input",
+    async (_, read) => {
+      const scope = new AsyncWorkScope();
+      const stdin = new Readable({
+        read() {
+          scope.beginClose();
+          this.push("late input");
+          this.push(null);
+        },
+      });
+      await expect(scope.run(() => read("-", { stdin }))).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    },
+  );
 
   it("preserves exact scratch BOM, Unicode and CRLF while scripts retain trimming", async () => {
     const text = "\uFEFF 中文 😀 \uFFFD\r\n";
