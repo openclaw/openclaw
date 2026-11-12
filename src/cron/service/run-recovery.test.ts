@@ -3,6 +3,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
@@ -88,6 +89,10 @@ async function recoveryStore(jobs: CronJob[]) {
         { storeKey },
       ).entries;
     },
+    receiptStatus: (receiptId: string) =>
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+        .get(receiptId),
   };
 }
 
@@ -166,6 +171,11 @@ describe("worker-owned startup recovery", () => {
     await activateManual(store, entry);
     const state = makeCronRecoveryState(logger, store.storePath, now + 1_000);
     await ensureLoaded(state);
+    // A run still live in this process keeps its receipt, as when a cron reload's replacement starts.
+    const marker = markCronJobActive(entry.id);
+    expect(await recoverCronRuns(state)).toEqual(new Set([entry.id]));
+    expect(state.store?.jobs[0]?.state.runningAtMs).toBe(now);
+    clearCronJobActive(entry.id, marker);
     await recoverCronRuns(state);
 
     const resident = state.store;
@@ -308,11 +318,9 @@ describe("worker-owned startup recovery", () => {
           { jobId: entry.id, runId: "removed-manual-run" },
         ]);
       }
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-          .get(receipt.receiptId),
-      ).toMatchObject({ status: recorded ? "ok" : "interrupted" });
+      expect(store.receiptStatus(receipt.receiptId)).toMatchObject({
+        status: recorded ? "ok" : "interrupted",
+      });
       await store.recover();
       expect(await store.history()).toHaveLength(1);
     },
@@ -337,11 +345,7 @@ describe("worker-owned startup recovery", () => {
       expect(outcome.jobs[0]?.state.nextRunAtMs).toBe(now + 60_000);
       expect(outcome.notifications).toEqual([]);
       expect(await store.history()).toEqual(before);
-      expect(
-        openOpenClawStateDatabase()
-          .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-          .get(receipt.receiptId),
-      ).toMatchObject({ status: "error" });
+      expect(store.receiptStatus(receipt.receiptId)).toMatchObject({ status: "error" });
     },
   );
 
@@ -378,11 +382,7 @@ describe("worker-owned startup recovery", () => {
     expect(result.interruptedRuns).toEqual([]);
     expect((await loadCronStore(store.storePath)).jobs[0]).toEqual(beforeJob);
     expect(await store.history()).toEqual(beforeHistory);
-    expect(
-      openOpenClawStateDatabase()
-        .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-        .get(receipt.receiptId),
-    ).toMatchObject({ status: "error" });
+    expect(store.receiptStatus(receipt.receiptId)).toMatchObject({ status: "error" });
     await store.recover();
     expect(await store.history()).toEqual(beforeHistory);
   });
