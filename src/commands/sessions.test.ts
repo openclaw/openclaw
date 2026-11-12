@@ -286,15 +286,16 @@ describe("sessionsCommand", () => {
       const spawnedWorkspaceDir =
         gatewayState === "other-workspace" ? "/workspace/spawned" : undefined;
       const work = new AsyncWorkScope();
+      if (gatewayState === "interrupted") {
+        work.beginClose();
+      }
       if (gatewayState === "uninspectable") {
         catalogState.readActiveGatewayLockIdentity.mockRejectedValue(
           new Error("Gateway lock payload could not be verified"),
         );
       } else if (gatewayState !== "absent") {
         catalogState.readActiveGatewayLockIdentity.mockResolvedValue(gatewayOwner);
-        if (gatewayState === "interrupted") {
-          catalogState.callGateway.mockImplementation(async () => work.beginClose() as never);
-        } else if (gatewayState === "unreachable") {
+        if (gatewayState === "unreachable" || gatewayState === "interrupted") {
           catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
         } else {
           catalogState.callGateway.mockResolvedValue({
@@ -388,9 +389,7 @@ describe("sessionsCommand", () => {
     expect(textOutput).toContain("\\r\\nforged-id");
     expect(textOutput).toContain("🦞\\tvariant");
 
-    const payload = await readSessionsJson(store);
-
-    expect(payload.sessions?.[0]).toMatchObject({ key, sessionId, model });
+    expect((await readSessionsJson(store)).sessions?.[0]).toMatchObject({ key, sessionId, model });
   });
 
   it.each([false, true])("preserves collaboration metadata (delegated=%s)", async (delegated) => {
