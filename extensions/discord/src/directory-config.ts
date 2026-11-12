@@ -39,6 +39,7 @@ export const listDiscordDirectoryPeersFromConfig = createResolvedDirectoryEntrie
     const cleaned = (mention?.[1] ?? raw).replace(/^(discord|user):/i, "").trim();
     return /^\d+$/.test(cleaned) ? `user:${cleaned}` : null;
   },
+  normalizeUnicode: true,
 });
 
 export const listDiscordDirectoryGroupsFromConfig = createResolvedDirectoryEntriesLister<
@@ -53,4 +54,5 @@ export const listDiscordDirectoryGroupsFromConfig = createResolvedDirectoryEntri
     const cleaned = (mention?.[1] ?? raw).replace(/^(discord|channel|group):/i, "").trim();
     return /^\d+$/.test(cleaned) ? `channel:${cleaned}` : null;
   },
+  normalizeUnicode: true,
 });

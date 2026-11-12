@@ -157,6 +157,7 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
           ...Object.values(config.groups ?? {}).map((group) => group?.allowFrom ?? []),
         ],
         normalizeId: (entry) => normalizeLineDirectoryId(entry, "direct"),
+        normalizeUnicode: true,
       }),
       listGroups: createResolvedDirectoryEntriesLister({
         kind: "group",
@@ -165,6 +166,7 @@ export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
         resolveSources: ({ config }) => [Object.keys(config.groups ?? {})],
         normalizeId: (entry) =>
           normalizeLineDirectoryId(resolveLineGroupLookupIds(entry)[0] ?? "", "group"),
+        normalizeUnicode: true,
       }),
     }),
     setupContract: lineSetupContract,

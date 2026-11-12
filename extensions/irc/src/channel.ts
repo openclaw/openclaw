@@ -181,9 +181,10 @@ const listIrcDirectoryPeersFromConfig = createResolvedDirectoryEntriesLister<Res
   resolveSources: (account) => [
     account.config.allowFrom ?? [],
     account.config.groupAllowFrom ?? [],
-    ...Object.values(account.config.groups ?? {}).map((group) => group.allowFrom ?? []),
+    ...Object.values(account.config.groups ?? []).map((group) => group.allowFrom ?? []),
   ],
   normalizeId: (entry) => normalizePairingTarget(entry) || null,
+  normalizeUnicode: true,
 });
 
 const listIrcDirectoryGroupsFromConfig = createResolvedDirectoryEntriesLister<ResolvedIrcAccount>({
@@ -197,6 +198,7 @@ const listIrcDirectoryGroupsFromConfig = createResolvedDirectoryEntriesLister<Re
     const normalized = normalizeIrcMessagingTarget(entry);
     return normalized && isChannelTarget(normalized) ? normalized : null;
   },
+  normalizeUnicode: true,
 });
 
 const ircConfigAdapter = createScopedChannelConfigAdapter<ResolvedIrcAccount, ResolvedIrcAccount>({

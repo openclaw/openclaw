@@ -11,17 +11,21 @@ type AccountDirectorySources<Account> = DirectoryConfigParams & {
   kind: "user" | "group";
   resolveSources: (account: Account) => Iterable<unknown>[];
   normalizeId: (entry: string) => string | null | undefined;
+  normalizeUnicode?: boolean;
 };
 
 export function applyDirectoryQueryAndLimit(
   ids: string[],
-  params: { query?: string | null; limit?: number | null },
+  params: { query?: string | null; limit?: number | null; normalizeUnicode?: boolean },
 ): string[] {
-  const q = normalizeLowercaseStringOrEmpty(params.query);
+  const normalize = params.normalizeUnicode
+    ? (value: string) => value.normalize("NFC")
+    : (value: string) => value;
+  const q = normalize(normalizeLowercaseStringOrEmpty(params.query));
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
   const filtered: string[] = [];
   for (const id of ids) {
-    if (q && !normalizeLowercaseStringOrEmpty(id).includes(q)) {
+    if (q && !normalize(normalizeLowercaseStringOrEmpty(id)).includes(q)) {
       continue;
     }
     filtered.push(id);
@@ -74,6 +78,7 @@ export function listDirectoryEntriesFromSources(params: {
   query?: string | null;
   limit?: number | null;
   normalizeId: (entry: string) => string | null | undefined;
+  normalizeUnicode?: boolean;
 }): ChannelDirectoryEntry[] {
   const ids = collectNormalizedDirectoryIds(params);
   return toDirectoryEntries(params.kind, applyDirectoryQueryAndLimit(ids, params));
@@ -142,6 +147,7 @@ export function listDirectoryUserEntriesFromAllowFrom(params: {
   query?: string | null;
   limit?: number | null;
   normalizeId?: (entry: string) => string | null | undefined;
+  normalizeUnicode?: boolean;
 }): ChannelDirectoryEntry[] {
   const ids = uniqueStrings(collectDirectoryIds(params.allowFrom ?? [], params.normalizeId));
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(ids, params));
@@ -154,6 +160,7 @@ export function listDirectoryUserEntriesFromAllowFromAndMapKeys(params: {
   limit?: number | null;
   normalizeAllowFromId?: (entry: string) => string | null | undefined;
   normalizeMapKeyId?: (entry: string) => string | null | undefined;
+  normalizeUnicode?: boolean;
 }): ChannelDirectoryEntry[] {
   const ids = uniqueStrings([
     ...collectDirectoryIds(params.allowFrom ?? [], params.normalizeAllowFromId),
@@ -167,6 +174,7 @@ export function listDirectoryGroupEntriesFromMapKeys(params: {
   query?: string | null;
   limit?: number | null;
   normalizeId?: (entry: string) => string | null | undefined;
+  normalizeUnicode?: boolean;
 }): ChannelDirectoryEntry[] {
   const ids = uniqueStrings(
     collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeId),
@@ -181,6 +189,7 @@ export function listDirectoryGroupEntriesFromMapKeysAndAllowFrom(params: {
   limit?: number | null;
   normalizeMapKeyId?: (entry: string) => string | null | undefined;
   normalizeAllowFromId?: (entry: string) => string | null | undefined;
+  normalizeUnicode?: boolean;
 }): ChannelDirectoryEntry[] {
   const ids = uniqueStrings([
     ...collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeMapKeyId),
@@ -194,6 +203,7 @@ export function listResolvedDirectoryUserEntriesFromAllowFrom<ResolvedAccount>(
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
     resolveAllowFrom: (account: ResolvedAccount) => readonly unknown[] | undefined;
     normalizeId?: (entry: string) => string | null | undefined;
+    normalizeUnicode?: boolean;
   },
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);
@@ -208,6 +218,7 @@ export function listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedAccount>(
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
     resolveGroups: (account: ResolvedAccount) => Record<string, unknown> | undefined;
     normalizeId?: (entry: string) => string | null | undefined;
+    normalizeUnicode?: boolean;
   },
 ): ChannelDirectoryEntry[] {
   const account = params.resolveAccount(params.cfg, params.accountId);

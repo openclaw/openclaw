@@ -30,6 +30,7 @@ export const listTelegramDirectoryPeersFromConfig =
       }
       return /^-?\d+$/.test(trimmed) || trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
     },
+    normalizeUnicode: true,
   });
 
 export const listTelegramDirectoryGroupsFromConfig =
@@ -38,4 +39,5 @@ export const listTelegramDirectoryGroupsFromConfig =
     resolveAccount: resolveTelegramDirectoryConfig,
     resolveSources: (config) => [Object.keys(config.groups ?? {})],
     normalizeId: (entry) => entry.trim() || null,
+    normalizeUnicode: true,
   });

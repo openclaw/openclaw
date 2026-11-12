@@ -83,4 +83,41 @@ describe("directory config helpers", () => {
 
     await expect(listGroups({ cfg, query: "a" })).resolves.toEqual(groups("a"));
   });
+
+  it("matches canonically equivalent Unicode when normalizeUnicode is enabled", () => {
+    const nfd = "cafe\u0301";
+    const nfc = "caf\u00e9";
+    expect(nfd).not.toBe(nfc);
+
+    const entries = listDirectoryGroupEntriesFromMapKeys({
+      groups: { [nfc]: {} },
+      normalizeUnicode: true,
+    });
+
+    const byNfdQuery = listDirectoryGroupEntriesFromMapKeys({
+      groups: { [nfc]: {} },
+      query: nfd,
+      normalizeUnicode: true,
+    });
+    expect(byNfdQuery).toEqual(entries);
+
+    const byNfcQuery = listDirectoryGroupEntriesFromMapKeys({
+      groups: { [nfd]: {} },
+      query: nfc,
+      normalizeUnicode: true,
+    });
+    expect(byNfcQuery).toEqual([{ kind: "group", id: nfd }]);
+  });
+
+  it("does not match canonically equivalent Unicode when normalizeUnicode is omitted", () => {
+    const nfd = "cafe\u0301";
+    const nfc = "caf\u00e9";
+    expect(nfd).not.toBe(nfc);
+
+    const entries = listDirectoryGroupEntriesFromMapKeys({
+      groups: { [nfc]: {} },
+      query: nfd,
+    });
+    expect(entries).toEqual([]);
+  });
 });

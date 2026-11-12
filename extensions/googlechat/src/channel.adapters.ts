@@ -88,12 +88,14 @@ export const googlechatDirectoryAdapter = createChannelDirectoryAdapter({
       resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
       resolveAllowFrom: (account) => account.config.allowFrom,
       normalizeId: (entry) => normalizeGoogleChatTarget(entry) ?? entry,
+      normalizeUnicode: true,
     }),
   listGroups: async (params) =>
     listResolvedDirectoryGroupEntriesFromMapKeys<ResolvedGoogleChatAccount>({
       ...params,
       resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
       resolveGroups: (account) => account.config.groups,
+      normalizeUnicode: true,
     }),
 });
 

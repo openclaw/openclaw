@@ -32,6 +32,7 @@ export async function listFeishuDirectoryPeers(
     limit: params.limit,
     normalizeAllowFromId: (entry) => normalizeFeishuTarget(entry) ?? entry,
     normalizeMapKeyId: (entry) => normalizeFeishuTarget(entry) ?? entry,
+    normalizeUnicode: true,
   });
   return entries.map(({ id }) => ({ kind: "user", id }));
 }
@@ -45,6 +46,7 @@ export async function listFeishuDirectoryGroups(
     allowFrom: account.config.groupAllowFrom,
     query: params.query,
     limit: params.limit,
+    normalizeUnicode: true,
   });
   return entries.map(({ id }) => ({ kind: "group", id }));
 }
@@ -58,6 +60,7 @@ export async function listAuthorizedFeishuDirectoryPeers(
     query: params.query,
     limit: params.limit,
     normalizeId: (entry) => normalizeFeishuTarget(entry) ?? entry,
+    normalizeUnicode: true,
   });
   return entries.map(({ id }) => ({ kind: "user", id }));
 }
@@ -69,6 +72,7 @@ export async function listAuthorizedFeishuDirectoryGroups(
   const entries = listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
     groups: account.config.groups,
     allowFrom: account.config.groupAllowFrom,
+    normalizeUnicode: true,
   });
   const authorizedEntries = entries.filter((entry) =>
     isFeishuGroupReadAllowed(params.cfg, account, entry.id, false),

@@ -299,6 +299,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             resolveAccount: adaptScopedAccountAccessor(resolveZaloAccount),
             resolveAllowFrom: (account) => account.config.allowFrom,
             normalizeId: (entry) => entry.trim().replace(/^(zalo|zl):/i, ""),
+            normalizeUnicode: true,
           }),
         listGroups: async () => [],
       }),
