@@ -226,14 +226,17 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
         throw OpenClawIDNodeNativePackagingError.notPackaged
     }
 
+    // periphery:ignore - Protocol witnesses of the ignored unpackaged endpoint (#196759).
     public func connect(serverKey: String, relayURL: URL, alpn: Data) async throws -> any OpenClawIDNodeConnection {
         throw OpenClawIDNodeNativePackagingError.notPackaged
     }
 
+    // periphery:ignore - Protocol witnesses of the ignored unpackaged endpoint (#196759).
     public func relayStatus() async -> [OpenClawIDNodeRelayStatus] {
         []
     }
 
+    // periphery:ignore - Protocol witnesses of the ignored unpackaged endpoint (#196759).
     public func shutdown() async {}
 }
 
