@@ -95,6 +95,17 @@ enum MacOpenClawIDJoinCompletion {
         }
     }
 
+    /// Whether the primary connection is this Mac's joined OpenClaw ID claw. That claw owns its
+    /// own AI and setup; this Mac's operator key has member scope, without operator.admin.
+    static func primaryIsJoinedClaw(
+        mode: AppState.ConnectionMode,
+        remoteUrl: String,
+        serves: (URL) -> Bool = { MacOpenClawIDOperatorRoute.shared.serves($0) }) -> Bool
+    {
+        guard mode == .remote, let url = URL(string: remoteUrl) else { return false }
+        return serves(url)
+    }
+
     private static func selectPrimary(_ claw: String) {
         let state = AppStateStore.shared
         state.remoteTransport = .direct
