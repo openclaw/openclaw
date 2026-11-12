@@ -39,7 +39,7 @@ it("loads Goal action styling from the standalone processed progress stylesheet"
 });
 
 it.each(["active", "paused"] as const)(
-  "keeps the %s goal's transport glyph filled under outline icon styling",
+  "preserves the %s goal's transport glyph paint and control spacing",
   (status) => {
     const frame = document.createElement("iframe");
     frame.width = "800";
@@ -66,8 +66,8 @@ it.each(["active", "paused"] as const)(
       expect(shapes.length).toBeGreaterThan(0);
       for (const shape of shapes) {
         const paint = frame.contentWindow!.getComputedStyle(shape);
-        expect(paint.fill).toBe("rgb(51, 68, 85)");
-        expect(paint.stroke).toBe("none");
+        expect(paint.fill).toBe(status === "active" ? "rgb(51, 68, 85)" : "none");
+        expect(paint.stroke).toBe(status === "active" ? "none" : "rgb(51, 68, 85)");
       }
       expect(button.disabled).toBe(false);
       const clear = doc.querySelector(".agent-chat__goal-clear")!;

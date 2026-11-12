@@ -422,17 +422,6 @@ export const iconData = {
   loaderCircle: strokePathData("M21 12a9 9 0 1 1-6.219-8.56"),
   square: strokeIconData([["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]]),
   play: strokeIconData([["polygon", { points: "6 3 20 12 6 21 6 3" }]]),
-  // The triangle's visual center sits left of its bounding-box center.
-  playFilled: strokeIconData([
-    [
-      "path",
-      {
-        d: "M6 4.75a1.25 1.25 0 0 1 1.875-1.083l12.5 7.25a1.25 1.25 0 0 1 0 2.166l-12.5 7.25A1.25 1.25 0 0 1 6 19.25Z",
-        fill: "currentColor",
-        stroke: "none",
-      },
-    ],
-  ]),
   pauseFilled: strokeIconData([
     [
       "rect",
