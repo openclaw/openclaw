@@ -170,6 +170,11 @@ public enum OpenClawIDNodeTrust {
             let sequence = try fields["seq"]!.number()
             let issued = try fields["issued_at"]!.number()
             let snapshotBinding = try fields["binding_seq"]!.number(minimum: 1)
+            // A Gateway key alone cannot retire a root-signed binding: refuse without retaining
+            // any of this snapshot's facts, but keep the verified binding pin.
+            if snapshotBinding > bindingSequence {
+                return .init(observation: pinned, verdict: .failure(.rollback))
+            }
             let candidate = OpenClawIDNodeTrustState(
                 clawID: claw,
                 rootFingerprint: rootFingerprint,
@@ -179,9 +184,8 @@ public enum OpenClawIDNodeTrust {
                 snapshotBindingSequence: snapshotBinding)
             // Future evidence may refuse a dial, but must never poison durable high-water state.
             let observation = issued <= now + 300 ? try self.mergeObservation(candidate, with: previous) : pinned
-            let refusal: OpenClawIDNodeEnrollmentError? = if max(
-                snapshotBinding,
-                previous?.snapshotBindingSequence ?? 0) > bindingSequence
+            let refusal: OpenClawIDNodeEnrollmentError? = if (previous?.snapshotBindingSequence ?? 0) >
+                bindingSequence
             {
                 .rollback
             } else if issued > now + 300 || issued < now - 10800 {
