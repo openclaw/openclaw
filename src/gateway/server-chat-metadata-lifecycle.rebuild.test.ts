@@ -53,16 +53,17 @@ const publishOwner = () =>
     allowGatewaySubagentBinding: true,
   });
 
-it("serves the published list while a provider never answers", async () => {
+it("retains unchanged providers during discovery and immediately applies auth and config removals", async () => {
+  let activeConfig = config;
   await publishOwner();
   const lifecycle = await createGatewayChatMetadataLifecycle({
-    getConfig: () => config,
+    getConfig: () => activeConfig,
     log: { warn: vi.fn() } as never,
   });
   await lifecycle.attachContext(
     {
       broadcast: vi.fn(),
-      getRuntimeConfig: () => config,
+      getRuntimeConfig: () => activeConfig,
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as GatewayRequestContext,
     sidecars.publish,
@@ -93,6 +94,20 @@ it("serves the published list while a provider never answers", async () => {
   const rebuild = publishOwner().catch((error: unknown) => error);
   try {
     expect(await read()).toContain("openai/gpt-5.4");
+    mocks.preparedAuthStore = { version: 1, profiles: {} };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+    mocks.preparedAuthStore = structuredClone(signedIn);
+    expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = {
+      ...config,
+      agents: {
+        ...config.agents,
+        defaults: { ...config.agents?.defaults, modelPolicy: { allow: [] } },
+      },
+    };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+    activeConfig = { ...config, env: { vars: { OPENAI_API_KEY: "" } } };
+    expect(await read()).not.toContain("openai/gpt-5.4");
   } finally {
     discovery.resolve({ entries: [model], routeVariants: [] });
     await rebuild;
