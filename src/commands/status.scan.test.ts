@@ -326,4 +326,26 @@ describe("status scans", () => {
       liveChannelStatus: { channelAccounts: {} },
     });
   });
+
+  it("aborts pending Gateway reads when the interrupt signal fires", async () => {
+    const { AsyncWorkScope } = await import("../shared/async-work-scope.js");
+    const reason = new Error("status scan interrupted");
+    const scope = new AsyncWorkScope();
+    mocks.probeGateway.mockResolvedValue({
+      ...createUnreachableGatewayProbe(url, "timeout"),
+      ok: true,
+    });
+    mocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw new Error("gateway stalled");
+    });
+
+    try {
+      await expect(
+        scope.run(() => scanStatus({ ...createStatusGatewayProbeBudget(5000), deep: true })),
+      ).rejects.toBe(reason);
+    } finally {
+      await scope.drain();
+    }
+  });
 });

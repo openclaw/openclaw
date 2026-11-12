@@ -19,6 +19,7 @@ import type { MemoryHealth } from "../plugins/memory-provider-runtime-types.js";
 import type { ActiveMemoryProviderResult } from "../plugins/memory-provider-types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
@@ -199,9 +200,14 @@ export async function resolveGatewayProbeSnapshot(params: {
             timeoutMs,
             mode: GATEWAY_CLIENT_MODES.BACKEND,
             clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            signal: getAsyncWorkSignal(),
           });
         })
-        .catch(() => null);
+        .catch(() => {
+          // A Ctrl+C cancels the pending fallback read; keep the canonical abort outcome.
+          getAsyncWorkSignal()?.throwIfAborted();
+          return null;
+        });
       if (status) {
         const auth = gatewayProbe.auth;
         gatewayProbe = {

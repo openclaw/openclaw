@@ -19,6 +19,7 @@ import type { CallGatewayOptions } from "../gateway/call.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { HealthSummary } from "./health.js";
 import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
@@ -70,10 +71,16 @@ async function queryStatusGateway<T>(
     ...buildRequest(),
     timeoutMs,
     config: params.config,
+    signal: getAsyncWorkSignal(),
     ...params.callOverrides,
   }).then<Result<T, StatusGatewayFailure>, Result<T, StatusGatewayFailure>>(
     (value) => ({ ok: true, value }),
-    (cause: unknown) => ({ ok: false, error: { kind: "request", cause } }),
+    (cause: unknown) => {
+      // A Ctrl+C cancels the pending read; keep the canonical abort outcome
+      // instead of folding the interruption into a request failure line.
+      getAsyncWorkSignal()?.throwIfAborted();
+      return { ok: false, error: { kind: "request", cause } };
+    },
   );
 }
 

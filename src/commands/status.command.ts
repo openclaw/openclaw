@@ -10,6 +10,7 @@ import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import {
@@ -43,6 +44,8 @@ export async function statusCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const probeBudget = createStatusGatewayProbeBudget(opts.timeoutMs);
   assertStatusUsageAgentScope(opts);
   for (const finding of await collectNodeRuntimeFindings()) {
