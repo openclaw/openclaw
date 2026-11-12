@@ -1,0 +1,3 @@
+# Install/refresh regressions prove main-thread fs isolation and required/off native policy.
+# Exact standalone-head shortfall within 101 new test lines; the reader grant stays separate.
+85
