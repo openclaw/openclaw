@@ -72,6 +72,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     resetProcessRegistryForTests();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
   function tool(
     autoReviewer: ExecAutoReviewer,
@@ -138,14 +139,31 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(boundary.spawn).not.toHaveBeenCalled();
   });
 
-  it("executes a safe-bin pipeline without synchronous trust probes", async () => {
-    const statSync = fs.statSync;
-    let safeBinStats = 0;
-    using _ = vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
-      if (new Error().stack?.includes("exec-safe-bin-trust")) {
-        safeBinStats += 1;
+  it("executes a safe-bin pipeline without synchronous command or trust probes", async () => {
+    const syncCalls: string[] = [];
+    const ownerCall = (method: string) => {
+      if (
+        /\/(?:exec-safe-bin-trust|exec-command-resolution|executable-path|system-run-(?:cwd-binding|file-snapshot|mutable-file-(?:operand|policy)|approval-binding))\.(?:ts|js):/.test(
+          new Error().stack ?? "",
+        )
+      ) {
+        syncCalls.push(method);
       }
+    };
+    const statSync = fs.statSync;
+    const accessSync = fs.accessSync;
+    const realpathSync = fs.realpathSync;
+    vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+      ownerCall("stat");
       return statSync(file, options);
+    });
+    vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+      ownerCall("access");
+      return accessSync(file, mode);
+    });
+    vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+      ownerCall("realpath");
+      return realpathSync(file, options);
     });
     const exec = createExecTool({
       agentId: "main",
@@ -165,7 +183,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     });
     expect(boundary.spawn).toHaveBeenCalledTimes(1);
     expect(callGatewayTool).not.toHaveBeenCalled();
-    expect(safeBinStats).toBe(0);
+    expect(syncCalls).toEqual([]);
   });
 
   it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
