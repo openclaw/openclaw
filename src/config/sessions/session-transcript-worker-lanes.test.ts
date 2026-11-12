@@ -377,8 +377,12 @@ it("dedupes independent lane prewarms while idle readers retire and regrow", asy
     expect(observed.run.mock.calls[0]?.[0]).toMatchObject({ kind: "prewarm" });
     expect(lanes.map((lane) => lane.pending)).toEqual([1, 1, 1, 1, 1]);
     replies[0]!.resolve(prewarmed);
-    await preparing[0];
-    expect(lanes.map((lane) => lane.pending)).toEqual([0, 1, 1, 1, 1]);
+    const completedLane = await Promise.race(
+      preparing.map((preparation, index) => preparation.then(() => index)),
+    );
+    expect(lanes.map((lane) => lane.pending)).toEqual(
+      lanes.map((_, index) => (index === completedLane ? 0 : 1)),
+    );
     replies.forEach((reply) => reply.resolve(prewarmed));
     await Promise.all(preparing);
     expect(lanes.map((lane) => lane.pending)).toEqual([0, 0, 0, 0, 0]);

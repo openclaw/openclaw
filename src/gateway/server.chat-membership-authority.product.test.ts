@@ -22,6 +22,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { readPersistedMediaFacts } from "../media/media-facts.js";
 import { resolveInboundMediaReference } from "../media/media-reference.js";
+import * as messageInjection from "../sessions/session-controller.message-injection.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { readResidentUserProfileIdentity } from "../state/user-profile-list.js";
@@ -482,6 +483,21 @@ it(
       const steeringMessage = `PROFILE_ACCEPTED_${randomUUID()}`;
       const backingHold = holdProviderResponse(backingMessage);
       const steeringHold = holdProviderResponse(steeringMessage);
+      const steeringAccepted = createDeferredCore<boolean>();
+      void steeringAccepted.promise.catch(() => undefined);
+      const beginInjection = messageInjection.beginReplyMessageInjectionTarget;
+      const injectionObserver = vi
+        .spyOn(messageInjection, "beginReplyMessageInjectionTarget")
+        .mockImplementation((...args) => {
+          const attempt = beginInjection(...args);
+          if (args[1].includes(steeringMessage)) {
+            void attempt
+              .then((value) => value.acceptance)
+              .then(steeringAccepted.resolve, steeringAccepted.reject);
+          }
+          return attempt;
+        });
+      cleanups.push(async () => injectionObserver.mockRestore());
       const requestOffset = requests.length;
       providerReply = "Accepted profile input completed.";
       const backing = await send(backer, profile.sessionKey, backingMessage);
@@ -498,6 +514,14 @@ it(
         items: [{ runId: steering.runId, state: "queued", message: { content: steeringMessage } }],
       });
       expect(JSON.stringify(await loadTranscriptEvents(profile))).not.toContain(steeringMessage);
+      // A persisted queue row precedes the runtime's acceptance of this exact input.
+      await expect(
+        expectHeld(
+          steeringAccepted.promise,
+          runExecution.waitForDispatch(steering.runId),
+          "native steering acceptance",
+        ),
+      ).resolves.toBe(true);
       linkEmail(aliasEmail, replacement.id);
       const mergedIdentity = readResidentUserProfileIdentity(aliasSource.id);
       expect(mergedIdentity).toMatchObject({
