@@ -9,7 +9,7 @@ import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-scr
 import { buildProductionControlUiE2e, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-// This asset-only proof must not prepare a full Gateway test runtime.
+// mock-isolation: Loading this unused test harness is the regression; no exports are consumed.
 vi.mock("../../../src/gateway/server-http.test-harness.ts", () => {
   throw new Error("Fresh HTTP fixture loaded the unnecessary full Gateway test harness");
 });
