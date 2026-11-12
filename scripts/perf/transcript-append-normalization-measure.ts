@@ -24,6 +24,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import type { OpenClawConfig } from "../../src/config/types.js";
 import type { Message } from "../../src/llm/types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -128,12 +129,14 @@ const [
   { SessionManager },
   { guardSessionManager },
   { toolAppendFixture },
+  { setRuntimeConfigSnapshot },
 ] = await Promise.all([
   import("../../src/test-utils/openclaw-test-state.js"),
   import("../../src/config/sessions/session-accessor.js"),
   import("../../src/agents/sessions/session-manager.js"),
   import("../../src/agents/session-tool-result-guard-wrapper.js"),
   import("./transcript-append-tool-fixture.ts"),
+  import("../../src/config/runtime-snapshot.js"),
 ]);
 assert(
   owners.every((owner) => owner.loaded),
@@ -225,6 +228,19 @@ process.env.TMPDIR = path.resolve(values.scratch);
 const state = await createOpenClawTestState({ label: "transcript-append-normalization" });
 const inspector = mode === "allocation" || mode === "profile" ? new Session() : undefined;
 try {
+  // Keep the large synthetic seed within policy; this measures append, not eviction.
+  const config: OpenClawConfig = {
+    session: {
+      maintenance: {
+        maxEntries: 10_000,
+        pruneAfter: "365d",
+        archiveDashboardAfter: "365d",
+        maxDiskBytes: 100 * 1024 ** 3,
+      },
+    },
+  };
+  await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
   const target = {
     agentId: "main",
     sessionId: "synthetic-append",
@@ -249,7 +265,7 @@ try {
   }
   const workspace = values.workspace ? path.resolve(values.workspace) : state.workspaceDir;
   assert((await stat(workspace)).isDirectory(), "Workspace must exist");
-  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: Date.now() });
   const manager = await SessionManager.openAsync(target, workspace);
   if (values.fixture === "tools") {
     guardSessionManager(manager, { allowSyntheticToolResults: false });
@@ -339,6 +355,7 @@ try {
     owners: owners.map(({ name, sha256 }) => ({ name, sha256 })),
     persistedMessageSha256: digest.digest("hex"),
     seedDatabaseBytes,
+    maintenance: config.session?.maintenance,
     databaseBytes: (await stat(target.storePath)).size,
     walBytes: (await stat(`${target.storePath}-wal`).catch(() => undefined))?.size ?? 0,
     hostLoad: { before: hostBefore, after: hostAfter },
