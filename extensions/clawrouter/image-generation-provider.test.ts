@@ -30,26 +30,25 @@ const authStore = {
   },
 };
 function catalog(model = MODEL, edit = false) {
-  const result = {
+  const operations = edit ? ["generations", "edits"] : ["generations"];
+  return {
     version: "clawrouter.client-catalog.v1",
     providers: [
       {
         id: "openai",
-        routes: [
-          {
-            endpoint: "images_generations",
-            methods: ["POST"],
-            path: "/v1/images/generations",
-            requestFormat: "openai.images_generations",
-            responseFormat: "openai.images_generations",
-          },
-        ],
+        routes: operations.map((operation) => ({
+          endpoint: "images_" + operation,
+          methods: ["POST"],
+          path: "/v1/images/" + operation,
+          requestFormat: "openai.images_" + operation,
+          responseFormat: "openai.images_generations",
+        })),
         allowed: true,
         executable: true,
         models: [
           {
             id: model,
-            capabilities: ["image.generation"],
+            capabilities: ["image.generation", ...(edit ? ["image.edit"] : [])],
             pricing: {
               unit: "image_token",
               generation: {
@@ -64,41 +63,18 @@ function catalog(model = MODEL, edit = false) {
             },
           },
         ],
-        offers: [
-          {
-            endpoint: "images_generations",
-            modelId: model,
-            transport: "http",
-            routeKind: "unified",
-            route: "/v1/images/generations",
-            eligible: true,
-            affordability: "request-dependent",
-          },
-        ],
+        offers: operations.map((operation) => ({
+          endpoint: "images_" + operation,
+          modelId: model,
+          transport: "http",
+          routeKind: "unified",
+          route: "/v1/images/" + operation,
+          eligible: true,
+          affordability: "request-dependent",
+        })),
       },
     ],
   };
-  if (edit) {
-    const provider = result.providers[0]!;
-    provider.routes.push({
-      endpoint: "images_edits",
-      methods: ["POST"],
-      path: "/v1/images/edits",
-      requestFormat: "openai.images_edits",
-      responseFormat: "openai.images_generations",
-    });
-    provider.offers.push({
-      endpoint: "images_edits",
-      modelId: model,
-      transport: "http",
-      routeKind: "unified",
-      route: "/v1/images/edits",
-      eligible: true,
-      affordability: "request-dependent",
-    });
-    provider.models[0]!.capabilities.push("image.edit");
-  }
-  return result;
 }
 
 describe("registered ClawRouter image generation over HTTP", () => {
@@ -555,51 +531,49 @@ describe("registered ClawRouter image generation over HTTP", () => {
     );
   });
 
-  it.each(["generate", "edit", "both"])(
-    "publishes only same-key entitled %s modes through the registered catalog family",
-    async (mode) => {
-      // Catalog discovery uses a literal synthetic key; runtime tests above use a real profile binding.
-      cfg.models!.providers!.clawrouter!.apiKey = "synthetic-router-key";
-      const selected = captured.modelCatalogProviders.find((provider) =>
-        provider.kinds.includes("image_generation"),
-      );
-      const resolveAuth = () => ({
-        apiKey: "synthetic-router-key",
-        discoveryApiKey: "synthetic-router-key",
-        mode: "api_key" as const,
-        source: "env" as const,
-      });
-      const context: UnifiedModelCatalogProviderContext = {
-        config: cfg,
-        env: {},
-        includeLive: true,
-        resolveProviderApiKey: resolveAuth,
-        resolveProviderAuth: resolveAuth,
-      };
-      const entitled = catalog(MODEL, mode !== "generate");
-      if (mode === "edit") {
+  it("publishes only same-key entitled image modes through the registered catalog family", async () => {
+    // Catalog discovery uses a literal synthetic key; runtime tests above use a real profile binding.
+    cfg.models!.providers!.clawrouter!.apiKey = "synthetic-router-key";
+    const selected = captured.modelCatalogProviders.find((provider) =>
+      provider.kinds.includes("image_generation"),
+    );
+    const resolveAuth = () => ({
+      apiKey: "synthetic-router-key",
+      discoveryApiKey: "synthetic-router-key",
+      mode: "api_key" as const,
+      source: "env" as const,
+    });
+    const context: UnifiedModelCatalogProviderContext = {
+      config: cfg,
+      env: {},
+      includeLive: true,
+      resolveProviderApiKey: resolveAuth,
+      resolveProviderAuth: resolveAuth,
+    };
+    for (const modes of [["generate"], ["edit"], ["generate", "edit"]]) {
+      const entitled = catalog(MODEL, modes.includes("edit"));
+      if (!modes.includes("generate")) {
         entitled.providers[0]!.offers.shift();
       }
       entitled.providers[0]!.models[0]!.pricing.generation.maxImages = 2;
       inventory = entitled;
-      const rows = await selected!.liveCatalog!(context);
-      expect(rows).toEqual([
+      expect(await selected!.liveCatalog!(context)).toEqual([
         expect.objectContaining({
           kind: "image_generation",
           provider: "clawrouter",
           model: MODEL,
-          modes: mode === "both" ? ["generate", "edit"] : [mode],
+          modes,
           capabilities: expect.objectContaining({
             generate: expect.objectContaining({ maxCount: 2 }),
-            edit: expect.objectContaining({ enabled: mode !== "generate" }),
+            edit: expect.objectContaining({ enabled: modes.includes("edit") }),
           }),
         }),
       ]);
-      inventory = { version: "clawrouter.client-catalog.v1", providers: [] };
-      await expect(selected!.liveCatalog!(context)).resolves.toEqual([]);
-      expect(
-        calls.every((call) => call.headers.authorization === "Bearer synthetic-router-key"),
-      ).toBe(true);
-    },
-  );
+    }
+    inventory = { version: "clawrouter.client-catalog.v1", providers: [] };
+    await expect(selected!.liveCatalog!(context)).resolves.toEqual([]);
+    expect(
+      calls.every((call) => call.headers.authorization === "Bearer synthetic-router-key"),
+    ).toBe(true);
+  });
 });
