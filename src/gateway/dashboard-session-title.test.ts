@@ -106,8 +106,8 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       await expect(
         maybeGenerateDashboardSessionTitle({ ...titleParams(), userMessage }),
       ).resolves.toBe(false);
-      expect(mocks.generate).not.toHaveBeenCalled();
-      expect(mocks.patch).not.toHaveBeenCalled();
+      expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
+      expect(updateSessionEntry).not.toHaveBeenCalled();
     },
   );
 

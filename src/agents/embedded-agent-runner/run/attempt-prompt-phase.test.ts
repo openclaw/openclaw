@@ -7,6 +7,7 @@ import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { Context, ImageContent, Model, SimpleStreamOptions } from "../../../llm/types.js";
+import type { InputGateDecision } from "../../../plugins/hook-decision-types.js";
 import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -142,7 +143,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         pluginId: "policy",
         hookName: "before_agent_run",
         source: "test",
-        handler: async (event: PluginHookBeforeAgentRunEvent) => {
+        handler: async (event: PluginHookBeforeAgentRunEvent): Promise<InputGateDecision> => {
           inspected = structuredClone(event.images);
           if (event.images?.length && block) {
             return { outcome: "block", reason: "Image policy", message: "Image blocked." };
@@ -163,7 +164,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
             ? message.content.filter((part) => part.type === "image")
             : [],
         );
-        return createAssistantResultStream(createAssistant(requestModel, "Done."));
+        return createAssistantResultStream(
+          createAssistant(requestModel, [{ type: "text", text: "Done." }]),
+        );
       });
 
       mocks.handlePromptError.mockImplementation(async ({ error }: { error: unknown }) => {
