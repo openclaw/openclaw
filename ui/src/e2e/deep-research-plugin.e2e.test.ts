@@ -408,6 +408,9 @@ suite.define(() => {
         const cite = pane.getByRole("button", { name: "Source S1", exact: true });
         await pw(cite).toBeVisible();
         await pw(pane.getByRole("heading", { name: question, exact: true })).toBeVisible();
+        // Report prose keeps macOS stem darkening; pane chrome stays antialiased.
+        await pw(pane.locator(".deep-research-report")).toHaveCSS("-webkit-font-smoothing", "auto");
+        await pw(pane).toHaveCSS("-webkit-font-smoothing", "antialiased");
         await capture("desktop-after", page.locator("openclaw-app"), [pane]);
         await capture("desktop-report", pane, [cite]);
         await cite.click();
