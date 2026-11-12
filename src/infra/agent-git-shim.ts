@@ -244,7 +244,8 @@ EOF
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
 $blob_paths
 EOF
-      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v speculative="$blob_expression" '
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v verb="$blob_verb" '
+        BEGIN { speculative = verb == "show" || verb == "blame" }
         function add(oid, mode) {
           if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
           if (speculative && (++count > 2048 || (bytes += length(oid) + 1) > 131072)) exit

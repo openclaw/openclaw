@@ -193,7 +193,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "bounds speculative show prefetch but batches large pickaxe searches",
+  "bounds show and blame discovery but batches large pickaxe searches",
   () =>
     withTempDir("agent-git-blob-bound-", async (root) => {
       const { origin, file, git, reader } = await historyFixture(root, 2050, false);
@@ -202,6 +202,9 @@ it.skipIf(process.platform === "win32")(
       const result = await invoke(args);
       expect(result.code, result.stderr).toBe(0);
       expect(result.stdout).toBe(git(origin, args));
+      expect(await requests()).toHaveLength(1);
+      const blame = ["blame", "-L", "1,1", "HEAD", "--", file];
+      expect((await invoke(blame)).stdout).toBe(git(origin, blame));
       expect(await requests()).toHaveLength(1);
       const search = await reader();
       const pickaxe = ["log", "--oneline", "-Shistory line 1", "--", file];
