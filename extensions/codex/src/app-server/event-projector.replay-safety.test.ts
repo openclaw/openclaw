@@ -319,6 +319,7 @@ describe("subagent-progress", () => {
         await progress.start();
         const latest = itemEvents.at(-1);
         expect(latest).toMatchObject({
+          title: "Subagent",
           status: kind === "interrupted" ? "failed" : kind === "started" ? "running" : "completed",
         });
         expect(progress.getSnapshot().lines).toHaveLength(kind === "interacted" ? 2 : 1);

@@ -315,6 +315,7 @@
     "!dist/extensions/brave/**",
     "!dist/extensions/byteplus/**",
     "!dist/extensions/buzz/**",
+    "!dist/extensions/celeris/**",
     "!dist/extensions/cerebras/**",
     "!dist/extensions/liquid-ai/**",
     "!dist/extensions/chutes/**",
@@ -334,6 +335,7 @@
     "!dist/extensions/duckduckgo/**",
     "!dist/extensions/exa/**",
     "!dist/extensions/facetime/**",
+    "!dist/extensions/fastino/**",
     "!dist/extensions/featherless/**",
     "!dist/extensions/feishu/**",
     "!dist/extensions/firecrawl/**",
@@ -363,6 +365,7 @@
     "!dist/extensions/msteams/**",
     "!dist/extensions/muse/**",
     "!dist/extensions/mxc/**",
+    "!dist/extensions/nace/**",
     "!dist/extensions/nextcloud-talk/**",
     "!dist/extensions/nostr/**",
     "!dist/extensions/novita/**",
@@ -1684,6 +1687,10 @@
       "types": "./dist/plugin-sdk/decisions-openai-runtime.d.ts",
       "default": "./dist/plugin-sdk/decisions-openai-runtime.js"
     },
+    "./plugin-sdk/decisions-http-runtime": {
+      "types": "./dist/plugin-sdk/decisions-http-runtime.d.ts",
+      "default": "./dist/plugin-sdk/decisions-http-runtime.js"
+    },
     "./plugin-sdk/secret-ref-readonly": {
       "types": "./dist/plugin-sdk/secret-ref-readonly.d.ts",
       "default": "./dist/plugin-sdk/secret-ref-readonly.js"
@@ -2408,6 +2415,7 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
+    "acorn",
     "chrome-devtools-mcp",
     "playwright-core"
   ],

@@ -219,13 +219,16 @@ if (command === "provision") {
       "--receipt",
       receiptPath,
     ],
-    5 * 60_000,
+    // Cold registration downloads and installs the runner before configuring it.
+    10 * 60_000,
   );
   if (existsSync(receiptPath)) {
     output("runner", runnerReceipt(readFileSync(receiptPath, "utf8")));
   }
   if (result.error || result.status !== 0) {
-    throw new Error("Boat runner registration failed; cleanup is required.");
+    throw new Error(
+      `Boat runner registration failed (${result.error?.code || result.signal || result.status}); cleanup is required.`,
+    );
   }
   if (!existsSync(receiptPath)) {
     throw new Error("Crabbox did not publish an Actions cleanup receipt.");

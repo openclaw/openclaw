@@ -285,18 +285,6 @@ export async function executeJobCore(
       if (abortSignal?.aborted) {
         return resolveAbortError();
       }
-      if (evaluation.kind === "busy") {
-        state.deps.log.debug({ jobId: job.id }, "cron: trigger evaluation deferred while busy");
-        return {
-          status: "skipped",
-          summary: "Automation deferred while condition evaluations are busy",
-          admissionDeferred: true,
-          admissionDeferredReason: "busy",
-          executionStarted: false,
-          delivered: false,
-          deliveryAttempted: false,
-        };
-      }
       if (evaluation.kind === "error") {
         return {
           status: "error",
@@ -314,6 +302,7 @@ export async function executeJobCore(
       if (!evaluation.fire) {
         return { status: "ok", triggerEval };
       }
+      await options?.onConditionFired?.();
       if (evaluation.message !== undefined) {
         effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
       }
