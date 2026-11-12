@@ -44,7 +44,7 @@ it(
     const held = createDeferred<string>();
     const release = createDeferred();
     const prepareAuthority = systemTurnAuthority.prepareSessionSystemTurnAuthority;
-    using heldResume = vi
+    using _heldResume = vi
       .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
       .mockImplementation(async (params) => {
         held.resolve(params.sessionKey);
@@ -53,7 +53,7 @@ it(
       });
     const receipts: ReturnType<typeof sessionEvents.enqueueSessionEventForHost>[] = [];
     const enqueue = sessionEvents.enqueueSessionEventForHost;
-    using events = vi
+    using _events = vi
       .spyOn(sessionEvents, "enqueueSessionEventForHost")
       .mockImplementation((...args) => {
         const receipt = enqueue(...args);
@@ -62,24 +62,16 @@ it(
       });
     const resume = restartResume.resumeMarkedSessions;
     let recovery: Promise<void> | undefined;
-    using observation = vi
+    using _observation = vi
       .spyOn(restartResume, "resumeMarkedSessions")
       .mockImplementation((params) => {
         recovery = resume(params);
         entered.resolve(params);
         return recovery;
       });
-    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     await using cleanup = new AsyncDisposableStack();
     cleanup.defer(() => state.cleanup());
     cleanup.defer(() => closeProvider(providerServer));
-    cleanup.defer(async () => {
-      release.resolve();
-      if (gateway) {
-        await disconnectGatewayClient(gateway.client);
-        await gateway.server.close();
-      }
-    });
     const model = productModelConfig(
       state.workspaceDir,
       buildMockOpenAiResponsesProvider(await listenProvider(providerServer), "recovery"),
@@ -125,19 +117,24 @@ it(
         return target;
       },
     );
-    gateway = await startGatewayWithClient({
+    const gateway = await startGatewayWithClient({
       cfg,
       configPath: state.configPath,
       token: "synthetic-startup-token",
       scopes: ["operator.admin"],
       sidecarStartup: "defer",
     });
+    cleanup.defer(async () => {
+      release.resolve();
+      await disconnectGatewayClient(gateway.client);
+      await gateway.server.close();
+    });
     const params = await withinTest(entered.promise, signal);
     const sessionKey = await withinTest(held.promise, signal);
     const waiting = createDeferred();
     const owner = params.context.agentDatabaseStartup!;
     const wait = owner.waitForAgentPreparation;
-    using admission = vi
+    using _admission = vi
       .spyOn(owner, "waitForAgentPreparation")
       .mockImplementation((agentId, options) => {
         if (options?.forInput && options.sessionKey === sessionKey) {
