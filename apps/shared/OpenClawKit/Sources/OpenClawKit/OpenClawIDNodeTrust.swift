@@ -106,8 +106,7 @@ public enum OpenClawIDNodeTrust {
             hostname: link.hostname,
             pin: (link.clawID, link.rootFingerprint),
             discoveryOrigin: discoveryOrigin,
-            peerKey: peerKey,
-            admission: .node,
+            listed: (peerKey, .node),
             previous: previous,
             now: now)
     }
@@ -127,8 +126,7 @@ public enum OpenClawIDNodeTrust {
             hostname: hostname,
             pin: (previous.clawID, previous.rootFingerprint),
             discoveryOrigin: discoveryOrigin,
-            peerKey: peerKey,
-            admission: .node,
+            listed: (peerKey, .node),
             previous: previous,
             now: now)
     }
@@ -138,22 +136,18 @@ public enum OpenClawIDNodeTrust {
     public static func assessDevice(
         response: Data,
         hostname: String,
-        clawID: String,
-        rootFingerprint: String,
+        pin: (clawID: String, rootFingerprint: String),
         discoveryOrigin: URL,
-        peerKey: String,
-        admission: OpenClawIDAdmission,
+        listed: (peerKey: String, admission: OpenClawIDAdmission),
         previous: OpenClawIDNodeTrustState?,
         now: Int64) throws -> OpenClawIDNodeTrustAssessment
     {
         try self.assess(
             response: response,
             hostname: hostname,
-            clawID: clawID,
-            rootFingerprint: rootFingerprint,
+            pin: pin,
             discoveryOrigin: discoveryOrigin,
-            peerKey: peerKey,
-            admission: admission,
+            listed: (listed.peerKey, listed.admission),
             previous: previous,
             now: now)
     }
@@ -170,8 +164,8 @@ public enum OpenClawIDNodeTrust {
         now: Int64) throws -> Int64
     {
         try self.assess(
-            response: response, hostname: hostname, clawID: clawID, rootFingerprint: rootFingerprint,
-            discoveryOrigin: discoveryOrigin, peerKey: "", admission: nil, previous: previous, now: now)
+            response: response, hostname: hostname, pin: (clawID, rootFingerprint),
+            discoveryOrigin: discoveryOrigin, listed: ("", nil), previous: previous, now: now)
             .verdict.get().state.snapshotSequence
     }
 
@@ -180,8 +174,7 @@ public enum OpenClawIDNodeTrust {
         hostname expectedHostname: String,
         pin: (clawID: String, rootFingerprint: String),
         discoveryOrigin: URL,
-        peerKey: String,
-        admission: OpenClawIDAdmission?,
+        listed: (peerKey: String, admission: OpenClawIDAdmission?),
         previous: OpenClawIDNodeTrustState?,
         now: Int64) throws -> OpenClawIDNodeTrustAssessment
     {
@@ -268,7 +261,7 @@ public enum OpenClawIDNodeTrust {
                 .rollback
             } else if snapshotBinding < bindingSequence {
                 .rollback
-            } else if try !self.admits(fields, peerKey: peerKey, as: admission) {
+            } else if try !self.admits(fields, peerKey: listed.peerKey, as: listed.admission) {
                 .notAdmitted
             } else {
                 nil
@@ -281,7 +274,7 @@ public enum OpenClawIDNodeTrust {
                 discoveryOrigin: discoveryOrigin,
                 relayURL: relay,
                 serverKey: server,
-                peerKey: peerKey,
+                peerKey: listed.peerKey,
                 state: observation ?? candidate,
                 evidence: OpenClawIDCanonicalJSON.object(response).encoded)
             return .init(observation: observation, verdict: .success(target))

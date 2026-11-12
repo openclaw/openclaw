@@ -381,8 +381,8 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
     {
         let response = try await self.discovery.descriptorAndSnapshot(session, clawID: claw.id)
         let device = try await OpenClawIDNodeTrust.assessDevice(
-            response: response, hostname: claw.hostname, clawID: claw.id, rootFingerprint: rootFingerprint,
-            discoveryOrigin: self.discovery.origin, peerKey: keys.peer.peerKey, admission: .owner,
+            response: response, hostname: claw.hostname, pin: (claw.id, rootFingerprint),
+            discoveryOrigin: self.discovery.origin, listed: (keys.peer.peerKey, .owner),
             previous: self.deviceStore.load(hostname: claw.hostname), now: self.now())
         if let observation = device.observation {
             try await self.deviceStore.observe(hostname: claw.hostname, state: observation)
@@ -393,8 +393,8 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         case let .success(target):
             if let nodeStore, let node = keys.node {
                 let nodeTarget = try OpenClawIDNodeTrust.assessDevice(
-                    response: response, hostname: claw.hostname, clawID: claw.id, rootFingerprint: rootFingerprint,
-                    discoveryOrigin: self.discovery.origin, peerKey: node.peerKey, admission: .node,
+                    response: response, hostname: claw.hostname, pin: (claw.id, rootFingerprint),
+                    discoveryOrigin: self.discovery.origin, listed: (node.peerKey, .node),
                     previous: target.state, now: self.now())
                 guard case let .success(listed) = nodeTarget.verdict else { return nil }
                 try await nodeStore.commit(listed)
