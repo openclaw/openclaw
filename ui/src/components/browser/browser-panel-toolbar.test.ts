@@ -215,6 +215,27 @@ describe("Browser toolbar", () => {
     expect(panel.querySelector(".bp-toolbar-favicon svg")).not.toBeNull();
   });
 
+  it("explains address input it can neither open nor search", async () => {
+    const panel = await mountToolbar();
+    const input = panel.querySelector<HTMLInputElement>(".bp-url")!;
+    input.focus();
+    input.value = "javascript:alert(1)";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await panel.updateComplete;
+    const hint = panel.querySelector(".bp-toolbar-hint");
+    expect(hint?.textContent).toBe(
+      "Only web addresses (http or https) or search text can be opened here.",
+    );
+    expect(input.getAttribute("aria-describedby")).toBe(hint?.id);
+    expect(document.activeElement).toBe(input);
+
+    input.value = "openclaw docs";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await panel.updateComplete;
+    expect(panel.querySelector(".bp-toolbar-hint")).toBeNull();
+  });
+
   it("renders the download's Gateway error and HTTP status", async () => {
     const panel = await mountToolbar();
     const error = { error: { message: "Unauthorized", type: "unauthorized" } };

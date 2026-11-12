@@ -16,7 +16,7 @@ import {
   flushBrowserResponses as flush,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { normalizeBrowserUrlDraft } from "./browser-url.ts";
+import { normalizeBrowserUrlDraft, resolveBrowserAddressInput } from "./browser-url.ts";
 import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
 
 type Panel = HTMLElementTagNameMap["openclaw-browser-panel"];
@@ -85,6 +85,23 @@ describe("Browser panel", () => {
     expect(normalizeBrowserUrlDraft("   ")).toBeNull();
     expect(normalizeBrowserUrlDraft("javascript:alert(1)")).toBeNull();
     expect(normalizeBrowserUrlDraft("file:///etc/passwd")).toBeNull();
+  });
+
+  it("searches address-bar text that is not an address", () => {
+    const search = "https://www.google.com/search?q=";
+    expect(resolveBrowserAddressInput(" openclaw browser panel ")).toBe(
+      `${search}openclaw+browser+panel`,
+    );
+    expect(resolveBrowserAddressInput("openclaw")).toBe(`${search}openclaw`);
+    expect(resolveBrowserAddressInput("note: buy milk")).toBe(`${search}note%3A+buy+milk`);
+    expect(resolveBrowserAddressInput("example.com")).toBe("https://example.com/");
+    expect(resolveBrowserAddressInput("localhost:3000/app")).toBe("https://localhost:3000/app");
+    expect(resolveBrowserAddressInput("localhost")).toBe("https://localhost/");
+    expect(resolveBrowserAddressInput("devbox:8080")).toBe("https://devbox:8080/");
+    expect(resolveBrowserAddressInput("http://127.0.0.1:5173/")).toBe("http://127.0.0.1:5173/");
+    expect(resolveBrowserAddressInput("[::1]:3000")).toBe("https://[::1]:3000/");
+    expect(resolveBrowserAddressInput("javascript:alert(1)")).toBeNull();
+    expect(resolveBrowserAddressInput("   ")).toBeNull();
   });
 
   it("restores persisted open state when a mounted tag upgrades lazily", async () => {

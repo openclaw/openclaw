@@ -75,6 +75,13 @@ used tab; different page URLs or browser routes stay separate. Long URLs that
 may have been shortened in tool metadata keep separate tab cards to avoid hiding
 different pages. Expand the tool activity to inspect every original call and result.
 
+The panel's address bar opens web addresses and searches everything else.
+Text with spaces, or a single word with no dot or port (other than
+`localhost`), opens a Google search. None of the browsers the panel drives
+exposes its own default search engine to OpenClaw. Addresses without a scheme
+open over `https://`; other schemes such as `javascript:` or `file:` are not
+opened, and the address bar says so.
+
 If a listed tab cannot be accessed, the panel explains whether navigation rules
 blocked it or its address could not be verified. Select another tab, enter an
 allowed address, or refresh after a temporary lookup failure. Blocked URLs stay
