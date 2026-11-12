@@ -7,6 +7,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
+import { formatGatewayServiceRootRedirect } from "../daemon-cli/shared.js";
 import { printResult } from "./progress.js";
 import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
@@ -109,9 +110,7 @@ export async function printUpdateDryRun(params: {
     );
   }
   if (params.managedServiceRootRedirect) {
-    notes.push(
-      `Package update targets managed service root ${params.managedServiceRootRedirect.root} instead of invoking root ${params.managedServiceRootRedirect.previousRoot}.`,
-    );
+    notes.push(formatGatewayServiceRootRedirect(params.managedServiceRootRedirect));
   }
   if (params.explicitTag && !canResolveRegistryVersionForPackageTarget(params.tag)) {
     notes.push("Non-registry package specs skip npm version lookup and downgrade previews.");

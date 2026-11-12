@@ -321,7 +321,7 @@ it("Doctor restores and verifies native ownership after inspection fails", async
   expect(result.effects).toEqual(["stop", "ResetFailedUnit", "StartUnit"]);
   expect(result.running).toBe(true);
   expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-  expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
+  expect(result.logs).toContain("Gateway restarted and verified after Doctor maintenance.");
   expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
 });
 

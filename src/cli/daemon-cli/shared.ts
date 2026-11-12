@@ -8,7 +8,10 @@ import {
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import {
+  hasGatewayServiceLauncherOverride,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { parseTcpPort } from "../../infra/tcp-port.js";
@@ -79,29 +82,41 @@ export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?:
 export function resolveDaemonServiceInstallGuidance(
   targetRole?: "target" | "diagnostic-only",
   env: NodeJS.ProcessEnv = process.env,
-  service?: { stopped?: boolean; port?: number },
+  service?: { stopped?: boolean; port?: number; command?: GatewayServiceCommandConfig | null },
 ): string | undefined {
   if (targetRole === "diagnostic-only") {
     return undefined;
   }
-  return (
-    resolveDaemonInstallBlockMessage("gateway", env) ??
-    (service?.stopped
-      ? `Stopped service definitions are preserved; run \`${formatDaemonServiceInstallCommand(env, service.port)}\` from the active CLI. Installation may start the service.`
-      : `Run \`${formatCliCommand("openclaw doctor --fix", env)}\` or \`${formatDaemonServiceInstallCommand(env, service?.port)}\` from the active CLI.`)
-  );
+  const block = resolveDaemonInstallBlockMessage("gateway", env);
+  if (block) {
+    return block;
+  }
+  if (hasGatewayServiceLauncherOverride(service?.command)) {
+    return "An operator-owned launcher override prevents automatic repair. Run `openclaw gateway status --deep`, then update or remove the override. On systemd, inspect it with systemctl cat (--user for user services) and reload the manager after editing. Reinstalling alone will not fix it.";
+  }
+  return service?.stopped
+    ? `Stopped service definitions are preserved; run \`${formatDaemonServiceInstallCommand(env, service.port)}\` from the active CLI. Installation may start the service.`
+    : `Run \`${formatCliCommand("openclaw doctor --fix", env)}\` or \`${formatDaemonServiceInstallCommand(env, service?.port)}\` from the active CLI.`;
 }
 
 export function formatGatewayServiceInstallationDrift(
   drift: GatewayServiceInstallationDrift,
   targetRole?: "target" | "diagnostic-only",
   env: NodeJS.ProcessEnv = process.env,
-  service?: { stopped?: boolean; port?: number },
+  service?: { stopped?: boolean; port?: number; command?: GatewayServiceCommandConfig | null },
 ): string {
   const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
   const facts = `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRoot} (${activeVersion ?? "version unknown"}).`;
   const guidance = resolveDaemonServiceInstallGuidance(targetRole, env, service);
   return guidance ? `${facts} ${guidance}` : facts;
+}
+
+/** Shared by update progress and JSON/text dry-run notes. */
+export function formatGatewayServiceRootRedirect(redirect: {
+  root: string;
+  previousRoot: string;
+}): string {
+  return `Only the Gateway installation at ${redirect.root} will be updated. Your CLI at ${redirect.previousRoot} will remain unchanged and may become incompatible with shared config and plugins. Use the CLI from ${redirect.root} after updating.`;
 }
 
 export function createCliStatusTextStyles() {

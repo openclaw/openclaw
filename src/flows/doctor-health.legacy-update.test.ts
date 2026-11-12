@@ -343,7 +343,9 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
             result: expect.objectContaining({
               status: "ok",
               warnings: expect.arrayContaining([
-                expect.stringContaining("Gateway started but readiness was not verified"),
+                expect.stringContaining(
+                  "Gateway started after Doctor maintenance, but readiness was not verified",
+                ),
                 expect.stringContaining("synthetic readiness failure"),
                 expect.stringContaining(
                   formatCliCommand("openclaw gateway status --deep", state.env),
@@ -386,7 +388,7 @@ describe("Doctor invoked by the published 2026.6.33 updater", () => {
         expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
         expect(service.restart).toHaveBeenCalledOnce();
         expect(runtime.log).not.toHaveBeenCalledWith(
-          "Gateway restarted and verified after Doctor repair.",
+          "Gateway restarted and verified after Doctor maintenance.",
         );
       });
     },

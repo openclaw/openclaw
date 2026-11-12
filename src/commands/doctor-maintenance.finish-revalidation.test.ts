@@ -634,7 +634,7 @@ it.each([
     expect(result.finishError).toBeUndefined();
     expect(mocks.stops).toBe(1);
     expect(result.restartCalls).toBe(1);
-    expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
+    expect(result.logs).toContain("Gateway restarted and verified after Doctor maintenance.");
   },
 );
 
@@ -698,7 +698,7 @@ it("continues owning-run Doctor maintenance", async () => {
   expect(mocks.stops).toBe(1);
   expect(restartCalls).toBe(1);
   expect(logs).toContain("Stopped the managed Gateway for Doctor repair.");
-  expect(logs).toContain("Gateway restarted and verified after Doctor repair.");
+  expect(logs).toContain("Gateway restarted and verified after Doctor maintenance.");
 });
 
 it("rechecks update admission after failed restoration inspection", async () => {
@@ -748,5 +748,5 @@ it("restores the Gateway and records one takeover when the owner terminalizes an
   expect(restartCalls).toBe(1);
   expect(takeoverSteps).toBe(1);
   expect(runStatus).toBe("failed");
-  expect(logs).toContain("Gateway restarted and verified after Doctor repair.");
+  expect(logs).toContain("Gateway restarted and verified after Doctor maintenance.");
 });

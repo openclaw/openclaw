@@ -23,67 +23,78 @@ function createService(overrides: Partial<GatewayService>): GatewayService {
 }
 
 describe("readServiceStatusSummary", () => {
-  it("reports installation facts with usable guidance", async () => {
-    const serviceVersion = "2026.9.4";
-    const root = await fs.realpath(tempDirs.make("openclaw-status-prefix-drift-"));
-    const serviceRoot = path.join(root, "prefix-a", "lib", "node_modules", "openclaw");
-    const activeRoot = path.join(root, "prefix-b", "lib", "node_modules", "openclaw");
-    for (const [packageRoot, version] of [
-      [serviceRoot, serviceVersion],
-      [activeRoot, "2026.9.17"],
-    ] as const) {
-      await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-      await fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version }),
+  it.each([false, true])(
+    "reports installation facts with usable guidance (launcher override: %s)",
+    async (launcherOverride) => {
+      const serviceVersion = "2026.9.4";
+      const root = await fs.realpath(tempDirs.make("openclaw-status-prefix-drift-"));
+      const serviceRoot = path.join(root, "prefix-a", "lib", "node_modules", "openclaw");
+      const activeRoot = path.join(root, "prefix-b", "lib", "node_modules", "openclaw");
+      for (const [packageRoot, version] of [
+        [serviceRoot, serviceVersion],
+        [activeRoot, "2026.9.17"],
+      ] as const) {
+        await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version }),
+        );
+        await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n");
+      }
+      const service = createService({
+        isLoaded: vi.fn(async () => true),
+        readCommand: vi.fn(async () => ({
+          programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+          ...(launcherOverride ? { managedOverrides: { launcher: "command" as const } } : {}),
+        })),
+        readRuntime: vi.fn(async () => ({ status: "running" })),
+      });
+      const accountHome = os.userInfo().homedir;
+      const summary = await withEnvAsync(
+        {
+          HOME: accountHome,
+          USERPROFILE: accountHome,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_CONTAINER_HINT: undefined,
+          OPENCLAW_NIX_MODE: undefined,
+          OPENCLAW_SUPERVISOR_MODE: undefined,
+          OPENCLAW_LAUNCHD_LABEL: undefined,
+          OPENCLAW_SYSTEMD_UNIT: undefined,
+          OPENCLAW_WINDOWS_TASK_NAME: undefined,
+        },
+        () => readServiceStatusSummary(service, "Daemon", undefined, activeRoot),
       );
-      await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n");
-    }
-    const service = createService({
-      isLoaded: vi.fn(async () => true),
-      readCommand: vi.fn(async () => ({
-        programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
-      })),
-      readRuntime: vi.fn(async () => ({ status: "running" })),
-    });
-    const accountHome = os.userInfo().homedir;
-    const summary = await withEnvAsync(
-      {
-        HOME: accountHome,
-        USERPROFILE: accountHome,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_CONTAINER_HINT: undefined,
-        OPENCLAW_NIX_MODE: undefined,
-        OPENCLAW_SUPERVISOR_MODE: undefined,
-        OPENCLAW_LAUNCHD_LABEL: undefined,
-        OPENCLAW_SYSTEMD_UNIT: undefined,
-        OPENCLAW_WINDOWS_TASK_NAME: undefined,
-      },
-      () => readServiceStatusSummary(service, "Daemon", undefined, activeRoot),
-    );
-    const output = getStatusOverviewRowValue("Gateway service", {
-      gatewayService: summary,
-      gatewayReachable: false,
-      gatewayProbe: { error: "protocol mismatch" },
-      gatewaySelf: null,
-    });
-    expect(output).toContain(`${serviceRoot} (${serviceVersion})`);
-    expect(output).toContain(`${activeRoot} (2026.9.17)`);
-    expect(typeof summary.installationDrift).toBe("string");
-    expect(output).toContain("openclaw doctor --fix");
-    expect(output).toContain("openclaw gateway install --force");
+      const output = getStatusOverviewRowValue("Gateway service", {
+        gatewayService: summary,
+        gatewayReachable: false,
+        gatewayProbe: { error: "protocol mismatch" },
+        gatewaySelf: null,
+      });
+      expect(output).toContain(`${serviceRoot} (${serviceVersion})`);
+      expect(output).toContain(`${activeRoot} (2026.9.17)`);
+      expect(typeof summary.installationDrift).toBe("string");
+      if (launcherOverride) {
+        expect(output).toContain("operator-owned");
+        expect(output).toContain("update or remove");
+        expect(output).not.toContain("openclaw doctor --fix");
+        expect(output).not.toContain("openclaw gateway install --force");
+      } else {
+        expect(output).toContain("openclaw doctor --fix");
+        expect(output).toContain("openclaw gateway install --force");
+      }
 
-    const alias = path.join(root, "active-package");
-    await fs.symlink(serviceRoot, alias, "dir");
-    const aligned = await readServiceStatusSummary(service, "Daemon", undefined, alias);
-    expect(aligned.installationDrift).toBeUndefined();
-    expect(getStatusOverviewRowValue("Gateway service", { gatewayService: aligned })).not.toContain(
-      "different OpenClaw install",
-    );
-  });
+      const alias = path.join(root, "active-package");
+      await fs.symlink(serviceRoot, alias, "dir");
+      const aligned = await readServiceStatusSummary(service, "Daemon", undefined, alias);
+      expect(aligned.installationDrift).toBeUndefined();
+      expect(getStatusOverviewRowValue("Gateway service", { gatewayService: aligned })).not.toContain(
+        "different OpenClaw install",
+      );
+    },
+  );
   it("marks running unmanaged services as externally managed", async () => {
     const summary = await readServiceStatusSummary(
       createService({

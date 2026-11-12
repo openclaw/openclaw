@@ -450,7 +450,7 @@ it.each([
       expect(boundary.revalidate).toHaveBeenCalledTimes(2);
       expect(boundary.repair).toHaveBeenCalledOnce();
       expect(boundary.log).toHaveBeenCalledWith(
-        "Gateway restarted and verified after Doctor repair.",
+        "Gateway restarted and verified after Doctor maintenance.",
       );
       return;
     }
@@ -472,7 +472,7 @@ it.each([
     expect(boundary.restart).not.toHaveBeenCalled();
     expect(boundary.health).not.toHaveBeenCalled();
     expect(boundary.log).not.toHaveBeenCalledWith(
-      "Gateway restarted and verified after Doctor repair.",
+      "Gateway restarted and verified after Doctor maintenance.",
     );
   },
 );

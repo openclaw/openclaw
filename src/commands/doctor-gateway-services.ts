@@ -315,22 +315,11 @@ export async function maybeRepairGatewayServiceConfig(
       : expectedPlan;
   if (installationDrift && expectedRoot) {
     note(
-      formatGatewayServiceInstallationDrift(installationDrift, undefined, serviceInstallEnv),
+      formatGatewayServiceInstallationDrift(installationDrift, undefined, serviceInstallEnv, {
+        command,
+      }),
       "Gateway service installation",
     );
-    if (!serviceRepairDeferred) {
-      try {
-        await assertGatewayServiceInstallationRepairAllowed({
-          service,
-          command,
-          activeRoot: expectedRoot,
-          maintenance: options.serviceMaintenance,
-        });
-      } catch (error) {
-        note(String(error), "Gateway service installation");
-        return cfg;
-      }
-    }
   }
   const runtimeLayout =
     repairPlan === expectedPlan ? expectedLayout : await summarizeGatewayServiceLayout(repairPlan);
@@ -435,6 +424,20 @@ export async function maybeRepairGatewayServiceConfig(
       "Gateway service config",
     );
     return cfg;
+  }
+
+  if (installationDrift && expectedRoot) {
+    try {
+      await assertGatewayServiceInstallationRepairAllowed({
+        service,
+        command,
+        activeRoot: expectedRoot,
+        maintenance: options.serviceMaintenance,
+      });
+    } catch (error) {
+      note(String(error), "Gateway service installation");
+      return cfg;
+    }
   }
 
   const gatewayTokenForRepair = expectedGatewayToken ?? readEmbeddedGatewayToken(managedDefinition);

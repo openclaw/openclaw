@@ -43,6 +43,8 @@ After its checks finish, `doctor --fix` settles its own inspection workers while
 
 ## Gateway and service repairs
 
+“Gateway restarted and verified” means the Gateway is healthy, not that every repair succeeded. Check the remaining findings; permission errors identify the file or directory to fix.
+
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Have that owner stop the Gateway, run Doctor as the state-owning account, then restart through the owner. Doctor skips native maintenance inspection and service mutations, including install/start/restart/bootstrap and legacy service cleanup; it keeps Gateway/state coordinators and agent-database lease checks, reports service health, and applies non-service repairs. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
 - Doctor and `gateway status --deep` distinguish an unavailable launchd domain, a missing systemd user bus, and native check access denial. See [Gateway and service recovery](/cli/doctor/recovery) for runtime-environment, `dbus-user-session`, and external-supervisor guidance.
 - Doctor reports the managed Gateway's applied heap limit and the adaptive derivation used for the current host or container memory limit. Use `openclaw gateway status` for the same report outside a repair pass.

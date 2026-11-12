@@ -14,6 +14,7 @@ import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
+import * as commandRun from "./update-command-run.js";
 import * as packageUpdate from "./update-command-package.js";
 import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { updateCommand } from "./update-command.js";
@@ -310,5 +311,30 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     } finally {
       fs.chmodSync(globalRoot, 0o755);
     }
+  },
+);
+
+it.each([false, true])(
+  "warns about the unchanged invoking CLI before a redirected update (json=%s)",
+  async (json) => {
+    stubNodeRuntime();
+    const prepare = vi.mocked(commandRun.prepareUpdateCommand).getMockImplementation()!;
+    vi.mocked(commandRun.prepareUpdateCommand).mockImplementation(async (opts) => ({
+      ...(await prepare(opts)),
+      servicePlan: {
+        rootRedirect: { root: fixture.root, previousRoot: "/other-node/lib/node_modules/openclaw" },
+      },
+    }));
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+    const output = json
+      ? JSON.stringify(vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0])
+      : log.mock.calls.flat().join("\n");
+    expect(output).toContain("will remain unchanged");
+    expect(output).toContain("incompatible with shared config and plugins");
+    expect(output).toContain(`Use the CLI from ${fixture.root}`);
+    expect(output).toContain("/other-node/lib/node_modules/openclaw");
+    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+    expect(fs.existsSync(fixture.databasePath)).toBe(false);
   },
 );

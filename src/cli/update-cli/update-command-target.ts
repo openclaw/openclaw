@@ -44,7 +44,7 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
-import { CLI_NAME } from "../cli-name.js";
+import { formatGatewayServiceRootRedirect } from "../daemon-cli/shared.js";
 import {
   DEFAULT_PACKAGE_NAME,
   normalizeTag,
@@ -108,11 +108,6 @@ function printManagedServicePackageUpdatePlan(params: {
     defaultRuntime.log(
       theme.warn(
         `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-      ),
-    );
-    defaultRuntime.log(
-      theme.muted(
-        `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
       ),
     );
     if (nodeRunner) {
@@ -387,6 +382,9 @@ export async function resolveUpdateCommandTarget(
         managedServiceRoot = servicePlan.serviceRoot;
         managedServiceNodeRunner = servicePlan.nodeRunner;
         root = managedServiceRootRedirect?.root ?? discoveredRoot;
+        if (managedServiceRootRedirect) {
+          warn(formatGatewayServiceRootRedirect(managedServiceRootRedirect));
+        }
         if (!opts.json) {
           printManagedServicePackageUpdatePlan(servicePlan);
         }

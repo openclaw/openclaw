@@ -424,17 +424,34 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     ).toEqual([]);
   });
 
-  it("refuses an unsafe directory even when its unit mode is repairable", async () => {
-    const previous = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
-    await writeFixtureFile(unitPath, previous);
-    await fs.chmod(unitPath, 0o664);
-    await fs.chmod(path.dirname(unitPath), 0o775);
-
-    await expect(stage()).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]");
-    expect(await fs.readFile(unitPath, "utf8")).toBe(previous);
-    expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o664);
-    expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
-  });
+  it.each(["service", "definition"])(
+    "identifies the unsafe %s directory without changing it",
+    async (kind) => {
+      const previous = "[Service]\nExecStart=/usr/bin/node /old/index.js gateway\n";
+      await writeFixtureFile(unitPath, previous);
+      await fs.chmod(unitPath, 0o664);
+      const directory = kind === "service" ? path.dirname(unitPath) : path.join(root, "operator");
+      if (kind === "definition") {
+        await fs.mkdir(directory, { mode: 0o755 });
+        const dropIn = path.join(directory, "custom.conf");
+        await writeFixtureFile(dropIn, "[Service]\nEnvironment=FIXTURE=retained\n");
+        managerDefinition(unitPath, [dropIn]);
+      }
+      await fs.chmod(directory, 0o775);
+      await expect(readSystemdDefinitionMutationCapability(env)).resolves.toMatchObject({
+        kind: "unknown",
+        reason: "unsafe-permissions",
+        path: directory,
+      });
+      const staging = stage();
+      await expect(staging).rejects.toThrow(JSON.stringify(directory));
+      await expect(staging).rejects.toThrow("SERVICE_DEFINITION_UNKNOWN: [unsafe-permissions]");
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o775);
+      expect(await fs.readFile(unitPath, "utf8")).toBe(previous);
+      expect((await fs.stat(unitPath)).mode & 0o777).toBe(0o664);
+      expect(await fs.readdir(path.dirname(unitPath))).toEqual([path.basename(unitPath)]);
+    },
+  );
 
   it.each([0o775, 0o777])(
     "repairs an owned writable state directory (%o) before publication",

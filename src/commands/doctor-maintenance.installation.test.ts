@@ -181,6 +181,8 @@ async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
   bun?: boolean;
+  launcherOverride?: boolean;
+  definitionRepairBlocked?: boolean;
   installFails?: boolean;
   stopFailsWithPairedDevice?: boolean;
   tokenRecovery?: "success" | "writer-unavailable" | "no-consent";
@@ -206,6 +208,14 @@ async function runInstallationCase(params: {
   };
 }) {
   const { installFails, initiallyStopped } = params;
+  if (params.definitionRepairBlocked) {
+    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+    mocks.confirm.mockResolvedValue(true);
+    mocks.audit.mockResolvedValue({
+      ok: false,
+      issues: [{ code: "gateway-proxy-env-embedded", message: "temporary CA" }],
+    });
+  }
   if (params.consent) {
     const { auditGatewayServiceConfig } = await vi.importActual<
       typeof import("../daemon/service-audit.js")
@@ -234,7 +244,8 @@ async function runInstallationCase(params: {
   const oldRoot = path.join(home, "prefix-a/lib/node_modules/openclaw");
   // Policy-only restoration must not silently become a cross-install repair.
   mocks.activeRoot =
-    params.nativePolicy && params.nativePolicy !== "disabled-before-install"
+    params.definitionRepairBlocked ||
+    (params.nativePolicy && params.nativePolicy !== "disabled-before-install")
       ? oldRoot
       : path.join(home, "prefix-b/lib/node_modules/openclaw");
   for (const [root, version] of [
@@ -291,6 +302,13 @@ async function runInstallationCase(params: {
           ...(params.tokenRecovery ? { OPENCLAW_GATEWAY_TOKEN: "maintenance-fixture-token" } : {}),
         },
       };
+      if (params.launcherOverride) {
+        command = {
+          ...command,
+          managedDefinition: structuredClone(command),
+          managedOverrides: { launcher: "command" },
+        };
+      }
       const originalCommand = structuredClone(command);
       let running = !initiallyStopped;
       let enabled = params.nativePolicy !== "disabled-before";
@@ -309,6 +327,10 @@ async function runInstallationCase(params: {
         isAbsent: async () => false,
         isEnabled: params.nativePolicy === "unavailable-before" ? undefined : async () => enabled,
         isLoaded: async () => true,
+        readDefinitionMutationCapability: async () =>
+          params.definitionRepairBlocked
+            ? { kind: "unknown", reason: "unsafe-permissions", path: "/fixture/service.d" }
+            : { kind: "writable" },
         readCommand: async () => command,
         readRuntime: async (env, opts) => {
           nativeInspectionReads += 1;
@@ -429,6 +451,18 @@ async function runInstallationCase(params: {
         const notes = mocks.note.mock.calls.flat().join("\n");
         expect(notes).toContain(`${oldRoot} (2026.9.4)`);
         expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
+        if (params.launcherOverride) {
+          expect({ events, running, command }).toEqual({
+            events: [],
+            running: true,
+            command: originalCommand,
+          });
+          expect(notes).toContain("systemctl --user cat openclaw-gateway.service");
+          expect(notes).not.toContain("controlled by another owner");
+          expect(notes).not.toContain("openclaw doctor --fix");
+          expect(notes).not.toContain("openclaw gateway install --force");
+          return;
+        }
         expect(notes).toContain("openclaw doctor --fix");
         expect(notes).toContain("openclaw gateway install --force");
         if (params.bun) {
@@ -499,7 +533,9 @@ async function runInstallationCase(params: {
         root: mocks.activeRoot,
         options: {
           repair: true,
-          nonInteractive: !params.tokenRecovery || params.tokenRecovery === "no-consent",
+          nonInteractive:
+            !params.definitionRepairBlocked &&
+            (!params.tokenRecovery || params.tokenRecovery === "no-consent"),
         },
         runtime,
       });
@@ -598,7 +634,9 @@ async function runInstallationCase(params: {
                   events.push("write-config");
                   return writeDoctorGatewayConfig(writerContext!, nextConfig);
                 }
-              : undefined,
+              : params.definitionRepairBlocked
+                ? async (nextConfig) => nextConfig
+                : undefined,
           );
         } catch (error) {
           finishError = error;
@@ -691,6 +729,19 @@ async function runInstallationCase(params: {
           return;
         }
         expect(finishError).toBeUndefined();
+        if (params.definitionRepairBlocked) {
+          expect({ events, running, command }).toEqual({
+            events: ["stop", "repair-state", "restart"],
+            running: true,
+            command: originalCommand,
+          });
+          expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("repair blocked"));
+          expect(runtime.log).toHaveBeenCalledWith(
+            "Gateway restarted and verified after Doctor maintenance.",
+          );
+          expect(mocks.health).toHaveBeenCalled();
+          return;
+        }
         if (params.restorationInspectionFailure) {
           expect(events).toEqual(["stop", "repair-state"]);
           expect(running).toBe(false);
@@ -699,7 +750,7 @@ async function runInstallationCase(params: {
           expect(maintenance?.warnings?.[0]).toContain("state compatibility is unverified");
           expect(runtime.log).toHaveBeenCalledWith(maintenance?.warnings?.[0]);
           expect(runtime.log).not.toHaveBeenCalledWith(
-            "Gateway restarted and verified after Doctor repair.",
+            "Gateway restarted and verified after Doctor maintenance.",
           );
           expect(mocks.health).not.toHaveBeenCalled();
           return;
@@ -767,6 +818,7 @@ it.each<InstallationCase>([
   { platform: "linux", tokenRecovery: "writer-unavailable", installFails: false },
   { platform: "linux", tokenRecovery: "no-consent", installFails: false },
   { platform: "linux", initiallyStopped: true },
+  { platform: "linux", definitionRepairBlocked: true },
   { platform: "linux", restorationInspectionFailure: "unknown-runtime" },
   { platform: "linux", inspectionScenario: "slow-admission" },
   { platform: "linux", stopFailsWithPairedDevice: true },
@@ -800,6 +852,7 @@ it.each<InstallationCase>([
   { platform: "linux", inspectionFailure: "lost-before-install" },
   { platform: "linux", updateInProgress: true },
   { platform: "linux", bun: true },
+  { platform: "linux", launcherOverride: true },
 ])("repairs installation drift with doctor --fix (%j)", async (scenario) =>
   runInstallationCase({ ...scenario, mode: "direct" }),
 );

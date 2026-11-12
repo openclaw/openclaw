@@ -71,6 +71,7 @@ export async function readServiceStatusSummary(
               installationDrift,
               undefined,
               state.env,
+              { command: state.command },
             ),
           }
         : {}),

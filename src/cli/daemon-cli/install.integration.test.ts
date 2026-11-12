@@ -333,7 +333,7 @@ describe("runDaemonInstall integration", () => {
         expect(output).toContain("service directory");
         expect(output).toContain("group/world-writable");
         expect(output).toContain("chmod go-w");
-        expect(output).not.toContain("private-path-canary");
+        expect(output).toContain(ancestor);
         expect(output).not.toContain("MISSING_GATEWAY_TOKEN");
 
         await fs.chmod(ancestor, 0o700);

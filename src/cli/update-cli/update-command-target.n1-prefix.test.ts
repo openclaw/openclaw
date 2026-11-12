@@ -6,6 +6,7 @@ import {
   resolveNodeRuntimeInfo,
 } from "../../daemon/runtime-paths.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import { defaultRuntime } from "../../runtime.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
@@ -146,6 +147,7 @@ async function resolve(servicePlan: {
 it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
   "selects the package root for a %s",
   async (kind) => {
+    const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     const selected = await resolve({
       rootRedirect: kind === "protected redirect" ? { root: rootA, previousRoot: rootB } : null,
       ...(kind === "writable rebind" ? { serviceRoot: rootA } : {}),
@@ -155,6 +157,9 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
     );
     if (kind !== "protected redirect") {
       expect(state.calls.some((argv) => argv[1] === "root")).toBe(kind === "unowned project");
+    }
+    if (kind === "protected redirect") {
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("will remain unchanged"));
     }
     if (kind === "writable rebind") {
       expect(selected.packageInstallTarget?.directNodeModulesRoot).toBe(true);
