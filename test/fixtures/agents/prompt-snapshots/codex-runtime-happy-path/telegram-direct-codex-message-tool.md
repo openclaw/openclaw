@@ -253,20 +253,20 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 2004
   },
   "openClawDeveloperInstructions": {
-    "chars": 3071,
-    "roughTokens": 768
+    "chars": 3431,
+    "roughTokens": 858
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 13762,
-    "roughTokens": 3441
+    "chars": 14122,
+    "roughTokens": 3531
   },
   "totalWithDynamicToolsJson": {
-    "chars": 99737,
-    "roughTokens": 24935
+    "chars": 100097,
+    "roughTokens": 25025
   },
   "userInputText": {
     "chars": 879,
@@ -417,7 +417,7 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 
 ### Conversation Behavior
-You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
+You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation. If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Do not use silence to abandon an outstanding request or hide a failure.
 </thread_policy>
 ````
 

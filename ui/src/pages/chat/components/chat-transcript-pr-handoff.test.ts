@@ -7,6 +7,11 @@ import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
+const abortedSession = (lastRunId: string) => ({
+  key: sessionKey,
+  lastRunId,
+  abortedLastRun: true,
+});
 
 const chatItems = (overrides: Partial<BuildChatItemsProps>) =>
   buildChatItems(createProps({ sessionKey, ...overrides }));
@@ -193,7 +198,8 @@ describe("PR preparation handoff", () => {
         },
         ...messages.slice(3),
       ];
-      const frame = framesOf(projectHistory(entries, { messages: entries, showToolCalls }))[0];
+      const options = { messages: entries, showToolCalls, session: abortedSession("prepare-run") };
+      const frame = framesOf(projectHistory(entries, options))[0];
       expect(frame?.outcome.kind).toBe("interrupted");
       if (!showToolCalls) {
         expect(JSON.stringify(messagesIn([frame!]))).not.toContain("yielded");
@@ -386,7 +392,8 @@ describe("background media handoff", () => {
     { name: "unrelated tool", details: receipt, tool: "exec" },
   ])("does not hide an unfinished run with $name", ({ details, isError, tool }) => {
     const messages = mediaHistory(tool ?? "image_generate", details, isError);
-    expect(framesOf(projectHistory(messages, { messages }))[0]?.outcome.kind).toBe("interrupted");
+    const chain = projectHistory(messages, { messages, session: abortedSession("media-run") });
+    expect(framesOf(chain)[0]?.outcome.kind).toBe("interrupted");
   });
 
   it.each(["aborted", "error", "timeout"])("preserves a real %s after acceptance", (stopReason) => {

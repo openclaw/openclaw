@@ -270,6 +270,12 @@ serialization, and reply delivery. Backend execution includes owner code and SQL
 it is not a native SQL timer. `replyReceived` marks broker receipt, before the
 caller resumes. Measure caller latency separately.
 
+OPEN requests also report `backendLoadStarted` / `backendLoadFinished` around
+backend module loading, `openGrantStarted` / `openGrantFinished` when requesting
+OPEN admission, and `factoryStarted` / `factoryFinished` through settlement of the
+backend factory result. These use the same optional timing object and omit phases
+the request never reaches.
+
 Framed requests retain the first receipt and backend execution timestamps through
 the final reply. `inputReady` marks complete command reconstruction before backend
 preparation. Failed requests omit stages they never reached. Timestamps contain no
