@@ -562,6 +562,30 @@
                     }
                   ]
                 },
+                "cyberAccessProgram": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "const": "standard",
+                          "type": "string"
+                        },
+                        {
+                          "const": "daybreak_blue",
+                          "type": "string"
+                        },
+                        {
+                          "const": "daybreak_red",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Access for this scheduled agent turn: standard, daybreak_blue, or daybreak_red. Subject to current role and account grants at execution. Null clears the override."
+                },
                 "declarationKey": {
                   "description": "Key to avoid duplicate declarations (add only).",
                   "maxLength": 200,
