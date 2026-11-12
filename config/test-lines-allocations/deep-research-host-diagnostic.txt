@@ -1,4 +1,4 @@
 # Reject research startup on hosts without session-work authority before opening state,
 # propagate the actionable diagnostic to tools, and preserve revoked-invocation rejection.
-# 64 regression lines plus the merged base's verified five-line inherited debt.
-69
+# Exactly 64 net regression-test lines; no credit for inherited base debt.
+64
