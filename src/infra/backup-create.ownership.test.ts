@@ -379,6 +379,28 @@ describe("backup Doctor migration originals", () => {
       closeOpenClawStateDatabase();
       const statePath = resolveOpenClawStateSqlitePath(state.env);
       const id = "0b6f3c1e-8f2a-4c1d-9e3b-5a7d2c4f6e81";
+      // Retained stores need no configured roster entry to be captured by a full backup.
+      const retiredPath = path.join(state.agentDir("retired"), "openclaw-agent.sqlite");
+      const registeredPath = state.statePath("registered-retired", "openclaw-agent.sqlite");
+      for (const target of [
+        { agentId: "retired", path: retiredPath },
+        { agentId: "registered-retired", path: registeredPath },
+      ]) {
+        openOpenClawAgentDatabase({ ...target, env: state.env });
+      }
+      closeOpenClawAgentDatabasesForTest();
+      unregisterOpenClawAgentDatabase({ agentId: "retired", path: retiredPath, env: state.env });
+      closeOpenClawStateDatabase();
+      // Doctor canonicalizes a file alias before naming its retained original.
+      const physicalPath = state.statePath("backing.sqlite");
+      const aliasPath = path.join(state.agentDir("aliased"), "openclaw-agent.sqlite");
+      openOpenClawAgentDatabase({ agentId: "aliased", path: physicalPath, env: state.env });
+      closeOpenClawAgentDatabasesForTest();
+      unregisterOpenClawAgentDatabase({ agentId: "aliased", path: physicalPath, env: state.env });
+      await fs.mkdir(path.dirname(aliasPath), { recursive: true });
+      await fs.symlink(physicalPath, aliasPath);
+      registerOpenClawAgentDatabase({ agentId: "aliased", path: aliasPath, env: state.env });
+      closeOpenClawStateDatabase();
       // A PostgreSQL original is a directory: omitted whole and reported once.
       const postgresOriginal = `${statePath}.pre-startup-migration-${id}.postgres.bak`;
       const originals = [
@@ -387,6 +409,10 @@ describe("backup Doctor migration originals", () => {
         `${agentPath}.pre-startup-migration-restart-recovery-${id}.bak`,
         `${statePath}.pre-startup-migration-${id}.bak`,
         postgresOriginal,
+        `${retiredPath}.pre-startup-migration-${id}.bak`,
+        `${registeredPath}.pre-startup-migration-${id}.bak`,
+        `${aliasPath}.pre-startup-migration-${id}.bak`,
+        `${physicalPath}.pre-startup-migration-${id}.bak`,
       ];
       // Similar names Doctor never writes stay ordinary agent files.
       const neighbors = [
@@ -401,16 +427,20 @@ describe("backup Doctor migration originals", () => {
       for (const file of [...originals, ...neighbors].filter((f) => f !== postgresOriginal)) {
         await fs.writeFile(file, "synthetic original");
       }
-      const archived = async (archivePath: string, file: string) =>
-        (await listArchiveEntries(archivePath)).some(
-          (entry) =>
-            entry.endsWith(`/${path.basename(file)}`) || entry.includes(`/${path.basename(file)}/`),
+      const archived = async (
+        archive: { archivePath: string; archiveRoot: string },
+        file: string,
+      ) => {
+        const member = buildBackupArchivePath(archive.archiveRoot, file).replaceAll("\\", "/");
+        return (await listArchiveEntries(archive.archivePath)).some(
+          (entry) => entry === member || entry.startsWith(`${member}/`),
         );
+      };
 
       const full = await createVerifiedBackup(state);
       expect(full.verified).toBe(true);
       for (const file of [...originals, ...neighbors]) {
-        expect(await archived(full.archivePath, file)).toBe(true);
+        expect(await archived(full, file)).toBe(true);
       }
 
       const lean = await createVerifiedBackup(state, {
@@ -418,7 +448,7 @@ describe("backup Doctor migration originals", () => {
         excludeMigrationBackups: true,
       });
       for (const file of originals) {
-        expect(await archived(lean.archivePath, file)).toBe(false);
+        expect(await archived(lean, file)).toBe(false);
       }
       expect(lean).toMatchObject({ excludeMigrationBackups: true, verified: true });
       for (const file of originals) {
@@ -435,7 +465,7 @@ describe("backup Doctor migration originals", () => {
         expect(await fs.readFile(file, "utf8")).toBe("synthetic original");
       }
       for (const file of neighbors) {
-        expect(await archived(lean.archivePath, file)).toBe(true);
+        expect(await archived(lean, file)).toBe(true);
       }
       await expect(restoreBackup(state, lean)).resolves.toMatchObject({ ok: true });
       const restoredAgent = path.join(

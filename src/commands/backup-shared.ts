@@ -18,6 +18,7 @@ import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
 } from "../infra/backup-config-capture.js";
+import { resolveAgentPortRoots } from "../infra/database-engine/agent-port.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getDatabaseEngineInput,
@@ -568,8 +569,10 @@ export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<B
 
 // Only Doctor's exact sibling names: update cleanup still owns their retention.
 async function listDoctorMigrationBackups(databasePaths: readonly string[]): Promise<string[]> {
+  // Doctor names originals beside physical databases; retained locators can be file aliases.
+  const physicalPaths = await Promise.all(databasePaths.map(realpathOrResolve));
   const listed = await Promise.all(
-    databasePaths.map(async (configuredPath) => {
+    [...new Set([...databasePaths, ...physicalPaths])].map(async (configuredPath) => {
       const databasePath = path.resolve(configuredPath);
       const directory = path.dirname(databasePath);
       const names = await fs.readdir(directory).catch((error: unknown) => {
@@ -583,7 +586,7 @@ async function listDoctorMigrationBackups(databasePaths: readonly string[]): Pro
         .filter((file) => isDoctorMigrationBackupPath(databasePath, file));
     }),
   );
-  return listed.flat().toSorted();
+  return [...new Set(listed.flat())].toSorted();
 }
 
 export async function resolveBackupPlanFromDisk(
@@ -705,7 +708,7 @@ async function resolveBackupPlanFromState(params: {
     excludedMigrationBackupPaths: params.excludeMigrationBackups
       ? await listDoctorMigrationBackups([
           resolveOpenClawStateSqlitePath(),
-          ...agentRoots.map((root) => root.databasePath),
+          ...(await resolveAgentPortRoots(discoveryInput)),
         ])
       : undefined,
     agentRoots,
