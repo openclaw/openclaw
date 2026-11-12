@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
+import { addGatewayClientOptions } from "../gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
@@ -167,6 +168,36 @@ ${formatHelpExamples([
         await agentsDeleteCommand({ ...opts, id });
       });
     });
+
+  const agentFiles = agents
+    .command("files")
+    .description("Inspect an agent's workspace documents (SOUL.md, AGENTS.md, USER.md, MEMORY.md)");
+
+  const agentFilesList = agentFiles
+    .command("list")
+    .description("List the agent's editable workspace documents")
+    .option("--agent <id>", "Agent id (defaults to the configured default agent)")
+    .option("--json", "Output JSON instead of text", false);
+  addGatewayClientOptions(agentFilesList);
+  agentFilesList.action(async (opts): Promise<void> => {
+    await runAgentsCommandAction(async () => {
+      const { agentsFilesListCommand } = await import("../../commands/agents.files.js");
+      await agentsFilesListCommand(opts);
+    });
+  });
+
+  const agentFilesGet = agentFiles
+    .command("get <name>")
+    .description("Print one editable workspace document")
+    .option("--agent <id>", "Agent id (defaults to the configured default agent)")
+    .option("--json", "Output JSON instead of text", false);
+  addGatewayClientOptions(agentFilesGet);
+  agentFilesGet.action(async (name, opts): Promise<void> => {
+    await runAgentsCommandAction(async () => {
+      const { agentsFilesGetCommand } = await import("../../commands/agents.files.js");
+      await agentsFilesGetCommand({ ...opts, name });
+    });
+  });
 
   agents.action(async (): Promise<void> => {
     await runAgentsCommandAction(async () => {

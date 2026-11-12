@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   bind: vi.fn(),
   delete: vi.fn(),
   list: vi.fn(),
+  filesList: vi.fn(),
+  filesGet: vi.fn(),
   exit: vi.fn(),
   verbose: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -37,6 +39,11 @@ vi.mock("../../commands/agents.commands.delete.js", () => ({ agentsDeleteCommand
 
 // mock-isolation: Agent enumeration is a controlled command collaborator.
 vi.mock("../../commands/agents.commands.list.js", () => ({ agentsListCommand: mocks.list }));
+// mock-isolation: CLI parsing must not call the Gateway.
+vi.mock("../../commands/agents.files.js", () => ({
+  agentsFilesListCommand: mocks.filesList,
+  agentsFilesGetCommand: mocks.filesGet,
+}));
 // mock-isolation: Argument parsing must not mutate process-wide verbosity.
 vi.mock("../../global-state.js", () => ({ setVerbose: mocks.verbose }));
 vi.mock("../../runtime.js", async (importOriginal) => ({
@@ -128,6 +135,18 @@ describe("agent command registration", () => {
     expect(mocks.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(options), {
       hasAutomationFlags: true,
     });
+  });
+
+  it("dispatches agents files list/get", async () => {
+    await runCli("agents files list --agent ops --json".split(" "));
+    expect(mocks.filesList).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agent: "ops", json: true }),
+    );
+
+    await runCli("agents files get SOUL.md --agent ops --json".split(" "));
+    expect(mocks.filesGet).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: "SOUL.md", agent: "ops", json: true }),
+    );
   });
 
   it.each([
