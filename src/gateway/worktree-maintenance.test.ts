@@ -55,7 +55,7 @@ function completedResult(): ManagedWorktreeGcResult {
   return { ...new WorktreeGcProgress().result, limitsSatisfied: true };
 }
 
-it("reclaims scratch before a held worktree backlog and records the outcome", async () => {
+it("reclaims scratch on startup and preserves progress across a restart during GC", async () => {
   const dirs = createTrackedTempDirs();
   try {
     const root = await fs.realpath(await dirs.make("worktree-maintenance-scratch-"));
@@ -63,22 +63,42 @@ it("reclaims scratch before a held worktree backlog and records the outcome", as
     await fs.mkdir(path.dirname(scratch), { recursive: true });
     await fs.writeFile(scratch, "proof");
     await fs.utimes(scratch, 1, 1);
-    vi.mocked(prepareScratchMaintenanceTargets).mockResolvedValueOnce({
-      targets: [{ root, kind: "checkout", isLive: () => false }],
+    const fresh = path.join(root, ".openclaw/tmp/fresh.txt");
+    await fs.writeFile(fresh, "keep");
+    await fs.utimes(fresh, 1_800_000_000, 1_800_000_000);
+    const custody = {
+      targets: [{ root, kind: "checkout" as const, isLive: () => false }],
       release: () => {},
-    });
+    };
+    vi.mocked(prepareScratchMaintenanceTargets)
+      .mockResolvedValueOnce(custody)
+      .mockResolvedValueOnce(custody);
     await using fixture = maintenanceFixture();
     fixture.clock.setTime(1_800_000_000_000);
-    const { owner, receipt, release, running } = await fixture.runHeld();
+    const { entered, release } = fixture.hold();
+    const owner = fixture.start();
+    await fixture.run();
+    const running = fixture.run();
+    await awaitCleanup(entered.promise, running);
     await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(owner.request({ jobId: receipt.jobId }).state).toBe("running");
-    release.resolve(completedResult());
-    await running;
-    expect(owner.request({ jobId: receipt.jobId })).toMatchObject({
-      state: "completed",
+    expect(owner.request()).toMatchObject({
+      state: "running",
       scratch: { entriesRemoved: 1, bytesRemoved: 5, skippedLive: 0, errors: [] },
     });
+    const stopping = owner.stop();
+    release.resolve(completedResult());
+    await stopping;
+    await running;
+    fixture.start();
+    await fixture.run();
+    await fixture.run();
+    expect(fixture.onComplete).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scratch: expect.objectContaining({ entriesRemoved: 0, scanned: 1, errors: [] }),
+      }),
+    );
     await expect(fs.stat(scratch)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(fresh, "utf8")).toBe("keep");
   } finally {
     await dirs.cleanup();
   }
@@ -208,6 +228,7 @@ function warmPoolDemand() {
 
 beforeEach(() => {
   vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => false);
+  vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedResult());
   vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue();
 });
 

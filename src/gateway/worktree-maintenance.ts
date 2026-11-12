@@ -392,7 +392,9 @@ export function startWorktreeMaintenance(params: {
   });
   scheduler.schedule({
     id: "maintenance:worktrees",
-    delayMs: WORKTREE_GC_INTERVAL_MS,
+    // The startup owner already waits for post-ready admission; do not lose an
+    // entire interval after each restart before reclaiming expired scratch.
+    delayMs: 0,
     everyMs: WORKTREE_GC_INTERVAL_MS,
     phase: "maintenance",
     run: () => {
