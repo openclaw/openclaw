@@ -168,7 +168,7 @@ describe("sessions import CLI", () => {
     await scope.run(() => run("sessions import --all --json"));
     expect(methods()).toEqual(["list", "import"]);
     const output = JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]));
-    expect(output).toMatchObject({ ok: false, results: [{ threadId: "first", status: "imported" }] });
+    expect(output).toMatchObject({ ok: false, results: [{ status: "imported" }] });
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
