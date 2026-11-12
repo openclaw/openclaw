@@ -15,7 +15,7 @@ jobs:
     name: Focused Mac diagnostic (not qualification)
     if: github.run_attempt == 1 && github.repository == 'openclaw/openclaw'
     runs-on: xcode-27
-    timeout-minutes: 75
+    timeout-minutes: 65
     strategy:
       matrix:
         phase:

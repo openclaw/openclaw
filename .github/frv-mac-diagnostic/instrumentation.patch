@@ -149,18 +149,21 @@
          defer { try? FileManager().removeItem(at: root) }
 --- a/apps/macos/Tests/OpenClawIPCTests/DashboardExperienceTests.swift
 +++ b/apps/macos/Tests/OpenClawIPCTests/DashboardExperienceTests.swift
-@@ -228,6 +228,20 @@
+@@ -228,6 +228,23 @@
      func `reopening preserves a manually refocused Gateway after backgrounding`(
          _ automaticGatewayProfileRefreshEnabled: Bool) async throws
      {
 +        MacDiagnosticTrace.emit("focus.case", detail: "automaticRefresh=\(automaticGatewayProfileRefreshEnabled)")
 +        let diagnosticObservers = [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification].map { name in
 +            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { note in
-+                MainActor.assumeIsolated {
-+                    let changed = note.object as? NSWindow
++                // Transfer only value snapshots; Notification and its object stay outside actor isolation.
++                let changedIdentity = (note.object as? NSWindow).map { ObjectIdentifier($0) }
++                let notificationName = note.name.rawValue
++                MainActor.assumeIsolated { [changedIdentity, notificationName] in
++                    let changed = NSApp.windows.first { changedIdentity == ObjectIdentifier($0) }
 +                    let owner = changed?.windowController.map { String(describing: type(of: $0)) } ?? "none"
-+                    MacDiagnosticTrace.emit("focus.notification", detail: "name=\(note.name.rawValue) changed=\(changed?.windowNumber ?? -1) key=\(NSApp.keyWindow?.windowNumber ?? -1) owner=\(owner)")
-+                    if name == NSWindow.didBecomeKeyNotification {
++                    MacDiagnosticTrace.emit("focus.notification", detail: "name=\(notificationName) changed=\(changed?.windowNumber ?? -1) key=\(NSApp.keyWindow?.windowNumber ?? -1) owner=\(owner)")
++                    if notificationName == NSWindow.didBecomeKeyNotification.rawValue {
 +                        MacDiagnosticTrace.emit("focus.stack", detail: Thread.callStackSymbols.prefix(16).joined(separator: " | "))
 +                    }
 +                }
@@ -170,7 +173,7 @@
          try await AppKitTestSupport.startApplication()
          let server = try await DashboardHTTPFixture.start()
          defer { server.stop() }
-@@ -248,6 +262,7 @@
+@@ -248,6 +265,7 @@
              // The user clicks an existing window, without going through a manager presentation.
              window.makeKeyAndOrderFront(nil)
          }
