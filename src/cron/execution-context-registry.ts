@@ -47,8 +47,9 @@ export type ScheduledToolTargets = Readonly<{
   /** The job's exec target pin, from the context's tool policy. */
   execTarget?: ScheduledExecutionFacts["toolPolicy"]["execTarget"];
   /**
-   * The owner bit sessions this run spawns record in their lineage receipt: the
-   * occurrence's admitted owner bit when its memory comes from its parent.
+   * The owner bit sessions this run spawns record in their lineage receipt: a
+   * child-placement occurrence's admitted owner bit, rechecked through
+   * `assertOwnerCurrent` when a requester holds it.
    */
   spawnSenderIsOwner?: boolean;
 }>;
@@ -76,7 +77,10 @@ export function readScheduledToolTargets(
     ...(ownerRecheck ? { assertOwnerCurrent: ownerRecheck } : {}),
     ...(context.principal.kind === "ingress" ? {} : { placement: context.placement }),
     ...(execTarget ? { execTarget } : {}),
-    ...(memory.source === "parent" ? { spawnSenderIsOwner: memory.owner } : {}),
+    // Only a child-placement run row carries the receipt its spawned sessions follow.
+    ...(context.placement === "child" && memory.source === "parent"
+      ? { spawnSenderIsOwner: memory.owner }
+      : {}),
   };
 }
 
