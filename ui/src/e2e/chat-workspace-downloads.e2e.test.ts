@@ -265,9 +265,9 @@ suite.define(() => {
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
         await page.evaluate(
           () =>
-            new Promise<void>((resolve) =>
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-            ),
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
         );
         expect(await row.count()).toBe(1);
         expect(await catalogRail.getByRole("listitem").count()).toBeLessThan(80);
