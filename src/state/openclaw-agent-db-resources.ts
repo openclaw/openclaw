@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { threadId } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
@@ -6,6 +8,7 @@ import {
   registerAgentDatabaseReaderCloser,
 } from "../infra/agent-database-readers.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { reserveAgentCreationClaimAdmission } from "./agent-creation-claim.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
@@ -277,6 +280,7 @@ export async function drainAgentDatabaseResources<T>(
   cleanupOwner?: object,
 ): Promise<T> {
   return withAgentDatabaseCloseFence(selection, async () => {
+    const startedAt = performance.now();
     const selected = [...new Set([...resources.active, ...resources.closing.keys()])].filter(
       (resource) =>
         matchesAgentDatabaseClose(selection, resource) &&
@@ -295,6 +299,7 @@ export async function drainAgentDatabaseResources<T>(
         .filter((resource) => !resource.retireAfterResources)
         .map((resource) => closeAgentDatabaseResource(resource)),
     );
+    const resourcesDoneAt = performance.now();
     const errors = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
@@ -304,13 +309,29 @@ export async function drainAgentDatabaseResources<T>(
     const nativeResults = await Promise.allSettled(
       nativeOwners.map((resource) => closeAgentDatabaseResource(resource)),
     );
+    const workersDoneAt = performance.now();
     const nativeErrors = nativeResults.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
     if (nativeErrors.length > 0) {
       throw new AggregateError(nativeErrors, "Agent database native retirement failed");
     }
-    return closeNative();
+    const result = await closeNative();
+    const totalMs = performance.now() - startedAt;
+    if (totalMs >= 500 && selection.path) {
+      // Worker join includes its native receipt phases and subsequent shared-state cleanup.
+      const db = createHash("sha256").update(selection.path).digest("hex").slice(0, 16);
+      const phases = {
+        totalMs: Math.round(totalMs),
+        resourceJoinMs: Math.round(resourcesDoneAt - startedAt),
+        workerJoinMs: Math.round(workersDoneAt - resourcesDoneAt),
+        nativeOwnerMs: Math.round(totalMs - (workersDoneAt - startedAt)),
+      };
+      createSubsystemLogger("state/agent-db").info(
+        `agent database close settled: agent=${selection.agentId ?? selected.find((resource) => resource.ownership === "known")?.agentId ?? "unknown"}; db=${db}; thread=${threadId}; close=${JSON.stringify(phases)}`,
+      );
+    }
+    return result;
   });
 }
 

@@ -277,6 +277,9 @@ const repositoryScriptEntries = [
   "scripts/build-mac-swift.mts!",
   // CI passes this native test launcher through the Apple command log wrapper.
   "scripts/test-macos-native.mts!",
+  // CI invokes the settings owner and its per-source producer by path.
+  "scripts/test-macos-mlx-settings.mts!",
+  "test/helpers/macos-mlx-settings-producer.ts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-package-dist-imports.mjs!",
@@ -1288,6 +1291,8 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        // Workspace benchmarks inspect and synchronize native btrfs fixtures.
+        "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
         "ffmpeg",
@@ -1302,13 +1307,19 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // Native checkpoint measurements run their synthetic guest through the host engine.
+        "podman",
         "sleep",
         // usage-refresh-stats-measure.ts inspects benchmark fixtures with the host SQLite CLI.
         "sqlite3",
         "swiftlint",
+        // The Windows session-source benchmark terminates its own child process tree.
+        "taskkill.exe",
         "uptime",
         "xcrun",
       ],
+      // napi generates these optional platform artifacts; pnpm build:iroh builds only the host.
+      ignoreUnresolved: [/^\.\/iroh-node\.[a-z0-9-]+\.node$/, "./iroh-node.wasi.cjs"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       // Maintained commands select these opt-in Vitest configs outside

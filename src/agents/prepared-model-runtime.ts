@@ -14,10 +14,6 @@ import {
   invalidatePreparedModelRuntimeOwnersForAuthMutation,
   type PreparedModelRuntimeAuthMutation,
 } from "./prepared-model-runtime-auth-publication.js";
-import {
-  isPreparedModelRuntimeGatewayLifecycleActive,
-  setPreparedModelRuntimeGatewayLifecycleActive,
-} from "./prepared-model-runtime-gateway-lifecycle.js";
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import {
   configuredOwnersAreRequestVisible,
@@ -42,6 +38,8 @@ import {
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   resolveConfiguredOwner,
+  isPreparedModelRuntimeGatewayLifecycleActive,
+  setPreparedModelRuntimeGatewayLifecycleActive,
   readPublishedModelRuntimeSnapshot,
   resolvePreparedModelRuntimeOwnerBySnapshot,
   preparedModelRuntimeConfigsMatch,

@@ -4,11 +4,7 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
-import {
-  buildToolSchemaDirectoryPrompt,
-  MAX_MCP_TOOL_DIRECTORY_BYTES,
-  sanitizeMcpToolDirectoryDescription,
-} from "./tool-search-directory.js";
+import { buildToolSchemaDirectoryPrompt } from "./tool-search-directory.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 import { applyToolSearchCatalog, createToolSearchTools } from "./tool-search.js";
@@ -117,9 +113,18 @@ describe("MCP directory in the tool_search description", () => {
   });
 
   it("normalizes unicode tricks and caps description length", () => {
-    expect(sanitizeMcpToolDirectoryDescription("A\u200Bb\u2028c\u00A0d \uFF21")).toBe("A b c d A");
-    expect(sanitizeMcpToolDirectoryDescription("<b>bold</b>")).toBe("b bold /b");
-    const capped = sanitizeMcpToolDirectoryDescription("\u{1F600}".repeat(200));
+    const { directory } = apply([
+      mcpTool("srv", "unicode", "A\u200Bb\u2028c\u00A0d \uFF21"),
+      mcpTool("srv", "markup", "<b>bold</b>"),
+      mcpTool("srv", "emoji", "\u{1F600}".repeat(200)),
+    ]);
+    const rows = directory.split("\n");
+    expect(rows).toContain("- mcp:srv:srv__unicode: A b c d A");
+    expect(rows).toContain("- mcp:srv:srv__markup: b bold /b");
+    const prefix = "- mcp:srv:srv__emoji: ";
+    const row = rows.find((line) => line.startsWith(prefix));
+    expect(row).toBeDefined();
+    const capped = row!.slice(prefix.length);
     expect(capped.length).toBeLessThanOrEqual(96);
     expect(capped.endsWith("...")).toBe(true);
     expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
@@ -133,7 +138,7 @@ describe("MCP directory in the tool_search description", () => {
         mcpTool("alpha", `tool_${String(i).padStart(3, "0")}`, longDescription),
       ),
     ).directory;
-    expect(Buffer.byteLength(names)).toBeLessThanOrEqual(MAX_MCP_TOOL_DIRECTORY_BYTES);
+    expect(Buffer.byteLength(names)).toBeLessThanOrEqual(4_096);
     expect(names).toContain("- mcp:alpha:alpha__tool_000\n");
     expect(names).not.toContain(longDescription);
 
@@ -143,7 +148,7 @@ describe("MCP directory in the tool_search description", () => {
       mcpTool("zeta", "only", longDescription),
     ];
     const summarized = apply(tools).directory;
-    expect(Buffer.byteLength(summarized)).toBeLessThanOrEqual(MAX_MCP_TOOL_DIRECTORY_BYTES);
+    expect(Buffer.byteLength(summarized)).toBeLessThanOrEqual(4_096);
     expect(summarized).toContain("- github server: 400 tools, names omitted");
     expect(summarized).toContain("- mcp:world:world__op_0");
     expect(summarized).toContain("- mcp:zeta:zeta__only");
@@ -154,7 +159,7 @@ describe("MCP directory in the tool_search description", () => {
         mcpTool(`server_${String(i).padStart(3, "0")}`, "op", longDescription),
       ),
     ).directory;
-    expect(Buffer.byteLength(manyServers)).toBeLessThanOrEqual(MAX_MCP_TOOL_DIRECTORY_BYTES);
+    expect(Buffer.byteLength(manyServers)).toBeLessThanOrEqual(4_096);
     const counted = manyServers.match(/- (\d+) more servers: (\d+) tools, names omitted/u);
     expect(counted).not.toBeNull();
     const listed = manyServers.split("\n").filter((line) => /^- server_\d+/u.test(line)).length;
