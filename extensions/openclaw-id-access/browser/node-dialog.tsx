@@ -71,15 +71,15 @@ function NodeDialogContent(props: NodeDialogProps) {
       }
     }
   };
-  const copy = async (command: string) => {
+  const copy = async (text: string) => {
     try {
-      await navigator.clipboard.writeText(command);
+      await navigator.clipboard.writeText(text);
       if (alive) {
         setCopyStatus("Copied");
       }
     } catch {
       if (alive) {
-        setCopyStatus("Could not copy. Select and copy the command above.");
+        setCopyStatus("Could not copy. Select and copy it above.");
       }
     }
   };
@@ -111,54 +111,78 @@ function NodeDialogContent(props: NodeDialogProps) {
       </Show>
       <Show when={state() === "open"}>
         <Show
-          when={created()?.commands}
+          when={created()}
           fallback={
             <p class="callout info">
-              {created()
-                ? "Configure the OpenClaw ID Discovery address on the Gateway first"
-                : "Waiting for this node to join. The command is available only in the browser dialog that created it."}
+              Waiting for this device to join. The invite link is available only in the browser
+              dialog that created it.
             </p>
           }
         >
-          {(commands) => (
+          {(made) => (
             <>
               <p class="ocid-access__hint">
-                Run this in a POSIX shell on the computer you want to add. It installs and starts
-                the node service after approval.
+                Send this link to the computer you want to add. On that computer, run{" "}
+                <code>openclaw node join '&lt;link&gt;'</code> to request access.
               </p>
               <pre class="ocid-node-dialog__command">
-                <code>{commands().command}</code>
+                <code>{made().joinLink}</code>
               </pre>
               <button
                 type="button"
-                class="btn btn--sm"
-                onClick={() => void copy(commands().command)}
+                class="btn btn--sm primary"
+                onClick={() => void copy(made().joinLink)}
               >
-                Copy command
+                Copy invite link
               </button>
               <details>
-                <summary>Already have OpenClaw installed?</summary>
-                <pre class="ocid-node-dialog__command">
-                  <code>{commands().installedCommand}</code>
-                </pre>
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  onClick={() => void copy(commands().installedCommand)}
+                <summary>Use the command line</summary>
+                <Show
+                  when={made().commands}
+                  fallback={
+                    <p class="callout info">
+                      Configure the OpenClaw ID Discovery address on the Gateway to get a command.
+                    </p>
+                  }
                 >
-                  Copy installed command
-                </button>
+                  {(commands) => (
+                    <>
+                      <p class="ocid-access__hint">
+                        Run this in a POSIX shell on the computer you want to add. It installs and
+                        starts the node service after approval.
+                      </p>
+                      <pre class="ocid-node-dialog__command">
+                        <code>{commands().command}</code>
+                      </pre>
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        onClick={() => void copy(commands().command)}
+                      >
+                        Copy command
+                      </button>
+                      <p class="ocid-access__hint">Already have OpenClaw installed?</p>
+                      <pre class="ocid-node-dialog__command">
+                        <code>{commands().installedCommand}</code>
+                      </pre>
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        onClick={() => void copy(commands().installedCommand)}
+                      >
+                        Copy installed command
+                      </button>
+                    </>
+                  )}
+                </Show>
               </details>
               <p class="ocid-access__hint">
-                Keep this command private. The single-use link stays only in this dialog and expires
-                in {countdown()}.
+                Keep this link private. It works once and expires in {countdown()}.
               </p>
             </>
           )}
         </Show>
-        <Show when={!created() || created()?.commands}>
-          <p role="status">Waiting for the node. You will compare a code and approve it here.</p>
-        </Show>
+        <p role="status">Waiting for the device. You will compare a code and approve it here.</p>
         <Show when={copyStatus()}>
           <p role="status">{copyStatus()}</p>
         </Show>
@@ -230,7 +254,7 @@ function NodeDialogContent(props: NodeDialogProps) {
             disabled={props.disabled || !props.canCreate || !label().trim()}
             onClick={() => void create()}
           >
-            Create node command
+            Create invite
           </button>
         </Show>
         <Show when={state() === "pending"}>
