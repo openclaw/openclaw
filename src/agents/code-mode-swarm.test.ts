@@ -225,19 +225,7 @@ function expectCollectAdvertised(tool: { parameters: unknown }, advertised: bool
 }
 
 describe("Code Mode Access", () => {
-  it.each([undefined, "standard", "daybreak_blue", "daybreak_red"])(
-    "passes %s through the native spawn owner",
-    async (program) => {
-      const harness = createSwarmHarness();
-      await runSwarmCode(
-        harness,
-        `return await agents.run("Research", ${JSON.stringify({ cyberAccessProgram: program })});`,
-      );
-      const input = swarmMocks.spawnSubagentDirect.mock.calls[0]?.[0];
-      expect(input).toBeDefined();
-      expect(input.cyberAccessProgram).toBe(program);
-    },
-  );
+  // Positive Access proof lives in subagent-spawn.production-boundary.test.ts, through final I/O.
   it("rejects invalid Access before creating a child", async () => {
     const harness = createSwarmHarness();
     const result = await runSwarmCode(

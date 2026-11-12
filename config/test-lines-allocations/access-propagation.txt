@@ -1,2 +1,2 @@
-59
-# 54 Access regression lines plus the exact 5-line upstream baseline debt; no spare headroom.
+211
+# Connected adapter-to-request authority regressions and saved Access status coverage.
