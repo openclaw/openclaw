@@ -250,6 +250,7 @@ function produceMemorySearchConfig(cfg: OpenClawConfig, agentId: string) {
       fts: {
         tokenizer:
           overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
+        cjk: overrides?.store?.fts?.cjk ?? defaults?.store?.fts?.cjk,
       },
       vector: {
         enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
