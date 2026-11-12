@@ -560,6 +560,11 @@ it.each([
       const line = buildForEntry(undefined, input);
       expect(line?.label).toBe(label);
       expect(line?.detail).toBe(detail);
+      if (!detail) {
+        expect(formatForEntry(undefined, input)).toBe(
+          input.event === "item" ? `${label}: running` : label,
+        );
+      }
       expect(line?.text).not.toMatch(/opaque|00000000|Private|timeout|tools true/);
     }
   },
