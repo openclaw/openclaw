@@ -5,6 +5,7 @@ import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { gate } from "./agent-route.test-support.js";
 import { createRouteFixture } from "./request.test-support.js";
 import type { createBrowserRouteResponse } from "./test-helpers.js";
+import type { BrowserRequest } from "./types.js";
 
 const navigation = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
