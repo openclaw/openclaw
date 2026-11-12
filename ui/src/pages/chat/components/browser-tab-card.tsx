@@ -124,7 +124,7 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
     return (
       target &&
       createMemo<ControlUiLinkPreview | undefined>(
-        () => loadLinkPreview(target.client, target.url),
+        () => loadLinkPreview(target.client, target.url, undefined, { allowUnavailable: true }),
         { loadingValue: undefined },
       )
     );

@@ -53,6 +53,7 @@ export function loadLinkPreview(
   client: GatewayBrowserClient,
   url: string,
   signal?: AbortSignal,
+  options?: { allowUnavailable?: boolean },
 ): Promise<ControlUiLinkPreview> {
   let cache = previews.get(client);
   if (cache?.recoveryScope !== client.recoveryScope || client.offlineRecoveryRetired) {
@@ -76,7 +77,11 @@ export function loadLinkPreview(
     return Promise.resolve({});
   }
   parsed.hash = "";
-  const key = parsed.href;
+  const requestUrl = parsed.href;
+  const allowUnavailable = options?.allowUnavailable === true;
+  // The opt-in changes the RPC result for unavailable targets, so it is part of
+  // the cache identity. The request still sends the actual URL.
+  const key = `${allowUnavailable ? "allow-unavailable" : "default"}\n${requestUrl}`;
   const owner = cache;
   const cached = owner.entries.get(key);
   if (
@@ -100,7 +105,11 @@ export function loadLinkPreview(
     controller,
     subscribers: new Set(),
     promise: client
-      .request("controlUi.linkPreview", { url: key }, { signal: controller.signal })
+      .request(
+        "controlUi.linkPreview",
+        { url: requestUrl, ...(allowUnavailable ? { allowUnavailable: true } : {}) },
+        { signal: controller.signal },
+      )
       .then(
         (value) => {
           if (
