@@ -694,6 +694,8 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         guard let serverLease = await GatewayConnection.shared.captureServerLease() else {
             return .retryLater
         }
+        // Waking a session with a system event is an admin action this connection may not hold.
+        guard await GatewayConnection.shared.grantsScope("operator.admin") else { return .noEligibleSession }
         if connectionMode == .remote {
             let gatewayVersion = await GatewayConnection.shared.cachedGatewayVersion(
                 ifCurrentServerLease: serverLease)

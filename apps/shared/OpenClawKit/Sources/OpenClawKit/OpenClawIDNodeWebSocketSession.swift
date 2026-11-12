@@ -1,15 +1,23 @@
 import Foundation
 import Synchronization
 
-/// Deliberately node-only. Never install this session in the operator/chat session factory.
+/// One role per session: a node session runs over the node key and an operator session over a
+/// human (owner or member) key's tunnel. The Gateway decides each key's role; this session only
+/// refuses to send a connect for any other role.
 public final class OpenClawIDNodeWebSocketSession: WebSocketSessioning, Sendable {
+    public enum Role: String, Sendable { case node, `operator` }
+
     private let tunnel: OpenClawIDNodeTunnel
     private let origin: URL
-    public let requiredGatewayRole: String? = "node"
+    private let role: Role
+    public var requiredGatewayRole: String? {
+        self.role.rawValue
+    }
 
-    public init(tunnel: OpenClawIDNodeTunnel, logicalOrigin: URL) {
+    public init(tunnel: OpenClawIDNodeTunnel, logicalOrigin: URL, role: Role = .node) {
         self.tunnel = tunnel
         self.origin = logicalOrigin
+        self.role = role
     }
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
@@ -18,12 +26,13 @@ public final class OpenClawIDNodeWebSocketSession: WebSocketSessioning, Sendable
 
     public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
         WebSocketTaskBox(task: OpenClawIDNodeWebSocketTask(
-            tunnel: self.tunnel, origin: self.origin, request: request, role: "node"))
+            tunnel: self.tunnel, origin: self.origin, request: request, role: self.role.rawValue))
     }
 
     /// Separate worker ingress requires its own admission credential, not a Gateway
     /// role upgrade. The fixed path and role cannot be used for chat/operator RPCs.
     public func prepareWorkerWebSocket() async throws -> WebSocketTaskBox {
+        guard self.role == .node else { throw OpenClawIDNodeTransportError.wrongRoute }
         guard var components = URLComponents(url: self.origin, resolvingAgainstBaseURL: false) else {
             throw OpenClawIDNodeTransportError.wrongRoute
         }
@@ -33,6 +42,16 @@ public final class OpenClawIDNodeWebSocketSession: WebSocketSessioning, Sendable
         guard let url = components.url else { throw OpenClawIDNodeTransportError.wrongRoute }
         let task = OpenClawIDNodeWebSocketTask(
             tunnel: self.tunnel, origin: self.origin, request: URLRequest(url: url), role: "worker")
+        try await task.prepare()
+        return WebSocketTaskBox(task: task)
+    }
+
+    /// Opens an operator WebSocket for a local proxy and returns only after the Gateway
+    /// accepted the upgrade, so the proxy never acknowledges an unknown or refused upstream.
+    public func prepareWebSocket(request: URLRequest) async throws -> WebSocketTaskBox {
+        guard self.role == .operator else { throw OpenClawIDNodeTransportError.wrongRoute }
+        let task = OpenClawIDNodeWebSocketTask(
+            tunnel: self.tunnel, origin: self.origin, request: request, role: self.role.rawValue)
         try await task.prepare()
         return WebSocketTaskBox(task: task)
     }
@@ -153,13 +172,14 @@ actor OpenClawIDNodeWebSocketIO {
         @unknown default: throw OpenClawIDNodeTransportError.unsupportedOpcode
         }
         // GatewayChannel sends JSON as binary; worker clients may send text. Both
-        // forms must prove the route-specific role before using W.
+        // forms must prove the route-specific role before using the tunnel key. Node and
+        // worker connects carry no operator scopes; the Gateway caps an operator's scopes.
         if !self.connectSent {
             guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                   object["type"] as? String == "req", object["method"] as? String == "connect",
                   let params = object["params"] as? [String: Any], params["role"] as? String == self.role,
                   self.role != "worker" || params["admission"] is [String: Any],
-                  params["scopes"] == nil || (params["scopes"] as? [String]) == []
+                  self.role == "operator" || params["scopes"] == nil || (params["scopes"] as? [String]) == []
             else { throw OpenClawIDNodeTransportError.nodeRoleRequired }
             self.connectSent = true
         }

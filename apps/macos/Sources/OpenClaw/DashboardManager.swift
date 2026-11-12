@@ -47,6 +47,8 @@ final class DashboardManager {
     @ObservationIgnored private let endpointStateProvider: @Sendable () async -> GatewayEndpointState
     @ObservationIgnored let mainWindowAutosaveName: String
     @ObservationIgnored private let websiteDataStore: WKWebsiteDataStore
+    /// In-memory store for the OpenClaw ID operator dashboard, separate from every other page.
+    @ObservationIgnored private(set) lazy var operatorDashboardStore = WKWebsiteDataStore.nonPersistent()
     @ObservationIgnored private var profileBrowserStores: [String: DashboardBrowserSessionStore] = [:]
     @ObservationIgnored private(set) var profileCredentialRevisions: [String: UInt64] = [:]
     @ObservationIgnored private(set) var unavailableProfileIDs: Set<String> = []
@@ -637,6 +639,11 @@ final class DashboardManager {
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
+        let state = AppStateStore.shared
+        let copy = Self.failureCopy(
+            error: error,
+            joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
+                mode: state.connectionMode, remoteUrl: state.remoteUrl))
         let controller = self.controller ?? makeController(
             configuration: WindowConfiguration(
                 url: Self.failureURL,
@@ -652,10 +659,24 @@ final class DashboardManager {
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.
         self.observeEndpointChanges()
-        controller.showFailure(
-            title: "Dashboard unavailable",
-            message: message,
-            detail: "Open Connection or use Debug → Reset Remote Tunnel, then try again.")
+        controller.showFailure(title: copy.title, message: copy.message, detail: copy.detail)
+    }
+
+    /// A route or lease superseded while opening surfaces as CancellationError; the failure page
+    /// keeps observing the endpoint and reopens the dashboard, so it reads as reconnecting. The SSH
+    /// tunnel reset does not apply to a claw reached over OpenClaw ID.
+    nonisolated static func failureCopy(
+        error: Error, joinedClaw: Bool) -> (title: String, message: String, detail: String)
+    {
+        let superseded = error is CancellationError
+        let title = superseded ? "Reconnecting to the Gateway" : "Dashboard unavailable"
+        let message = superseded
+            ? "The connection changed while the dashboard was opening. It reopens when the connection is ready."
+            : (error as NSError).localizedDescription
+        let detail = joinedClaw
+            ? "This Mac reaches its claw over OpenClaw ID. Check that the claw is online and that this Mac is still allowed on its Access page."
+            : "Open Connection or use Debug → Reset Remote Tunnel, then try again."
+        return (title, message, detail)
     }
 
     private func retireWindowPresentation() {
@@ -1185,12 +1206,13 @@ extension DashboardManager {
         return ControlUIDocumentHost(
             url: configuration.url,
             auth: configuration.auth,
-            websiteDataStore: store?.dataStore ?? self.websiteDataStore,
+            websiteDataStore: configuration.operatorDataStore ?? store?.dataStore ?? self.websiteDataStore,
             tlsParams: configuration.tlsParams,
             browserSessionLease: store?.lease(for: configuration.browserSession),
             nativeAuthProvider: configuration.nativeAuthProvider,
             legacyNativeCredentials: configuration.legacyNativeCredentials)
         {
+            if let rule = configuration.operatorCookieRule { $0.add(rule) }
             installCapabilities($0, configuration.url)
         }
     }
@@ -1207,7 +1229,9 @@ extension DashboardManager {
         let controller = DashboardWindowController(
             url: configuration.url,
             auth: configuration.auth,
-            websiteDataStore: browserStore?.dataStore ?? self.websiteDataStore,
+            websiteDataStore: configuration.operatorDataStore ?? browserStore?.dataStore ?? self.websiteDataStore,
+            isolatesReadingTabs: configuration.operatorDataStore != nil,
+            cookieRule: configuration.operatorCookieRule,
             updater: self.updater,
             updateBridgeEnabled: primaryLocal && Self.updateBridgeEnabled(mode: configuration.mode),
             tlsParams: configuration.tlsParams,

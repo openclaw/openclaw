@@ -25,6 +25,10 @@ extension DashboardManager {
         var autoStartSignIn = false
         var legacyNativeCredentials: DashboardNativeGatewayAuth.LegacyCredentials?
         var nativeAuthProvider: DashboardNativeGatewayAuth.Provider?
+        /// Set for the OpenClaw ID operator proxy: the only store holding its cookie.
+        var operatorDataStore: WKWebsiteDataStore?
+        /// Blocks cookies on every request but the proxy's own origin, including subframes.
+        var operatorCookieRule: WKContentRuleList?
     }
 
     struct SupersededDashboardPresentation: Error {}
@@ -222,7 +226,10 @@ extension DashboardManager {
         let config = endpoint.config
         let browserSession = endpoint.browserSession
         try browserSession?.validate(for: config.url)
-        let advertisedIdentityURL = mode == .remote || endpoint.tls != nil
+        // The OpenClaw ID operator proxy is this Mac's dashboard route; never the claw's
+        // browser sign-in origin, which would need a separate browser approval.
+        let operatorDashboard = MacOpenClawIDOperatorRoute.dashboardRoute(for: config.url)
+        let advertisedIdentityURL = operatorDashboard == nil && (mode == .remote || endpoint.tls != nil)
             ? try await browserIdentityURLProvider(target, config)
             : nil
         let identityURL = mode == .remote ? advertisedIdentityURL : nil
@@ -257,6 +264,18 @@ extension DashboardManager {
             : nil
         let url = try identityURL ?? GatewayEndpointStore.dashboardURL(
             for: dashboardConfig, mode: mode, remoteBasePath: remoteBasePath)
+        // Cookies ignore ports, so the proxy cookie lives only in a store that loads nothing else:
+        // other loopback servers, the local Gateway and reading tabs never receive it.
+        let operatorDataStore = operatorDashboard.map { _ in self.operatorDashboardStore }
+        var operatorCookieRule: WKContentRuleList?
+        if let operatorDashboard, let operatorDataStore {
+            // A frame from another loopback port is still same-site; the rule keeps the cookie
+            // on requests to the proxy's exact HTTP and WebSocket origin only.
+            operatorCookieRule = try await WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: "openclaw.ocid-operator-cookie-origin",
+                encodedContentRuleList: MacOpenClawIDDashboardProxy.cookieRules(for: operatorDashboard.url))
+            await operatorDataStore.httpCookieStore.setCookie(operatorDashboard.cookie)
+        }
         try browserSession?.validate(for: url)
         let legacyCredentials: DashboardNativeGatewayAuth.LegacyCredentials? = if identityURL == nil,
                                                                                   browserSession == nil
@@ -271,8 +290,9 @@ extension DashboardManager {
         } else {
             .nativeDevice(
                 gatewayUrl: Self.websocketURLString(for: url),
-                token: token,
-                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                token: operatorDashboard == nil ? token : nil,
+                password: operatorDashboard == nil
+                    ? config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty : nil,
                 legacyCredentials: legacyCredentials?.credentials)
         }
         let name = target == .primary ? "OpenClaw"
@@ -282,13 +302,16 @@ extension DashboardManager {
         return (WindowConfiguration(
             url: url,
             auth: auth,
-            tlsParams: identityURL == nil && browserSession == nil ? endpoint.tls?.params : nil,
+            tlsParams: identityURL == nil && browserSession == nil && operatorDashboard == nil
+                ? endpoint.tls?.params : nil,
             mode: mode,
             displayName: name,
             browserSession: browserSession,
             legacyNativeCredentials: legacyCredentials,
             nativeAuthProvider: auth.usesNativeDevice ? self
-                .nativeAuthProvider(target: target, endpoint: endpoint) : nil), endpoint)
+                .nativeAuthProvider(target: target, endpoint: endpoint) : nil,
+            operatorDataStore: operatorDataStore,
+            operatorCookieRule: operatorCookieRule), endpoint)
     }
 
     func nativeAuthProvider(
