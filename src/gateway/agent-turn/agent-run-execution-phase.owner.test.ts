@@ -32,6 +32,8 @@ import {
   rpcSourceTesting,
 } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -83,6 +85,40 @@ vi.mock("../../agents/command/runtime-loaders.js", async (importOriginal) => ({
 }));
 
 describe("startAgentRunExecution Gateway ownership", () => {
+  it("retains personal skill tools when an authenticated human turn carries provenance", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const profile = ensureProfileForEmail("human-handoff@example.test");
+      const catalog = await prepareUserProfileCatalog();
+      try {
+        const execution = createVisibleExecution();
+        const { params } = execution;
+        params.isOneShotModelRun = false;
+        params.isRawModelRun = false;
+        params.inputProvenance = {
+          kind: "external_user",
+          sourceChannel: "voice",
+          sourceTool: "gateway.voice.transcript",
+        };
+        params.client = {
+          authenticatedUserProfile: { profileId: profile.id },
+          connect: { scopes: ["operator.read", "operator.write"] },
+        } as NonNullable<typeof params.client>;
+        params.context.resolveGatewayContext = () =>
+          params.context as unknown as GatewayRequestContext;
+        let authoringTarget: string | undefined;
+        dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
+          authoringTarget = dispatch.ingressOpts.skillLibraryAuthoring?.target;
+          await dispatch.cleanupAbortController();
+        });
+        await startAgentRunExecution(params);
+        expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
+        expect(authoringTarget).toBe("personal");
+      } finally {
+        catalog.release();
+      }
+    });
+  });
+
   it("reads the workspace after resuming from a retired same-session preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const execution = createExecution();

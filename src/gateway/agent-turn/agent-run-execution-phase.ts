@@ -41,7 +41,10 @@ import { resolveChatSendCallerContext } from "../server-methods/gateway-client-i
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import { prepareSessionWorkspaceForRun } from "../server-methods/session-create-project.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
-import { prepareGatewaySkillAuthoring } from "../skill-library-authoring.js";
+import {
+  isHumanSkillAuthoringInput,
+  prepareGatewaySkillAuthoring,
+} from "../skill-library-authoring.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
 import { yieldAfterAgentAcceptedAck } from "./agent-handler-helpers.js";
 import { captureAgentJobSession } from "./agent-job.js";
@@ -386,14 +389,16 @@ async function executeAgentRun(
                   sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
-                !params.inputProvenance &&
+                isHumanSkillAuthoringInput(
+                  params.inputProvenance,
+                  params.request.suppressPromptPersistence,
+                ) &&
                   !params.restoredCronContinuation &&
                   !params.isOneShotModelRun &&
                   !params.request.internalEvents &&
                   !params.request.internalRuntimeHandoffId &&
                   !params.request.execApprovalFollowupExpectedSessionId &&
                   params.sessionEffects !== "internal" &&
-                  !params.request.suppressPromptPersistence &&
                   !params.request.swarmCollector &&
                   params.request.lane !== "subagent",
               )
