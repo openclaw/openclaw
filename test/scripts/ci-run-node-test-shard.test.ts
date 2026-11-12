@@ -518,11 +518,32 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: ["src/commands/doctor-maintenance.stopped-systemd.test.ts"],
       sibling: {
         configs: ["test/vitest/vitest.infra.config.ts"],
-        includePatterns: ["src/flows/doctor-health.update-schema.test.ts"],
+        includePatterns: [
+          "src/flows/doctor-health.update-schema.test.ts",
+          "src/flows/doctor-health.managed-settlement.test.ts",
+        ],
       },
       preset: "runtime",
     },
     { configs: [gatewayDatabaseConfig], files: [], preset: "full" },
+    {
+      configs: ["test/vitest/vitest.unit.config.ts"],
+      files: [
+        "src/flows/doctor-health.migration-refusal.test.ts",
+        "src/flows/doctor-health.nocow.test.ts",
+        "src/flows/doctor-health.plugin-load.test.ts",
+        "src/flows/doctor-health.readonly-filesystem.test.ts",
+      ],
+      sibling: {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        includePatterns: [
+          "src/flows/doctor-health.managed-admission.test.ts",
+          "src/flows/doctor-health.managed-approvals.test.ts",
+          "src/flows/doctor-health.readonly-config.test.ts",
+        ],
+      },
+      preset: "runtime",
+    },
     { configs: [gatewayDatabaseConfig], files: null, preset: "full" },
     { configs: [gatewayDatabaseConfig], files: undefined, preset: "full" },
     {
@@ -601,6 +622,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       targets: [
         "src/flows/doctor-health.update-schema.test.ts",
+        "src/flows/doctor-health.managed-admission.test.ts",
+        "src/flows/doctor-health.managed-approvals.test.ts",
+        "src/flows/doctor-health.managed-settlement.test.ts",
+        "src/flows/doctor-health.migration-refusal.test.ts",
+        "src/flows/doctor-health.nocow.test.ts",
+        "src/flows/doctor-health.plugin-load.test.ts",
+        "src/flows/doctor-health.readonly-config.test.ts",
+        "src/flows/doctor-health.readonly-filesystem.test.ts",
         "src/commands/doctor-config-preflight.container-upgrade.test.ts",
         "src/commands/doctor-maintenance.schema-preflight.test.ts",
         "src/commands/doctor-maintenance.stopped-systemd.test.ts",
@@ -1373,6 +1402,39 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const run = createWorker.mock.results[0]!.value;
     expect(existsSync(run.descriptor.directory)).toBe(false);
   });
+
+  it.each([2, 4, 8])(
+    "retains the %s CPU scheduling budget on a larger Boat host",
+    async (cpuBudget) => {
+      machine(16, 32);
+      let active = 0;
+      let peak = 0;
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const result = await runPlans(
+        groupPlans([{ configs: ["a.config.ts"] }, { configs: ["b.config.ts"] }]),
+        {
+          env: {
+            CI: "true",
+            RUNNER_ENVIRONMENT: "self-hosted",
+            OPENCLAW_NODE_TEST_CPU_BUDGET: String(cpuBudget),
+          },
+          runChild: async () => {
+            active += 1;
+            peak = Math.max(peak, active);
+            await nextTurn();
+            active -= 1;
+            return 0;
+          },
+        },
+      );
+      expect(result).toBe(0);
+      expect(peak).toBe(cpuBudget < 8 ? 1 : 2);
+      expect(log).toHaveBeenCalledWith(`[shard:cpu-budget] logicalCpuCount=${cpuBudget}`);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(`logicalCpuCount=16 totalMemoryBytes=${32 * 1024 ** 3}`),
+      );
+    },
+  );
 
   it("retains the measured group's fallback ceiling below its memory floor", async () => {
     vi.spyOn(os, "availableParallelism").mockReturnValue(8);

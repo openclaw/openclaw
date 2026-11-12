@@ -97,58 +97,16 @@ export function ToolRuntime(props: {
   const visibleEffectiveTools = () => uniqueEffectiveTools().slice(0, MAX_RUNTIME_TOOL_CHIPS);
   const hiddenEffectiveToolCount = () =>
     uniqueEffectiveTools().length - visibleEffectiveTools().length;
-  const availability = () => {
-    const current = props.preview.status ? props.preview : null;
-    return current ? (
-      current.status === "previewLoading" ? (
-        <SettingsLoadingSkeleton label={t(`agentTools.${current.empty}`)} rows={2} />
-      ) : (
-        <SettingsEmpty message={t(`agentTools.${current.empty}`)} />
-      )
-    ) : uniqueEffectiveTools().length === 0 ? (
-      <SettingsEmpty message={t("agentTools.emptyPreview")} />
-    ) : (
-      <div class="agents-panel-body">
-        <div class="agent-tools-runtime">
-          <For each={visibleEffectiveTools()} keyed={(tool) => tool.id}>
-            {(tool) => {
-              const anchorId = () => toToolAnchorId(tool().id);
-              return (
-                <Dynamic
-                  component={props.onJump ? "a" : "span"}
-                  class="agent-tools-runtime-chip"
-                  href={props.onJump ? `#${anchorId()}` : undefined}
-                  onClick={(event: Event) => props.onJump?.(event, anchorId())}
-                >
-                  <span class="mono" translate="no">
-                    {tool().label}
-                  </span>
-                  <span class="agent-tools-runtime-chip__meta">
-                    {renderEffectiveToolBadge(tool())}
-                  </span>
-                </Dynamic>
-              );
-            }}
-          </For>
-          {hiddenEffectiveToolCount() > 0 ? (
-            <span
-              class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
-              title={t("agentTools.morePreviewTitle", {
-                count: String(hiddenEffectiveToolCount()),
-              })}
-            >
-              {t("agentTools.morePreview", {
-                count: String(hiddenEffectiveToolCount()),
-              })}
-            </span>
-          ) : undefined}
-        </div>
-      </div>
-    );
-  };
   return (
     <SettingsSection
       title={t("agentTools.previewTitle")}
+      actions={
+        <Show when={props.preview.result && props.preview.status}>
+          <span class="muted" role="status">
+            {previewStatus(props.preview)}
+          </span>
+        </Show>
+      }
       description={
         <>
           {t("agentTools.previewSubtitle")}{" "}
@@ -156,7 +114,7 @@ export function ToolRuntime(props: {
         </>
       }
     >
-      <Show when={props.preview.result?.notices?.length}>
+      <Show when={!props.preview.status && props.preview.result?.notices?.length}>
         <div class="agent-tools-notices">
           <For each={props.preview.result?.notices}>
             {(notice) => (
@@ -170,7 +128,62 @@ export function ToolRuntime(props: {
           </For>
         </div>
       </Show>
-      {availability()}
+      <Show
+        when={!props.preview.result && props.preview.status}
+        fallback={
+          <Show
+            when={uniqueEffectiveTools().length > 0}
+            fallback={<SettingsEmpty message={t("agentTools.emptyPreview")} />}
+          >
+            <div
+              class="agents-panel-body"
+              aria-busy={props.preview.status === "previewLoading" ? "true" : "false"}
+            >
+              <div class="agent-tools-runtime">
+                <For each={visibleEffectiveTools()} keyed={(tool) => tool.id}>
+                  {(tool) => {
+                    const anchorId = () => toToolAnchorId(tool().id);
+                    return (
+                      <Dynamic
+                        component={props.onJump ? "a" : "span"}
+                        class="agent-tools-runtime-chip"
+                        href={props.onJump ? `#${anchorId()}` : undefined}
+                        onClick={(event: Event) => props.onJump?.(event, anchorId())}
+                      >
+                        <span class="mono" translate="no">
+                          {tool().label}
+                        </span>
+                        <span class="agent-tools-runtime-chip__meta">
+                          {renderEffectiveToolBadge(tool())}
+                        </span>
+                      </Dynamic>
+                    );
+                  }}
+                </For>
+                {hiddenEffectiveToolCount() > 0 ? (
+                  <span
+                    class="agent-tools-runtime-chip agent-tools-runtime-chip--more"
+                    title={t("agentTools.morePreviewTitle", {
+                      count: String(hiddenEffectiveToolCount()),
+                    })}
+                  >
+                    {t("agentTools.morePreview", {
+                      count: String(hiddenEffectiveToolCount()),
+                    })}
+                  </span>
+                ) : undefined}
+              </div>
+            </div>
+          </Show>
+        }
+      >
+        <Show
+          when={props.preview.status === "previewLoading"}
+          fallback={<SettingsEmpty message={t(`agentTools.${props.preview.empty}`)} />}
+        >
+          <SettingsLoadingSkeleton label={t(`agentTools.${props.preview.empty}`)} rows={2} />
+        </Show>
+      </Show>
     </SettingsSection>
   );
 }

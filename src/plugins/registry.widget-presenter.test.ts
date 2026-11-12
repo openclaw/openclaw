@@ -64,8 +64,9 @@ describe("plugin widget presenter registry", () => {
         const selected = registry.widgetPresenters[0]!.presenter;
         const availability = await selected.availability({});
         expect(availability).toEqual({ ok: true, value: { available: true } });
-        const document = { kind: "html" as const, html: "<p>Panel</p>" };
-        await expect(selected.present({ context: {}, document, title: "Panel" })).resolves.toEqual({
+        const document = { kind: "html" as const, html: "<p>Panel</p>", source: "<p>Panel</p>" };
+        const present = selected.present({ context: {}, document, title: "Panel", name: "panel" });
+        await expect(present).resolves.toEqual({
           ok: false,
           error: { code: "no_eligible_node", message: "none" },
         });

@@ -1,2 +1,0 @@
-122
-# One provider-flow regression covers footer and label alignment, stable height, validation scrolling and submission; the existing channel case preserves meaningful message newlines.

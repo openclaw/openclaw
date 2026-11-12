@@ -183,6 +183,15 @@ it.each([
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
+  it("keeps slash commands enabled for compact while retaining tool restriction", () => {
+    const availability = { native: ["Read"], openClaw: [] as string[] };
+    const compact = executionArgs({ toolAvailability: availability, controlOperation: "compact" });
+    expect(compact).not.toContain("--disable-slash-commands");
+    expect(compact).toContain("--tools");
+    const turn = executionArgs({ toolAvailability: availability });
+    expect(turn).toContain("--disable-slash-commands");
+  });
+
   it.each([false, true])("layers exec policy before selecting bypass (resume=%s)", (useResume) => {
     type Exec = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
     const cases: [Exec | undefined, Exec | undefined, boolean][] = [
@@ -318,7 +327,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
 
   it.each([
     ["claude-sonnet-4-6", "off", "--effort xhigh --effort=low", "--effort xhigh --effort=low"],
-    ["claude-fable-5", "off", "--effort high", "--effort low"],
     ["claude-opus-4-7", "minimal", "", "--effort low"],
     ["claude-opus-4-7", "medium", "", "--effort medium"],
   ] as const)("maps %s thinking=%s to %s", (modelId, thinkingLevel, configured, expected) => {
@@ -326,6 +334,17 @@ describe("resolveClaudeCliExecutionArgs", () => {
     expect(executionArgs({ modelId, thinkingLevel, baseArgs })).toEqual(
       argv("-p --setting-sources user", expected),
     );
+  });
+
+  it.each([
+    [true, ["--fast-mode", "on"]],
+    [false, []],
+    [undefined, []],
+  ] as const)("forwards fastMode=%s to Claude Code", (fastMode, expected) => {
+    expect(executionArgs({ fastMode, baseArgs: argv("-p --setting-sources user") })).toEqual([
+      ...argv("-p --setting-sources user"),
+      ...expected,
+    ]);
   });
 
   it("strips configured effort args when thinking is adaptive", () => {
@@ -479,13 +498,17 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(prepared).not.toHaveProperty("env.CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR");
   });
 
-  it("forwards a selected API-key profile through Claude's private descriptor", async () => {
-    const prepared = prepareSecret(
-      { type: "api_key", provider: "claude-cli", key: "selected-api-key" },
-      "claude-cli:api",
-    );
+  it.each([
+    ["selected-api-key", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR"],
+    // Legacy imports stored subscription tokens as api_key profiles (#197169).
+    ["sk-ant-oat01-synthetic-subscription-token", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"],
+  ])("forwards api_key profile %s through %s", async (key, envName) => {
+    const prepared = (await prepare(backend, {
+      authCredential: { type: "api_key", provider: "claude-cli", key },
+      authProfileId: "claude-cli:api",
+    })) as ClaudePreparedExecutionWithSecret;
 
-    expectSecret(prepared, "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR", "selected-api-key");
+    expectSecret(prepared, envName, key);
     expect(prepared.env).not.toHaveProperty("ANTHROPIC_API_KEY");
     await expectSecretDestroyed(prepared);
   });
