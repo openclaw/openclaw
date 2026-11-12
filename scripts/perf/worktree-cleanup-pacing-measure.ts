@@ -31,8 +31,9 @@
  * candidate positive progress, no commit/loop latency regression beyond A/A spread.
  * PSI runs flush setup writes, settle for 30 seconds, then commit a small marker before
  * timing. Report both flush durations; bulk fixture writeback is not cleanup IO.
- * Seed a large isolated DB once with --seed-transcript-gib <logical-gib>, close the process, then
- * reuse its reported agentDatabasePath with --agent-db-fixture for every measured arm.
+ * Seed a large isolated DB with generateTeamShapeFixture from team-shape-fixture.ts,
+ * using session keys agent:main:synthetic-0 through agent:main:synthetic-4999, then
+ * reuse its closed agent database with --agent-db-fixture for every measured arm.
  * The transcript owner compresses synthetic content; report physical DB bytes, not
  * the requested logical size. COPYFILE_EXCL refuses replacing an already opened DB.
  */
@@ -68,7 +69,6 @@ const { values } = parseArgs({
     "observe-ms": { type: "string", default: "0" },
     "psi-trace": { type: "boolean", default: false },
     "agent-db-fixture": { type: "string" },
-    "seed-transcript-gib": { type: "string", default: "0" },
   },
 });
 assert(values.source, "--source is required");
@@ -119,11 +119,9 @@ const output = path.resolve(values.output);
 const worktrees = Number(values.worktrees);
 const scratchClones = Number(values["scratch-clones"]);
 const observeMs = Number(values["observe-ms"]);
-const transcriptGiB = Number(values["seed-transcript-gib"]);
 assert(Number.isSafeInteger(worktrees) && worktrees >= 2);
 assert(Number.isSafeInteger(scratchClones) && scratchClones >= 0);
 assert(Number.isSafeInteger(observeMs) && observeMs >= 0);
-assert(Number.isSafeInteger(transcriptGiB) && transcriptGiB >= 0 && transcriptGiB <= 64);
 fs.mkdirSync(output);
 for (const directory of ["home", "tmp", "state"]) {
   fs.mkdirSync(path.join(output, directory));
@@ -248,25 +246,14 @@ if (values["agent-db-fixture"]) {
     fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
   );
 }
-if (transcriptGiB) {
-  const { seedTeamShapeSessions } = await import("./team-shape-sessions.js");
-  await seedTeamShapeSessions({
-    stateDir: process.env.OPENCLAW_STATE_DIR!,
-    sessions,
-    sessionKeys: Array.from({ length: sessions }, (_, index) => `agent:main:synthetic-${index}`),
-    retainedRuns: 0,
-    seed: 2437,
-    now: Date.now(),
-    transcriptBytes: transcriptGiB * 1024 ** 3,
-  });
-}
 for (let offset = 0; offset < sessions; offset += 100) {
   runOpenClawAgentWriteTransaction(
     (database) => {
       for (let index = offset; index < Math.min(offset + 100, sessions); index++) {
         const record = records[index];
         writeSessionEntry(database, `agent:main:synthetic-${index}`, {
-          sessionId: `synthetic-${index}`,
+          // Preserve the canonical fixture's current transcript window.
+          sessionId: `team-shape-session-${index}`,
           updatedAt: 1,
           lifecycleRevision: `synthetic-${index}`,
           status: "done",
