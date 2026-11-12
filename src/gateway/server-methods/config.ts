@@ -40,14 +40,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
 import { redactToolDetail } from "../../logging/redact.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import {
-  isRetryableSecretDegradationReason,
-  redactSecretDegradationReason,
-} from "../../secrets/runtime-degraded-state.js";
-import {
-  prepareSecretsRuntimeSnapshot,
-  type PreparedSecretsRuntimeSnapshot,
-} from "../../secrets/runtime.js";
+import type { PreparedSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { diffGatewayReloadPaths } from "../config-diff.js";
 import { invalidateConfigGetResponseCache, readConfigGetResponse } from "../config-get-response.js";
 import {
@@ -83,6 +76,10 @@ import {
   resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
 } from "./config-write-flow.js";
+import {
+  prepareConfigWriteSecretsOrRespond,
+  preparedSecretDegradationPayload,
+} from "./config-write-secrets.js";
 import { readConfigWriteSnapshotOrRespond } from "./config-write-snapshot.js";
 import {
   execOpenPath,
@@ -481,48 +478,6 @@ function rejectDroppedAgentRosterEntries(params: {
   return true;
 }
 
-async function ensureResolvableSecretRefsOrRespond(params: {
-  config: OpenClawConfig;
-  respond: RespondFn;
-}): Promise<PreparedSecretsRuntimeSnapshot | null> {
-  try {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: params.config,
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-    });
-    for (const owner of snapshot.degradedOwners ?? []) {
-      const reason = redactSecretDegradationReason(owner.reason);
-      if (!isRetryableSecretDegradationReason(reason)) {
-        throw new Error(reason);
-      }
-    }
-    return snapshot;
-  } catch (error) {
-    const details = formatErrorMessage(error);
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid config: active SecretRef resolution failed (${details})`,
-      ),
-    );
-    return null;
-  }
-}
-
-function preparedSecretDegradationPayload(snapshot: PreparedSecretsRuntimeSnapshot) {
-  const degradedSecretOwners = (snapshot.degradedOwners ?? []).map((owner) => ({
-    ownerKind: owner.ownerKind,
-    ownerId: owner.ownerId,
-    state: owner.degradationState ?? "cold",
-    paths: [...owner.paths],
-    reason: redactSecretDegradationReason(owner.reason),
-  }));
-  return degradedSecretOwners.length > 0 ? { degradedSecretOwners } : {};
-}
-
 async function commitConfigRestartWrite(params: {
   requestParams: unknown;
   mode: ConfigRestartWriteMode;
@@ -762,7 +717,8 @@ export const configHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond(context, {
+      previousConfig: parsed.writeSnapshot.snapshot.config,
       config: parsed.config,
       respond,
     });
@@ -930,7 +886,8 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const writeConfig = validatedSubmission.validationCandidate;
     const validatedConfig = validatedSubmission.config;
-    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond(context, {
+      previousConfig: snapshot.config,
       config: validatedConfig,
       respond,
     });
@@ -986,7 +943,8 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!parsed) {
       return;
     }
-    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+    const preparedSecretsSnapshot = await prepareConfigWriteSecretsOrRespond(context, {
+      previousConfig: parsed.writeSnapshot.snapshot.config,
       config: parsed.config,
       respond,
     });

@@ -80,9 +80,16 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
   return normalizeConfigSelection(pageId, section, null);
 }
 
-// Appearance's Language picker owns this leaf; generic forms and search must
-// not expose a second control for it.
-const CURATED_SETTINGS_OWNED_LEAF_PATHS: readonly string[] = ["ui.prefs.locale"];
+// Curated controls own these leaves; generic forms and search must not expose a
+// second control. Appearance's Language picker owns the locale, and the Gateway
+// Authentication card stages the mode with the settings that mode requires.
+const CURATED_SETTINGS_OWNED_LEAF_PATHS: readonly string[] = [
+  "ui.prefs.locale",
+  "gateway.auth.mode",
+  "gateway.auth.token",
+  "gateway.auth.password",
+  "gateway.auth.trustedProxy.userHeader",
+];
 
 function omitLeafPath(schema: JsonSchema, segments: readonly string[]): JsonSchema {
   const [segment, ...rest] = segments;

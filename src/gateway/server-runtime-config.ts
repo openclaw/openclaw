@@ -74,7 +74,7 @@ export function isGatewayEffectiveConfigConflictError(error: unknown): boolean {
 }
 
 /** Startup and reload validate the same security policy against the serving listener. */
-export function assertGatewayRuntimeSecurityConfig(
+function assertGatewayRuntimeSecurityConfig(
   params: Pick<
     GatewayRuntimeConfig,
     "bindHost" | "controlUiEnabled" | "resolvedAuth" | "tailscaleMode"
@@ -132,6 +132,29 @@ export function assertGatewayRuntimeSecurityConfig(
       "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
     );
   }
+}
+
+/** Binds the startup and reload security policy to one serving listener. */
+export function createGatewayRuntimeSecurityAssertion(listener: {
+  port: number;
+  bindHost: string;
+  /** Startup override; the candidate config decides when unset. */
+  controlUiEnabled?: boolean;
+  tailscaleMode: GatewayRuntimeConfig["tailscaleMode"];
+}) {
+  return (cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): void =>
+    assertGatewayRuntimeSecurityConfig({
+      cfg,
+      port: listener.port,
+      bindHost: listener.bindHost,
+      controlUiEnabled: listener.controlUiEnabled ?? cfg.gateway?.controlUi?.enabled ?? true,
+      tailscaleMode: listener.tailscaleMode,
+      resolvedAuth: resolveGatewayAuth({
+        authConfig: cfg.gateway?.auth,
+        tailscaleMode: listener.tailscaleMode,
+        env,
+      }),
+    });
 }
 
 export async function resolveGatewayRuntimeConfig(params: {
