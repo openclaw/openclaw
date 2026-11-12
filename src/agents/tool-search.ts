@@ -61,7 +61,6 @@ export {
 } from "./tool-search-catalog.js";
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
-  buildRunGrantedToolDirectory,
   buildToolSchemaDirectoryPrompt,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
