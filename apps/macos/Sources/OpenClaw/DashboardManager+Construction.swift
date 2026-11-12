@@ -228,7 +228,10 @@ extension DashboardManager {
         try browserSession?.validate(for: config.url)
         // The OpenClaw ID operator proxy is this Mac's dashboard route; never the claw's
         // browser sign-in origin, which would need a separate browser approval.
-        let operatorDashboard = MacOpenClawIDOperatorRoute.dashboardRoute(for: config.url)
+        let operatorDashboard = endpoint.openClawIDSession == nil
+            ? nil : MacOpenClawIDOperatorRoute.dashboardRoute(for: config.url)
+        // A route retired since the endpoint resolved reopens once its replacement is ready.
+        if endpoint.openClawIDSession != nil, operatorDashboard == nil { throw CancellationError() }
         let advertisedIdentityURL = operatorDashboard == nil && (mode == .remote || endpoint.tls != nil)
             ? try await browserIdentityURLProvider(target, config)
             : nil
@@ -288,8 +291,9 @@ extension DashboardManager {
         let auth: DashboardWindowAuth = if identityURL != nil || browserSession != nil {
             .browserIdentity(gatewayUrl: Self.websocketURLString(for: url))
         } else {
+            // The proxy upgrades only the Gateway root, whatever the Control UI's mount path.
             .nativeDevice(
-                gatewayUrl: Self.websocketURLString(for: url),
+                gatewayUrl: Self.websocketURLString(for: operatorDashboard?.url ?? url),
                 token: operatorDashboard == nil ? token : nil,
                 password: operatorDashboard == nil
                     ? config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty : nil,
