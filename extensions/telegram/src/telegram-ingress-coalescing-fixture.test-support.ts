@@ -169,6 +169,8 @@ export type TelegramIngressMonitorOptions = {
   adoptionStallTimeoutMs?: number;
   pollIntervalMs?: number;
   onRuntimeError?: (error: unknown) => void;
+  /** Drop the fixture's fast album window and exercise the production default instead. */
+  useProductionAlbumWindow?: boolean;
 };
 
 export async function createIngressMonitor(
@@ -186,7 +188,10 @@ export async function createIngressMonitor(
     telegramTransport,
     fetchAbortSignal: abortController.signal,
     mediaAbortSignal: abortController.signal,
-    testTimings: { mediaGroupFlushMs: 40, textFragmentGapMs: 20 },
+    testTimings: {
+      ...(options.useProductionAlbumWindow ? {} : { mediaGroupFlushMs: 40 }),
+      textFragmentGapMs: 20,
+    },
     runtime: {
       log: () => {},
       error:
