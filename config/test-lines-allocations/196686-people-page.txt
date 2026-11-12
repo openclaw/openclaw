@@ -1,0 +1,4 @@
+166
+# People page regression coverage: host picker selection/reset, request recovery,
+# read-only/member rendering, and independent node actions during invite creation.
+# Exact net growth in browser/people-page.test.tsx; shared scalar unchanged.
