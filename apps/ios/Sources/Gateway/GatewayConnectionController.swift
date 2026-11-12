@@ -49,7 +49,7 @@ final class GatewayConnectionController {
     private var localNetworkAccessRequested: Bool
     private(set) var currentScenePhase: ScenePhase = .inactive
     private var didAutoConnect = false
-    private var pendingServiceResolvers: [String: BonjourServiceResolver<(host: String, port: Int)>] = [:]
+    private var pendingServiceResolvers: [UUID: BonjourServiceResolver<(host: String, port: Int)>] = [:]
     private var pendingTrustConnect: GatewayPendingTrustConnect?
     private var preconnectRetryContext: PreconnectRetryContext?
     private var trustProbeGeneration: UInt64 = 0
@@ -1490,7 +1490,9 @@ extension GatewayConnectionController {
             return await serviceEndpointResolver(endpoint)
         }
         guard case let .service(name, type, domain, _) = endpoint else { return nil }
-        let key = "\(domain)|\(type)|\(name)"
+        // One resolver per call: callers resolving the same service at once (Settings connect and
+        // the background fleet) each keep their resolver alive until it finishes.
+        let key = UUID()
         return await withCheckedContinuation { continuation in
             let resolver = BonjourServiceResolver(
                 name: name,

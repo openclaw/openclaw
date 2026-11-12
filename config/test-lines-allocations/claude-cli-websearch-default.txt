@@ -1,0 +1,3 @@
+# Managed claude-cli keeps native WebSearch by default: default/opt-out selection and the
+# configured-OpenClaw-provider gate on ordinary and completion turns. Exact net growth.
+29

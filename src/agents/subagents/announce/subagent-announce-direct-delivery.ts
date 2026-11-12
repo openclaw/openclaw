@@ -1,8 +1,8 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import { runOutsideAdmittedGenerationScopes } from "../../../auto-reply/reply/queue/drain-admission-scope.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
-import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
@@ -77,9 +77,7 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  // The child's finished turn closed its plugin scope; routing the announcement
-  // must not inherit it.
-  return pluginInvocationContext.exit(() =>
+  return runOutsideAdmittedGenerationScopes(() =>
     withSubagentRequesterDelivery(
       params.targetRequesterSessionKey,
       params,

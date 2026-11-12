@@ -49,7 +49,7 @@ import {
   markPreparedModelCatalogFull,
 } from "./prepared-model-runtime.full-catalog.js";
 import { capturePreparedModelRuntimeLifetime } from "./prepared-model-runtime.lifecycle.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { runWithPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import {
   createCatalogAttemptReporter,
   notifyPreparedModelCatalogPublication,
@@ -405,15 +405,12 @@ export async function createFullModelCatalogAccess(
     }
     const previousNative = nativePending;
     let failedProviders: readonly string[] | undefined;
-    const promise = (async () => {
+    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
       await previousNative?.catch(() => undefined);
       const settledCatalog = readReadyCatalog();
       if (settledCatalog) {
         return settledCatalog;
       }
-      await using _ = {
-        [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
-      };
       attempt.setPending([], "native");
       let discoveredProviders: string[] = [];
       let completed = false;
@@ -532,7 +529,7 @@ export async function createFullModelCatalogAccess(
         throw failures[0]!.error;
       }
       return published.catalog ?? staticCatalog;
-    })()
+    })
       .catch((error: unknown) => {
         attempt.failed(error, failedProviders ?? providerIds, "native");
         if (published.catalog) {
@@ -653,10 +650,7 @@ export async function createFullModelCatalogAccess(
     }
     attempt.setPending(fullRefresh || providers.length ? providers : undefined);
     const providerIds = fullRefresh ? undefined : providers;
-    const promise = (async () => {
-      await using _ = {
-        [Symbol.asyncDispose]: retainPreparedPluginGeneration(params.pluginGeneration),
-      };
+    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
       if (fullRefresh || providers.length) {
         const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
           (error: unknown) => {
@@ -672,7 +666,7 @@ export async function createFullModelCatalogAccess(
         return await acquireNativeCatalog(nativeScope, undefined, options.refresh);
       }
       return published.catalog ?? staticCatalog;
-    })().finally(() => {
+    }).finally(() => {
       pending = undefined;
       retryFailedDiscovery();
     });
