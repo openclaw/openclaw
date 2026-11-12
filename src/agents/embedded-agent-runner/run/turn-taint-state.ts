@@ -1,4 +1,4 @@
-import type { ToolOutcomeObservation } from "../../agent-tools.before-tool-call.js";
+import type { ToolOutcomeObservation } from "../../tool-outcome-observation.js";
 
 /** Sticky current-turn taint shared by retries and runtime-specific tool owners. */
 export function createAgentTurnTaintState(initiallyTainted = false) {

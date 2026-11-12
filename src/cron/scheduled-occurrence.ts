@@ -4,6 +4,7 @@
  * creates occurrences; this module stays free of runtime dependencies so cron
  * core can import it.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { OperationalRunInstanceRef } from "../agents/operational-run-instance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -84,7 +85,10 @@ export function buildScheduledParentPauseNotice(params: {
   job: { id: string; name?: string };
   pause: CronParentUnavailable;
 }): string {
-  const name = (params.job.name || params.job.id).replace(/\s+/g, " ").trim().slice(0, 120);
+  const name = truncateUtf16Safe(
+    (params.job.name || params.job.id).replace(/\s+/g, " ").trim(),
+    120,
+  );
   const { pause } = params;
   const cause =
     pause.reason === "worktree-missing"

@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -48,10 +49,6 @@ const enSessionNavigation = {
 } satisfies TranslationMap;
 
 export const registerSessionNavigationEnglish = Object.assign(
-  () => {
-    Object.assign(en.chat.catalog, enSessionNavigation.chat.catalog);
-    Object.assign(en.chat.sessionSuggestions, enSessionNavigation.chat.sessionSuggestions);
-    Object.assign(en.chat.sessionRoute, enSessionNavigation.chat.sessionRoute);
-  },
+  () => mergeCatalog(en, enSessionNavigation),
   { catalog: enSessionNavigation },
 );

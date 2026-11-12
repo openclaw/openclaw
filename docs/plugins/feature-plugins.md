@@ -134,6 +134,15 @@ handler receives a discriminated invocation context: `source` is
 surface. Tool policy, authenticated command handling, and Gateway scope checks
 remain owned by their existing execution paths.
 
+For session actions, thrown handler errors return `ok: false` with code
+`OPERATION_FAILED` and the error's message (or stringified thrown value), limited
+to 2,000 UTF-16 code units without splitting surrogate pairs. Blank messages use
+`Feature operation failed`. Validation failures retain `INVALID_INPUT` or
+`INVALID_OUTPUT`. `createFeatureClient.invoke` rejects with the returned message.
+Use caller-safe error messages: stacks, causes, and other error fields are not
+included. Tools and commands retain their existing error handling; the Gateway
+still masks uncaught errors from directly registered session actions.
+
 Use `createFeatureClient(contract, context.host)` inside a browser view:
 
 ```typescript
@@ -190,6 +199,26 @@ Its id must match the plugin manifest. Register contributions through
 | `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
+
+Panels can supply an optional `icon` with a fixed host icon-registry name, such as
+`bookOpenText`, `barChart`, `activity`, or `terminal`:
+
+```typescript
+host.ui.registerPanel({
+  id: "activity",
+  label: "Activity",
+  icon: "activity",
+  mount(container) {
+    // Mount the plugin's panel content.
+  },
+});
+```
+
+The same icon appears in panel pickers and tabs, including mobile launchers.
+Omitted or unknown names fall back to `plug`; URLs, raw SVG, and emoji are not
+accepted as registry names. A plugin's [manifest-provided SVG](/plugins/manifest/surfaces#controlui-reference)
+takes precedence over this per-panel choice. If that artwork cannot render, the
+host uses the registered icon, or `plug` when no known icon was selected.
 
 Set a navigation item's `parent` to another navigation ID in the same plugin to
 show it nested while the parent or a child destination is active; children only
@@ -264,17 +293,29 @@ view is presented again; previously captured operations remain retired.
 
 Use the host for shared application behavior:
 
-| Capability              | Purpose                                                                                                       |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
-| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
-| `connection`            | Current connection and operator capabilities.                                                                 |
-| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
-| `navigation`            | Open plugin pages and build their URLs.                                                                       |
-| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
-| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
-| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
-| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+| Capability                   | Purpose                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                     | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`                 | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`                 | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)            | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`                 | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent`      | Authenticated Gateway requests and event subscriptions.                                                       |
+| `recoveryStorage` (optional) | Account-bound, tab-local recovery data for this plugin.                                                       |
+| `sessions`                   | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`                  | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                         | Register, select, and invalidate plugin contributions.                                                        |
+
+Use `host.recoveryStorage` for private retry drafts that must survive a view
+remount. Version 1 provides `getItem`, `setItem`, `removeItem`, and
+`assertCurrent`. It is absent or null until the Gateway resolves the authenticated
+recovery owner. Include the agent and session identity in your local key. Storage
+errors throw; an unavailable read does not mean no previous operation exists.
+Captured handles stop working when the account, connection, plugin activation,
+or view changes. Credential replacement, rejection, or forgetting an account
+retires its stored data. Reconnect, acquire a new handle, and reauthorize the
+server resource before restoring private content. Do not fall back to an
+account-independent browser storage key.
 
 `onEvent("session.message", listener)` listeners receive complete messages;
 delivery begins once the Gateway confirms full-body delivery for this connection.

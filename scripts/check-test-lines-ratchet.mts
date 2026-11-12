@@ -195,9 +195,12 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       // A prune folds allocations into the scalar. Compare effective ceilings
       // so an older branch cannot count that folded credit a second time.
       const credit = Math.max(0, ceiling - previousCeiling);
-      if (credit > Math.max(0, delta)) {
+      // Exact grants can reconcile base debt without creating new headroom.
+      const inheritedDebt = Math.max(0, total - delta - previousCeiling);
+      const allowedGrowth = Math.max(0, delta + inheritedDebt);
+      if (credit > allowedGrowth) {
         throw new Error(
-          `Test line allocation credit ${credit} exceeds added test lines ${Math.max(0, delta)}.`,
+          `Test line allocation credit ${credit} exceeds allowed ceiling growth ${allowedGrowth}.`,
         );
       }
     }

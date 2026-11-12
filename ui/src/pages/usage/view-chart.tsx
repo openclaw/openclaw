@@ -1,6 +1,5 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
-import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatUsd } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
@@ -70,7 +69,6 @@ export function DailyChartCompact(props: {
   selectedDays: string[];
   chartMode: "tokens" | "cost";
   dailyChartMode: UsageProps["display"]["dailyChartMode"];
-  onDailyChartModeChange: (mode: UsageProps["display"]["dailyChartMode"]) => void;
   providerSeries: ProviderSeries[];
   onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"];
   range: UsageChartRange;
@@ -208,18 +206,6 @@ export function DailyChartCompact(props: {
             {formatFullDate(props.range.startDate)} – {formatFullDate(props.range.endDate)}
           </div>
         </div>
-        <SettingsSegmented
-          mode="buttons"
-          class="sessions-toggle"
-          value={props.dailyChartMode}
-          onChange={(mode) => props.onDailyChartModeChange(mode)}
-          onReselect={(mode) => props.onDailyChartModeChange(mode)}
-          options={[
-            { value: "total", label: t("usage.daily.total") },
-            { value: "by-type", label: t("usage.daily.byType") },
-            { value: "by-provider", label: t("usage.daily.byProvider") },
-          ]}
-        />
       </div>
       <Show
         when={dates().length > 0}

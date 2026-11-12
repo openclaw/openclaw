@@ -55,6 +55,8 @@ describe("incomplete-turn retry classification", () => {
   it.each([
     ["ollama", "minimax-m2.7:cloud", 6, EMPTY_RETRY, undefined],
     ["ollama", "glm-5.1:cloud", 0, null, undefined],
+    ["llmman", "qwen3.5:0.8b", 6, EMPTY_RETRY, "ollama"],
+    ["llmman", "qwen3.5:0.8b", 0, null, "ollama"],
     ["openai", "gpt-5.5", 111, EMPTY_RETRY, "openai-chatgpt-responses"],
   ] as const)("handles empty %s/%s output", (provider, modelId, output, expected, modelApi) => {
     const instructions = resolveNonVisibleTurnRetryInstructions({

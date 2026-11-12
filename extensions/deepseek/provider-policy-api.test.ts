@@ -30,16 +30,28 @@ function model(
 }
 
 describe("deepseek provider-policy-api", () => {
-  it("refreshes exact current-model catalog metadata snapshots written by prior releases", () => {
-    const providerConfig = configWithModels(
-      model("deepseek-v4-flash", { cost: cost(0.14, 0.28, 0.028) }),
-      model("deepseek-v4-pro", { cost: cost(1.74, 3.48, 0.145) }),
-    );
-    expect(normalizeConfig({ provider: "deepseek", providerConfig }).models).toEqual([
-      model("deepseek-v4-flash"),
-      model("deepseek-v4-pro", { cost: cost(0.435, 0.87, 0.003625) }),
-    ]);
+  it.each([
+    ["deepseek-v4-flash", cost(0.14, 0.28, 0.028), cost(0.3, 1.2, 0.006)],
+    ["deepseek-v4-flash", cost(0.14, 0.28, 0.0028), cost(0.3, 1.2, 0.006)],
+    ["deepseek-v4-pro", cost(1.74, 3.48, 0.145), cost(1.32, 3.96, 0.044)],
+    ["deepseek-v4-pro", cost(0.435, 0.87, 0.003625), cost(1.32, 3.96, 0.044)],
+    ["deepseek-v4-flash-vision-exp", cost(0.44, 1.32, 0.014), cost(0.3, 1.2, 0.006)],
+  ])("refreshes the exact previous %s pricing snapshot", (id, previous, current) => {
+    const providerConfig = configWithModels(model(id, { cost: previous }));
+    const result = normalizeConfig({ provider: "deepseek", providerConfig });
+    expect(result.models).toEqual([model(id, { cost: current })]);
+    expect(normalizeConfig({ provider: "deepseek", providerConfig: result })).toBe(result);
   });
+
+  it.each([{ contextWindow: 500_000 }, { maxTokens: 100_000 }, { cost: cost(0.435, 0.87, 0.1) }])(
+    "preserves a partial previous snapshot with authored overrides: %j",
+    (overrides) => {
+      const providerConfig = configWithModels(
+        model("deepseek-v4-pro", { cost: cost(0.435, 0.87, 0.003625), ...overrides }),
+      );
+      expect(normalizeConfig({ provider: "deepseek", providerConfig })).toBe(providerConfig);
+    },
+  );
 
   it("leaves zero-cost retired alias snapshots unchanged when uncataloged", () => {
     const providerConfig = configWithModels(
@@ -87,7 +99,7 @@ describe("deepseek provider-policy-api", () => {
       ...providerConfig.models[1],
       contextWindow: 1_000_000,
       maxTokens: 384_000,
-      cost: { input: 0.435, output: 0.87, cacheRead: 0.003625, cacheWrite: 0 },
+      cost: { input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 },
     });
   });
 });

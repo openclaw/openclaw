@@ -8,6 +8,7 @@ import * as chatThread from "./chat-thread.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
+import { settleChatMount } from "./test-helpers/chat-mount-frames.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-snapshot.ts";
 
 describe("resolveChatProjectionRunId", () => {
@@ -53,28 +54,30 @@ describe("transcript run identity", () => {
       transcript.dispose();
       container.remove();
     });
-    const view = mountSolid(
-      () =>
-        createComponent(ChatThread, {
-          props: {
-            ...threadProps("run-id-projection"),
-            sessions: sessionListResult(
-              0,
-              [
-                {
-                  key: "agent:main:main",
-                  kind: "direct",
-                  updatedAt: 1,
-                  hasActiveRun: true,
-                  activeRunIds: ["arbitrary-first", "other-run"],
-                },
-              ],
-              { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-            ),
-          },
-          transcript,
-        }),
-      { container },
+    const view = settleChatMount(() =>
+      mountSolid(
+        () =>
+          createComponent(ChatThread, {
+            props: {
+              ...threadProps("run-id-projection"),
+              sessions: sessionListResult(
+                0,
+                [
+                  {
+                    key: "agent:main:main",
+                    kind: "direct",
+                    updatedAt: 1,
+                    hasActiveRun: true,
+                    activeRunIds: ["arbitrary-first", "other-run"],
+                  },
+                ],
+                { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+              ),
+            },
+            transcript,
+          }),
+        { container },
+      ),
     );
     flush();
     transcript.start();

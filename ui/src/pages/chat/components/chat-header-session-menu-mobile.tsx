@@ -8,6 +8,7 @@ import {
   type MenuItem,
   type MenuItemBindings,
 } from "../../../components/solid/menu.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerSessionMenuEnglish } from "../../../i18n/locales/en-session-menu.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../../lib/reactive/pending-focus.ts";
@@ -95,11 +96,9 @@ function PageEntries(props: {
             {entry.type === "checkbox" ? <Icon name="eye" /> : entry.icon}
             <span>{plainLabel(entry.label)}</span>
             {entry.type === "checkbox" ? (
-              <span
-                class="session-actions-page__switch"
-                data-checked={entry.checked ? "true" : "false"}
-                aria-hidden="true"
-              />
+              <span class="session-actions-page__switch">
+                <SwitchIndicator checked={Boolean(entry.checked)} size="md" />
+              </span>
             ) : entry.checked ? (
               <Icon name="check" />
             ) : entry.id.startsWith("compact:open-") ? (

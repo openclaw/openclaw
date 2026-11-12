@@ -59,6 +59,63 @@ export function WorkspaceFilename(props: { name: string }) {
   );
 }
 
+/** Shared tile face: admitted image pixels or the large file icon, with an optional name. */
+export function WorkspaceTileBody(props: {
+  name: string;
+  mimeType?: string;
+  previewUrl?: string;
+  pending?: boolean;
+  caption: boolean;
+  activity?: string;
+  changed?: boolean;
+}) {
+  // A preview that fails to decode falls back to the file icon instead of a broken image.
+  const [failedUrl, setFailedUrl] = createSignal<string>();
+  const previewUrl = () =>
+    props.previewUrl && props.previewUrl !== failedUrl() ? props.previewUrl : undefined;
+  return (
+    <>
+      <Show
+        when={previewUrl()}
+        fallback={
+          <span class="workspace-desktop__tile-media">
+            <AttachmentFileIcon
+              filename={props.name}
+              mimeType={props.mimeType}
+              mode="large-placeholder"
+              loading={props.pending}
+            />
+          </span>
+        }
+      >
+        {(url) => (
+          <img
+            class="workspace-desktop__tile-media"
+            src={url()}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            referrerpolicy="no-referrer"
+            onError={() => setFailedUrl(url())}
+          />
+        )}
+      </Show>
+      <Show when={props.caption}>
+        <span class="workspace-desktop__name-line">
+          <WorkspaceFilename name={props.name} />
+          <Show when={props.activity}>
+            <span
+              class={["workspace-desktop__activity", { "is-changed": props.changed }]}
+              role="img"
+              aria-label={props.activity}
+            />
+          </Show>
+        </span>
+      </Show>
+    </>
+  );
+}
+
 export function RailRow(props: {
   file: WorkspaceCatalogFile;
   workspace: SessionWorkspaceProps;
@@ -68,6 +125,8 @@ export function RailRow(props: {
   searching?: boolean;
   position?: number;
   setSize?: number;
+  /** Session files can render as tiles; tree rows and search results stay rows. */
+  view?: "list" | "grid";
   onToggle?: (instant: boolean) => void;
 }) {
   const selected = createMemo(() =>
@@ -96,78 +155,104 @@ export function RailRow(props: {
         ? t("chat.workspaceFiles.read")
         : undefined;
   return (
-    <div
-      role="listitem"
-      class="workspace-desktop__item"
-      aria-posinset={props.position}
-      aria-setsize={props.setSize}
-    >
-      <button
-        type="button"
-        class={["workspace-desktop__row", { "is-active": selected() }]}
-        style={{
-          "padding-inline-start": `min(calc(8px + ${props.depth ?? 0} * var(--workspace-tree-step, 16px)), max(8px, calc(100% - 100px)))`,
-        }}
-        aria-label={props.file.path}
-        aria-description={activity()}
-        aria-current={selected() ? "true" : undefined}
-        aria-expanded={props.directory ? (props.expanded ? "true" : "false") : undefined}
-        onClick={(event) => {
-          if (props.directory) {
-            props.onToggle?.(event.detail === 0);
-          } else {
-            onOpen();
-          }
-        }}
-        onDblClick={() => {
-          if (!props.directory) {
-            onOpen("pinned");
-          }
-        }}
-      >
-        <Show
-          when={props.directory}
-          fallback={
-            <AttachmentFileIcon
-              filename={props.file.name}
-              mimeType={props.file.mimeType}
-              mode="preview-with-favicon"
-            />
-          }
+    <Show
+      when={props.view === "grid" && !props.directory}
+      fallback={
+        <div
+          role="listitem"
+          class="workspace-desktop__item"
+          aria-posinset={props.position}
+          aria-setsize={props.setSize}
         >
-          <span class="workspace-desktop__folder-icon">
-            <Show when={props.expanded} fallback={<Icon name="folder" />}>
-              {/* Lucide folder-open, the approved Files glyph (ISC). */}
-              <StrokeIcon aria-hidden="true">
-                <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
-              </StrokeIcon>
+          <button
+            type="button"
+            class={["workspace-desktop__row", { "is-active": selected() }]}
+            style={{
+              "padding-inline-start": `min(calc(8px + ${props.depth ?? 0} * var(--workspace-tree-step, 16px)), max(8px, calc(100% - 100px)))`,
+            }}
+            aria-label={props.file.path}
+            aria-description={activity()}
+            aria-current={selected() ? "true" : undefined}
+            aria-expanded={props.directory ? (props.expanded ? "true" : "false") : undefined}
+            onClick={(event) => {
+              if (props.directory) {
+                props.onToggle?.(event.detail === 0);
+              } else {
+                onOpen();
+              }
+            }}
+            onDblClick={() => {
+              if (!props.directory) {
+                onOpen("pinned");
+              }
+            }}
+          >
+            <Show
+              when={props.directory}
+              fallback={
+                <AttachmentFileIcon
+                  filename={props.file.name}
+                  mimeType={props.file.mimeType}
+                  mode="preview-with-favicon"
+                />
+              }
+            >
+              <span class="workspace-desktop__folder-icon">
+                <Show when={props.expanded} fallback={<Icon name="folder" />}>
+                  {/* Lucide folder-open, the approved Files glyph (ISC). */}
+                  <StrokeIcon aria-hidden="true">
+                    <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
+                  </StrokeIcon>
+                </Show>
+              </span>
             </Show>
-          </span>
-        </Show>
-        <span class="workspace-desktop__identity">
-          <span class="workspace-desktop__name-line">
-            <WorkspaceFilename name={props.file.name} />
-            <Show when={!props.directory && activity()}>
-              <span
-                class={[
-                  "workspace-desktop__activity",
-                  { "is-changed": props.file.activity !== "read" },
-                ]}
-                role="img"
-                aria-label={activity()}
-              />
-            </Show>
-          </span>
-          <Show when={props.searching}>
-            <span class="workspace-desktop__location">
-              {props.file.artifactId
-                ? t("chat.workspaceFiles.desktop.sessionFiles")
-                : (props.file.workspacePath ?? props.file.path)}
+            <span class="workspace-desktop__identity">
+              <span class="workspace-desktop__name-line">
+                <WorkspaceFilename name={props.file.name} />
+                <Show when={!props.directory && activity()}>
+                  <span
+                    class={[
+                      "workspace-desktop__activity",
+                      { "is-changed": props.file.activity !== "read" },
+                    ]}
+                    role="img"
+                    aria-label={activity()}
+                  />
+                </Show>
+              </span>
+              <Show when={props.searching}>
+                <span class="workspace-desktop__location">
+                  {props.file.artifactId
+                    ? t("chat.workspaceFiles.desktop.sessionFiles")
+                    : (props.file.workspacePath ?? props.file.path)}
+                </span>
+              </Show>
             </span>
-          </Show>
-        </span>
-      </button>
-    </div>
+          </button>
+        </div>
+      }
+    >
+      <div role="listitem" class="workspace-desktop__item">
+        <button
+          type="button"
+          class={["workspace-desktop__row workspace-desktop__tile", { "is-active": selected() }]}
+          title={props.file.name}
+          aria-label={props.file.path}
+          aria-description={activity()}
+          aria-current={selected() ? "true" : undefined}
+          onClick={() => onOpen()}
+          onDblClick={() => onOpen("pinned")}
+        >
+          <WorkspaceTileBody
+            name={props.file.name}
+            mimeType={props.file.mimeType}
+            caption
+            activity={activity()}
+            changed={props.file.activity !== "read"}
+          />
+        </button>
+      </div>
+    </Show>
   );
 }
 

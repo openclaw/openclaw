@@ -19,7 +19,7 @@ import {
   buildGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "./config-reload-plan.js";
-import { isCustomPluginUiEnabled } from "./control-ui-plugin-policy.js";
+import { controlUiPluginPolicyKey } from "./control-ui-plugin-policy.js";
 import { GATEWAY_EVENTS } from "./events.js";
 import { startOpenClawIdPeopleEvents } from "./openclaw-id/people-events.js";
 import {
@@ -457,7 +457,7 @@ export async function finishGatewayStartup(params: {
   if (tlsRenewal) {
     registerGatewayLifetimeSidecars(tlsRenewal);
   }
-  let appliedCustomPluginUiEnabled = isCustomPluginUiEnabled(gatewayPluginConfigAtStart);
+  let appliedPluginUiPolicy = controlUiPluginPolicyKey(gatewayPluginConfigAtStart);
   const configReloaderParams: Parameters<typeof startManagedGatewayConfigReloader>[0] = {
     scheduler: runtime.scheduler,
     onReloadEnabledChange: tlsRenewal?.setEnabled,
@@ -577,12 +577,12 @@ export async function finishGatewayStartup(params: {
         runtime.nodeDesktopService.reconcileRuntimePolicy(),
         runtimeState.discovery?.update({ mdnsMode: nextConfig.discovery?.mdns?.mode }),
         (async () => {
-          const customPluginUiEnabled = isCustomPluginUiEnabled(nextConfig);
-          if (customPluginUiEnabled !== appliedCustomPluginUiEnabled) {
+          const nextPluginUiPolicy = controlUiPluginPolicyKey(nextConfig);
+          if (nextPluginUiPolicy !== appliedPluginUiPolicy) {
             const { listControlUiPluginCatalog } = await import("./control-ui-plugin-assets.js");
             const catalog = await listControlUiPluginCatalog();
             broadcast("plugins.controlUi.changed", { revision: catalog.revision });
-            appliedCustomPluginUiEnabled = customPluginUiEnabled;
+            appliedPluginUiPolicy = nextPluginUiPolicy;
           }
         })(),
       ]);

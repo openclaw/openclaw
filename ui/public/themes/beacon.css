@@ -79,7 +79,6 @@
 
   /* Neutral status tints — see the block comment above. */
   --ok: #5ee88a;
-  --ok-muted: rgba(94, 232, 138, 0.85);
   --ok-subtle: rgba(255, 255, 255, 0.1);
   --destructive: #ffabab;
   --destructive-hover: #ffc4c4;
@@ -129,7 +128,6 @@
   --card-foreground: #000000;
   --card-highlight: rgba(0, 0, 0, 0.04);
   --popover-foreground: #000000;
-  --session-hovercard-surface: var(--card);
 
   --text: #000000;
   --text-strong: #000000;
@@ -149,7 +147,6 @@
 
   /* Neutral status tints — see the block comment above. */
   --ok: #0c5024;
-  --ok-muted: rgba(12, 80, 36, 0.85);
   --ok-subtle: rgba(0, 0, 0, 0.07);
   --destructive: #8c0f0f;
   --destructive-foreground: #ffffff;

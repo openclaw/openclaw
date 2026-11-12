@@ -90,6 +90,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Checks for updates when the Gateway starts, including read-only extended-stable hints (default: true). Set false to disable automatic Gateway and headless-node update checks, applies, and anonymous update pings.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
+  "update.auto.schedule":
+    "Optional cron expression for Gateway automatic-update campaign starts, in the Gateway host timezone. Omit for the existing hourly cadence. Rollout delays and idle countdowns still apply; missed windows are skipped.",
   telemetry:
     "Explicit consent for anonymous feature statistics attached to the daily update check. Feature statistics are disabled by default and never include messages, credentials, or identifiers.",
   ...TELEMETRY_FIELD_HELP,
@@ -161,6 +163,10 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.trustedProxy.delegation":
+    "Accept revision-scoped OCE browser identity and scope grants through the private trusted proxy. Delegated profiles do not use email aliases or device grants.",
+  "gateway.auth.trustedProxy.delegation.credentialFile":
+    "Absolute path to a private file containing the revision's 32-byte credential as 64 lowercase hexadecimal characters. File replacement or removal invalidates existing grants.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc":
     "Optional verified GitHub identity from a selected Cloudflare Access OIDC provider. Requires the standard Access email and assertion headers. Missing claims keep email-only profiles; existing profile roles and co-author preferences are preserved.",
   "gateway.auth.trustedProxy.cloudflareAccessOidc.issuer":

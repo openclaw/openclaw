@@ -175,6 +175,23 @@ suite.define(() => {
     });
   });
 
+  it("lets navigation finish before a forever-delayed roster is released", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const key = "agent:main:method-delayed-roster";
+      const gateway = await installMockGateway(page, {
+        methodDelays: { "sessions.list": "forever" },
+        sessions: [{ key, label: "Method-delayed roster", kind: "direct", updatedAt: 1 }],
+      });
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.list");
+      expect(await row.count()).toBe(0);
+      await gateway.setMethodDelay("sessions.list", null);
+      await row.waitFor();
+      await waitForControlUiGatewayReady(page);
+    });
+  });
+
   it("navigates through a lazily loaded readiness hook after reload", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const key = "agent:main:lazy-readiness-navigation";

@@ -50,6 +50,6 @@ export function formatSessionStateChanges(details: {
 }): string {
   return `Session state changes:
 \`\`\`json
-${JSON.stringify(details, null, 2)}
+${JSON.stringify(details)}
 \`\`\``;
 }

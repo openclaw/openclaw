@@ -23,7 +23,15 @@ import { captureGatewayAuthPolicy } from "../../auth-policy.js";
 import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult } from "../../auth.js";
 import { getRemoteControlUiIngressContext } from "../../ingress-attribution.js";
+import {
+  checkDeviceTokenPeer,
+  openclawIdPeerKeyOf,
+} from "../../openclaw-id/device-token-binding.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "../../trusted-proxy-delegation.js";
 import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -228,6 +236,13 @@ async function authenticateGatewayConnectCore(
     });
     close(1008, truncateCloseReason(authMessage));
   };
+  if (
+    hasGatewayDelegationClaim(upgradeReq, resolvedAuth.trustedProxy?.userHeader) &&
+    (!authResult.delegation || role !== "operator")
+  ) {
+    rejectUnauthorized({ ok: false, reason: GATEWAY_DELEGATION_DENIED });
+    return undefined;
+  }
   const clearUnboundScopes = () => {
     if (scopes.length > 0) {
       scopes = [];
@@ -418,10 +433,20 @@ async function authenticateGatewayConnectCore(
         clientIp: browserRateLimitClientIp,
         verifyBootstrapToken: verifyDeviceBootstrapToken,
         async verifyDeviceToken(paramsLocal) {
-          return await verifyDeviceToken({
+          const verified = await verifyDeviceToken({
             ...paramsLocal,
             requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
           });
+          if (!verified.ok) {
+            return verified;
+          }
+          // OpenClaw ID binds tunnel-issued tokens to the device key that obtained them.
+          const peer = await checkDeviceTokenPeer({
+            deviceId: paramsLocal.deviceId,
+            role: paramsLocal.role,
+            peerKey: openclawIdPeerKeyOf(context.handler.ingressAttribution),
+          });
+          return peer.ok ? verified : { ok: false, reason: peer.reason };
         },
       });
   ({ authResult, authOk, authMethod } = authDecision);
@@ -435,6 +460,17 @@ async function authenticateGatewayConnectCore(
     }
     rejectUnauthorized(authResult);
     return undefined;
+  }
+  if (authResult.openclawId?.kind === "node") {
+    if (role !== "node" || connectParams.client.mode !== "node") {
+      const message = 'OpenClaw ID node keys require role "node" and client mode "node"';
+      markHandshakeFailure("openclaw-id-node-role-required");
+      sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+      close(1008, message);
+      return undefined;
+    }
+    // Device proof above covers the original request. A node key never carries operator scopes.
+    clearUnboundScopes();
   }
   // The device signs its requested scopes; the live principal caps authority only
   // after signature verification. Empty requests select the current grant ceiling.
@@ -580,6 +616,7 @@ async function authenticateGatewayConnectCore(
       authMethod,
       authModeOverride: resolvedAuth.modeSource === "override" ? resolvedAuth.mode : undefined,
       verifiedIdentity: authResult.user,
+      delegation: authResult.delegation,
       browserOrigin: context.browserOrigin,
     }),
     resolvedAuth,
