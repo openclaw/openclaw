@@ -24,6 +24,8 @@ import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir
 import { withEnvAsync } from "../test-utils/env.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createResidentSessionRowReader } from "./session-row-projection.test-support.js";
+import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { registerSubagentSessionStatusTests } from "./session-utils.subagent-status.test-harness.js";
 import { useSessionStoreFixture } from "./session-utils.test-support.js";
 const rowReader = createResidentSessionRowReader();
@@ -190,6 +192,34 @@ describe("session list subagent metadata", () => {
     }, true));
 
   registerSubagentSessionStatusTests(listSubagentSessions);
+
+  test("re-projects a cached run state when only descendant liveness changes", () => {
+    const key = "agent:main:subagent:follow-up";
+    let descendants = 0;
+    const cache = {};
+    const read = () =>
+      projectGatewaySessionRunState({
+        key,
+        now: 1,
+        cache,
+        rowContext: {
+          subagentRuns: {
+            getDisplaySubagentRun: () => null,
+            countActiveDescendantRuns: () => descendants,
+          } as unknown as SessionListRowContext["subagentRuns"],
+          // The follow-up turn keeps the combined flag true on both sides of the change.
+          projectedSubagentActivity: new Set([key]),
+        },
+      }).fields;
+    expect(read()).toMatchObject({
+      hasActiveSubagentRun: true,
+      hasActiveSubagentDescendantRun: false,
+    });
+    descendants = 1;
+    expect(read().hasActiveSubagentDescendantRun).toBe(true);
+    descendants = 0;
+    expect(read().hasActiveSubagentDescendantRun).toBe(false);
+  });
 
   test("uses the newest child-session row for stale/current replacement pairs", async () => {
     const now = Date.now();

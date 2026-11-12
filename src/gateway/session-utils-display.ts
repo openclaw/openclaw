@@ -140,6 +140,7 @@ export type GatewaySessionRunStateCache = {
     entry: SessionEntry | undefined;
     live: boolean;
     active: boolean;
+    descendants: boolean;
     clock: number | undefined;
     value: GatewaySessionRunState;
   };
@@ -164,9 +165,10 @@ export function projectGatewaySessionRunState(params: {
   const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
   // Follow-up turns retain the child session while owning a different run from its original spawn.
   const activeSubagentDescendantCount = subagentRuns.countActiveDescendantRuns(key);
+  const hasActiveSubagentDescendantRun = activeSubagentDescendantCount > 0;
   const hasActiveSubagentRun =
     liveSubagentRunActive ||
-    activeSubagentDescendantCount > 0 ||
+    hasActiveSubagentDescendantRun ||
     ((subagentRun !== null || entry?.spawnedBy !== undefined) &&
       rowContext?.projectedAgentRuns !== undefined &&
       (params.projectRunProgress
@@ -190,6 +192,8 @@ export function projectGatewaySessionRunState(params: {
     previous.value.subagentRun === subagentRun &&
     previous.live === liveSubagentRunActive &&
     previous.active === hasActiveSubagentRun &&
+    // A follow-up turn keeps the combined flag true while descendants start or drain.
+    previous.descendants === hasActiveSubagentDescendantRun &&
     previous.clock === clock
   ) {
     return previous.value;
@@ -205,7 +209,7 @@ export function projectGatewaySessionRunState(params: {
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     // Emit an explicit false so clients can distinguish a current Gateway with
     // no live descendants from a legacy Gateway that does not expose this fact.
-    hasActiveSubagentDescendantRun: activeSubagentDescendantCount > 0,
+    hasActiveSubagentDescendantRun,
     startedAt: entry?.startedAt,
     endedAt: entry?.endedAt,
     runtimeMs: entry?.runtimeMs,
@@ -252,6 +256,7 @@ export function projectGatewaySessionRunState(params: {
       entry,
       live: liveSubagentRunActive,
       active: hasActiveSubagentRun,
+      descendants: hasActiveSubagentDescendantRun,
       clock,
       value,
     };
