@@ -8,9 +8,11 @@ import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.tes
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
+let createSessionsCreateTool: typeof import("./sessions-create-tool.js").createSessionsCreateTool;
 
 beforeAll(async () => {
   ({ createSessionsSpawnTool } = await import("./sessions-spawn-tool.js"));
+  ({ createSessionsCreateTool } = await import("./sessions-create-tool.js"));
 });
 beforeEach(() => {
   setRuntimeConfigSnapshot({});
@@ -20,6 +22,11 @@ beforeEach(() => {
     context: "isolated",
     childSessionKey: "agent:main:subagent:1",
     runId: "run-subagent",
+  });
+  hoisted.inProcessCreationMock.mockReset().mockResolvedValue({
+    key: "agent:main:dashboard:created",
+    sessionId: "created-session",
+    runStarted: false,
   });
 });
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -44,4 +51,25 @@ it("records a retained owner bit only while the scheduled requester is still an 
     true,
     false,
   ]);
+});
+
+// sessions_create shares the spawn tool's options and commit guard.
+it("rechecks the scheduled requester's owner status for sessions_create", async () => {
+  let owner = true;
+  const tool = createSessionsCreateTool({
+    agentSessionKey: "agent:main:main",
+    countActiveRuns: () => 0,
+    senderIsOwner: true,
+    assertSenderOwnerCurrent: () => {
+      if (!owner) {
+        throw new Error("requester is no longer an owner");
+      }
+    },
+  });
+  await tool.execute("owner-create", { label: "owner" });
+  owner = false;
+  await tool.execute("revoked-create", { label: "after revocation" });
+  expect(
+    hoisted.inProcessCreationMock.mock.calls.map((call) => call[2].requesterSenderIsOwner),
+  ).toEqual([true, false]);
 });
