@@ -386,10 +386,10 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
             sessionEntry,
           });
           const fastMode = params.opts.fastMode ?? fastModeState.requestMode;
-          const configuredAuthProfileId =
-            providerOverride === defaultProvider && modelOverride === defaultModel
-              ? configuredDefaultAuthProfileId
-              : undefined;
+          const usesDefault =
+            providerOverride === defaultProvider && modelOverride === defaultModel;
+          const configuredAuthProfileId = usesDefault ? configuredDefaultAuthProfileId : undefined;
+          const sameAuthProvider = providerOverride === providerForAuthProfileValidation;
           const agentHarnessRuntimeOverride = runOptions.agentHarnessRuntimeOverride;
           const candidateRuntime =
             agentHarnessRuntimeOverride ??
@@ -428,10 +428,7 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 model: modelOverride,
                 agentRuntime: candidateRuntime,
                 authProfileId: resolveCommandAuthProfileSelection({
-                  sessionEntry:
-                    providerOverride === providerForAuthProfileValidation
-                      ? attemptSessionEntry
-                      : undefined,
+                  sessionEntry: sameAuthProvider ? attemptSessionEntry : undefined,
                   configuredAuthProfileId: runOptions.authProfileId ?? configuredAuthProfileId,
                 })?.id,
                 agentId: sessionAgentId,
