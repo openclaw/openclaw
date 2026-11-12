@@ -419,8 +419,14 @@
   box-shadow: 0 1px var(--border-strong);
 }
 
-/* The transcript, excluding reserved Details space, owns spare width.
-   Only top-level assistant tables borrow it; prose and nested tables stay put. */
+/* Resolve transcript-relative lengths before inheriting into message containers. */
+@property --chat-table-outset {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* Only top-level assistant tables borrow spare width; prose and nested tables stay put. */
 @container chat-transcript (min-width: 900px) {
   .chat-group.assistant:has(> :is(.chat-avatar, .chat-avatar-slot)) {
     --chat-leading-table-clearance: var(--chat-avatar-column);
