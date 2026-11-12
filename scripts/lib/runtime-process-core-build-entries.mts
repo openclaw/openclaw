@@ -49,6 +49,7 @@ const privateChunkRuntimeProcessEntrypoints = [
   runtimeProcessEntrypoints.localAgentAvatar,
   runtimeProcessEntrypoints.fsSafeCopy,
   runtimeProcessEntrypoints.secretFileRead,
+  runtimeProcessEntrypoints.fileLog,
   runtimeProcessEntrypoints.controlUiFile,
   runtimeProcessEntrypoints.publicSessionCard,
   runtimeProcessEntrypoints.sessionTranscriptReconcile,

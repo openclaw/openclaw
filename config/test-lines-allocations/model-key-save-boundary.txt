@@ -1,3 +1,0 @@
-# Start the existing key-save deadline at Save, after form setup and key entry.
-# Exact net growth; retain the strict deadline and all behavior assertions.
-3

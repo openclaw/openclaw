@@ -86,13 +86,13 @@ function fixture(inheritPath = false) {
     },
     patterns: (analysis: Analysis, platform?: string) =>
       resolveAllowAlwaysPatternEntries({ segments: analysis.segments, ...context(platform) }),
-    allowed: (
+    allowed: async (
       analysis: Analysis,
       allowlist: Allowlist,
       platform?: string,
       safeBins = resolveSafeBins(undefined),
     ) =>
-      evaluateExecAllowlist({ analysis, allowlist, safeBins, ...context(platform) })
+      (await evaluateExecAllowlist({ analysis, allowlist, safeBins, ...context(platform) }))
         .allowlistSatisfied,
     hash: (argv: string[], platform?: string) =>
       buildCwdBoundHashedArgPattern(argv, dir, platform ?? process.platform),
@@ -294,7 +294,7 @@ it("keeps argument grant precedence and rechecks mutable argv on each call", () 
   expect(matchAllowlist(entries, resolution, argv, "linux")).toBe(fallback);
 });
 
-it("persists empty PowerShell file arguments after dispatch unwrap", () => {
+it("persists empty PowerShell file arguments after dispatch unwrap", async () => {
   const f = fixture();
   f.exe("env");
   f.exe("pwsh");
@@ -302,7 +302,7 @@ it("persists empty PowerShell file arguments after dispatch unwrap", () => {
   const analysis = f.analyze(["env", "pwsh", "/file", script, ""]);
   const entries = f.patterns(analysis, "win32");
   expect(entries).toEqual([{ pattern: script, argPattern: f.hash([script, ""], "win32") }]);
-  expect(f.allowed(analysis, [...entries], "win32", new Set())).toBe(true);
+  expect(await f.allowed(analysis, [...entries], "win32", new Set())).toBe(true);
 });
 
 it("extracts all inner binaries from reusable shell chains and deduplicates", async () => {
@@ -391,7 +391,7 @@ it.each([
   await f.expectAllowed(expanded, [{ pattern: touch }], expected);
 });
 
-it("keeps generated positional carrier patterns bound to the carried argv", () => {
+it("keeps generated positional carrier patterns bound to the carried argv", async () => {
   if (process.platform === "win32") {
     return;
   }
@@ -402,12 +402,12 @@ it("keeps generated positional carrier patterns bound to the carried argv", () =
   const analysis = f.analyze(["sh", "-c", '$0 "$@"', "touch", marker], "linux");
   const entries = f.patterns(analysis, "linux");
   expect(entries).toEqual([{ pattern: touch, argPattern: f.hash([touch, marker], "linux") }]);
-  expect(f.allowed(analysis, [...entries], "linux")).toBe(true);
+  expect(await f.allowed(analysis, [...entries], "linux")).toBe(true);
   const changed = f.analyze(
     ["sh", "-c", '$0 "$@"', "touch", path.join(f.dir, "other-marker")],
     "linux",
   );
-  expect(f.allowed(changed, [...entries], "linux")).toBe(false);
+  expect(await f.allowed(changed, [...entries], "linux")).toBe(false);
   const partial = f.analyze(["sh", "-c", '$0 "$1"', "touch", marker], "linux");
   expect(f.patterns(partial, "linux")).toEqual([]);
 });
@@ -461,13 +461,13 @@ it("blocks persisted comment-tailed payload bypasses", async () => {
   await f.bypass(`${benign} warmup # && payload`, "payload", benign);
 });
 
-it("prevents Windows fallback from allowlisting opaque shell inline payloads", () => {
+it("prevents Windows fallback from allowlisting opaque shell inline payloads", async () => {
   const f = fixture();
   const shell = f.exe("nu.exe");
   const safeTool = f.exe("safe-tool.exe");
   const analysis = f.analyze([shell, "--commands", "safe-tool arg"], "win32");
   expect(f.patterns(analysis, "win32")).toStrictEqual([]);
-  const allowlistSatisfied = f.allowed(
+  const allowlistSatisfied = await f.allowed(
     analysis,
     [{ pattern: safeTool, source: "allow-always" }],
     "win32",
@@ -475,7 +475,7 @@ it("prevents Windows fallback from allowlisting opaque shell inline payloads", (
   expectApprovalRequired({ analysisOk: analysis.ok, allowlistSatisfied });
 });
 
-it("does not bind mksh option values as shell script allowlist targets", () => {
+it("does not bind mksh option values as shell script allowlist targets", async () => {
   const f = fixture();
   f.exe("mksh");
   const script = f.write("run.sh", "#!/bin/sh\necho ok\n", true);
@@ -483,9 +483,9 @@ it("does not bind mksh option values as shell script allowlist targets", () => {
   const analysis = f.analyze(["mksh", "+o", "errexit", "./run.sh"]);
   const entries = f.patterns(analysis);
   expect(entries).toEqual([{ pattern: script, argPattern: f.hash([script]) }]);
-  expect(f.allowed(analysis, [{ pattern: decoy, source: "allow-always" }])).toBe(false);
+  expect(await f.allowed(analysis, [{ pattern: decoy, source: "allow-always" }])).toBe(false);
   expect(
-    f.allowed(
+    await f.allowed(
       analysis,
       entries.map((entry) => Object.assign({}, entry, { source: "allow-always" as const })),
     ),
@@ -524,7 +524,7 @@ it("keeps known non-exec package-manager commands argv-bound", async () => {
   await f.expectAllowed("yarn install", [{ pattern: yarn, source: "allow-always" }], false);
 });
 
-it("matches package-manager shell-script arg patterns against inner argv", () => {
+it("matches package-manager shell-script arg patterns against inner argv", async () => {
   const f = scriptFixture();
   f.exe("pnpm");
   f.exe("bash");
@@ -533,9 +533,9 @@ it("matches package-manager shell-script arg patterns against inner argv", () =>
   expect(entries).toEqual([
     { pattern: f.script, argPattern: f.hash([f.script, "allowed"], "win32") },
   ]);
-  expect(f.allowed(analysis, [...entries], "win32")).toBe(true);
+  expect(await f.allowed(analysis, [...entries], "win32")).toBe(true);
   const extra = f.analyze(["pnpm", "exec", "bash", f.script, "allowed", "extra"], "win32");
-  const allowlistSatisfied = f.allowed(extra, [...entries], "win32");
+  const allowlistSatisfied = await f.allowed(extra, [...entries], "win32");
   expectApprovalRequired({ analysisOk: extra.ok, allowlistSatisfied });
 });
 
@@ -614,7 +614,7 @@ it.each([
 
 it.runIf(process.platform !== "win32")(
   "keeps shell-script grants bound to cwd and exact arguments",
-  () => {
+  async () => {
     const base = makeExecApprovalsTempDir();
     const dirWithSpace = path.join(base, "data ");
     const dirNoSpace = path.join(base, "data");
@@ -647,7 +647,7 @@ it.runIf(process.platform !== "win32")(
     ] as const) {
       const analysis = analyzeArgvCommand({ ...context, argv: [...argv], cwd });
       expect(analysis.ok).toBe(true);
-      const evaluation = evaluateExecAllowlist({
+      const evaluation = await evaluateExecAllowlist({
         ...context,
         analysis,
         allowlist: entries,

@@ -117,20 +117,17 @@ export function resolveSafeBins(entries?: readonly string[] | null): Set<string>
   );
 }
 
-function isSafeBinUsage(params: {
+async function isSafeBinUsage(params: {
   argv: string[];
   resolution: ExecutableResolution | null;
   safeBins: Set<string>;
   platform?: string | null;
   trustedSafeBinDirs?: ReadonlySet<string>;
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
-}): boolean {
+}): Promise<boolean> {
   // Windows host exec uses PowerShell, which has different parsing/expansion rules.
   // Keep safeBins conservative there (require explicit allowlist entries).
   if (isWindowsPlatform(params.platform ?? process.platform)) {
-    return false;
-  }
-  if (params.safeBins.size === 0) {
     return false;
   }
   const resolution = params.resolution;
@@ -147,10 +144,10 @@ function isSafeBinUsage(params: {
     return false;
   }
   if (
-    !isTrustedSafeBinPath({
+    !(await isTrustedSafeBinPath({
       resolvedPath: trustPath,
       trustedDirs: params.trustedSafeBinDirs,
-    })
+    }))
   ) {
     return false;
   }
@@ -540,18 +537,18 @@ function resolveSegmentAllowlistMatch(params: {
   };
 }
 
-function resolveSegmentSatisfaction(params: {
+async function resolveSegmentSatisfaction(params: {
   match: ExecAllowlistEntry | null;
   segment: ExecCommandSegment;
   effectiveArgv: string[];
   context: ExecAllowlistContext;
   allowSkills: boolean;
   skillBinTrust: ReadonlyMap<string, ReadonlySet<string>>;
-}): ExecSegmentSatisfiedBy {
+}): Promise<ExecSegmentSatisfiedBy> {
   if (params.match) {
     return "allowlist";
   }
-  const safe = isSafeBinUsage({
+  const safe = await isSafeBinUsage({
     argv: params.effectiveArgv,
     resolution: resolveExecutionTargetResolution(params.segment.resolution),
     safeBins: params.context.safeBins,
@@ -576,11 +573,11 @@ function resolveSegmentSatisfaction(params: {
   return skillAllow ? "skills" : null;
 }
 
-function evaluateShellWrapperInlineCommand(params: {
+async function evaluateShellWrapperInlineCommand(params: {
   inlineCommand: string;
   context: ExecAllowlistContext;
   inlineDepth: number;
-}): ExecAllowlistEntry[] | null {
+}): Promise<ExecAllowlistEntry[] | null> {
   if (params.inlineDepth >= MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH) {
     return null;
   }
@@ -599,7 +596,7 @@ function evaluateShellWrapperInlineCommand(params: {
 
   const matches: ExecAllowlistEntry[] = [];
   for (const group of analysis.chains ?? [analysis.segments]) {
-    const result = evaluateSegments(group, params.context, params.inlineDepth);
+    const result = await evaluateSegments(group, params.context, params.inlineDepth);
     if (!result.allowlistSatisfied) {
       return null;
     }
@@ -617,21 +614,21 @@ function emptyExecAllowlistEvaluation(): ExecAllowlistEvaluation {
   };
 }
 
-function evaluateSegments(
+async function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
   inlineDepth = 0,
-): ExecAllowlistEvaluation {
+): Promise<ExecAllowlistEvaluation> {
   const result = emptyExecAllowlistEvaluation();
   const { allowlistMatches, segmentAllowlistEntries, segmentSatisfiedBy } = result;
   const skillBinTrust = buildSkillBinTrustIndex(params.skillBins);
   const allowSkills = params.autoAllowSkills === true && skillBinTrust.size > 0;
 
-  result.allowlistSatisfied = segments.every((segment) => {
+  for (const segment of segments) {
     if (segment.resolution?.policyBlocked === true) {
       segmentAllowlistEntries.push(null);
       segmentSatisfiedBy.push(null);
-      return false;
+      return result;
     }
     const { effectiveArgv, inlineCommand, match } = resolveSegmentAllowlistMatch({
       segment,
@@ -641,7 +638,7 @@ function evaluateSegments(
       allowlistMatches.push(match);
     }
     segmentAllowlistEntries.push(match ?? null);
-    const by = resolveSegmentSatisfaction({
+    const by = await resolveSegmentSatisfaction({
       match,
       segment,
       effectiveArgv,
@@ -651,7 +648,7 @@ function evaluateSegments(
     });
     const inlineResult =
       by === null && inlineCommand && isWindowsPlatform(params.platform)
-        ? evaluateShellWrapperInlineCommand({
+        ? await evaluateShellWrapperInlineCommand({
             inlineCommand,
             context: params,
             inlineDepth: inlineDepth + 1,
@@ -662,19 +659,22 @@ function evaluateSegments(
       // Keep per-segment metadata aligned with segments: one satisfaction marker
       // for this wrapper segment, even when the inline payload has multiple parts.
       segmentSatisfiedBy.push("allowlist");
-      return true;
+      continue;
     }
     segmentSatisfiedBy.push(by);
-    return Boolean(by);
-  });
+    if (!by) {
+      return result;
+    }
+  }
+  result.allowlistSatisfied = true;
 
   return result;
 }
 
-function evaluateAuthorizationPlan(params: {
+async function evaluateAuthorizationPlan(params: {
   plan: Extract<ExecAuthorizationPlan, { ok: true }>;
   context: ExecAllowlistContext;
-}): ExecAllowlistAnalysis {
+}): Promise<ExecAllowlistAnalysis> {
   const result: ExecAllowlistAnalysis = {
     ...emptyExecAllowlistEvaluation(),
     analysisOk: true,
@@ -695,7 +695,7 @@ function evaluateAuthorizationPlan(params: {
           context: params.context,
         });
         match = evaluation.match;
-        satisfiedBy = resolveSegmentSatisfaction({
+        satisfiedBy = await resolveSegmentSatisfaction({
           match,
           segment: candidate.sourceSegment,
           effectiveArgv: evaluation.effectiveArgv,
@@ -718,11 +718,11 @@ function evaluateAuthorizationPlan(params: {
   return result;
 }
 
-export function evaluateExecAllowlist(
+export async function evaluateExecAllowlist(
   params: {
     analysis: ExecCommandAnalysis;
   } & ExecAllowlistContext,
-): ExecAllowlistEvaluation {
+): Promise<ExecAllowlistEvaluation> {
   if (!params.analysis.ok || params.analysis.segments.length === 0) {
     return emptyExecAllowlistEvaluation();
   }
@@ -731,7 +731,7 @@ export function evaluateExecAllowlist(
   }
   const result = emptyExecAllowlistEvaluation();
   for (const group of params.analysis.chains) {
-    const groupResult = evaluateSegments(group, params);
+    const groupResult = await evaluateSegments(group, params);
     if (!groupResult.allowlistSatisfied) {
       return emptyExecAllowlistEvaluation();
     }
@@ -1152,7 +1152,7 @@ export async function evaluateShellAllowlistWithAuthorization(
     }
     return {
       analysisOk: true,
-      ...evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true }),
+      ...(await evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true })),
       segments: analysis.segments,
     };
   }

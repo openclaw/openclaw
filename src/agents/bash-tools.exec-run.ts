@@ -133,30 +133,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
-  const {
-    safeBins,
-    safeBinProfiles,
-    trustedSafeBinDirs,
-    unprofiledSafeBins,
-    unprofiledInterpreterSafeBins,
-  } = resolveExecSafeBinRuntimePolicy({
-    local: {
-      safeBins: defaults?.safeBins,
-      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
-      safeBinProfiles: defaults?.safeBinProfiles,
-    },
-    onWarning: logInfo,
-  });
-  if (unprofiledSafeBins.length > 0) {
-    logInfo(
-      `exec: ignoring unprofiled safeBins entries (${unprofiledSafeBins.toSorted().join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
-    );
-  }
-  if (unprofiledInterpreterSafeBins.length > 0) {
-    logInfo(
-      `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
-    );
-  }
+  let safeBinPolicy: ReturnType<typeof resolveExecSafeBinRuntimePolicy> | undefined;
   const {
     notifyOnExit,
     notifyOnExitEmptySuccess,
@@ -196,6 +173,28 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const approvalTransport = defaults?.createApprovalTransport?.(toolCallId, signal);
       const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
+      const { safeBins, safeBinProfiles, trustedSafeBinDirs } = await (safeBinPolicy ??=
+        resolveExecSafeBinRuntimePolicy({
+          local: {
+            safeBins: defaults?.safeBins,
+            safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
+            safeBinProfiles: defaults?.safeBinProfiles,
+          },
+          onWarning: logInfo,
+        }).then((policy) => {
+          if (policy.unprofiledSafeBins.length > 0) {
+            logInfo(
+              `exec: ignoring unprofiled safeBins entries (${policy.unprofiledSafeBins.join(", ")}); use allowlist or define tools.exec.safeBinProfiles.<bin>`,
+            );
+          }
+          if (policy.unprofiledInterpreterSafeBins.length > 0) {
+            logInfo(
+              `exec: interpreter/runtime binaries in safeBins (${policy.unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
+            );
+          }
+          return policy;
+        }));
+      assertSourceActive();
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
       let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
       if (!autoReviewer) {
