@@ -1,0 +1,6 @@
+64
+# LOCAL 2026.11.8 row 54; source 794a6a806ff12ebd9a9760c0db7553b30e63f0ac.
+# Preserve passive/wake queue separation and tool_handoff drain, with capacity, publication handoff and queue-full exec notification regressions (+23/+23/+18 LF). Companion row56 is already integrated and is not credited again.
+# Reviewed private composition: 0a16093762a898cc95bb29a99004bc4bf4fc12df.
+# Exact net test LF including matching helper/support files; no scalar baseline or coverage reduction.
+# Apply only with this reviewed source composition; do not duplicate existing or folded credit.
