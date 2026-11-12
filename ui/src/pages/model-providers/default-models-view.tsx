@@ -4,6 +4,7 @@ import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profi
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
+import { pathForAgentPanel } from "../../app-route-paths.ts";
 import {
   DecisionModelPicker,
   type DecisionModelEntry,
@@ -25,6 +26,7 @@ import {
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelDefaultsSaveField, ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
@@ -45,6 +47,7 @@ export type DefaultModelsViewProps = {
   /** Agents with their own utility model settings; the rest use this default. */
   utilityOverrides?: AgentUtilityOverride[];
   onOpenAgent: (agentId: string) => void;
+  basePath: string;
   /** Route the utility model in effect (automatic or explicit) runs on. */
   utilityRuntime?: CompletionRoute;
   thinkingLevel: string | undefined;
@@ -526,7 +529,11 @@ export function DefaultModels(props: DefaultModelsViewProps) {
           }
           description={
             props.utilityOverrides?.length ? (
-              <UtilityOverrides overrides={props.utilityOverrides} onOpen={props.onOpenAgent} />
+              <UtilityOverrides
+                overrides={props.utilityOverrides}
+                basePath={props.basePath}
+                onOpen={props.onOpenAgent}
+              />
             ) : undefined
           }
           control={
@@ -581,6 +588,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
 
 function UtilityOverrides(props: {
   overrides: AgentUtilityOverride[];
+  basePath: string;
   onOpen: (agentId: string) => void;
 }) {
   const selection = (entry: AgentUtilityOverride) =>
@@ -603,13 +611,13 @@ function UtilityOverrides(props: {
         {(entry) => (
           <span data-agent-id={entry.agentId}>
             <br />
-            <button
-              type="button"
+            <a
               class="model-providers__agent-link"
-              onClick={() => props.onOpen(entry.agentId)}
+              href={pathForAgentPanel(entry.agentId, null, props.basePath)}
+              onClick={(event) => handleNavigationClick(event, () => props.onOpen(entry.agentId))}
             >
               {entry.label}
-            </button>
+            </a>
             {`: ${selection(entry)}`}
           </span>
         )}

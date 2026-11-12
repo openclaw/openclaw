@@ -37,6 +37,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     updatedAt: 1,
     onOpenUsage: () => undefined,
     onOpenAgent: () => undefined,
+    basePath: "",
     credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],

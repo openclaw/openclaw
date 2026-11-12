@@ -101,6 +101,8 @@ it("names agents with their own utility settings and opens their Overview", asyn
   const row = settingsRow(container, "Utility model");
   expect(row.textContent).toContain("Forge: fixture/small · fallbacks: fixture/backup");
   expect(row.textContent).toContain("Quiet: Disabled");
-  row.querySelector<HTMLButtonElement>('[data-agent-id="forge"] button')!.click();
+  const link = row.querySelector<HTMLAnchorElement>('[data-agent-id="forge"] a')!;
+  expect(link.getAttribute("href")).toBe("/settings/agents/forge");
+  link.click();
   expect(onOpenAgent).toHaveBeenCalledWith("forge");
 });

@@ -355,20 +355,6 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-/* Agent names in the utility-override note open that agent's Overview. */
-.model-providers__agent-link {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-}
-
-.model-providers__agent-link:hover,
-.model-providers__agent-link:focus-visible {
-  text-decoration: underline;
-}
-
 .settings-section > .settings-group:has(> .model-providers__provider-list) {
   overflow: visible;
   border: 0;

@@ -652,6 +652,7 @@ export function createModelProviders(
       updatedAt: data.updatedAt,
       onOpenUsage: () => context.navigate("usage"),
       onOpenAgent: (agentId: string) => navigateToAgent(context, agentId, null, "overview"),
+      basePath: context.basePath,
       credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,
