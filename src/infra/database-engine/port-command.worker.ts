@@ -157,6 +157,16 @@ async function stage(
   if (migrationRequired || !verification) {
     refuse("observed unmigrated private source; required migrate phase before staging");
   }
+  // Copy verification is not owner admission, including when resuming a staged target.
+  const admit = async () => {
+    const input =
+      task.to === "postgres" ? await resolveDatabaseEngineInput(task.config) : undefined;
+    assertCurrent();
+    workboardApi().admitWorkboardPort(task.targetPath, input);
+    if (task.to === "sqlite") {
+      compare((await inspectSqlite(task.targetPath, descriptor)).verification!, verification);
+    }
+  };
   if (task.sourceVerification) {
     compare(verification, task.sourceVerification);
   }
@@ -172,15 +182,22 @@ async function stage(
       refuse("observed occupied target file; required absent private staging path");
     }
     const { targetPath: sourcePath, to: engine } = task;
-    try {
-      await verify({ ...task, operation: "verify", sourcePath, engine, verification }, descriptor);
+    const verified = await verify(
+      { ...task, operation: "verify", sourcePath, engine, verification },
+      descriptor,
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (verified) {
+      // Admission refusal must retain the verified target, not enter the rebuild path.
+      await admit();
       return verification;
-    } catch {
-      // Only unverified private staging is rebuilt; occupied namespaces are checked below.
-      for (const suffix of ["", "-wal", "-shm", "-journal"]) {
-        assertCurrent();
-        await fs.rm(task.targetPath + suffix, { force: true });
-      }
+    }
+    // Only unverified private staging is rebuilt; occupied namespaces are checked below.
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      assertCurrent();
+      await fs.rm(task.targetPath + suffix, { force: true });
     }
   }
   if (task.to === "postgres") {
@@ -241,14 +258,7 @@ async function stage(
       preserveRowIds: true,
     });
   }
-  assertCurrent();
-  workboardApi().admitWorkboardPort(
-    task.targetPath,
-    task.to === "postgres" ? await resolveDatabaseEngineInput(task.config) : undefined,
-  );
-  if (task.to === "sqlite") {
-    compare((await inspectSqlite(task.targetPath, descriptor)).verification!, verification);
-  }
+  await admit();
   return verification;
 }
 async function verify(

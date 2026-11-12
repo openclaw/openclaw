@@ -25,6 +25,7 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import * as snapshots from "../sqlite-snapshot.js";
 import * as tasks from "./port-command.worker.js";
+import type { PortVerification } from "./port.worker.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -576,6 +577,69 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         { id: "schema-2", applied_at: 17 },
       ]);
       expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(2);
+    }, true);
+  }, 120_000);
+
+  it("keeps a verified resumed anchor refused by the Workboard owner", async () => {
+    await fixture(async ({ state, source }) => {
+      const original = hash(source);
+      const originalConfig = hash(state.configPath);
+      const run = tasks.runWorkboardPortTask;
+      let anchor: string | undefined;
+      let verification: PortVerification | undefined;
+      let stagedTask: Extract<tasks.WorkboardPortTask, { operation: "stage" }> | undefined;
+      vi.spyOn(tasks, "runWorkboardPortTask").mockImplementation(async (...args) => {
+        const result = await run(...args);
+        if (args[0].operation === "stage") {
+          stagedTask = args[0];
+          anchor = stagedTask.targetPath;
+          assert(result && "verification" in result && result.verification);
+          verification = result.verification;
+          // Model an interrupted stage with an anchor that passes logical verification
+          // but is not admitted: the owner forbids local data beside a PostgreSQL anchor.
+          using db = openNodeSqliteDatabase(anchor);
+          db.exec("CREATE TABLE retained_local_data (value TEXT)");
+          throw new Error("interrupted before recording staged verification");
+        }
+        return result;
+      });
+      await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("stage/materialize");
+      vi.restoreAllMocks();
+      assert(anchor);
+      const anchorHash = hash(anchor);
+      const saved = manifest(state);
+      const savedManifest = fs.readFileSync(
+        recovery.databasePortManifestPath(state.stateDir),
+        "utf8",
+      );
+      const target = saved.targets[0];
+      assert(target?.intended.engine === "postgres" && stagedTask && verification);
+      // Exercise real verification independently so a fixture failure cannot stand in
+      // for the owner-admission refusal being tested on resume.
+      await run(
+        {
+          operation: "verify",
+          sourcePath: anchor,
+          engine: "postgres",
+          config: stagedTask.config,
+          storeId: target.storeId,
+          namespace: target.intended.namespace,
+          verification,
+        },
+        { assertCurrent() {} },
+      );
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await expect(
+          doctorDatabasePort({ resume: recovery.databasePortManifestPath(state.stateDir) }),
+        ).rejects.toThrow(/^stage: .*observed database validation/);
+        expect(manifest(state).targets[0]?.verification).toBeNull();
+        expect(fs.readFileSync(recovery.databasePortManifestPath(state.stateDir), "utf8")).toBe(
+          savedManifest,
+        );
+        expect(hash(anchor)).toBe(anchorHash);
+        expect(hash(source)).toBe(original);
+        expect(hash(state.configPath)).toBe(originalConfig);
+      }
     }, true);
   }, 120_000);
 
