@@ -67,7 +67,7 @@ async function resolveLiveModel(
     throw new Error(`No Anthropic Haiku model found for ${requestedModelId}`);
   }
   return {
-    model: { ...model, maxTokens: Math.min(model.maxTokens, 128) },
+    model,
     modelRegistry,
   };
 }
@@ -89,7 +89,8 @@ async function createLiveSession(
   const sessionManager = SessionManager.inMemory();
   const settingsManager = SettingsManager.inMemory({
     defaultThinkingLevel: "off",
-    compaction: { enabled: true, reserveTokens: 128, keepRecentTokens: 0 },
+    // Exercise the normal summary budget; a 128-token reserve caps turn-prefix summaries at 64.
+    compaction: { enabled: true, keepRecentTokens: 0 },
     retry: {
       enabled: false,
       provider: { timeoutMs: PROVIDER_TIMEOUT_MS, maxRetryDelayMs: 0 },
