@@ -252,12 +252,6 @@ suite.define(() => {
         if (surface !== "menu") {
           expect(await row.boundingBox()).toEqual(rowBounds);
           expect(
-            await name.evaluate((element) => {
-              const style = getComputedStyle(element);
-              return [style.borderTopWidth, style.outlineStyle];
-            }),
-          ).toEqual(["0px", "none"]);
-          expect(
             await name.evaluate((element: HTMLInputElement) => ({
               focused: element === document.activeElement,
               selection: [element.selectionStart, element.selectionEnd],

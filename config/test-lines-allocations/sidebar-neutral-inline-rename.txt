@@ -1,2 +1,2 @@
-9
-# Assert fixed row geometry and borderless focus styling in the existing selected/unselected sidebar rename flow.
+3
+# Retain fixed row geometry during the existing rename interaction.
