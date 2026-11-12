@@ -5,7 +5,13 @@ import path from "node:path";
 import * as catalog from "@openclaw/model-catalog-core";
 import { LITELLM_PRICING_URL } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts";
+import {
+  assembleModelCatalogBundle,
+  assembleVersionedModelCatalogBundle,
+  readModelCatalogManifests,
+  runPublishModelCatalog,
+} from "../../scripts/publish-model-catalog.mts";
+import { loadPluginManifest } from "../../src/plugins/manifest.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 
@@ -247,6 +253,28 @@ describe("task facts", () => {
     expect(row).not.toHaveProperty("baseUrl");
     expect(parsedV3.models.find((model) => model.id === "chat-0")?.inference?.chat).toBe(true);
     expect(v2.models.find((model: Row) => model.id === "chat-0")).not.toHaveProperty("inference");
+  });
+
+  it("serves every fixed-list bundled Decision provider from the hosted catalog", async () => {
+    const manifests = readModelCatalogManifests();
+    const v1 = await assembleModelCatalogBundle({ manifests, generatedAt: 1, sourceCommit: "x" });
+    const v3 = await assembleVersionedModelCatalogBundle(v1, new WeakMap(), undefined, [], {}, 3);
+    const { models } = catalog.parseRemoteModelCatalogBundleV3(v3);
+    const hosted = new Set(models.flatMap((m) => (m.inference?.decision ? [m.provider] : [])));
+    // Runtime/refreshable providers (Levanto too, out of scope) list live, never from hosted rows.
+    // ONNX presets are local artifacts, Rerank has no fixed list, SubQ retired its only model.
+    const exempt = new Set(["onnx", "rerank", "subq"]);
+    const unhosted = manifests.flatMap(({ manifestPath }) => {
+      const loaded = loadPluginManifest(path.dirname(manifestPath));
+      if (!loaded.ok) {
+        throw new Error(loaded.error);
+      }
+      const { contracts, modelCatalog } = loaded.manifest;
+      return (contracts?.decisionProviders ?? []).filter(
+        (id) => !modelCatalog?.discovery?.[id] && !exempt.has(id) && !hosted.has(id),
+      );
+    });
+    expect(unhosted).toEqual([]);
   });
 
   it("does not use native-only rows to satisfy the released chat catalog floor", async () => {
