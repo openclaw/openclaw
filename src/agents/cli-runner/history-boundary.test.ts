@@ -543,6 +543,14 @@ describe("CLI transcript account boundary", () => {
       expect(prompt).toContain("B fresh canary");
       expect(prompt).not.toContain("A long history");
     });
+    // The new boundary stays account-bound: another account gets nothing, and the original
+    // account does not regain history once a foreign account touched it.
+    for (const epoch of ["epoch-c", "epoch-b"]) {
+      await f.run(epoch, async (allowed, params) => {
+        expect(allowed).toBe(false);
+        expect((await history(allowed, params)) ?? "").not.toContain("B fresh canary");
+      });
+    }
   });
 
   it("admits a finished writer's successor while refusing the live writer", async () => {
