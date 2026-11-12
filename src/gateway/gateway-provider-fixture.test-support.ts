@@ -33,7 +33,7 @@ export function writeToolCall(
   writeToolCallResponse(response, item, `resp_${id}`, inputTokens, outputTokens);
 }
 
-export function writeToolCallResponse(
+function writeToolCallResponse(
   response: ServerResponse,
   item: { id: string; arguments: string },
   responseId: string,
