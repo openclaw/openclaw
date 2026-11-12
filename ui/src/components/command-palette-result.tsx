@@ -182,6 +182,10 @@ export function CommandPaletteResult(props: {
         <Show when={session()}>
           <span class="cmd-palette__item-meta">
             {agentName()}
+            <Show when={session()?.archived}>
+              <span aria-hidden="true"> · </span>
+              <span>{t("sessionsView.archived")}</span>
+            </Show>
             <Show when={owner()?.id}>
               <span aria-hidden="true"> · </span>
               {t("sessionsView.ownedBy", { name: owner()!.label || owner()!.id! })}

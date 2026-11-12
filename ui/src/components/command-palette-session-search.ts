@@ -7,11 +7,16 @@ import {
 import type { GatewaySessionRow } from "../api/types.ts";
 import { clampText } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { SESSION_SEARCH_SCOPE } from "../lib/sessions/session-requests.ts";
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 
 export const SESSION_ACTION_PREFIX = "session:";
 export const SESSION_SEARCH_LIMIT = 10;
-export { SESSION_SEARCH_SCOPE } from "../lib/sessions/session-requests.ts";
+// Discovery includes completed conversations without changing section membership.
+export const COMMAND_PALETTE_SESSION_SEARCH_SCOPE = {
+  ...SESSION_SEARCH_SCOPE,
+  archivedFilter: "all",
+} as const;
 const SESSION_SEARCH_SNIPPET_MAX_CHARS = 160;
 
 export function buildCommandPaletteSessionItems(params: {
@@ -86,7 +91,11 @@ export function buildCommandPaletteSessionItems(params: {
       const transcriptDiff =
         (right.transcriptHit?.score ?? Number.NEGATIVE_INFINITY) -
         (left.transcriptHit?.score ?? Number.NEGATIVE_INFINITY);
-      return transcriptDiff || (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0);
+      return (
+        transcriptDiff ||
+        Number(left.row.archived === true) - Number(right.row.archived === true) ||
+        (right.row.updatedAt ?? 0) - (left.row.updatedAt ?? 0)
+      );
     })
     .slice(0, SESSION_SEARCH_LIMIT)
     .map<CommandPaletteItem>(({ row, label, rawMetadataRank, transcriptHit }) => ({

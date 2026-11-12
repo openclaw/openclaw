@@ -440,7 +440,7 @@ function PaletteSearch(props: {
       <div id="cmd-palette-keys" class="cmd-palette__footer">
         <Show when={current().archivedTranscriptsExcluded > 0}>
           <span class="cmd-palette__archive-note" role="status">
-            {t("palette.archivedSessionsExcluded")}
+            {t("palette.coldHistoryExcluded")}
           </span>
         </Show>
         <Show when={results().items.length > 0 && !current().query.includes("\n")}>

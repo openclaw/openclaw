@@ -191,7 +191,10 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
       ...groupedSpawn,
       category: " ",
     });
-    await seed("main", "archived", owner, "needle", { ...groupedSpawn, archivedAt: 1 });
+    const archived = await seed("main", "archived", owner, "needle", {
+      ...groupedSpawn,
+      archivedAt: 1,
+    });
     await seed("main", "incognito-row", owner, "needle", { ...groupedSpawn, incognito: true });
     await seed("main", "internal-session-effects:run", owner, "needle");
     const visible = await seed(
@@ -257,6 +260,17 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
         request: { ...paletteScope, search: "needle" },
       }),
     ).toMatchObject({ sessions: [], totalCount: 0 });
+    // Archive inclusion does not disclose the newly private result or hidden discovery kinds.
+    const allScope = { ...paletteScope, archived: "all" as const };
+    expect(await search(context, other, { query: "needle", scope: allScope })).toMatchObject({
+      ok: true,
+      payload: { results: [{ sessionKey: archived }], sessions: [{ key: archived }] },
+    });
+    expect(
+      (
+        await listSessions({ context, client: other, request: { ...allScope, search: "needle" } })
+      ).sessions.map((row) => row.key),
+    ).toEqual([archived]);
   });
 });
 

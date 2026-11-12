@@ -32,8 +32,8 @@ import {
 } from "./command-palette-contract.ts";
 import {
   buildCommandPaletteSessionItems,
+  COMMAND_PALETTE_SESSION_SEARCH_SCOPE,
   SESSION_SEARCH_LIMIT,
-  SESSION_SEARCH_SCOPE,
 } from "./command-palette-session-search.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.tsx";
 
@@ -559,14 +559,14 @@ export class CommandPaletteState {
     const transcriptSearch = searchVisibleSessionTranscripts({
       client,
       query: search,
-      listOptions: SESSION_SEARCH_SCOPE,
+      listOptions: COMMAND_PALETTE_SESSION_SEARCH_SCOPE,
       isCurrent,
     })
       .then((result) => ({ error: false as const, result }))
       .catch(() => ({ error: true as const, result: null }));
     try {
       const result = await sessions.list({
-        ...SESSION_SEARCH_SCOPE,
+        ...COMMAND_PALETTE_SESSION_SEARCH_SCOPE,
         source: "command-palette",
         search,
         limit: SESSION_SEARCH_LIMIT,

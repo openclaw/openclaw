@@ -31,7 +31,8 @@ export function projectSidebarArchiveVisibility(input: {
   const isSessionHidden = (row: Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">) =>
     isLifecycleHidden(row.key) ||
     (input.statusFilter === "archived" && row.archived !== true) ||
-    (input.statusFilter === "active" && isSessionSnoozed(row, input.now)) ||
+    (input.statusFilter === "active" &&
+      (row.archived === true || isSessionSnoozed(row, input.now))) ||
     (input.statusFilter === "snoozed" &&
       (row.archived === true || !isSessionSnoozed(row, input.now)));
   const sourceRows = input.sourceRows;

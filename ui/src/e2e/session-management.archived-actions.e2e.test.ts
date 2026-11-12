@@ -278,12 +278,6 @@ suite.define(() => {
       const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
 
       const selectedRow = ui.sessionRows(page)(archived.key);
-      await ui.visible(selectedRow, 10_000);
-      await expect
-        .poll(() => selectedRow.getAttribute("class"))
-        .toContain("sidebar-recent-session--active");
-      await ui.visible(selectedRow.locator(".sidebar-session__archive-glyph"));
-      await ui.visible(selectedRow.getByText("Archived planning", { exact: true }));
       await ui.visible(
         activePane.getByRole("button", {
           name: "Actions for Archived planning",
@@ -294,6 +288,7 @@ suite.define(() => {
       const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
       await ui.visible(archivedNotice, 10_000);
       await ui.expectText(archivedNotice, "This session is archived.");
+      await ui.expectCount(selectedRow, 0);
       await ui.expectCount(activePane.locator(".agent-chat__input"), 0);
       await expectVersionAuthority(activePane, false, true);
       expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);

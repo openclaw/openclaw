@@ -34,7 +34,7 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: SIDEBAR_SESSION_ROSTER_LIMIT,
 } as const satisfies SessionListOptions;
 
-/** User-facing session pickers (command palette, section editor) list the same sessions. */
+/** Shared discovery exclusions; pickers stay active-only unless they opt into archives. */
 export const SESSION_SEARCH_SCOPE = {
   includeGlobal: false,
   includeUnknown: false,

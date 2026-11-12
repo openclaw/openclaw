@@ -45,3 +45,56 @@ it("ranks sigma-equivalent literal metadata without a matching title", () => {
     "session:agent:main:prefix",
   ]);
 });
+
+it("prefers active sessions only after metadata and message relevance tie", () => {
+  const visibleRows: GatewaySessionRow[] = [
+    {
+      key: "agent:main:archived-exact",
+      kind: "direct",
+      label: "Heron",
+      archived: true,
+      updatedAt: 3,
+    },
+    { key: "agent:main:active-prefix", kind: "direct", label: "Heron notes", updatedAt: 1 },
+    {
+      key: "agent:main:archived-prefix",
+      kind: "direct",
+      label: "Heron notes",
+      archived: true,
+      updatedAt: 4,
+    },
+  ];
+  const items = buildCommandPaletteSessionItems({
+    visibleRows,
+    visibleKeys: new Set(visibleRows.map((row) => row.key)),
+    transcriptResult: null,
+    search: "Heron",
+  });
+  expect(items.map((item) => item.session?.key)).toEqual([
+    "agent:main:archived-exact",
+    "agent:main:active-prefix",
+    "agent:main:archived-prefix",
+  ]);
+  const messages = buildCommandPaletteSessionItems({
+    visibleRows: [],
+    visibleKeys: new Set(),
+    transcriptResult: {
+      sessions: visibleRows,
+      results: visibleRows.map((row, index) => ({
+        sessionKey: row.key,
+        messageId: row.key,
+        sessionId: row.key,
+        role: "user",
+        timestamp: 1,
+        snippet: "telescope",
+        score: index === 0 ? 2 : 1,
+      })),
+    },
+    search: "telescope",
+  });
+  expect(messages.map((item) => item.session?.key)).toEqual([
+    "agent:main:archived-exact",
+    "agent:main:active-prefix",
+    "agent:main:archived-prefix",
+  ]);
+});

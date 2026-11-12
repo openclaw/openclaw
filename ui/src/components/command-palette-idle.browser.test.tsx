@@ -49,7 +49,7 @@ it("keeps an idle search settled across usage updates and still accepts command 
   await vi.advanceTimersByTimeAsync(200);
   await expect
     .poll(() => palette.textContent)
-    .toContain("Archived sessions are not included in message search.");
+    .toContain("Cold-stored messages are not searched until their history is restored.");
   await expect.poll(() => palette.textContent).not.toMatch(/Searching (commands|sessions)/);
   expect(palette.textContent).toContain("zzidlequery old skill");
   expect(palette.textContent).toContain("zzidlequery old model");

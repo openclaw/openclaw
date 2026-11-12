@@ -21,8 +21,8 @@ function project(rows: GatewaySessionRow[], statusFilter: SidebarSessionStatusFi
     statusFilter,
     now,
     deletionState: () => undefined,
-    archiveVisibility: (key) =>
-      rows.find((row) => row.key === key)?.archived ? "archived" : undefined,
+    // A persisted archive can be opened without a local archive mutation receipt.
+    archiveVisibility: () => undefined,
   });
 }
 
@@ -33,7 +33,7 @@ describe("sidebar snooze visibility", () => {
     { key: "awake", kind: "direct" },
     { key: "snoozed", kind: "direct", snoozedUntil: 200, pinned: true },
     { key: "expired", kind: "direct", snoozedUntil: 100 },
-    { key: "archived", kind: "direct", archived: true, snoozedUntil: 200 },
+    { key: "archived", kind: "direct", archived: true },
   ];
   it.each([
     ["active", ["awake", "expired"]],

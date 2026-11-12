@@ -78,14 +78,28 @@ communication**. The agent-facing `sessions_search` tool keeps exact-word matchi
 The command palette also finds agent-created conversations assigned to a custom
 sidebar group, by title or transcript, after you switch to another conversation.
 Ungrouped spawned sessions and subagent runs remain excluded from the palette.
-Groups do not grant access to private conversations or include incognito or
-archived sessions in active search.
+Groups do not grant access to private conversations or include incognito sessions.
+
+Cmd+K (Ctrl+K on Windows and Linux) searches active and archived conversations
+by stored title and metadata, plus messages already available in the index.
+Archived results are labeled **Archived**. Active conversations come first only
+when title/metadata and message relevance are otherwise equal; an exact archived
+title match still ranks above a weaker active match. Opening a result does not
+unarchive the conversation, restore its worktree, or start an agent turn. It stays
+out of the active sidebar, with **Unarchive** available when you want to continue.
+Personal section editors still offer active conversations only.
+
+The palette preserves the existing authorized discovery scope; it does not
+introduce an “Involving me” default or a new all-accessible toggle.
 
 Search returns a bounded set of the best matches. More matches than the result limit is
 normal, not a search-completeness warning; refine the query to narrow the results. Unconfirmed
 search completeness and cold archived transcripts excluded from search have separate status
-messages. Cold transcript history becomes searchable again when its session is opened
-and the history is restored. Search does not restore archived history automatically.
+messages. Cold-stored messages are not searched until their history is restored;
+stored titles and metadata remain searchable without loading those payloads.
+Opening the history can restore it, but searching never restores cold transcripts
+automatically. Archiving a conversation and moving transcript payloads into cold
+storage are separate operations: indexed archived messages can still match.
 
 ## Index lifecycle
 

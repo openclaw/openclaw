@@ -13,9 +13,14 @@ import {
   appendTranscriptMessages,
   createSessionEntryWithTranscript,
 } from "../../../src/config/sessions/session-accessor.js";
+import { runSessionColdStorageMaintenance } from "../../../src/config/sessions/session-cold-storage.js";
+import type { SessionEntry } from "../../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../src/infra/kysely-sync.js";
+import type { DB } from "../../../src/state/openclaw-agent-db.generated.js";
+import { runOpenClawAgentWriteTransaction } from "../../../src/state/openclaw-agent-db.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
-import { captureEnv, setTestEnvValue } from "../../../src/test-utils/env.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "../../../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -37,6 +42,12 @@ const commonMatchCount = 30;
 const commonQuery = "orchardglow";
 const uniqueQuery = "copperfinch";
 const targetKey = "agent:fifth:search-proof-12345678-0000-4000-8000-000000000001";
+const archivedKey = "agent:main:archived-search-proof";
+const archivedLabel = "Quartz heron expedition notes";
+const archivedMessage = "The amberquill telescope records the completed expedition.";
+const coldKey = "agent:main:cold-search-proof";
+const coldLabel = "Glacier kestrel field journal";
+const excludedQuery = "obsidiandormouse";
 const targetLabel = "Per-session communication controls in UI";
 const targetMessage =
   "The copperfinch observatory uses cross-agent message routing beside the violet lantern.";
@@ -49,6 +60,8 @@ const scope = {
   excludeSystem: true,
   excludeDock: true,
 };
+const paletteScope = { ...scope, archived: "all" as const };
+const coldNotice = "Cold-stored messages are not searched until their history is restored.";
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 let instance: OpenClawTestInstance | undefined;
 let client: Awaited<ReturnType<typeof connectChatGateway>>;
@@ -84,8 +97,54 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
         ? `The ${commonQuery} sample is recorded for this conversation.`
         : null,
   }));
-  const fixtures = [
+  const fixtures: Array<{
+    agentId: string;
+    key: string;
+    label: string;
+    updatedAt: number;
+    text: string | null;
+    extra?: Partial<SessionEntry>;
+  }> = [
     ...recent,
+    ...[
+      {
+        key: "private",
+        extra: {
+          visibility: "draft" as const,
+          createdActor: { type: "human" as const, id: "foreign" },
+        },
+      },
+      { key: "incognito", extra: { incognito: true } },
+      { key: "cron:archive", extra: {} },
+      { key: "subagent:archive", extra: {} },
+      {
+        key: "system-archive",
+        extra: { createdActor: { type: "system" as const, id: "fixture" } },
+      },
+      { key: "ungrouped-archive", extra: { spawnedBy: "agent:main:search-roster-0" } },
+    ].map(({ key, extra }) => ({
+      agentId: "main",
+      key: `agent:main:${key}`,
+      label: key === "private" ? "privatedormouse" : excludedQuery,
+      updatedAt: now,
+      text: key === "private" ? "privatedormouse" : excludedQuery,
+      extra: { archivedAt: now, ...extra },
+    })),
+    {
+      agentId: "main",
+      key: coldKey,
+      label: coldLabel,
+      updatedAt: now - 90 * 86_400_000,
+      text: "frozenwagtail message payload",
+      extra: { archivedAt: now - 90 * 86_400_000 },
+    },
+    {
+      agentId: "main",
+      key: archivedKey,
+      label: archivedLabel,
+      updatedAt: now - 30 * 86_400_000,
+      text: archivedMessage,
+    },
     {
       agentId: "fifth",
       key: targetKey,
@@ -111,6 +170,7 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
           sessionId,
           updatedAt: fixture.updatedAt,
           label: fixture.label,
+          ...(fixture.key === archivedKey ? { archivedAt: fixture.updatedAt } : {}),
           visibility: "shared",
           ...(fixture.key === targetKey
             ? {
@@ -127,6 +187,7 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
                   id: profile.id,
                 },
               }),
+          ...fixture.extra,
         },
       }),
       { cwd: owner.state.workspaceDir },
@@ -152,7 +213,32 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
       );
       expect(appended).toHaveLength(1);
     }
+    if (fixture.key === coldKey) {
+      // Age only this synthetic window before startup; production cold maintenance owns the archive.
+      runOpenClawAgentWriteTransaction(
+        ({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<DB>(db)
+              .updateTable("session_windows")
+              .set({ updated_at: fixture.updatedAt, transcript_updated_at: fixture.updatedAt })
+              .where("session_id", "=", sessionId),
+          );
+        },
+        { agentId: fixture.agentId, env: owner.env },
+      );
+    }
   }
+  await withEnvAsync({ OPENCLAW_STATE_DIR: owner.stateDir }, async () => {
+    expect(
+      await runSessionColdStorageMaintenance({
+        config: {
+          ...config,
+          session: { maintenance: { coldStorage: { enabled: true, afterDays: 45 } } },
+        },
+      }),
+    ).toMatchObject({ archivedTranscripts: 1 });
+  });
 }
 
 const suite = createControlUiE2eSuite({
@@ -467,7 +553,6 @@ suite.define(() => {
             filename: string,
             metadataKeys: string[] = [],
           ) => {
-            const noMatches = expectedHits === 0 && metadataKeys.length === 0;
             const start = rpc.length;
             await input.fill(query);
             await expect
@@ -493,14 +578,17 @@ suite.define(() => {
             queryCount++;
             // Capture the settled state before assertions too, retaining useful
             // before-fix evidence when run against the original regression.
-            await capture(filename, palette, [input, visibleResults === 0 ? emptyState : results]);
+            await capture(filename, palette, [
+              input,
+              visibleResults === 0 ? palette.locator(".cmd-palette__archive-note") : results,
+            ]);
             expect(searches).toHaveLength(1);
             const response = searches[0]!;
-            expect(response.params).toEqual({ query, limit: 25, scope });
+            expect(response.params).toEqual({ query, limit: 25, scope: paletteScope });
             expect(response.ok).toBe(true);
             expect(response.resultCount).toBe(expectedHits);
             expect(response.indexing).toBe(false);
-            expect(response.archivedTranscriptsExcluded).toBe(0);
+            expect(response.archivedTranscriptsExcluded).toBe(1);
             expect(response.sessionKeys?.length).toBeLessThanOrEqual(25);
             expect(new Set(response.sessionKeys)).toEqual(new Set(response.resultKeys));
             // The query owns one bounded metadata lookup. The scoped transcript
@@ -515,7 +603,7 @@ suite.define(() => {
               requestedRevision,
             );
             expect(metadataParams).toEqual({
-              ...scope,
+              ...paletteScope,
               search: query,
               limit: 10,
               rowMode: "compact",
@@ -549,9 +637,7 @@ suite.define(() => {
               revision,
               keys: metadataKeys,
             });
-            expect(notices).toEqual(
-              noMatches ? [expect.stringContaining("No results match your search.")] : [],
-            );
+            expect(notices).toEqual([expect.stringContaining(coldNotice)]);
             expect(
               await palette
                 .getByText(/Search notices|incomplete|unavailable|indexing older/i)
@@ -559,6 +645,113 @@ suite.define(() => {
             ).toBe(0);
             return response;
           };
+
+          const storageBefore = await client.request("sessions.storage.status", {});
+          for (const [query, hits, filename, keys] of [
+            [archivedLabel, 0, "archive-title.png", [archivedKey]],
+            ["amberquill", 1, "archive-message.png", []],
+          ] as const) {
+            await search(query, hits, filename, [...keys]);
+            const archivedOption = results.getByRole("option").filter({ hasText: archivedLabel });
+            expect(await archivedOption.getByText("Archived", { exact: true }).isVisible()).toBe(
+              true,
+            );
+            const start = rpc.length;
+            await archivedOption.click();
+            await input.waitFor({ state: "hidden" });
+            const pane = page.locator(
+              "openclaw-chat-pane.chat-pane-cache__pane--active:not([inert])",
+            );
+            await pane
+              .locator(".chat-thread")
+              .getByText(archivedMessage, { exact: true })
+              .waitFor();
+            await pane.getByRole("button", { name: "Unarchive", exact: true }).waitFor();
+            expect(
+              await page
+                .locator(`.sidebar-recent-session[data-session-key="${archivedKey}"]`)
+                .count(),
+            ).toBe(0);
+            const inventory = await client.request<SessionsListResult>("sessions.list", {
+              ...paletteScope,
+              search: archivedLabel,
+            });
+            expect(inventory.sessions).toMatchObject([{ key: archivedKey, archived: true }]);
+            expect(
+              rpc
+                .slice(start)
+                .filter(
+                  (entry) =>
+                    entry.method === "sessions.patch" && Object.hasOwn(entry.params, "archived"),
+                ),
+            ).toEqual([]);
+            await capture("opened-" + filename, pane, [pane.locator(".chat-thread")]);
+            await page.goBack();
+            await page.keyboard.press("ControlOrMeta+K");
+            await input.waitFor();
+          }
+          await search(coldLabel, 0, "cold-title.png", [coldKey]);
+          await search("frozenwagtail", 0, "cold-message-notice.png");
+          await search(excludedQuery, 0, "excluded-archives.png");
+          // The owner/admin fixture retains its existing permission to discover drafts.
+          await search("privatedormouse", 1, "admin-authorized-draft.png", ["agent:main:private"]);
+          const storageAfter = await client.request("sessions.storage.status", {});
+          for (const storage of [storageBefore, storageAfter]) {
+            const agents = requireRecord(storage).agents;
+            expect.assert(Array.isArray(agents));
+            expect(
+              agents.reduce(
+                (count: number, agent: unknown) =>
+                  count + Number(requireRecord(agent).coldTranscripts),
+                0,
+              ),
+            ).toBe(1);
+          }
+          await page.keyboard.press("Escape");
+          await input.waitFor({ state: "hidden" });
+          const sidebar = page.locator("openclaw-app-sidebar");
+          await sidebar.getByRole("button", { name: /^Filter & sort/ }).click();
+          await page
+            .locator(".sidebar-session-sort-menu")
+            .getByRole("button", { name: "New section", exact: true })
+            .click();
+          const editor = page.getByRole("dialog", { name: "New section", exact: true });
+          await editor.getByLabel("Section name", { exact: true }).fill("Synthetic archive check");
+          await editor.getByRole("radio", { name: "All sessions" }).check();
+          await editor.getByRole("button", { name: "Choose sessions", exact: true }).click();
+          await editor.getByRole("button", { name: "Search sessions", exact: true }).click();
+          const sectionSearch = editor.getByRole("searchbox", {
+            name: "Search sessions",
+            exact: true,
+          });
+          for (const [query, expected] of [
+            [archivedLabel, 0],
+            ["Synthetic conversation 1", 1],
+          ] as const) {
+            const start = rpc.length;
+            await sectionSearch.fill(query);
+            await expect
+              .poll(() =>
+                rpc
+                  .slice(start)
+                  .some(
+                    (entry) =>
+                      entry.method === "sessions.list" &&
+                      entry.params.search === query &&
+                      entry.elapsedMs !== undefined,
+                  ),
+              )
+              .toBe(true);
+            await expect
+              .poll(() => editor.getByRole("checkbox", { name: query, exact: true }).count())
+              .toBe(expected);
+            expect(
+              rpc.slice(start).find((entry) => entry.params.search === query)?.params.archived,
+            ).toBeUndefined();
+          }
+          await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+          await page.keyboard.press("ControlOrMeta+K");
+          await input.waitFor();
 
           await search("per session communi", 0, "00-title-punctuation-prefix.png", [targetKey]);
           await results.getByRole("option").filter({ hasText: targetLabel }).waitFor();
@@ -626,9 +819,10 @@ suite.define(() => {
           const absent = await search("copperfinch absentconstellation", 0, "05-no-match.png");
           expect(absent.truncated).toBe(false);
           expect(await results.getByRole("option").count()).toBe(0);
-          await emptyState
-            .getByRole("heading", { name: "No results match your search.", exact: true })
-            .waitFor();
+          expect(await emptyState.isVisible()).toBe(false);
+          expect(await palette.locator(".cmd-palette__archive-note").textContent()).toContain(
+            coldNotice,
+          );
 
           await search("copperfinch observatory", 1, "06-selected-search-result.png");
           await results.getByRole("option").filter({ hasText: targetLabel }).click();
@@ -740,7 +934,7 @@ suite.define(() => {
           {
             passed,
             fixture: {
-              sessions: recentSessionCount + 1,
+              sessions: recentSessionCount + 9,
               configuredAgents: agentIds.length,
               newerSessions: recentSessionCount,
               commonMatches: commonMatchCount,

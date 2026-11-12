@@ -202,7 +202,7 @@ describe("CommandPalette pending searches", () => {
     ["partial", {}, "Couldn’t search messages"],
     ["model failure", {}, "Couldn’t search models"],
     ["indexing", { indexing: true }, "Results may be incomplete. Search again shortly."],
-    ["archived", { archivedTranscriptsExcluded: 2 }, "Archived sessions"],
+    ["archived", { archivedTranscriptsExcluded: 2 }, "Cold-stored messages"],
   ] as const)(
     "does not announce empty success for %s transcript results",
     async (name, result, notice) => {
