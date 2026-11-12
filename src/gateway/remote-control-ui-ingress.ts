@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
-import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { ErrorCodes, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import {
   GatewayControlUiIngressError,
   type GatewayControlUiIngressFactoryV2,
@@ -166,6 +167,7 @@ export function createGatewayControlUiIngressFactory(params: {
   async function bindPrincipal(
     options: GatewayIngressPrincipalOptionsV1,
   ): Promise<GatewayIngressPrincipalBindingV1> {
+    host.admissionSignal.throwIfAborted();
     const operatorScopeCeiling = validatePrincipalOptions(options);
     const principal = Object.freeze({ ...options.principal });
     const grantSignal = AbortSignal.any([params.signal, host.signal, options.signal]);
@@ -183,6 +185,7 @@ export function createGatewayControlUiIngressFactory(params: {
       getResolvedAuth: () => host.getResolvedAuth(),
       signal: grantSignal,
       assertCurrent: assertGrant,
+      assertPreparationCurrent: () => host.admissionSignal.throwIfAborted(),
     });
     const principalSignal = authority.signal;
     const resolvePrincipal = () => authority.resolve();
@@ -196,6 +199,13 @@ export function createGatewayControlUiIngressFactory(params: {
       requestOptions?: { signal?: AbortSignal },
       ingressContext?: RemoteControlUiIngressContext,
     ): Promise<T> => {
+      if (host.admissionSignal.aborted) {
+        throw new GatewayClientRequestError({
+          code: ErrorCodes.UNAVAILABLE,
+          message: "Gateway request entry is closed",
+          retryable: true,
+        });
+      }
       const principalSnapshot = resolvePrincipal();
       const context = host.resolveGatewayContext?.();
       if (!context) {
@@ -276,6 +286,7 @@ export function createGatewayControlUiIngressFactory(params: {
     async function openControlUi(
       presentationOptions: GatewayControlUiIngressPresentationOptionsV1,
     ): Promise<GatewayControlUiIngressV2> {
+      host.admissionSignal.throwIfAborted();
       const presentation = {
         ...validatePresentation(presentationOptions),
         operatorScopeCeiling,
@@ -483,7 +494,13 @@ export function createGatewayControlUiIngressFactory(params: {
       openControlUi,
       close: closeBinding,
     };
-    assertPrincipalCurrent();
+    try {
+      host.admissionSignal.throwIfAborted();
+      assertPrincipalCurrent();
+    } catch (error) {
+      authority.close();
+      throw error;
+    }
     return Object.freeze(binding);
   }
   return {

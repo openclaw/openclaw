@@ -8,6 +8,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import * as restartRecovery from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { resolveStateDir } from "../config/paths.js";
 import * as devicePairing from "../infra/device-pairing.js";
 import * as questionChannel from "../infra/question-channel-runtime.js";
@@ -255,6 +256,19 @@ describe("public Gateway close operator observer lifetime", () => {
       const expectHeldWork = holdRead ? await observeHeldGatewayWorkDrain() : undefined;
       const entered = createDeferredCore();
       const releaseRead = createDeferredCore();
+      const markerEntered = createDeferredCore();
+      const releaseMarker = createDeferredCore();
+      const markRestart = restartRecovery.markRestartAbortedMainSessions;
+      const marker =
+        read === "queued-wake"
+          ? vi
+              .spyOn(restartRecovery, "markRestartAbortedMainSessions")
+              .mockImplementation(async (params) => {
+                markerEntered.resolve();
+                await releaseMarker.promise;
+                await markRestart(params);
+              })
+          : undefined;
       const readPending = devicePairing.getPendingDevicePairing;
       const readPaired = devicePairing.getPairedDevice;
       const reads: Promise<unknown>[] = [];
@@ -278,6 +292,7 @@ describe("public Gateway close operator observer lifetime", () => {
       let pendingReads = 0;
       let releaseTimer: ReturnType<typeof setTimeout> | undefined;
       const unblock = () => {
+        releaseMarker.resolve();
         releaseRead.resolve();
         if (!limited || settled) {
           return;
@@ -391,12 +406,27 @@ describe("public Gateway close operator observer lifetime", () => {
         }
         closeStarted = true;
         closing = started.gateway.server
-          .close({ reason: `scope observer lifetime proof: ${name}`, drainTimeoutMs: 0 })
+          .close({
+            reason: `scope observer lifetime proof: ${name}`,
+            drainTimeoutMs: 0,
+            ...(read === "queued-wake" ? { restartExpectedMs: 1_500 } : {}),
+          })
           .then(() => {
             atClose = { observerSettled: settled, heldReadFinished };
             // Early public close releases the original read on a broken owner.
             releaseRead.resolve();
           });
+        if (read === "queued-wake") {
+          await markerEntered.promise;
+          await nextTurn();
+          expect(postCloseReads).toBe(0);
+          await expect(observed).resolves.toMatchObject({
+            status: "rejected",
+            reason: { name: "AbortError" },
+          });
+          expect(atClose).toBeUndefined();
+          releaseMarker.resolve();
+        }
         if (expectHeldWork) {
           await expectHeldWork(closing);
           expect(atClose).toBeUndefined();
@@ -430,6 +460,7 @@ describe("public Gateway close operator observer lifetime", () => {
           observation?.mockRestore();
           pendingObservation?.mockRestore();
           pairedObservation?.mockRestore();
+          marker?.mockRestore();
           resetTestPluginRegistry();
           signal.removeEventListener("abort", unblock);
         }

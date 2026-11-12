@@ -53,6 +53,7 @@ function fixture(overrides: Partial<GatewayControlUiIngressHost> = {}) {
   });
   const host: GatewayControlUiIngressHost = {
     signal: new AbortController().signal,
+    admissionSignal: new AbortController().signal,
     controlUiBasePath: "/claw",
     getRuntimeConfig: () => ({}),
     getResolvedAuth: () => ({
@@ -204,34 +205,95 @@ describe("remote Control UI memory transport", () => {
     }
   });
 
-  it("keeps accepted WebSocket authority with the grant when the browser transport disconnects", async () => {
-    const wss = websocketServer();
-    const admitted = createDeferred<RemoteControlUiIngressContext>();
-    const { transport, revoke } = fixture({
-      handleUpgrade: async (req, socket, head) => {
-        const provenance = readGatewayIngressTransport(req);
-        if (provenance?.kind !== "remote-forwarded") {
-          throw new Error("Missing remote provenance");
+  it.each(["browser", "admission"] as const)(
+    "keeps accepted WebSocket authority when %s closes",
+    async (kind) => {
+      const wss = websocketServer();
+      const admitted = createDeferred<RemoteControlUiIngressContext>();
+      const admission = new AbortController();
+      const { transport, revoke } = fixture({
+        admissionSignal: admission.signal,
+        handleUpgrade: async (req, socket, head) => {
+          const provenance = readGatewayIngressTransport(req);
+          if (provenance?.kind !== "remote-forwarded") {
+            throw new Error("Missing remote provenance");
+          }
+          admitted.resolve(provenance.context);
+          wss.handleUpgrade(req, socket, head, () => {});
+        },
+      });
+      const browser = new AbortController();
+      const { socket } = await transport.openWebSocket({
+        pathAndQuery: "/claw",
+        origin: "https://ui.example.test",
+        protocols: [],
+        signal: browser.signal,
+      });
+      const authority = await admitted.promise;
+      (kind === "browser" ? browser : admission).abort(new Error("Transport closed"));
+      if (kind === "admission") {
+        await expect(transport.openWebSocket(websocketRequest)).rejects.toThrow("Transport closed");
+        // Intake is fenced; an accepted socket and its independent grant remain live.
+        await socket.send({ kind: "text", text: "accepted before fence" });
+        browser.abort();
+      }
+      await socket.closed;
+      expect(authority.signal.aborted).toBe(false);
+      expect(() => authority.assertCurrent()).not.toThrow();
+      revoke();
+      expect(() => authority.assertCurrent()).toThrow("Grant revoked");
+    },
+  );
+
+  it.each(["retained", "revoked", "retired"] as const)(
+    "keeps accepted HTTP separate from admission while its grant is %s",
+    async (state) => {
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const admission = new AbortController();
+      const retained = new AbortController();
+      const { transport, input, revoke } = fixture({
+        admissionSignal: admission.signal,
+        signal: retained.signal,
+        handleRequest: async (_req, res) => {
+          entered.resolve();
+          await release.promise;
+          res.end("accepted response");
+        },
+      });
+      const pending = transport.request(input);
+      // Attach rejection handling before retirement can abort the transport.
+      const outcome = pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await entered.promise;
+        admission.abort(new Error("Intake fenced"));
+        await expect(transport.request(input)).rejects.toThrow("Intake fenced");
+        if (state === "revoked") {
+          revoke();
+        } else if (state === "retired") {
+          retained.abort(new Error("Restart execution retired"));
         }
-        admitted.resolve(provenance.context);
-        wss.handleUpgrade(req, socket, head, () => {});
-      },
-    });
-    const browser = new AbortController();
-    const { socket } = await transport.openWebSocket({
-      pathAndQuery: "/claw",
-      origin: "https://ui.example.test",
-      protocols: [],
-      signal: browser.signal,
-    });
-    const authority = await admitted.promise;
-    browser.abort(new Error("Browser disconnected"));
-    await socket.closed;
-    expect(authority.signal.aborted).toBe(false);
-    expect(() => authority.assertCurrent()).not.toThrow();
-    revoke();
-    expect(() => authority.assertCurrent()).toThrow("Grant revoked");
-  });
+        release.resolve();
+        const result = await outcome;
+        if ("error" in result) {
+          expect(state).not.toBe("retained");
+          expect(result.error).toMatchObject({
+            message: state === "revoked" ? "Grant revoked" : "Restart execution retired",
+          });
+        } else {
+          expect(state).toBe("retained");
+          expect(await result.value.response.text()).toBe("accepted response");
+          await result.value.closed;
+        }
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+    },
+  );
 
   it("delivers the final buffered response chunk before normal transport completion", async () => {
     const { transport, input } = fixture({

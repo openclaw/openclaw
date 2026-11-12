@@ -15,6 +15,7 @@ import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch
 import { createGatewayKernel } from "./server-kernel.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -43,6 +44,18 @@ vi.mock("./server/ws-connection/request-start.js", async (importOriginal) => {
       return started?.then(() => boundaries.start()) ?? null;
     },
   };
+});
+
+it("separates admission fencing from retained execution retirement", async () => {
+  const lifetime = new GatewayRequestEntryLifetime();
+  lifetime.beginClose();
+  expect(lifetime.signal.aborted).toBe(true);
+  expect(lifetime.retainedSignal.aborted).toBe(false);
+  const restart = new Error("typed restart reason");
+  lifetime.retire(restart);
+  expect(lifetime.retainedSignal.reason).toBe(restart);
+  await lifetime.sealAndJoin();
+  expect(lifetime.retainedSignal.reason).toBe(restart);
 });
 
 describe("Gateway request entry lifetime", { concurrent: false }, () => {

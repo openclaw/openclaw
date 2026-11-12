@@ -59,6 +59,8 @@ export async function prepareRemoteIngressPrincipal(params: {
   getResolvedAuth(): ResolvedGatewayAuth;
   signal: AbortSignal;
   assertCurrent(): void;
+  /** Creation only; never retained as an accepted principal grant. */
+  assertPreparationCurrent(): void;
 }): Promise<{
   resolve(): RemoteIngressPrincipalSnapshot;
   assertCurrent(this: void): void;
@@ -82,6 +84,7 @@ export async function prepareRemoteIngressPrincipal(params: {
       throw new GatewayControlUiIngressError("unsupported-auth", error);
     }
   };
+  params.assertPreparationCurrent();
   assertGrant();
   if (principal.kind === "person" && principal.profileId === GATEWAY_OWNER_PROFILE_ID) {
     throw new GatewayControlUiIngressError(
@@ -92,8 +95,14 @@ export async function prepareRemoteIngressPrincipal(params: {
   const profileId = principal.kind === "person" ? principal.profileId : GATEWAY_OWNER_PROFILE_ID;
   if (principal.kind === "owner") {
     const displayName = await resolveHostAccountName();
+    params.assertPreparationCurrent();
     assertGrant();
-    await ensureCanonicalGatewayOwnerProfile(displayName, { assertCurrent: assertGrant });
+    await ensureCanonicalGatewayOwnerProfile(displayName, {
+      assertCurrent: () => {
+        params.assertPreparationCurrent();
+        assertGrant();
+      },
+    });
   }
   const prepared = await prepareUserProfileIdentity(profileId).catch(() => {
     throw new GatewayControlUiIngressError(
@@ -114,6 +123,7 @@ export async function prepareRemoteIngressPrincipal(params: {
     throw denial;
   };
   try {
+    params.assertPreparationCurrent();
     assertGrant();
     const resident = captureResidentUserProfileAccess(profileId);
     const initialIdentity = prepared.readCurrentFacts();

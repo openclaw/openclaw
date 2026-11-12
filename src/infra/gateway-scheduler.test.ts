@@ -37,6 +37,33 @@ function withNativeErrorStacks<T>(run: () => T): T {
 }
 
 describe("Gateway timed work", () => {
+  it("fences new wakeups without aborting accepted work and joins it at retirement", async () => {
+    const { time, scheduler } = fixture();
+    const scope = scheduler.scope();
+    const release = createDeferredCore();
+    const run = vi.fn(() => release.promise);
+    const waiting = vi.fn();
+    scope.schedule({ id: "running", delayMs: 0, everyMs: 100, run });
+    const wake = time.wake();
+    scheduler.schedule({ id: "waiting", delayMs: 100, run: waiting });
+    scheduler.fence();
+    expect(scheduler.signal.aborted).toBe(false);
+    expect(scope.signal.aborted).toBe(false);
+    scope.schedule({ id: "late", delayMs: 0, run: waiting });
+    await time.advanceBy(100);
+    expect(run).toHaveBeenCalledOnce();
+    expect(waiting).not.toHaveBeenCalled();
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    const stopped = vi.fn();
+    const stop = scheduler.stop().then(stopped);
+    expect(scope.signal.aborted).toBe(true);
+    expect(stopped).not.toHaveBeenCalled();
+    release.resolve();
+    await Promise.all([wake, stop]);
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(scheduler.nextWakeAtMs).toBeNull();
+  });
+
   it("shares maintenance slots across owners and skips slots missed by async work and sleep", async () => {
     const { time, scheduler } = fixture();
     const scope = scheduler.scope();

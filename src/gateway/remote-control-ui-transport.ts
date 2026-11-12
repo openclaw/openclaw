@@ -40,6 +40,7 @@ export function createRemoteControlUiTransport({
   const lifetime = new AbortController();
 
   function openOperation(inputSignal: AbortSignal) {
+    host.admissionSignal.throwIfAborted();
     context.assertCurrent();
     const controller = new AbortController();
     const signal = AbortSignal.any([

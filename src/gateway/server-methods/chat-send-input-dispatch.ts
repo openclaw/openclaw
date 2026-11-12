@@ -351,6 +351,8 @@ export async function handleChatSendWithStorage(
     if (stageInput) {
       // ACK transfers input custody. Persist approved source bytes before
       // dispatch; a validated durable retry already owns its transcript input.
+      // Non-main sessions rely on the original authorized same-key retry after
+      // restart, not automatic replay under a newly invented source authority.
       inputAdmissionAttempted = true;
       using stagePhase = diagnostics.scope("detail.persist.stage");
       const staged = await userTurnRecorder.stageApproved?.(

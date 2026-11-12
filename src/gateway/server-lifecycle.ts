@@ -395,12 +395,13 @@ export async function prepareGatewayLifecycle(params: {
     talkClose.beginClose();
     void stopModelAccountsForClose();
     void closeAuthProfileUsage(params.sdkResourceHost);
-    runtime.scheduler.beginClose();
+    runtime.scheduler.fence();
     void runtimeState.maintenance?.stopPeriodicTasks();
     // Fence new entry now; the run-shutdown owner records recovery before
     // canceling admitted work or withdrawing its runtime capabilities.
     requestEntryLifetime.beginClose();
     void mentionInbox.dispose();
+    runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.beginClose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
     connectionDependentSidecarStopOwner.beginClose();
@@ -531,8 +532,9 @@ export async function prepareGatewayLifecycle(params: {
           });
         },
         cancelReceivedWork: (reason) => {
-          // Publish cancellation before retained principals lose their authority,
-          // so interrupted preparation observes the exact restart reason.
+          // Recovery capture precedes retirement of accepted ingress authority.
+          requestEntryLifetime.retire(reason);
+          runtime.scheduler.beginClose();
           runtime.connectionWork.beginClose(reason);
           kernel.setDispatchReady(false);
           gatewayInstanceRuntimeRef.current?.close();
@@ -543,7 +545,16 @@ export async function prepareGatewayLifecycle(params: {
         configReloader: { stop: stopConfigReloaderForClose },
       },
       optsValue,
-    );
+    ).catch((error: unknown) => {
+      // A failed capture/preparation must still retire retained execution before joins.
+      const reason = error instanceof Error ? error : new Error(String(error));
+      requestEntryLifetime.retire(reason);
+      runtime.scheduler.beginClose();
+      runtime.connectionWork.beginClose(reason);
+      kernel.setDispatchReady(false);
+      gatewayInstanceRuntimeRef.current?.close();
+      throw error;
+    });
     await beginClosePrelude(optsValue);
     // Startup may still publish cleanup owners while received work settles.
     // Resolve their handles only when the caller reaches final teardown.

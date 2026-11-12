@@ -68,6 +68,7 @@ async function fixture(recordOptions: Partial<PluginRecord> = {}) {
     handleUpgrade: async (_req, socket) => {
       socket.destroy();
     },
+    admissionSignal: new AbortController().signal,
     signal: new AbortController().signal,
   });
   markPluginRegistryActive(registry);
