@@ -1,2 +1,0 @@
-1
-# Await the lazy plugin detail module before polling rendered MCP credential controls.

@@ -1,3 +1,0 @@
-# Regression for copied human mentions starting the first agent turn, with
-# notification delivery and direct-human interrupt behavior preserved.
-36
