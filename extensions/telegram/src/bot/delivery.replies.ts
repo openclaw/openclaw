@@ -747,8 +747,8 @@ async function deliverReplyPlan(
                       .findLast(Boolean) ?? `Attachment ${index + 1}`,
                 })),
               ) ?? "";
-            const firstDeliveredMessageId = await deliverTextReply({ ...textReply, text });
-            return { firstDeliveredMessageId, visibleFallbackText: text, mediaUrls: [] };
+            const sentId = await deliverTextReply({ ...textReply, text });
+            return { firstDeliveredMessageId: sentId, visibleFallbackText: text, mediaUrls: [] };
           },
         );
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
