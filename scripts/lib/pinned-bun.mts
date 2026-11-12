@@ -195,10 +195,15 @@ export function requirePinnedBun(
   return result.command;
 }
 
-export function pinnedBunEnv(command: string, env: NodeJS.ProcessEnv): { PATH: string } {
-  return {
-    PATH: path.isAbsolute(command)
-      ? [path.dirname(command), env.PATH].filter(Boolean).join(path.delimiter)
-      : (env.PATH ?? ""),
-  };
+export function pinnedBunEnv(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): { PATH: string; OPENCLAW_BUN_PATH?: string } {
+  // HOME/cache isolation must not discard the executable already selected by the owner.
+  return path.isAbsolute(command)
+    ? {
+        PATH: [path.dirname(command), env.PATH].filter(Boolean).join(path.delimiter),
+        OPENCLAW_BUN_PATH: command,
+      }
+    : { PATH: env.PATH ?? "" };
 }
