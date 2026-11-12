@@ -81,15 +81,15 @@ private struct MacOpenClawIDJoinView: View {
 enum MacOpenClawIDJoinCompletion {
     static func finishWithChat(
         claw: String,
-        markOnboardingComplete: () -> Void = { OnboardingController.markComplete() },
-        closeOnboarding: () -> Void = { OnboardingController.shared.close() },
-        selectPrimary: (String) -> Void = Self.selectPrimary,
-        openDashboard: @escaping () -> Void = { AppNavigationActions.openDashboard() })
+        markOnboardingComplete: @MainActor () -> Void = { OnboardingController.markComplete() },
+        closeOnboarding: @MainActor () -> Void = { OnboardingController.shared.close() },
+        selectPrimary: @MainActor (String) -> Void = { Self.selectPrimary($0) },
+        openDashboard: @escaping @MainActor () -> Void = { AppNavigationActions.openDashboard() })
     {
         markOnboardingComplete()
         closeOnboarding()
         selectPrimary(claw)
-        Task {
+        Task { @MainActor in
             await GatewayEndpointStore.shared.refresh()
             openDashboard()
         }
