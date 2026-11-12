@@ -63,7 +63,7 @@ function writeFixture(
   return file;
 }
 
-function runHotpathCandidate(consentSupported: boolean) {
+function runHotpathCandidate(consentSupported: boolean, candidateVersion = "") {
   const root = mkTempRoot();
   const hotpath = script.slice(
     script.indexOf('if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]'),
@@ -95,6 +95,8 @@ ${hotpath}`,
         ARGV_LOG: path.join(root, "argv.log"),
         CONSENT_SUPPORTED: consentSupported ? "1" : "0",
         FIXTURE_ROOT: root,
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: candidateVersion ? root : "",
+        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: candidateVersion,
       },
     },
   );
@@ -153,13 +155,17 @@ it("requires Convex leases instead of static credentials", () => {
   expect(runs).toEqual([]);
 });
 
-it.each([false, true])(
-  "runs the onboarding hotpath with candidate consent support=%s",
-  (supported) => {
-    const calls = runHotpathCandidate(supported);
-    expect(calls.filter((call) => call.startsWith("plugins install @openclaw/codex"))).toEqual(
-      supported ? ["plugins install @openclaw/codex --accept-capabilities"] : [],
-    );
+it.each([
+  [false, "", ""],
+  [true, "", "@openclaw/codex"],
+  [true, "2026.11.12-beta.3", "npm:@openclaw/codex@2026.11.12-beta.3 --pin"],
+])(
+  "runs the onboarding hotpath with consent=%s and verified candidate=%s",
+  (supported, candidateVersion, expectedInstall) => {
+    const calls = runHotpathCandidate(supported, candidateVersion);
+    expect(
+      calls.filter((call) => call.startsWith("plugins install ") && !call.endsWith("--help")),
+    ).toEqual(expectedInstall ? [`plugins install ${expectedInstall} --accept-capabilities`] : []);
     expect(calls.some((call) => call.startsWith("onboard "))).toBe(true);
   },
 );

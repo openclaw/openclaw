@@ -1,0 +1,2 @@
+6
+# Extend the existing executed shell hotpath regression to protect exact verified npm companion selection and pinning.
