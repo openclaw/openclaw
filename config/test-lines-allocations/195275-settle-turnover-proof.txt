@@ -1,0 +1,2 @@
+# PR #195275 (settle wakes across requester-run turnover): a real-Gateway product proof of base loss and post-acceptance reset/Stop revocation, requested by review, plus owner-level pre-acceptance re-arm and retained child/session fences.
+136
