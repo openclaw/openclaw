@@ -1,0 +1,5 @@
+3
+# LOCAL 2026.11.8 row 117; source b6468ddec209a83ffd9a57d336439cf5199186ba.
+# The existing directory-watch source/dist entrypoints join the gateway-worker classification list. Explicit artifact evidence remains resolved first, so retained runtime custody is not discarded.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
