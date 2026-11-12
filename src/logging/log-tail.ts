@@ -90,7 +90,7 @@ export async function readConfiguredLogTail(
   params?: { cursor?: number; limit?: number; maxBytes?: number },
   filter?: (line: string) => boolean,
 ): Promise<LogTailPayload> {
-  const target = getResolvedLoggerFileTarget();
+  const target = await getResolvedLoggerFileTarget();
   const { file, stat } = await resolveLogFile(target.file, target.rolling);
   invalidateRedactionAnchor(file, stat);
   const requestedCursor = params?.cursor;
