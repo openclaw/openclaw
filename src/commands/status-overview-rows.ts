@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveIsNixMode } from "../config/paths.js";
@@ -52,7 +53,7 @@ function buildStatusDegradationRows(
   const rows: Array<{ Item: string; Value: string }> = [];
   const addWarning = (Item: string, value: string | undefined) => {
     if (value) {
-      rows.push({ Item, Value: decorate(value) });
+      rows.push({ Item, Value: decorate(sanitizeTerminalText(value)) });
     }
   };
   addWarning("Startup migrations", summary.startupMigrationWarning);
@@ -72,7 +73,7 @@ function buildStatusDegradationRows(
       Value:
         status.state === "ready"
           ? `ready · CA expires ${status.caExpiresAt}`
-          : decorate(status.message ?? "Certificate preparation unavailable"),
+          : decorate(sanitizeTerminalText(status.message ?? "Certificate preparation unavailable")),
     });
   }
   const secretOwners = buildStatusSecretDiagnostics(summary.degradedSecretOwners ?? [], []);
