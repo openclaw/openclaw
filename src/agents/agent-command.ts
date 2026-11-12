@@ -648,7 +648,7 @@ async function agentCommandFromIngressInternal(
             });
 
         if (result && preparedAgentDir) {
-          emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+          await emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
         }
         return result;
       } finally {

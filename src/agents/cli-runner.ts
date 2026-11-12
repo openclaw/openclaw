@@ -569,7 +569,7 @@ async function runPreparedCliAgentOwned(
                 },
               }
             : undefined;
-        const pricedUsage = buildCliAssistantTranscriptUsage({
+        const pricedUsage = await buildCliAssistantTranscriptUsage({
           runParams: params,
           modelId: context.modelId,
           agentDir: context.agentDir,
