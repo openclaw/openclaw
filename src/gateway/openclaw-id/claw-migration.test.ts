@@ -9,6 +9,7 @@ import {
   OWNER_CAPABILITIES,
   randomBytes,
   signStatement,
+  snapshotBody,
   type IrohEndpointKey,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createOpenClawIdAuthority } from "./authority.js";
@@ -107,6 +108,28 @@ describe("allowlist upgrade", () => {
     expect(upgraded.authority!.owner_devices[d1Fp]!.approved_by).toBe(device.approved_by);
     expect(upgraded.discovery.publish_pending).toBe(true);
     expect(needsAllowlistUpgrade(upgraded)).toBe(false);
+  });
+
+  it("upgrades pre-node authority before reconnect and snapshot publication", async () => {
+    const claw = await linkedClaw();
+    const current = claw.authority.current()!;
+    const { nodes: _nodes, node_invites: _invites, ...state } = current.authority!;
+    // Persisted before node enrollment added these unsigned collections.
+    const older = { ...current, authority: state } as StoredClaw;
+    const store = memoryStore();
+    await store.write(older);
+    const authority = createOpenClawIdAuthority(store);
+    expect(await authority.resolvePeer(claw.w1)).toMatchObject({ kind: "owner" });
+    const upgraded = authority.current()!;
+    expect(upgraded.authority).toEqual({ ...state, nodes: {}, node_invites: {} });
+    expect(upgraded.binding).toEqual(current.binding);
+    expect(upgraded.discovery.publish_pending).toBe(true);
+    expect(
+      snapshotBody(upgraded.authority!, current.binding!.body.binding_seq, nowSeconds())
+        .node_peer_keys,
+    ).toEqual([]);
+    expect(await store.read()).toEqual(upgraded);
+    expect(await createOpenClawIdAuthority(store).load()).toEqual(upgraded);
   });
 
   it("leaves a current record alone", async () => {

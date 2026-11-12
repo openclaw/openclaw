@@ -107,8 +107,7 @@ const MASCOT_STYLES = openClawMascotStyles({
     "@media(max-width:768px),(max-width:932px) and (max-height:500px) and (orientation:landscape)",
 });
 
-/** Also usable by a disposable ingress fixture; the Gateway cannot serve a stopped listener. */
-export function renderControlUiUnavailableDocument(title: string): string {
+function renderControlUiUnavailableDocument(title: string): string {
   // Control UI default theme tokens and geometry (ui/src/styles); the fonts are app assets, so system faces stand in.
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">

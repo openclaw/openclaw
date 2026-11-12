@@ -17,10 +17,10 @@ const DIALECT_FIXTURES = [
     after: "```\nconst value = 1;\n```",
   },
   {
-    name: "labeled link",
-    input: "[docs](https://example.com)",
-    before: "[docs](https://example.com)",
-    after: "<https://example.com|docs>",
+    name: "labeled and self-labeled links",
+    input: "[docs](https://example.com) [a_b@example.com](mailto:a_b@example.com)",
+    before: "[docs](https://example.com) [a_b@example.com](mailto:a_b@example.com)",
+    after: "<https://example.com|docs> a_b@example.com",
   },
   { name: "heading fallback", input: "## Heading", before: "## Heading", after: "*Heading*" },
   {

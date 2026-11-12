@@ -138,7 +138,16 @@ suite.define(() => {
         { viewport: { width: 1280, height: 900 }, serviceWorkers: "block" },
         async ({ page }) => {
           let connections = 0;
-          page.on("websocket", () => connections++);
+          let shutdownAnnounced = false;
+          page.on("websocket", (socket) => {
+            connections++;
+            socket.on("framereceived", ({ payload }) => {
+              const frame = asOptionalRecord(JSON.parse(payload.toString()));
+              if (frame?.type === "event" && frame.event === "shutdown") {
+                shutdownAnnounced = true;
+              }
+            });
+          });
           await page.goto(
             suite.server.baseUrl + "new#token=" + encodeURIComponent(instance.gatewayToken),
           );
@@ -175,12 +184,8 @@ suite.define(() => {
             throw new Error("The isolated Gateway did not accept its restart intent");
           }
           process.kill(pid, "SIGUSR2");
-          await expect
-            .poll(async () => {
-              const response = await fetch(suite.server.baseUrl + "startupz");
-              return asOptionalRecord(await response.json())?.status;
-            })
-            .toBe("draining");
+          // A fast clean restart can finish between HTTP readiness polls.
+          await expect.poll(() => shutdownAnnounced).toBe(true);
           expect(await shell?.evaluate((element) => element.isConnected)).toBe(true);
           expect(await composer.inputValue()).toBe(draft);
           expect(page.url()).toBe(url);
@@ -309,7 +314,7 @@ suite.define(() => {
           expect(response?.status(), JSON.stringify(ingress.diagnostics())).toBe(503);
           expect(response?.headers()["x-openclaw-proof-boundary"]).toBe("disposable-ingress");
           const title = page.getByRole("heading", {
-            name: "Server is temporarily unavailable",
+            name: "OpenClaw is temporarily unavailable",
             exact: true,
           });
           expect(await title.isVisible()).toBe(true);

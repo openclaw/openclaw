@@ -515,6 +515,22 @@ database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
 
+## Prepared Decision HTTP runtime
+
+`openclaw/plugin-sdk/decisions-http-runtime` supplies `executeDecisionHttp(execution)`
+for provider-owned JSON Decision protocols. Import it lazily. Supply prepared
+provider auth, headers, request overrides, base URL, relative endpoint path,
+serialized body, signal, monotonic deadline, live admission assertion, and a
+provider-owned response decoder returning a Decision V2 provider outcome.
+It owns guarded HTTP dispatch, bounded JSON reads, credential-reflection rejection,
+cancellation, release, and standard HTTP failure classification. It makes one
+request, never discovers credentials, and never retries paid inference. The
+provider owns request eligibility, native semantics, retention controls, and
+validation of decoded results. `evaluateDecisionHttp(context, route)` projects the
+host-prepared V2 context into those execution inputs without importing a broad
+host-runtime facade in the provider. OpenAI-compatible and System One adapters share
+this executor without sharing their wire codecs.
+
 ## OpenAI-compatible Decisions runtime
 
 `openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
@@ -566,5 +582,8 @@ This capability is host-local and is never a wire environment override.
 
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
+`stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
+entries in place from a caller-owned child environment. Copy inherited values
+first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.

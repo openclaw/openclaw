@@ -31,6 +31,11 @@ import {
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createAgentDatabaseDeletionRefusal,
+  createAgentDatabaseInspectionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "./agent-database-admission.js";
 import { useAgentDeletionFixture } from "./agent-deletion.test-support.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
 import { closeDeletedAgentDatabases, reviveAgentDatabases } from "./openclaw-agent-db-readers.js";
@@ -86,6 +91,31 @@ function expectPublishedArchive(databasePath: string, sessionId: string, content
 }
 
 describe("agent deletion database cleanup authority", () => {
+  it("purges a retained database after startup refuses its deleting agent", async () => {
+    const f = fixture();
+    await f.withDeletion(async (deletion) => {
+      recordAgentDatabaseAdmissions(
+        [
+          createAgentDatabaseDeletionRefusal(
+            createAgentDatabaseInspectionRefusal({
+              agentId: "worker",
+              paths: [f.target.path],
+              reason: "inspection pending",
+              pending: true,
+            }),
+          ),
+        ],
+        { env: f.env, source: "startup" },
+      );
+      await expect(f.purgeStore(deletion)).resolves.toBe(false);
+      expect(readRow(f.target.path, "SELECT count(*) AS count FROM session_nodes")).toEqual({
+        count: 0,
+      });
+      expect(fs.existsSync(f.target.path)).toBe(true);
+      expect(() => f.open()).toThrow("deleted during startup inspection");
+    });
+  });
+
   it.each([false, true])(
     "purges through the live deletion owner without host SQLite (cold: %s)",
     async (cold) => {
@@ -434,7 +464,8 @@ describe("agent deletion database cleanup authority", () => {
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(f.target.path);
       {
         using writer = openNodeSqliteDatabase(f.target.path);
-        writer.exec("DROP INDEX idx_agent_cache_expiry");
+        // Unique index repair retains verification before the authority-bound mutation.
+        writer.exec("DROP INDEX idx_agent_conversations_identity");
       }
       const operation = vi.fn(() => {});
       await f.withDeletion(async (deletion) => {
@@ -465,7 +496,7 @@ describe("agent deletion database cleanup authority", () => {
       expect(
         readRow(
           f.target.path,
-          "SELECT name FROM sqlite_schema WHERE name='idx_agent_cache_expiry'",
+          "SELECT name FROM sqlite_schema WHERE name='idx_agent_conversations_identity'",
         ),
       ).toBeUndefined();
       expect(operation).not.toHaveBeenCalled();
@@ -477,6 +508,10 @@ describe("agent deletion database cleanup authority", () => {
     const f = fixture();
     closeOpenClawAgentDatabasesForTest(f.root);
     invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(f.target.path);
+    {
+      using writer = openNodeSqliteDatabase(f.target.path);
+      writer.exec("DROP INDEX idx_agent_conversations_identity");
+    }
     await f.withDeletion(async (deletion) => {
       const { checked, resume } = holdIntegrityCheck();
       const releaseOwner = createDeferred();

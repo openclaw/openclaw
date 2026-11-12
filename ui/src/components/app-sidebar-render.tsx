@@ -164,7 +164,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
               ]}
             >
               <Show
-                when={!host.connectionPending && Boolean(avatar() || avatarText())}
+                when={!host.connectionPending}
                 fallback={<GatewayIdentityPlaceholder kind="agent" />}
               >
                 <AgentIdentityAvatar
@@ -504,7 +504,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
         >
           <span class="sidebar-identity-card__avatar">
             <Show
-              when={!host.connectionPending && Boolean(displayUser()?.avatarUrl)}
+              when={!host.connectionPending}
               fallback={<GatewayIdentityPlaceholder kind="user" />}
             >
               <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />

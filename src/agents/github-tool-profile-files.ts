@@ -1,7 +1,15 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "@openclaw/fs-safe/root";
-import { stringify as stringifyYaml } from "yaml";
+import { readSecretFileSync } from "@openclaw/fs-safe/secret";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parseDocument, stringify as stringifyYaml } from "yaml";
+import { hasErrnoCode } from "../infra/errno.js";
+import {
+  GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
+  normalizeGitHubToken,
+} from "./github-read-identity.js";
 import { managedGitHubHosts } from "./github-tool-account.js";
 import { notifyManagedGitHubProfileChanged } from "./github-tool-identity-lifecycle.js";
 
@@ -51,5 +59,60 @@ export async function isPrivateManagedGitHubProfile(profileDir: string): Promise
     );
   } catch {
     return false;
+  }
+}
+
+/** The worker owns every path check and bounded read; callers retain live authority. */
+export function readManagedGitHubProfileToken(profileDir: string): string | undefined {
+  try {
+    const profile = fsSync.lstatSync(profileDir);
+    if (
+      !profile.isDirectory() ||
+      profile.isSymbolicLink() ||
+      (process.platform !== "win32" && (profile.mode & 0o077) !== 0)
+    ) {
+      return undefined;
+    }
+    let hosts: Record<string, unknown> | undefined;
+    for (const name of ["hosts.yml", "config.yml"]) {
+      const filePath = path.join(profileDir, name);
+      let stat;
+      try {
+        stat = fsSync.lstatSync(filePath);
+      } catch (error) {
+        if (name === "config.yml" && hasErrnoCode(error, "ENOENT")) {
+          continue;
+        }
+        throw error;
+      }
+      if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+        return undefined;
+      }
+      const raw = readSecretFileSync(filePath, "Managed GitHub profile", {
+        maxBytes: GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES,
+        rejectSymlink: true,
+      });
+      // parse() logs YAML warnings containing file contents. Inspect the document
+      // instead so corrupt credentials never escape into parser diagnostics.
+      const document = parseDocument(raw, { prettyErrors: false });
+      if (document.errors.length || document.warnings.length) {
+        return undefined;
+      }
+      const value: unknown = document.toJS({ maxAliasCount: 0 });
+      if (!isRecord(value)) {
+        return undefined;
+      }
+      if (name === "hosts.yml") {
+        hosts = value;
+      }
+    }
+    const host = hosts?.["github.com"];
+    // gh reads the active host token before considering the global keyring.
+    // User-keyed entries alone cannot prove isolation from native auth.
+    return isRecord(host) && typeof host.oauth_token === "string"
+      ? normalizeGitHubToken(host.oauth_token)
+      : undefined;
+  } catch {
+    return undefined;
   }
 }

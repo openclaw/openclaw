@@ -40,8 +40,16 @@ vi.mock("./agent-database-admission.js", async (importOriginal) => {
     ),
     failPendingAgentDatabase: vi.fn<typeof actual.failPendingAgentDatabase>(
       (refusal, cause, options) => {
+        const previous = actual.listAgentDatabaseAdmissionRefusals(options);
         actual.failPendingAgentDatabase(refusal, cause, options);
-        admissionState.failed.push(refusal.agentId);
+        // Observe recorded verdicts; repeating an already-recorded refusal is idempotent.
+        if (
+          actual
+            .listAgentDatabaseAdmissionRefusals(options)
+            .some((entry) => !previous.includes(entry))
+        ) {
+          admissionState.failed.push(refusal.agentId);
+        }
       },
     ),
   };
@@ -295,6 +303,12 @@ it.each([
   }
   await prepareAgents(1);
   expectAdmission([], ["agent-0"], attempts);
+  if (typeof outcome === "string") {
+    const options = vi.mocked(failPendingAgentDatabase).mock.lastCall![2];
+    const refusal = readAgentDatabaseAdmissionRefusal("agent-0", options);
+    expect(refusal?.repairHint).toContain("retry agents.delete");
+    expect(refusal?.repairHint).not.toContain("doctor --fix");
+  }
 });
 
 it("does not start queued journal reads after Gateway ownership changes", async () => {

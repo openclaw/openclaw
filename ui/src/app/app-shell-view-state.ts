@@ -13,7 +13,7 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
+import { pluginPageLabel, pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
@@ -60,17 +60,17 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
+  readonly initialConnectionPending: boolean;
   readonly shellLayout: ShellLayoutOwner;
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
-  readonly settingsSearchQuery: string;
+  settingsSearchQuery: string;
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   readonly workspaceChromeVisible: boolean;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   readonly handleNativeNewSession: () => void;
-  handleSettingsSearchQueryChange(query: string): Promise<void>;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
   refreshControlUi: () => Promise<boolean>;
@@ -142,12 +142,7 @@ export function readShellView(host: ShellViewHost) {
   // Onboarding renders without any navigation chrome, so the settings takeover
   // must not reserve its sidebar column (the grid would stay off-center).
   const nativeEmbed = isNativeEmbedHost();
-  const initialGatewayConnection =
-    !nativeEmbed &&
-    !runtime.warmBoot &&
-    !presentationScope.readyOnce &&
-    !gatewayConnected &&
-    host.routeState.routeId === undefined;
+  const initialGatewayConnection = host.initialConnectionPending;
   const embedSettingsRoot = nativeEmbed && activeRoute === "settings";
   const embedSettings =
     nativeEmbed &&
@@ -198,9 +193,9 @@ export function readShellView(host: ShellViewHost) {
     !host.desktopNavigationExpanded &&
     !navDrawerOpen() &&
     !settingsTakeover;
-  const railAvailable = !nativeEmbed && !settingsTakeover && !onboarding;
+  const railAvailable = !nativeEmbed && !onboarding && (!settingsTakeover || !mobileNavLayout);
   const railWidth = railAvailable ? NAVIGATION_RAIL_WIDTH : 0;
-  // Settings replaces the rail and sidebar without moving the desktop reading surface.
+  // Settings replaces the adjacent sidebar without moving the desktop reading surface.
   const expandedNavWidth =
     navigationSnapshot.navWidth +
     (settingsTakeover && !mobileNavLayout ? NAVIGATION_RAIL_WIDTH : railWidth);
@@ -285,6 +280,12 @@ export function readShellView(host: ShellViewHost) {
     onOpenPalette: host.openPalette,
     onRetryConnect: callbacks.retryGateway,
     onToggleSidebar: callbacks.toggleSidebar,
+    onExitSettings: settingsTakeover
+      ? () => {
+          context.navigation.update({ navCollapsed: false });
+          host.shellNavigation.exitSettings();
+        }
+      : undefined,
     onOpenNewSession: callbacks.requestOpenNewSession,
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
     onPairMobile: callbacks.openDevicePairSetup,
@@ -390,7 +391,9 @@ export function readShellView(host: ShellViewHost) {
       // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
       return activeRoute === "custodian"
         ? currentThemeBranding().brandName
-        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot);
+        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot, () =>
+            pluginPageLabel(context, host.routeState.location),
+          );
     },
     get navCollapsed() {
       return navCollapsed();

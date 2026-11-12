@@ -36,6 +36,7 @@ import {
 } from "./lib/control-ui-interaction-scenarios.ts";
 import {
   clipInteractionCpuProfile,
+  collectInteractionStyleSheets,
   summarizeInteractionSelectors,
   summarizeInteractionTrace,
   summarizeLongTaskCpuProfiles,
@@ -887,6 +888,7 @@ try {
               page,
               { ...fixture, awaitInitialRoster: false },
               {
+                nativeAssetLatencyMs: assetLatencyMs,
                 requestHandlers: {
                   ...defaultRequestHandlers,
                   ...scenario.createRequestHandlers?.(defaultRequestHandlers),
@@ -961,19 +963,7 @@ try {
               };
             }
             if (values["selector-stats"]) {
-              cdp.on(
-                "CSS.styleSheetAdded",
-                ({ header }: { header: InteractionStyleSheet & { styleSheetId: string } }) =>
-                  styleSheets.set(header.styleSheetId, {
-                    sourceURL: header.sourceURL,
-                    origin: header.origin,
-                    title: header.title,
-                    startLine: header.startLine,
-                    startColumn: header.startColumn,
-                  }),
-              );
-              await cdp.send("DOM.enable");
-              await cdp.send("CSS.enable");
+              await collectInteractionStyleSheets(cdp, styleSheets);
             }
             if (trace) {
               cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) =>

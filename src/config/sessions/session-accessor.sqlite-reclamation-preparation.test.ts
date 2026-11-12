@@ -1,6 +1,7 @@
 import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -71,6 +72,11 @@ test("commits foreground replacement while cold reclamation holds native integri
   await closeOpenClawAgentDatabaseByPathAsync(fixture.database.path);
   invalidateOpenClawAgentDatabaseValidation(fixture.database.path);
   revokeSqliteDatabaseAdmissionsForPath(fixture.database.path);
+  // Required unique-index repair holds verification while the foreground writer proceeds.
+  {
+    using database = openNodeSqliteDatabase(fixture.database.path);
+    database.exec("DROP INDEX idx_agent_transcript_message_idempotency");
+  }
   const gate = createWorkerSqliteIntegrityGate(fixture.database.path);
   gate.arm();
   integrity.gate = gate;

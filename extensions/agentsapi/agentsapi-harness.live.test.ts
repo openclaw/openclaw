@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import OpenAI from "openai";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -11,7 +12,7 @@ import {
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import {
   createAttempt,
@@ -29,7 +30,7 @@ afterEach(() => {
 });
 
 // Real registered harness, native session lifecycle, SQLite, attachments, and provider I/O.
-// The synthetic host capability is a trap: isolation must not construct Gateway tools.
+// Keep the admitted host capability intact; inspect native tool declarations to prove isolation.
 describeLive("Agents API isolated hosted execution", () => {
   it("runs native code and transfers files without Gateway or MCP capabilities", async () => {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -74,9 +75,6 @@ describeLive("Agents API isolated hosted execution", () => {
         tools: { web: { search: { enabled: false } } },
       };
       const params = await createAttempt(state.stateDir);
-      const construction = vi.fn(async () => {
-        throw new Error("Gateway tool construction escaped isolation");
-      });
       const model = createModel({
         id: modelId,
         name: modelId,
@@ -91,7 +89,6 @@ describeLive("Agents API isolated hosted execution", () => {
         modelId,
         resolvedApiKey: apiKey,
         timeoutMs: 180_000,
-        hostCapabilities: { ...params.hostCapabilities, createToolSurfaceAsync: construction },
       };
       const store = createPluginStateKeyedStoreForTests<AgentsApiBinding>("agentsapi", {
         namespace: "agentsapi-sessions",
@@ -111,7 +108,7 @@ describeLive("Agents API isolated hosted execution", () => {
             ...attempt,
             ...input,
             runId,
-            hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
+            hostCapabilities: host.capabilities,
           });
         } finally {
           host.close();
@@ -134,6 +131,13 @@ describeLive("Agents API isolated hosted execution", () => {
       });
       try {
         const marker = randomUUID();
+        const handoffCode = randomUUID();
+        const history = await SessionManager.openAsync(params.sessionTarget!, params.workspaceDir);
+        await history.appendMessageAsync({
+          role: "user",
+          content: `The existing task handoff code is ${handoffCode}. Keep it for the next step.`,
+          timestamp: Date.now(),
+        });
         const inbound = await saveMediaBuffer(
           Buffer.from(JSON.stringify({ marker, value: 42 })),
           "application/json",
@@ -142,10 +146,11 @@ describeLive("Agents API isolated hosted execution", () => {
         const first = await run({
           media: [{ url: "media://inbound/" + inbound.id, fileName: "probe.json" }],
           prompt:
-            "Use Python through the native shell to read the attached JSON. Write its marker into /workspace/retained-proof.txt. Write /workspace/outputs/proof.json with exactly the JSON keys marker and value, keeping the marker unchanged and doubling the input value. Return the output file and state its numeric result. Do not use the network.",
+            "Use Python through the native shell to read the attached JSON. Write its marker into /workspace/retained-proof.txt. Write /workspace/outputs/proof.json with exactly the JSON keys marker and value, keeping the marker unchanged and doubling the input value. Return the output file, state its numeric result, and include the existing task handoff code from the earlier conversation in your final answer. Do not use the network.",
         });
         expect(first).toHaveProperty("terminal", { kind: "ok" });
         expect(first.agentHarnessId).toBe("agentsapi");
+        expect(first.assistantTexts.join("\n")).toContain(handoffCode);
         const binding = await store.lookup(params.sessionId);
         remoteId = binding?.sessionId;
         if (!remoteId) {
@@ -192,7 +197,6 @@ describeLive("Agents API isolated hosted execution", () => {
           items.data.filter((item) => item.type === "command_execution" && item.exit_code === 0)
             .length,
         ).toBeGreaterThanOrEqual(2);
-        expect(construction).not.toHaveBeenCalled();
         // Even a change with no current MCP declarations must not reuse an old policy binding.
         forwarding.mcpServers = true;
         canary.enabled = false;

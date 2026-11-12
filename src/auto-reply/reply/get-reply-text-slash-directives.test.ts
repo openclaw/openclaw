@@ -51,6 +51,8 @@ async function resolveTextSlashDirective(
   const result = await resolveReplyDirectives(
     replyDirectiveParams({
       ctx,
+      model: "gpt-5.4",
+      defaultModel: "gpt-5.4",
       cfg: markCompleteReplyConfig({
         session: { store: storePath },
         commands: native ? { text: false } : undefined,
@@ -98,6 +100,7 @@ it.each([
   ["", "/unknown@openclaw explain  this\n    unchanged", {}, undefined],
   ["/verbose@openclaw:\r\n", "    if ready:\n        run('a  b')  \n", {}, undefined],
   ["/think: high\n", codeTask, { resolvedThinkLevel: "high" }, "thinkingLevel"],
+  ["/think extra high\n", codeTask, { resolvedThinkLevel: "xhigh" }, "thinkingLevel"],
   ["/fast on ", codeTask, { resolvedFastMode: true, resolvedFastModeOverride: true }, "fastMode"],
 ] as const)("preserves addressed task bytes after %s", async (prefix, task, expected, field) => {
   const { result, read, storedBefore } = await resolveTextSlashDirective(`${prefix}${task}`);
