@@ -423,6 +423,8 @@ export function createAgentMemory(
       if (ownerBlocks(enabled)) {
         pendingEnabled = null;
         dreaming.dreamingStatusError = null;
+        // The write's own cleanup is gated on canDispatch, which the lock now fails.
+        dreaming.dreamingModeSaving = false;
         return;
       }
       throw new Error(dreaming.dreamingStatusError ?? t("dreaming.toggleConfirmation.failed"));

@@ -958,6 +958,23 @@ describe("a memory slot owner that reports its own dreaming", () => {
     expect(page.context.runtimeConfig.patch).not.toHaveBeenCalled();
   });
 
+  it("clears the saving state when the owner's report vetoes a queued write", async () => {
+    const report: Record<string, unknown> = {};
+    const page = await createPage({ [STATUS]: () => ownerStatus(report)() });
+    page.context.setConfig(OWNER_CONFIG);
+    vi.mocked(page.context.runtimeConfig.patch).mockImplementationOnce(async ({ canDispatch }) => {
+      report.reportedByProvider = true;
+      await page.state.loadResources("dreamingStatus", false);
+      return canDispatch?.() ?? true;
+    });
+    page.state.setEnabled(true);
+    flush();
+    await page.toggle.onConfirm();
+    expect(page.context.runtimeConfig.patch).toHaveBeenCalledTimes(1);
+    expect(page.dreaming).toMatchObject({ modeSaving: false, statusError: null });
+    expect(page.toggle.open).toBe(false);
+  });
+
   it.each([
     [
       "a phases-only report with a running phase",
