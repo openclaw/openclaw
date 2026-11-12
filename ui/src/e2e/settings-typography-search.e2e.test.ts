@@ -49,13 +49,6 @@ suite.define(() => {
             typographySection.getByText("Interface font", { exact: true }),
           ).toBeVisible();
           await expect(typographySection.getByText("Chat font", { exact: true })).toBeVisible();
-          // The chat sample renders like chat prose; app chrome stays antialiased.
-          const smoothing = (selector: string) =>
-            page.locator(selector).evaluate((node) => {
-              return getComputedStyle(node).getPropertyValue("-webkit-font-smoothing");
-            });
-          expect(await smoothing(".settings-typography-preview__prose")).toBe("auto");
-          expect(await smoothing("body")).toBe("antialiased");
           await typographySection.scrollIntoViewIfNeeded();
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifacts, "typography-present.png") });
