@@ -1,0 +1,3 @@
+# Reject research startup on hosts without session-work authority before opening state,
+# propagate the actionable diagnostic to tools, and preserve revoked-invocation rejection.
+64
