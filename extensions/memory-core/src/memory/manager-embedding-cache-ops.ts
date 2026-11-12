@@ -24,6 +24,9 @@ import {
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 
+const CACHE_READ_PAGE_BYTES = 8 * 1024 * 1024;
+const CACHE_READ_DEFAULT_DIMENSIONS = 4096;
+
 export type MemoryEmbeddingCacheCandidate = {
   chunk: IndexedMemoryChunk;
   entry: MemoryIndexEntry;
@@ -68,28 +71,37 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     generation: MemorySemanticProviderGeneration,
   ) {
     const hashes = candidates.map((candidate) => candidate.chunk.hash);
-    const cached = this.cache.enabled
-      ? await generation.database.read(
-          {
-            type: "cache.read",
-            input: {
-              providerIdentities: generation.identities,
-              hashes,
-            },
+    // Bound decoded vectors in the read worker without changing cache identity or precedence.
+    const pageHashes = Math.max(
+      1,
+      Math.floor(
+        CACHE_READ_PAGE_BYTES /
+          (8 * (generation.embeddingDimensions ?? CACHE_READ_DEFAULT_DIMENSIONS)),
+      ),
+    );
+    const uniqueHashes = [...new Set(hashes)];
+    const cached = new Map<string, number[]>();
+    for (let start = 0; this.cache.enabled && start < uniqueHashes.length; start += pageHashes) {
+      const read = await generation.database.read(
+        {
+          type: "cache.read",
+          input: {
+            providerIdentities: generation.identities,
+            hashes: uniqueHashes.slice(start, start + pageHashes),
           },
-          () => {
-            if (!generation.database.isOpen) {
-              throw new Error("Memory database owner is closed");
-            }
-          },
-        )
-      : new Map<string, number[]>();
-    // Cache hits and new batches must inhabit the same vector space during a sync.
-    for (const [hash, embedding] of cached) {
-      if (!isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
-        cached.delete(hash);
-      } else {
-        generation.embeddingDimensions ??= embedding.length;
+        },
+        () => {
+          if (!generation.database.isOpen) {
+            throw new Error("Memory database owner is closed");
+          }
+        },
+      );
+      // Cache hits and new batches must inhabit the same vector space during a sync.
+      for (const [hash, embedding] of read) {
+        if (isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
+          generation.embeddingDimensions ??= embedding.length;
+          cached.set(hash, embedding);
+        }
       }
     }
     const result = collectMemoryCachedEmbeddings({ hashes, cached });
