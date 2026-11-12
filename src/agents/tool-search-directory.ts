@@ -1,6 +1,7 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { isRunGrantedCoreToolId } from "./core-tool-facts.js";
 import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import {
   applyToolCatalogCompaction,
@@ -111,6 +112,33 @@ export function buildToolSchemaDirectoryPrompt(
   return prompt;
 }
 
+/**
+ * A run-granted core tool exists only on turns whose requester granted it, so a
+ * system-started wake of the same session lacks it. The cached directory omits
+ * these rows; the granting turn lists them beside its own input instead.
+ */
+function isRunGrantedDirectoryEntry(entry: ToolSearchCatalogEntry): boolean {
+  return entry.source === "openclaw" && isRunGrantedCoreToolId(entry.name);
+}
+
+/** Deferred run-granted tools for this turn's runtime context, or undefined when none. */
+export function buildRunGrantedToolDirectory(
+  catalogRef: ToolSearchCatalogRef | undefined,
+): string | undefined {
+  const rows = (catalogRef?.current?.entries ?? [])
+    .filter((entry) => !entry.directVisible && isRunGrantedDirectoryEntry(entry))
+    .map(prepareToolDirectoryRow)
+    .filter((row): row is ToolDirectoryRow => row !== undefined)
+    .toSorted((left, right) => (left.label < right.label ? -1 : 1));
+  if (rows.length === 0) {
+    return undefined;
+  }
+  return [
+    "Deferred tools granted for this turn (use them like the deferred-schema tools in the system prompt):",
+    ...rows.map((row) => formatToolDirectoryRow(row, 180)),
+  ].join("\n");
+}
+
 export function resolveToolSearchCatalogTool(
   ctx: ToolSearchToolContext,
   name: unknown,
@@ -179,7 +207,9 @@ function formatToolSearchCatalogDirectory(
   maxChars: number,
   initialDescriptionMaxChars: number,
 ): string {
-  const deferredEntries = entries.filter((entry) => !entry.directVisible);
+  const deferredEntries = entries.filter(
+    (entry) => !entry.directVisible && !isRunGrantedDirectoryEntry(entry),
+  );
   if (deferredEntries.length === 0) {
     return "Available deferred-schema tools: none.";
   }
