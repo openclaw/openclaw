@@ -170,7 +170,11 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
         headers.set(name, value);
       }
     }
-    const perRequestNames = new Set(perRequest.map(([name]) => name.toLowerCase()));
+    // Per-request values describe the body; the credential matcher must never collect them.
+    const credentialHeaders = new Headers(headers);
+    for (const [name] of perRequest) {
+      credentialHeaders.delete(name);
+    }
     // Append to the configured prefix; an absolute path would escape it.
     const url = `${baseUrl.replace(/\/+$/u, "")}/${execution.endpointPath}`;
     const request = {
@@ -218,11 +222,9 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
       if (
         serialized.includes(auth.apiKey) ||
         createProviderCredentialMatcher({
-          headers,
+          headers: credentialHeaders,
           request: preparedRequest,
-          configuredHeaderNames: Object.keys(execution.headers ?? {}).filter(
-            (name) => !perRequestNames.has(name.toLowerCase()),
-          ),
+          configuredHeaderNames: Object.keys(execution.headers ?? {}),
           defaultAuthHeader: "Authorization",
           defaultAuthPrefix: "Bearer ",
         })(serialized)

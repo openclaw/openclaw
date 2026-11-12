@@ -100,7 +100,11 @@ it("never restores a bearer after a prepared auth override replaces it", async (
 });
 
 it("applies per-request headers without treating their values as credentials", async () => {
-  const model = { ...context().model, headers: { "X-Opt-In": "false", "X-Stale": "1" } };
+  // Configured on the model and on the prepared request; the body-specific value wins.
+  const model = attachModelProviderRequestTransport(
+    { ...context().model, headers: { "X-Opt-In": "false", "X-Stale": "1" } },
+    { headers: { "X-Opt-In": "false" } },
+  );
   mocks.fetch.mockResolvedValue(Response.json({ flag: true }));
   await expect(
     evaluate({ model }, { requestHeaders: { "x-opt-in": "true", "x-stale": null } }),
