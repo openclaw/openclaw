@@ -442,9 +442,9 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
 
 /**
  * Recheck current facts, returning the original grant's live authority for retained work.
- * `options.openclawIdPrincipal` is the run's OpenClaw ID principal. A linked owner device was admitted as the
- * owner, outside its person's access policies, and resumes the same way; the caller checks
- * that its principal is current.
+ * `options.openclawIdPrincipal` is the run's OpenClaw ID principal. A linked owner device
+ * was admitted as the owner, outside its person's access policies, and resumes the same way;
+ * the caller checks that its principal is current.
  */
 export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,

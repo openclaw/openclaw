@@ -83,10 +83,8 @@ export function disconnectDisallowedGatewayPolicyClients(
           throw new Error("OpenClaw ID owner authority changed");
         }
         // A linked owner device keeps the owner's grants under its person's profile.
-        currentRole = openclawIdSubjectRolePolicy(
-          principal,
-          () =>
-            resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
+        currentRole = openclawIdSubjectRolePolicy(principal, () =>
+          resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
         );
         roleAuthorityRevoked =
           (member && !isDeepStrictEqual(currentRole, client.internal?.openclawIdRolePolicy)) ||

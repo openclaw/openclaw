@@ -1,4 +1,7 @@
 # Member-definition authority across transport admission, retained/recovered work,
 # required access-policy plugins, real Gateway activation/reload persistence,
 # delayed startup/reload-off activation, and canonical profile-merge write guards.
-905
+# Includes the linked-owner grant regression's member-aware options signature
+# and explicit named-role fixture opt-in plus recovery helper imports/extraction
+# needed by the rebased line cap.
+918
