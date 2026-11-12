@@ -134,7 +134,7 @@ describe("google manifest model catalog", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
-    expect(modelIds).toHaveLength(12);
+    expect(modelIds).toHaveLength(13);
     expect(modelIds[0]).toBe("gemini-4-argon");
     expect(
       modelIds.slice(

@@ -12,6 +12,7 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import {
   interruptedChatHistory,
   interruptedChatCommentary,
+  interruptedChatSession,
 } from "../../../test-helpers/interrupted-chat-history.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
@@ -156,6 +157,7 @@ describe("chat transcript rendering", () => {
         attachHistoryActivity(interruptedChatHistory()).messages,
       );
       props.showToolCalls = showTools;
+      props.selectedSession = { key: props.sessionKey, kind: "direct", ...interruptedChatSession };
       const { container } = await mountThread(props);
       for (const text of interruptedChatCommentary) {
         expect(container.textContent).toContain(text);

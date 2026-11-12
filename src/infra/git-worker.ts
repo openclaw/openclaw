@@ -61,6 +61,7 @@ const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
 const operationDiagnostics = channel("openclaw.git.operation");
 const SPAWN_OPERATIONS = {
+  "github.profile-token": "github.identity",
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
   "checkout.revision": "checkout.revision",
@@ -224,10 +225,11 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
   const admitted = transferList
     ? structuredClone(command, { transfer: [...new Set(transferList)] })
     : structuredClone(command);
-  const baseEnv = { ...process.env };
+  const baseEnv = command.type === "github.profile-token" ? {} : { ...process.env };
   // Pooled workers do not inherit later environment changes. Git discovery
   // overrides must disable direct metadata reads for this admission too.
   admitted.filesystemRefs =
+    command.type !== "github.profile-token" &&
     options.git === undefined &&
     !Object.entries(baseEnv).some(
       ([key, value]) =>

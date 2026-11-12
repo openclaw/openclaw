@@ -31,11 +31,11 @@ function resolveTrustedGoogleGenerativeAiBaseUrl(baseUrl?: string): string {
 export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
   apiKey: string;
   baseUrl?: string;
-  headers?: Record<string, string>;
+  headers?: Parameters<typeof resolveProviderHttpRequestConfig>[0]["headers"];
   request?: ProviderRequestTransportOverrides & {
     allowPrivateNetwork?: boolean;
   };
-  capability: "image" | "audio" | "video";
+  capability: "image" | "audio" | "video" | "other";
   transport: "http" | "media-understanding";
 }) {
   const baseUrl = resolveTrustedGoogleGenerativeAiBaseUrl(params.baseUrl);
