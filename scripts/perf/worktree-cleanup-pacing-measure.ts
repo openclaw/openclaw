@@ -10,7 +10,7 @@
  * Run two A/A controls followed by five serial interleaved A/B pairs. Select a pinned
  * sparse source overlay with OPENCLAW_BENCH_BASELINE_DIR. --profile writes a separate
  * main-thread CPU profile; all arms report exact main V8 allocated bytes and process
- * CPU (workers included, Git children excluded). Setup/verification/drainage are untimed.
+ * CPU (workers included, broker/Git children excluded). Setup/verification/drainage are untimed.
  * Only scheduled waits are virtualized: filesystem, SQLite, snapshots and removal are
  * real. Report actual owner wall time separately from the logical maintenance timeline.
  * Acceptance: <=1 candidate admission/minute, identical complete snapshot contents,
@@ -163,6 +163,9 @@ const { writeSessionEntry } =
   await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
 const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
 const { startWorktreeMaintenance } = await import("../../src/gateway/worktree-maintenance.js");
+const { getSpawnBroker, runWithSpawnBroker } =
+  await import("../../src/process/spawn-broker/context.js");
+const { createSpawnBrokerHost } = await import("../../src/process/spawn-broker/host.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as {
   files: number;
@@ -309,6 +312,7 @@ const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
 const gc = managedWorktrees.gc.bind(managedWorktrees);
 managedWorktrees.gc = async (params) => {
+  assert.equal(getSpawnBroker(), broker, "Maintenance must retain the Gateway spawn broker");
   if (params?.beforeRemoval) {
     const beforeRemoval = params.beforeRemoval;
     params.beforeRemoval = async (record) => {
@@ -363,49 +367,62 @@ const sampleKernel = () => {
       : [],
   });
 };
-sampleKernel();
-const kernelTimer = setInterval(sampleKernel, 1_000);
+let kernelTimer: ReturnType<typeof setInterval> | undefined;
 const loop = monitorEventLoopDelay({ resolution: 10 });
-loop.enable();
 let owner: ReturnType<typeof startWorktreeMaintenance> | undefined;
 let observationTimer: ReturnType<typeof setTimeout> | undefined;
+const broker = process.platform === "linux" ? createSpawnBrokerHost() : undefined;
 try {
+  await broker?.ready();
   global.gc();
   if (values.profile) {
     inspector.connect();
     await inspector.post("Profiler.enable");
     await inspector.post("Profiler.start");
   }
+  sampleKernel();
+  kernelTimer = setInterval(sampleKernel, 1_000);
+  loop.enable();
   const allocationBefore = getHeapStatistics().total_allocated_bytes;
   assert(Number.isFinite(allocationBefore), "Runtime must expose exact V8 allocation counters");
   const loadBefore = os.loadavg();
   const cpuBefore = process.cpuUsage();
   const mainCpuBefore = process.threadCpuUsage();
   const started = performance.now();
-  const result = await new Promise<ManagedWorktreeGcResult>((resolve, reject) => {
-    owner = startWorktreeMaintenance({
-      scheduler,
-      getRuntimeConfig: () => config,
-      onComplete: resolve,
-      onError: (message) => {
-        maintenanceErrors.push(message);
-        if (!observeMs) {
-          reject(new Error(message));
+  const result = await runWithSpawnBroker(
+    broker,
+    () =>
+      new Promise<ManagedWorktreeGcResult>((resolve, reject) => {
+        owner = startWorktreeMaintenance({
+          scheduler,
+          getRuntimeConfig: () => config,
+          onComplete: (completed) => {
+            if (!observeMs) {
+              resolve(completed);
+            }
+          },
+          onError: (message) => {
+            maintenanceErrors.push(message);
+            if (!observeMs) {
+              reject(new Error(message));
+            }
+          },
+        });
+        const receipt = owner.request();
+        if (observeMs) {
+          observationTimer = setTimeout(
+            () => resolve(owner!.request({ jobId: receipt.jobId })),
+            observeMs,
+          );
         }
-      },
-    });
-    const receipt = owner.request();
-    if (observeMs) {
-      observationTimer = setTimeout(
-        () => resolve(owner!.request({ jobId: receipt.jobId })),
-        observeMs,
-      );
-    }
-  });
+      }),
+  );
   const wallMs = performance.now() - started;
   const processCpu = process.cpuUsage(cpuBefore);
   const mainCpu = process.threadCpuUsage(mainCpuBefore);
   const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
+  loop.disable();
+  clearInterval(kernelTimer);
   if (values.profile) {
     fs.writeFileSync(
       path.join(output, "cpu.cpuprofile"),
@@ -460,6 +477,7 @@ try {
     diagnosticProfile: values.profile,
     node: process.version,
     platform: process.platform,
+    spawnBroker: Boolean(broker),
     filesPerWorktree: fixture.files,
     bytesPerWorktree: fixture.files * fixture.fileBytes,
     worktrees,
@@ -500,7 +518,11 @@ try {
   clearInterval(kernelTimer);
   loop.disable();
   fsPromises.open = open;
-  await owner?.stop();
-  await scheduler.stop();
-  await drainGlobalSingletonLifecycleState();
+  try {
+    await owner?.stop();
+    await scheduler.stop();
+    await drainGlobalSingletonLifecycleState();
+  } finally {
+    await broker?.close();
+  }
 }
