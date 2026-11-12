@@ -209,15 +209,11 @@ describe("ordinary session event execution", () => {
     expect(redeemed.slice(1)).toEqual([undefined, undefined]);
   });
 
+  const declared = ["openai/gpt-5.4"];
   it.for([
-    {
-      label: "declared fallback",
-      fallbacks: ["openai/gpt-5.4"],
-      locked: false,
-      expected: ["openai/gpt-5.4"],
-    },
+    { label: "declared fallback", fallbacks: declared, locked: false, expected: declared },
     { label: "explicit empty fallback", fallbacks: [], locked: false, expected: [] },
-    { label: "locked session", fallbacks: ["openai/gpt-5.4"], locked: true, expected: [] },
+    { label: "locked session", fallbacks: declared, locked: true, expected: [] },
   ])(
     "preserves scheduled fallback policy: $label",
     async ({ fallbacks, locked, expected }, { onTestFinished }) => {
@@ -521,6 +517,9 @@ describe("ordinary session event execution", () => {
             expect.objectContaining({ payloads: [expect.objectContaining({ isError: true })] }),
           );
           expect(
+            lifecycleEvents.some((lifecycleEvent) => lifecycleEvent.data.phase === "start"),
+          ).toBe(false);
+          expect(
             lifecycleEvents.find((lifecycleEvent) => lifecycleEvent.data.phase === "error")?.data,
           ).toMatchObject({
             executionStarted: false,
@@ -565,6 +564,7 @@ describe("ordinary session event execution", () => {
       release.resolve();
     }
     await rejected;
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(event.onStarted).not.toHaveBeenCalled();
     expect(event.onTerminal).toHaveBeenCalledExactlyOnceWith(
       expect.any(String),
