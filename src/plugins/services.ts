@@ -14,7 +14,11 @@ import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import {
+  getPluginInstance,
+  pluginInvocationContext,
+  runPluginCleanup,
+} from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
@@ -629,18 +633,21 @@ async function startPreparedPluginServices({
           const start = () =>
             withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext));
           // Reload may originate in an RPC or tool; background work captures
-          // service-owned Gateway/worker context, never that caller's authority or generation.
+          // service-owned Gateway/worker context, never that caller's authority, generation,
+          // or finite invocation custody. Registry preparation still admits service registration.
           await runOutsideOperatorToolGatewayAuthority(() =>
             runOutsidePluginRuntimeGenerationScope(() =>
-              pluginInstanceInvocation.exit(() =>
-                runServiceStart(async () =>
-                  withPluginHttpRouteRegistry(
-                    registry,
-                    () =>
-                      ownedService.startupConsumer
-                        ? ownedService.startupConsumer.run(start)
-                        : start(),
-                    lease,
+              pluginInvocationContext.exit(() =>
+                pluginInstanceInvocation.exit(() =>
+                  runServiceStart(async () =>
+                    withPluginHttpRouteRegistry(
+                      registry,
+                      () =>
+                        ownedService.startupConsumer
+                          ? ownedService.startupConsumer.run(start)
+                          : start(),
+                      lease,
+                    ),
                   ),
                 ),
               ),

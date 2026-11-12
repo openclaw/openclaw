@@ -1,4 +1,4 @@
-import { AsyncResource } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
@@ -32,6 +32,7 @@ import {
 } from "./plugin-cache.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginMetadataSnapshot } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -52,7 +53,7 @@ import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 import { startPluginServices } from "./services.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
-it("owns service callbacks after startup and reload callers finish", async () => {
+it("owns service callbacks when startup and reload inherit closed caller custody", async () => {
   class CallerFacts {
     readonly owner = "service-start-caller";
   }
@@ -149,7 +150,15 @@ it("owns service callbacks after startup and reload callers finish", async () =>
                     signal: caller.signal,
                     isWebchatConnect: () => false,
                   },
-                  () => readers.run(run),
+                  () =>
+                    readers.run(() => {
+                      const invocationScope = new PluginInvocationScope(callerRegistry, []);
+                      const inClosedInvocation = invocationScope.run(() =>
+                        AsyncLocalStorage.snapshot(),
+                      );
+                      invocationScope.release();
+                      return inClosedInvocation(run);
+                    }),
                 ),
             ),
           ),
