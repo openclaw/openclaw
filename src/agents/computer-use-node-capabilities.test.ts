@@ -364,3 +364,18 @@ it("keeps configured attachment service and bound desktops without a paired node
   expect(transport.resolveNode).not.toHaveBeenCalled();
   expect(startComputerHostProcess).not.toHaveBeenCalled();
 });
+
+it("retains configured remote overrides behind an empty local Gateway", async () => {
+  const context = createContext();
+  const result = await withContext(context, () =>
+    loadPairedComputerUseAvailabilityForSurface({
+      computerAllowed: true,
+      mobileUiAllowed: true,
+      config: { gateway: { mode: "local", remote: { url: "wss://desktop.example" } } },
+    }),
+  );
+  expect(result?.unsupportedTools).toEqual([]);
+  expect(listNodes).not.toHaveBeenCalled();
+  expect(loadGatewayComputerStatus).not.toHaveBeenCalled();
+  expect(startComputerHostProcess).not.toHaveBeenCalled();
+});

@@ -146,7 +146,10 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
   signal?.throwIfAborted();
   const eligible = nodes?.filter(isEligibleComputerNode) ?? [];
   const unsupportedTools: Array<"computer" | "mobile_ui"> = [];
-  if (nodes) {
+  // Explicit matching remote URL overrides remain usable in local Gateway mode.
+  // Local inventory cannot prove absence on that configured route; do not probe it.
+  const configuredRemoteRoute = Boolean(params.config?.gateway?.remote?.url?.trim());
+  if (nodes && !configuredRemoteRoute) {
     const known = nodes.filter((node) => node.paired === true || node.connected === true);
     if (
       ordinaryComputer &&
@@ -163,6 +166,7 @@ export async function loadPairedComputerUseAvailabilityForSurface(params: {
   const cacheKey = stableStringify({
     gateway,
     attachedComputerRoute,
+    configuredRemoteRoute,
     unsupportedTools,
     nodes: eligible
       // oxlint-disable-next-line unicorn/no-array-sort -- filter created this private array; node records stay untouched.
