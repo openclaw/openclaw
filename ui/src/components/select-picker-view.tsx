@@ -615,9 +615,7 @@ export function PickerContent<Option extends PickerOption>(props: {
           aria-label={props.params.groupBy ? undefined : props.params.label}
           data-picker-focus={!searching() ? "" : undefined}
           tabindex={searching() ? -1 : 0}
-          aria-activedescendant={
-            opened() && !searching() && active() !== null ? optionId(active()!) : undefined
-          }
+          aria-activedescendant={opened() && active() !== null ? optionId(active()!) : undefined}
         >
           <Show
             when={opened() && windowed()}

@@ -22,11 +22,8 @@ async function fixture(
   await select.updateComplete;
   const trigger = select.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
   const menu = select.querySelector<HTMLElement>(".agent-select__menu")!;
-  // A searchable menu's field owns the active descendant; a short menu's list does.
-  const activeId = () =>
-    (
-      select.querySelector('input[role="combobox"]') ?? select.querySelector('[role="listbox"]')
-    )?.getAttribute("aria-activedescendant");
+  // Keyboard navigation exposes the active option on the element that owns focus.
+  const activeId = () => document.activeElement?.getAttribute("aria-activedescendant");
   const open = async () => {
     await page.elementLocator(trigger).click();
     await expect.poll(() => menu.matches(":popover-open")).toBe(true);
