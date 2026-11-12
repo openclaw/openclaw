@@ -6,6 +6,7 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
 import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import { CyberAccessProgramSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -105,6 +106,13 @@ export function getInvalidPersistedCronJobReason(
     } catch {
       return "invalid-plugin-command";
     }
+  }
+  if (
+    candidate.cyberAccessProgram !== undefined &&
+    (!Value.Check(CyberAccessProgramSchema, candidate.cyberAccessProgram) ||
+      asRecord(candidate.payload).kind !== "agentTurn")
+  ) {
+    return "invalid-execution-policy";
   }
   if (candidate.idleOnly !== undefined && typeof candidate.idleOnly !== "boolean") {
     return "invalid-execution-policy";

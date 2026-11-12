@@ -163,3 +163,17 @@ This page is an index. Each section below moved to a child page, and every ancho
 - [Standing intents](/concepts/standing-intents) — event-triggered work instead of a schedule
 - [Standing orders](/automation/standing-orders) — the operating authority a scheduled run acts under
 - [Timezone](/concepts/timezone) — timezone configuration
+
+### Per-job Access
+
+Agent-turn jobs accept optional `cyberAccessProgram`: `standard`, `daybreak_blue`,
+or `daybreak_red`. Use `openclaw automations add --access standard` to pin a job
+to Standard, or `openclaw automations edit <jobId> --access daybreak_blue`.
+`--clear-access` (or an update patch with `cyberAccessProgram: null`) removes
+the override. Jobs without the field keep their existing selection behavior.
+The choice is reported in full and compact job reads and does not change the
+conversation's saved Access. Current role, account, model, and runtime grants
+still apply when the job runs; saving a choice does not grant access.
+
+Older versions do not enforce this field. Before downgrading, disable jobs with
+an explicit Access selection or clear it after reviewing their inherited Access.

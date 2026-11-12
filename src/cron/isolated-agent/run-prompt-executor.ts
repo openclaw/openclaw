@@ -259,6 +259,7 @@ export function createCronPromptExecutor(
         provider: params.liveSelection.provider,
         model: params.liveSelection.model,
         requestedRouteResolution: "resolved",
+        cyberAccessProgram: params.job.cyberAccessProgram,
         agentDir: params.agentDir,
         userLockedAuthProfileId:
           params.liveSelection.authProfileIdSource === "user"
@@ -653,7 +654,9 @@ export function createCronPromptExecutor(
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
           cyberAccessProgram:
-            runOptions.cyberAccessProgram ?? params.cronSession.sessionEntry.cyberAccessProgram,
+            runOptions.cyberAccessProgram ??
+            params.job.cyberAccessProgram ??
+            params.cronSession.sessionEntry.cyberAccessProgram,
           authProfileId: runOptions.authProfileId ?? params.liveSelection.authProfileId,
           authProfileIdSource: runOptions.authProfileId
             ? "user"
