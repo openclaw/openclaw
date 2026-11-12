@@ -20,7 +20,16 @@ function subscribe(options: Omit<Subscription, "id" | "handle">) {
   return {
     handle,
     send: (data: Record<string, unknown>, sessionKey?: string) => {
-      const event = { runId: "run-payload", seq: 1, ts: 0, stream: "tool", sessionKey, data };
+      const preamble = { retainedText: "original preamble" };
+      const event = {
+        runId: "run-payload",
+        seq: 1,
+        ts: 0,
+        stream: "tool",
+        sessionKey,
+        data,
+        preamble,
+      };
       dispatchPluginAgentEventSubscriptions({
         registry,
         event,
@@ -79,6 +88,7 @@ describe("agent event subscription payloads", () => {
         count: 42,
         enabled: false,
         missing: null,
+        ["__proto__"]: "literal metadata",
       };
       const full = () => ({
         long: "a".repeat(257),
@@ -113,6 +123,10 @@ describe("agent event subscription payloads", () => {
       expect(delivered.data === data).toBe(false);
       delivered.data.phase = "changed";
       expect(data.phase).toBe("result");
+      delete delivered.data.count;
+      expect(data.count).toBe(42);
+      delivered.preamble!.retainedText = "changed preamble";
+      expect(event.preamble.retainedText).toBe("original preamble");
       if (payload !== "metadata") {
         expect(delivered.data.nested).not.toBe(data.nested);
       }

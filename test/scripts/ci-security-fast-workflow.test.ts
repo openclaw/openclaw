@@ -169,6 +169,8 @@ it.each(["same revision", "different revision", "manual target", "missing HEAD",
       [scannerPath]: fixture.realScanner,
       "scripts/ci-production-audit.mjs": "// trusted audit\n",
       "scripts/ci-collect-checks.sh": "#!/bin/sh\nexit 0\n",
+      "scripts/stage-openclaw-bun.sh": "#!/bin/sh\nexit 0\n",
+      "scripts/lib/openclaw-bun.json": '{"tag":"synthetic-pin"}\n',
     };
     fixture.write(files);
     fixture.git("add", ...Object.keys(files));
