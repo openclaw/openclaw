@@ -36,6 +36,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     mode: { type: "string", default: "timing" },
     fixture: { type: "string", default: "mixed" },
+    history: { type: "string", default: "12" },
     operations: { type: "string", default: "1000" },
     "payload-bytes": { type: "string", default: "16384" },
   },
@@ -49,7 +50,7 @@ assert(
     mode === "owner" ||
     mode === "profile",
 );
-assert(["mixed", "plain", "reasoning", "signature", "media"].includes(values.fixture));
+assert(["mixed", "plain", "reasoning", "signature", "media", "tools"].includes(values.fixture));
 const integer = (raw: string, label: string) =>
   parseStrictIntegerOption({ raw, label, min: 1, fallback: 1 });
 const operations = integer(values.operations, "operations");
@@ -65,6 +66,7 @@ const owners = [
   "src/agents/sessions/session-manager-persistence-entry.ts",
   "src/agents/transcript-sanitize.ts",
   "src/media/media-facts.ts",
+  "src/agents/tool-search-transcript.ts",
 ].map((name) => {
   const original = pathToFileURL(path.join(repo, name));
   const frozen = values["owners-dir"] && path.resolve(values["owners-dir"], name);
@@ -124,16 +126,23 @@ const [
   { createOpenClawTestState },
   { upsertSessionEntryCore, loadTranscriptEvents },
   { SessionManager },
+  { guardSessionManager },
+  { toolAppendFixture },
 ] = await Promise.all([
   import("../../src/test-utils/openclaw-test-state.js"),
   import("../../src/config/sessions/session-accessor.js"),
   import("../../src/agents/sessions/session-manager.js"),
+  import("../../src/agents/session-tool-result-guard-wrapper.js"),
+  import("./transcript-append-tool-fixture.ts"),
 ]);
 assert(
   owners.every((owner) => owner.loaded),
   "An owner was not loaded",
 );
 function fixture(index: number): Message {
+  if (values.fixture === "tools") {
+    return toolAppendFixture(index, payloadBytes);
+  }
   const kind =
     values.fixture === "mixed"
       ? ["plain", "reasoning", "signature", "media"][index % 4]
@@ -242,16 +251,22 @@ try {
   assert((await stat(workspace)).isDirectory(), "Workspace must exist");
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   const manager = await SessionManager.openAsync(target, workspace);
+  if (values.fixture === "tools") {
+    guardSessionManager(manager, { allowSyntheticToolResults: false });
+  }
   await manager.appendMessageAsync({
     role: "user",
     content: "Synthetic append benchmark",
     timestamp: 0,
   });
-  const warmup = 12;
+  const warmup = integer(values.history, "history");
   for (let index = 0; index < warmup; index++) {
     await manager.appendMessageAsync(fixture(index));
   }
-  const messages = Array.from({ length: operations }, (_, index) => fixture(index + warmup));
+  const messages =
+    values.fixture === "tools"
+      ? undefined
+      : Array.from({ length: operations }, (_, index) => fixture(index + warmup));
   globalThis.gc?.();
   for (const key of Object.keys(counters)) {
     delete counters[key];
@@ -274,8 +289,10 @@ try {
   const cpuBefore = process.cpuUsage();
   const threadBefore = process.threadCpuUsage();
   const started = performance.now();
-  for (const message of messages) {
+  for (let index = 0; index < operations; index++) {
     const start = performance.now();
+    // Include snapshot creation: transferring ownership must not hide producer work.
+    const message = messages?.[index] ?? fixture(index + warmup);
     await manager.appendMessageAsync(message);
     latencies.push(performance.now() - start);
   }
