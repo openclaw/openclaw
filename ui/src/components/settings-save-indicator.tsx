@@ -271,8 +271,15 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
                 <span>{t("configView.applying")}</span>
               </Match>
               <Match when={state() === "restarting"}>
-                <span class="btn__spinner settings-save-indicator__spinner" aria-hidden="true" />
                 <span>{t("configView.autoSaveRestarting")}</span>
+                {/* An accepted restart can still fail, so applying stays available. */}
+                <Show when={props.needsApply}>
+                  <IndicatorAction
+                    label={t("configView.restartNow")}
+                    busy={busy() || props.applyDisabled}
+                    onClick={() => submit("apply")}
+                  />
+                </Show>
               </Match>
               <Match when={state() === "paused"}>
                 <span>{t("configView.autoSavePaused")}</span>

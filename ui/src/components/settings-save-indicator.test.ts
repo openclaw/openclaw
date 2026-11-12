@@ -83,14 +83,19 @@ describe("settings save indicator", () => {
     expect(button("Apply changes")).toBeUndefined();
   });
 
-  it("reports a write finishing through a restart as saved, without failure actions", async () => {
-    await update({ status: "restarting", needsApply: true });
-    expect(indicator.textContent?.trim()).toBe("Saved. Restarting OpenClaw to finish applying…");
-    expect(part("spinner")).not.toBeNull();
+  it("reports a write finishing through a restart as saved and keeps Restart now", async () => {
+    const { onApply } = await update({ status: "restarting", needsApply: true });
+    expect(indicator.textContent).toContain(
+      "Saved. OpenClaw will restart to finish applying this change.",
+    );
     expect(part("title")).toBeNull();
     expect(button("Retry")).toBeUndefined();
     expect(button("Discard changes")).toBeUndefined();
-    expect(button("Apply changes")).toBeUndefined();
+    // A failed restart leaves the change unapplied; Restart now recovers it.
+    button("Restart now")?.click();
+    await waitForSolid(() => expect(onApply).toHaveBeenCalledOnce());
+    await update({ status: "restarting", needsApply: false });
+    expect(button("Restart now")).toBeUndefined();
   });
 
   it.each([true, false])("discards a failure only when confirmed: %s", async (confirmed) => {
