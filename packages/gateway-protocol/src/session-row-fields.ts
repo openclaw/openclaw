@@ -92,7 +92,6 @@ export const SESSION_SIDEBAR_ROW_FIELDS: ReadonlySet<string> = new Set([
   "effectiveCommunication",
   "hasActiveRun",
   "backgroundProcessCount",
-  "backgroundProcessRunIds",
   "hasActiveSubagentRun",
   "activeRunIds",
   "subagentRunState",

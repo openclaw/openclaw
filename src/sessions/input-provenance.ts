@@ -9,12 +9,6 @@ const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "interna
 
 type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
 
-export type ExecCompletionProvenance = {
-  sessionId: string;
-  status: "completed" | "failed";
-  exitCode?: number;
-};
-
 export type InputProvenance = {
   kind: InputProvenanceKind;
   originSessionId?: string;
@@ -25,7 +19,6 @@ export type InputProvenance = {
   sourcePromptPrefix?: string;
   jobId?: string;
   runId?: string;
-  execCompletion?: ExecCompletionProvenance;
 };
 
 /** Native input attribution, not canonical chat visibility or execution authority. */
@@ -124,21 +117,6 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     const normalized = normalizeOptionalString(record[key]);
     if (normalized) {
       provenance[key] = normalized;
-    }
-  }
-  if (provenance.kind === "internal_system" && provenance.sourceTool === "exec") {
-    const completion = record.execCompletion;
-    if (completion && typeof completion === "object" && !Array.isArray(completion)) {
-      const sessionId = normalizeOptionalString(Reflect.get(completion, "sessionId"));
-      const status = Reflect.get(completion, "status");
-      const exitCode = Reflect.get(completion, "exitCode");
-      if (sessionId && (status === "completed" || status === "failed")) {
-        provenance.execCompletion = {
-          sessionId,
-          status,
-          ...(typeof exitCode === "number" && Number.isSafeInteger(exitCode) ? { exitCode } : {}),
-        };
-      }
     }
   }
   return provenance;

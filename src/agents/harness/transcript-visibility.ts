@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isCronExecutionInputProvenance,
   isProgressCardRefreshInputProvenance,
@@ -38,39 +37,16 @@ export function projectAgentHarnessTranscriptMessageForDisplay<T extends AgentMe
       toolCall ||
       (params.message.role === "toolResult" && !params.message.isError) ||
       scheduledAssistant);
-  const shouldHide =
-    params.hidden ||
-    isSubagentCoordinationInputProvenance(inputProvenance) ||
-    isProgressCardRefreshInputProvenance(inputProvenance) ||
-    executionOnly;
-  let projected = params.message;
-  if (shouldHide) {
-    if (Reflect.get(params.message, "display") === false) {
-      return params.message;
-    }
-    projected = Object.assign({}, params.message, { display: false });
-  }
   if (
-    !shouldHide &&
-    params.message.role === "assistant" &&
-    Reflect.get(params.message, "display") !== false &&
-    params.runId &&
-    inputProvenance?.kind === "internal_system" &&
-    inputProvenance.sourceTool === "exec" &&
-    inputProvenance.runId &&
-    inputProvenance.execCompletion?.status === "completed" &&
-    inputProvenance.execCompletion.exitCode === 0
+    !params.hidden &&
+    !isSubagentCoordinationInputProvenance(inputProvenance) &&
+    !isProgressCardRefreshInputProvenance(inputProvenance) &&
+    !executionOnly
   ) {
-    const metadata = Reflect.get(params.message, "__openclaw");
-    projected = Object.assign({}, params.message, {
-      __openclaw: {
-        ...(isRecord(metadata) ? metadata : {}),
-        execCompletion: {
-          sourceRunId: inputProvenance.runId,
-          ...inputProvenance.execCompletion,
-        },
-      },
-    });
+    return params.message;
   }
-  return projected;
+  if (Reflect.get(params.message, "display") === false) {
+    return params.message;
+  }
+  return Object.assign({}, params.message, { display: false });
 }

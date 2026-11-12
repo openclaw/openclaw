@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { prepareRunningBackgroundProcessFacts } from "../agents/bash-process-observation.js";
+import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
 import { addSession, deleteSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -60,7 +60,7 @@ test.each([
 ] as const)("preserves process scope aliases for %s under %s (%s)", (key, canonical, scope) => {
   const records = [canonical, key, BASE_ENTRY.sessionId].map((scopeKey, i) => {
     const record = createProcessSessionFixture({ id: `scope-${i}`, backgrounded: true });
-    Object.assign(record, { scopeKey, agentId: "main", originRunId: `run-${i}` });
+    Object.assign(record, { scopeKey, agentId: "main" });
     addSession(record);
     return record;
   });
@@ -69,13 +69,12 @@ test.each([
     const materialized = materializeSessionRow(inputs);
     const row = presentSessionRow(materialized, presentation);
     expect(row.backgroundProcessCount).toBe(3);
-    expect(row.backgroundProcessRunIds).toEqual(["run-0", "run-1", "run-2"]);
     expect(
       presentSessionRow(materialized, {
         ...presentation,
-        backgroundProcessCount: prepareRunningBackgroundProcessFacts()(
+        backgroundProcessCount: prepareRunningBackgroundProcessCount()(
           materialized.source.backgroundProcessScope,
-        ).count,
+        ),
       }),
     ).toStrictEqual(row);
   } finally {

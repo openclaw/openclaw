@@ -198,7 +198,6 @@ export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
   childActivity?: SessionChildActivity;
   backgroundProcessCount?: number;
-  backgroundProcessRunIds?: string[];
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   active?: boolean;
@@ -510,7 +509,6 @@ export function present(
     excludedChildKeys: options.excludedChildKeys,
     childActivity: options.childActivity,
     backgroundProcessCount: options.backgroundProcessCount,
-    backgroundProcessRunIds: options.backgroundProcessRunIds,
     preparedRunState: options.preparedRunState,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());

@@ -168,11 +168,6 @@ export async function maybeNotifyOnExit(
         {
           ...eventOptions,
           sourceRunId: session.originRunId,
-          execCompletion: {
-            sessionId: session.id,
-            status,
-            ...(typeof session.exitCode === "number" ? { exitCode: session.exitCode } : {}),
-          },
           assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
         },
       );

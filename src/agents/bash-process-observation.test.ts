@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  prepareRunningBackgroundProcessFacts,
+  countRunningBackgroundProcesses,
+  prepareRunningBackgroundProcessCount,
   readBackgroundProcesses,
   stopBackgroundProcess,
 } from "./bash-process-observation.js";
@@ -44,17 +45,17 @@ it("indexes unique scope matches with live foreground, exit, removal and global 
     scopeKeys: [scope.scopeKeys[0]!, "legacy", "session-id", "legacy"],
     agentId: "main",
   };
-  const read = prepareRunningBackgroundProcessFacts();
-  expect(read(query).count).toBe(3);
-  expect(read({ ...query, agentId: "other" }).count).toBe(2);
-  expect(read({ scopeKeys: ["global", "global"], agentId: "main" }).count).toBe(1);
-  expect(read({ scopeKeys: ["global"], agentId: "other" }).count).toBe(0);
-  expect(read({ scopeKeys: ["missing"], agentId: "main" }).count).toBe(0);
+  const read = prepareRunningBackgroundProcessCount();
+  expect(read(query)).toBe(3);
+  expect(read({ ...query, agentId: "other" })).toBe(2);
+  expect(read({ scopeKeys: ["global", "global"], agentId: "main" })).toBe(1);
+  expect(read({ scopeKeys: ["global"], agentId: "other" })).toBe(0);
+  expect(read({ scopeKeys: ["missing"], agentId: "main" })).toBe(0);
   markBackgrounded(foreground);
-  expect(prepareRunningBackgroundProcessFacts()(query).count).toBe(4);
+  expect(prepareRunningBackgroundProcessCount()(query)).toBe(4);
   markExited(canonical, 0, null, "completed");
   deleteSession("legacy");
-  expect(prepareRunningBackgroundProcessFacts()(query).count).toBe(2);
+  expect(prepareRunningBackgroundProcessCount()(query)).toBe(2);
 });
 
 it("keeps the observed incarnation through completion and refuses a same-slug successor", () => {
@@ -87,7 +88,7 @@ it("bounds encoded output and rows without consuming agent output or crossing gl
     appendOutput(session, "stdout", "界".repeat(2200));
   }
   const result = readBackgroundProcesses(scope);
-  expect(prepareRunningBackgroundProcessFacts()(scope).count).toBe(80);
+  expect(countRunningBackgroundProcesses(scope)).toBe(80);
   expect(result.truncated).toBe(true);
   expect(result.processes.length).toBeGreaterThan(0);
   expect(result.processes.length).toBeLessThanOrEqual(50);
@@ -96,10 +97,10 @@ it("bounds encoded output and rows without consuming agent output or crossing gl
   const global = seed("global-main", "global");
   const readGlobal = { scopeKeys: ["global"], agentId: "other" };
   expect(readBackgroundProcesses(readGlobal).processes).toEqual([]);
-  expect(prepareRunningBackgroundProcessFacts()(readGlobal).count).toBe(0);
+  expect(countRunningBackgroundProcesses(readGlobal)).toBe(0);
   global.agentId = undefined;
   expect(readBackgroundProcesses({ ...readGlobal, agentId: "main" }).processes).toEqual([]);
-  expect(prepareRunningBackgroundProcessFacts()({ ...readGlobal, agentId: "main" }).count).toBe(0);
+  expect(countRunningBackgroundProcesses({ ...readGlobal, agentId: "main" })).toBe(0);
 });
 
 it.each([

@@ -394,7 +394,7 @@ test.for([
       "wake-provenance",
       'process.stdout.write("WAKE_PROVENANCE_DONE")',
     );
-    const { sessionId } = runningSession(started.details);
+    runningSession(started.details);
     await withinTest(waitForExecScope(sessionKey), signal);
     await completion(signal);
     const [params] = expectDefined(model.mock.calls[0], "completion turn");
@@ -405,7 +405,6 @@ test.for([
       kind: "internal_system",
       sourceTool: "exec",
       ...expected,
-      execCompletion: { sessionId, status: "completed", exitCode: 0 },
     });
   },
 );

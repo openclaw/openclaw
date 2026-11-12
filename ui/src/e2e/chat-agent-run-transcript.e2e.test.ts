@@ -175,59 +175,6 @@ suite.define(() => {
     expect(await page.getByRole("button", { name: "Stop", exact: true }).isVisible()).toBe(true);
   });
 
-  it("keeps a WebChat transcript active while its matching background exec runs", async () => {
-    const key = "agent:main:main";
-    const runId = "background-review";
-    const user = transcriptMessage("user", "Review the release notes.", runId, "request", 1);
-    const commentary = {
-      ...transcriptMessage("assistant", "The review is still running.", runId, "commentary", 2),
-      stopReason: "toolUse",
-      phase: "commentary",
-    };
-    const tool = transcriptMessage(
-      "toolResult",
-      "Background process is still running.",
-      runId,
-      "exec",
-      3,
-    );
-    const messages = [user, commentary, tool];
-    const session = {
-      key,
-      sessionId: "background-webchat-session",
-      kind: "direct",
-      channel: "webchat",
-      status: "interrupted",
-      lastRunId: runId,
-      backgroundProcessCount: 1,
-      backgroundProcessRunIds: [runId],
-    };
-    const history = { messages, sessionId: session.sessionId, sessionInfo: session };
-    const { page, gateway } = await openTranscript(
-      {
-        sessionKey: key,
-        sessions: [session],
-        authMethod: "trusted-proxy",
-        authMode: "trusted-proxy",
-        subscriptionInitialHistory: false,
-        heldMethods: ["chat.startup"],
-        historyMessages: messages,
-        methodResponses: { "chat.startup": history },
-      },
-      { locale: "en-US" },
-    );
-    await gateway.waitForRequest("chat.startup");
-    await gateway.resolveDeferred("chat.startup");
-    await page.locator(".chat-group.assistant").waitFor();
-
-    if (process.env.OPENCLAW_EVENT_SCREENSHOT_PATH) {
-      await page.screenshot({ path: process.env.OPENCLAW_EVENT_SCREENSHOT_PATH, fullPage: true });
-    }
-    expect(await page.getByText("Interrupted", { exact: true }).count()).toBe(0);
-    expect(await page.getByText("Background work running", { exact: true }).count()).toBe(1);
-    expect(await page.locator('.chat-group.assistant[data-chat-streaming="true"]').count()).toBe(1);
-  });
-
   it("collapses nested tool activity after commentary across history reload", async () => {
     const runId = "nested-run";
     const commentary = "I’ll inspect the workspace first.";

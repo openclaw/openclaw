@@ -35,31 +35,6 @@ it("retains cron run identity without changing the model-facing prompt", () => {
   const prompt = "[cron:daily-monitor Daily monitor] Read REFRESH.md.\n    Keep indentation.\n";
   expect(annotateInterSessionPromptText(prompt, provenance)).toBe(prompt);
 });
-
-it("retains structured exec completion facts only for exec input", () => {
-  const execCompletion = { sessionId: "exec-1", status: "completed", exitCode: 0 };
-  expect(
-    normalizeInputProvenance({
-      kind: "internal_system",
-      sourceTool: "exec",
-      runId: "origin-run",
-      execCompletion,
-    }),
-  ).toEqual({
-    kind: "internal_system",
-    sourceTool: "exec",
-    runId: "origin-run",
-    execCompletion,
-  });
-  expect(
-    normalizeInputProvenance({
-      kind: "internal_system",
-      sourceTool: "restart",
-      runId: "origin-run",
-      execCompletion,
-    }),
-  ).toEqual({ kind: "internal_system", sourceTool: "restart", runId: "origin-run" });
-});
 it.each(["plain body", "decorated envelope", "foreign marker"])(
   "wraps %s without losing provenance or bytes",
   (kind) => {

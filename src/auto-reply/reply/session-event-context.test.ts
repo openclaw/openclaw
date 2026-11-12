@@ -69,24 +69,3 @@ it("retains scheduled execution provenance without projecting the prompt as a re
   });
   expect(ctx.BodyForAgent).toBe(text);
 });
-
-it("retains the managed exec outcome with its source run", () => {
-  const execCompletion = { sessionId: "exec-1", status: "completed" as const, exitCode: 0 };
-  const ctx = buildSessionEventContext({
-    cfg: {},
-    agentId: "main",
-    sessionKey: "agent:main:exec-review",
-    text: "Exec completed (exec-1).",
-    options: { source: "exec", sourceRunId: "origin-run", execCompletion },
-    occurrenceId: "exec-occurrence",
-    target: { sessionId: "existing-session", generation: "current" },
-    assertCurrent() {},
-  });
-
-  expect(ctx.InputProvenance).toEqual({
-    kind: "internal_system",
-    sourceTool: "exec",
-    runId: "origin-run",
-    execCompletion,
-  });
-});

@@ -5,7 +5,7 @@ import {
 import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import { readRunningBackgroundProcessFactsForScope } from "../agents/bash-process-observation.js";
+import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
@@ -606,7 +606,6 @@ export function presentSessionRow(
     now: number;
     childActivity?: SessionChildActivity;
     backgroundProcessCount?: number;
-    backgroundProcessRunIds?: string[];
     preparedRunState?: ReturnType<typeof projectGatewaySessionRunState>;
   },
 ): GatewaySessionRow {
@@ -617,21 +616,11 @@ export function presentSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
-  const backgroundProcessFacts =
-    options.backgroundProcessCount === undefined || options.backgroundProcessRunIds === undefined
-      ? readRunningBackgroundProcessFactsForScope(source.backgroundProcessScope)
-      : undefined;
   const backgroundProcessCount =
-    options.backgroundProcessCount ?? backgroundProcessFacts?.count ?? 0;
-  const backgroundProcessRunIds =
-    options.backgroundProcessRunIds ?? backgroundProcessFacts?.runIds ?? [];
-  delete row.backgroundProcessCount;
-  delete row.backgroundProcessRunIds;
+    options.backgroundProcessCount ??
+    countRunningBackgroundProcesses(source.backgroundProcessScope);
   if (backgroundProcessCount > 0) {
     row.backgroundProcessCount = backgroundProcessCount;
-    if (backgroundProcessRunIds.length > 0) {
-      row.backgroundProcessRunIds = backgroundProcessRunIds;
-    }
   }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });

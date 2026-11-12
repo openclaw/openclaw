@@ -30,13 +30,8 @@ export function registerBackgroundProcessPublicationTests(
       const process = createProcessSessionFixture({ id: "background", backgrounded: true });
       process.scopeKey = key;
       process.agentId = "main";
-      process.originRunId = "origin-run";
       addSession(process);
-      expect(read()).toMatchObject({
-        backgroundProcessCount: 1,
-        backgroundProcessRunIds: ["origin-run"],
-        status: "done",
-      });
+      expect(read()).toMatchObject({ backgroundProcessCount: 1, status: "done" });
       await vi.advanceTimersByTimeAsync(5_000);
       await waitForFast(() =>
         expect(params.broadcastToConnIds).toHaveBeenCalledWith(
@@ -44,12 +39,7 @@ export function registerBackgroundProcessPublicationTests(
           expect.objectContaining({
             reason: "background-processes",
             backgroundProcessCount: 1,
-            backgroundProcessRunIds: ["origin-run"],
-            session: expect.objectContaining({
-              key,
-              backgroundProcessCount: 1,
-              backgroundProcessRunIds: ["origin-run"],
-            }),
+            session: expect.objectContaining({ key, backgroundProcessCount: 1 }),
           }),
           new Set(["sidebar"]),
           expect.any(Object),
@@ -65,12 +55,7 @@ export function registerBackgroundProcessPublicationTests(
           expect.objectContaining({
             reason: "background-processes",
             backgroundProcessCount: null,
-            backgroundProcessRunIds: null,
-            session: expect.objectContaining({
-              key,
-              backgroundProcessCount: null,
-              backgroundProcessRunIds: null,
-            }),
+            session: expect.objectContaining({ key, backgroundProcessCount: null }),
           }),
           new Set(["sidebar"]),
           expect.any(Object),

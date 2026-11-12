@@ -425,13 +425,6 @@ function RunFrame(props: FrameProps) {
         />
       </ChatLazyBoundary>
     </Show>,
-    <Show
-      when={props.frame.backgroundActive && (!props.frame.fragment || props.frame.fragment.last)}
-    >
-      <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
-        {t("sessionsView.backgroundWorkRunning")}
-      </div>
-    </Show>,
     <Show when={props.frame.outcome.kind === "interrupted"}>
       <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
         {t("chat.composer.runInterrupted")}
