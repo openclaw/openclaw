@@ -26,7 +26,6 @@ import "./menu-surface.ts";
 import type {
   SidebarRecentSession,
   SidebarToolActivity,
-  SidebarSessionSortMode,
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
@@ -170,8 +169,6 @@ export type SessionCatalogGroupsParams = {
 export type RenderableSessionSection = SidebarVisibleSections["sections"][number];
 export type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
-  effectiveSessionsGrouping(): SidebarSessionsGrouping;
-  effectiveSessionSortMode(): SidebarSessionSortMode;
   readonly sessionData: SessionListHost["sessionData"] &
     Pick<
       SessionDataOwner,

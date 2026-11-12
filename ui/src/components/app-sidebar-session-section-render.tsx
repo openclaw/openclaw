@@ -195,7 +195,7 @@ export function renderSessionSection(params: {
         ) : undefined}
         {collapsedAttentionDot() ? (
           <span
-            class="sidebar-session-group-attention"
+            class="session-unread-dot sidebar-session-group-attention"
             role="img"
             aria-label={t("sessionsView.attentionRequired")}
             title={t("sessionsView.attentionRequired")}

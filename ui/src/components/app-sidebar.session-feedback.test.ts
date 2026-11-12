@@ -356,8 +356,6 @@ describe("sidebar session feedback", () => {
       harness.sessions,
     );
     await selectFilter(sidebar, "status:all");
-    // Flat view may auto-load the visible page before the click; either path
-    // must wait on this pending page.
     const pending = createDeferred<typeof harness.sessions.state.result>();
     harness.list.mockImplementation(async () => (await pending.promise)!);
     setSessionsGrouping(sidebar.sessionOrganizer, "none");

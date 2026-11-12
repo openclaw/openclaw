@@ -1,0 +1,2 @@
+# Collapse-triggered request and shared unread-dot browser regression; replaces auto-load cases.
+60
