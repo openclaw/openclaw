@@ -9,6 +9,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { loadMcpToolGrants, type McpToolGrant } from "../infra/exec-approvals-mcp.js";
 import { loadEnabledBundleMcpConfig } from "../plugins/bundle-mcp.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
@@ -25,6 +26,7 @@ import type {
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { resolveMcpBearerBundleConfig } from "./mcp-auth-profile.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "./mcp-codex-tool-approval.js";
 import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
@@ -306,7 +308,22 @@ export async function loadCodexBundleMcpThreadConfigCore(
     const mode = resolveProjectedMcpCodexToolApprovalMode(grant.server, server);
     return mode === undefined || mode === "auto";
   });
-  const mcpServers = buildCodexMcpServersConfig(preparedDataDirs.config, configuredGrants);
+  // Plugin servers may declare OpenClaw-managed OAuth; the native thread config is handed to the
+  // Codex app-server, so the resolved credential has to be projected as a literal bearer header
+  // here too, exactly like the owner-configured server path (#197763).
+  const bearerResolved = await resolveMcpBearerBundleConfig({
+    config: preparedDataDirs.config,
+    cfg: params.cfg,
+    tokenProjection: "literal",
+    omitUnavailableOAuthServers: true,
+    onServerUnavailable: (serverName, error) => {
+      diagnostics.push({
+        pluginId: bundleMcp.pluginIdsByServer?.[serverName] ?? serverName,
+        message: `MCP OAuth credential unavailable for ${serverName}: ${formatErrorMessage(error)}`,
+      });
+    },
+  });
+  const mcpServers = buildCodexMcpServersConfig(bearerResolved.config, configuredGrants);
   const hasServers = Object.keys(mcpServers).length > 0;
   return {
     ...(hasServers ? { configPatch: { mcp_servers: mcpServers } } : {}),

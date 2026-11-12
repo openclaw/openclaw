@@ -50,6 +50,22 @@ vi.mock("../plugins/bundle-mcp.js", () => ({
   loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
 }));
 
+// mock-isolation: Stand in for the credential store so projection shape is observable.
+vi.mock("./mcp-auth-profile.js", () => ({
+  resolveMcpBearerBundleConfig: async ({ config }: { config: BundleMcpConfig }) => ({
+    config: {
+      mcpServers: Object.fromEntries(
+        Object.entries(config.mcpServers).map(([name, server]) => [
+          name,
+          (server as { auth?: string }).auth === "oauth"
+            ? { ...server, headers: { ...server.headers, Authorization: "Bearer projected" } }
+            : server,
+        ]),
+      ),
+    },
+  }),
+}));
+
 beforeEach(() => {
   mocks.loadExecApprovalsReadOnlyAsync.mockReset().mockResolvedValue({ version: 1, agents: {} });
   mocks.bundleMcp = { config: { mcpServers: {} }, diagnostics: [] };
@@ -291,5 +307,19 @@ describe("loadCodexBundleMcpThreadConfigCore", () => {
       expect(loaded.fingerprint).toBe(withoutScopedConfig.fingerprint);
       expect(loaded.staticServerNames).toEqual(["search"]);
     });
+  });
+
+  it("projects the resolved OAuth bearer for a plugin-only server", async () => {
+    setServers({
+      atlassian: http("https://mcp.atlassian.com/v1/mcp/authv2", { auth: "oauth" }),
+    });
+
+    const loaded = await load({ cfg: {}, toolsEnabled: true });
+
+    expect(loaded.configPatch?.mcp_servers?.atlassian).toMatchObject({
+      url: "https://mcp.atlassian.com/v1/mcp/authv2",
+      http_headers: { Authorization: "Bearer projected" },
+    });
+    expect(loaded.diagnostics).toEqual([]);
   });
 });
