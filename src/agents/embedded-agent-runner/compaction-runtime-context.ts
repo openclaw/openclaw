@@ -8,6 +8,7 @@ import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { listAgentIds, resolveAgentConfig, resolveSessionAgentIds } from "../agent-scope-config.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
@@ -87,12 +88,36 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   );
 }
 
+/** Resolves the configured summarization model: the session agent's override, then the shared default. */
+export function resolveConfiguredCompactionModel(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string | null;
+}): string | undefined {
+  const config = params.config;
+  if (!config) {
+    return undefined;
+  }
+  // Callers without a session identity keep the shared default instead of guessing an agent.
+  const agentId =
+    params.agentId ??
+    (params.sessionKey && listAgentIds(config).length > 0
+      ? resolveSessionAgentIds({ config, sessionKey: params.sessionKey }).sessionAgentId
+      : undefined);
+  const agentModel = agentId
+    ? resolveAgentConfig(config, agentId)?.compaction?.model?.trim()
+    : undefined;
+  return agentModel || config.agents?.defaults?.compaction?.model?.trim() || undefined;
+}
+
 /**
  * Resolve the effective compaction target from config, falling back to the
  * caller-supplied provider/model and optionally applying runtime defaults.
  */
 export function resolveEmbeddedCompactionTarget(params: {
   config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string | null;
   provider?: string | null;
   modelId?: string | null;
   authProfileId?: string | null;
@@ -114,7 +139,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   // summaries. Compaction-specific model overrides would cross that boundary.
   const override = params.modelSelectionLocked
     ? undefined
-    : params.config?.agents?.defaults?.compaction?.model?.trim();
+    : resolveConfiguredCompactionModel(params);
   const assembleTarget = (targetProvider: string | undefined, targetModel: string | undefined) => {
     // A provider switch cannot inherit credentials selected for the session's
     // original provider; all target paths share that boundary.

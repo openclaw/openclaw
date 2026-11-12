@@ -746,7 +746,13 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       compactionEnabled: true,
       compactionReplayEnabled: true,
     };
+    const agentModelConfig = {
+      agents: { entries: { main: {}, support: { compaction: { model: "other/model" } } } },
+    };
     expect(isChatGPTV2CompactionEligible(eligible)).toBe(true);
+    expect(
+      isChatGPTV2CompactionEligible({ ...eligible, config: agentModelConfig, agentId: "main" }),
+    ).toBe(true);
     for (const override of [
       { compactionEnabled: false },
       { compactionReplayEnabled: false },
@@ -755,6 +761,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       { contextEngineOwnsCompaction: true },
       { config: { agents: { defaults: { compaction: { model: "other/model" } } } } },
       { config: { agents: { defaults: { compaction: { provider: "custom" } } } } },
+      { config: agentModelConfig, agentId: "support" },
       { operation: "settled-tool-finalization" },
       { model: { ...model, baseUrl: "https://proxy.invalid" } },
       { model: { ...model, api: "openai-responses" } },

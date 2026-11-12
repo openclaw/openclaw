@@ -243,6 +243,27 @@ The built-in OpenClaw runtime starts compaction with the active session model. S
 
 Bare configured aliases resolve to their normalized provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
+To give one agent its own summarization model, set `agents.entries.<id>.compaction.model`. It accepts the same values and takes precedence over `agents.defaults.compaction.model` for that agent's sessions; other agents keep the shared setting:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "model": "openrouter/anthropic/claude-sonnet-4-6"
+      }
+    },
+    "entries": {
+      "support": {
+        "compaction": {
+          "model": "ollama/llama3.1:8b"
+        }
+      }
+    }
+  }
+}
+```
+
 If Gateway configuration reloads while compaction is waiting to start, compaction uses the newly loaded context engine and model settings together. Its requested workspace and transcript stay the same.
 
 This works with local models too, for example a second Ollama model dedicated to summarization:
@@ -259,7 +280,7 @@ This works with local models too, for example a second Ollama model dedicated to
 }
 ```
 
-When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
+When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit compaction model override, shared or per agent, remains exact and does not inherit the session fallback chain.
 
 If the summarizer refuses the request and that chain has another distinct model,
 OpenClaw requests the summary once more from the next model in the chain, with that

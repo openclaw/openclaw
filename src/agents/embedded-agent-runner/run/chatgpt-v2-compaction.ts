@@ -19,6 +19,7 @@ import { recordSessionModelUsage } from "../../sessions/session-model-usage.js";
 import { sanitizeTranscriptMessage } from "../../transcript-sanitize.js";
 import { makeZeroUsageSnapshot, normalizeUsage } from "../../usage.js";
 import type { runCompactionHooks, runPostCompactionSideEffects } from "../compaction-hooks.js";
+import { resolveConfiguredCompactionModel } from "../compaction-runtime-context.js";
 import { compactWithSafetyTimeout } from "../compaction-safety-timeout.js";
 import { log } from "../logger.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
@@ -33,6 +34,7 @@ import {
 /** Only the native ChatGPT request path owns V2; proxies keep their existing policy. */
 export function isChatGPTV2CompactionEligible(params: {
   config?: OpenClawConfig;
+  agentId?: string;
   model: Pick<Model, "api" | "provider" | "baseUrl">;
   extraParams: Record<string, unknown>;
   compactionEnabled: boolean;
@@ -44,7 +46,7 @@ export function isChatGPTV2CompactionEligible(params: {
     params.compactionEnabled &&
     params.compactionReplayEnabled &&
     !params.contextEngineOwnsCompaction &&
-    !params.config?.agents?.defaults?.compaction?.model?.trim() &&
+    !resolveConfiguredCompactionModel(params) &&
     !params.config?.agents?.defaults?.compaction?.provider &&
     params.operation !== "settled-tool-finalization" &&
     params.extraParams.responsesCompactEndpoint !== false &&

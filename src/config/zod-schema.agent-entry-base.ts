@@ -135,6 +135,8 @@ export const AgentEntryBaseSchema = z.strictObject({
     .strictObject({
       /** Override the default persisted client-side summary character ceiling. */
       maxSummaryChars: AgentCompactionMaxSummaryCharsSchema.optional(),
+      /** Override the shared compaction summarization model for this agent. */
+      model: z.string().optional(),
     })
     .optional(),
   params: z.record(z.string(), z.unknown()).optional(),

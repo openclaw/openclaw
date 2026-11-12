@@ -1382,21 +1382,19 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(result).toMatchObject(compacted);
   });
 
-  it("never falls back from an explicit compaction.model", async () => {
+  it.each([
+    ["shared", { compaction: { model: "azure/compact-primary" } }, {}],
+    ["agent", {}, { main: { compaction: { model: "azure/compact-primary" } } }],
+  ])("never falls back from an explicit %s compaction.model", async (_owner, shared, entries) => {
     sessionCompactImpl.mockRejectedValueOnce(
       Object.assign(new Error("400 invalid request body"), { status: 400 }),
     );
+    const model = { primary: "openai/gpt-primary", fallbacks: ["anthropic/claude-fallback"] };
 
     const result = await compactWorkspace({
       provider: "openai",
       model: "gpt-primary",
-      config: defaultsConfig({
-        model: {
-          primary: "openai/gpt-primary",
-          fallbacks: ["anthropic/claude-fallback"],
-        },
-        compaction: { model: "azure/compact-primary" },
-      }) as never,
+      config: { agents: { defaults: { model, ...shared }, entries } } as never,
     });
 
     expect(result.ok).toBe(false);

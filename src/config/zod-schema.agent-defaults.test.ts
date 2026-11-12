@@ -127,6 +127,15 @@ describe("agent defaults schema", () => {
     expect(AgentEntrySchema.parse({ id: "ops" }).compaction).toBeUndefined();
   });
 
+  it("accepts a per-agent compaction model and keeps other compaction policy shared", () => {
+    const compaction = { model: "ollama/llama3.1:8b" };
+    expect(AgentEntrySchema.parse({ id: "ops", compaction })).toMatchObject({ compaction });
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", compaction: { provider: "custom" } }),
+      "compaction",
+    );
+  });
+
   it("rejects unsafe byte-size strings in compaction defaults", () => {
     const unsafe = String(Number.MAX_SAFE_INTEGER + 1);
     for (const compaction of [
