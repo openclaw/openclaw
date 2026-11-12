@@ -219,7 +219,7 @@ an autonomous ingestion engine.
 | ------------------------------- | --------------------------------------------------------------------------------------------------- |
 | `knowledge-automation`          | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
 | `knowledge-capture`             | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
-| `knowledge-claim-consolidation` | Review and consolidate claims: unlinked, on one page, or about one subject; supersede snapshots.    |
+| `knowledge-claim-consolidation` | Consolidate claims (unlinked, on one page, or about one subject) and review pages for currency.     |
 | `knowledge-correct`             | Correct or withdraw exact records and inspect affected knowledge.                                   |
 | `knowledge-entities`            | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
 | `knowledge-ingest`              | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
