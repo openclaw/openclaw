@@ -255,6 +255,8 @@ describe("gateway telemetry maintenance", () => {
         },
       });
       try {
+        // Finish startup cleanup before the simulated late wake holds channel admission.
+        await vi.advanceTimersByTimeAsync(2);
         vi.setSystemTime(Date.now() + 75_000);
         await vi.advanceTimersByTimeAsync(30_000);
         expect(checkTelemetryUpdateMock).toHaveBeenCalledOnce();
@@ -271,6 +273,7 @@ describe("gateway telemetry maintenance", () => {
           new Error("Gateway health refresh owner is closed"),
         );
         state.broadcast.mockClear();
+        state.worktreeGc.mockClear();
         state.dedupe.set("retained-during-drain", { ts: 0, ok: true });
         thaw.resolve(true);
 
