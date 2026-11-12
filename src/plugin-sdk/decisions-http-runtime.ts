@@ -10,6 +10,7 @@ import type {
 import type { ModelRequestHeaders } from "../llm/types.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 import {
+  responseWithRelease,
   shouldUseEnvHttpProxyForUrl,
   withTrustedEnvProxyGuardedFetchMode,
 } from "./fetch-runtime.js";
@@ -195,11 +196,15 @@ export async function executeDecisionHttp<T = ProviderDecisionOutcomeV2>(
         ...(execution.body === undefined ? {} : { body: execution.body }),
       },
     };
-    const { response, release } = await fetchWithProviderHttpGuard(
+    const guarded = await fetchWithProviderHttpGuard(
       !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
         ? withTrustedEnvProxyGuardedFetchMode(request)
         : request,
     );
+    // Cancelling a captured (teed) body waits for its capture branch; release ends both.
+    let releasing: Promise<void> | undefined;
+    const release = () => (releasing ??= guarded.release());
+    const response = responseWithRelease(guarded.response, release);
     try {
       if (!response.ok) {
         // Error bodies can reflect credentials or state; never read them.

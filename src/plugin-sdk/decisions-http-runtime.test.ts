@@ -127,13 +127,28 @@ it.each([
   [422, {}, { reason: "unsupported-input" }],
   [500, {}, { reason: "transport" }],
 ])("maps HTTP %i without reading the body", async (status, headers, outcome) => {
+  const cancel = vi.fn();
   const body = new ReadableStream({
     start: (controller) => controller.enqueue(new Uint8Array([1])),
+    cancel,
   });
-  const cancel = vi.spyOn(body, "cancel");
   mocks.fetch.mockResolvedValue(new Response(body, { status, headers }));
   await expect(evaluate()).resolves.toEqual({ status: "unavailable", ...outcome });
   expect(cancel).toHaveBeenCalled();
+  expect(mocks.release).toHaveBeenCalledOnce();
+});
+
+it("releases a capture tee when an error body is cancelled", async () => {
+  const nativeCancel = vi.fn();
+  const [consumer, capture] = new ReadableStream(
+    { cancel: nativeCancel },
+    { highWaterMark: 0 },
+  ).tee();
+  // Debug capture keeps a second branch open; only release ends it.
+  mocks.release.mockImplementationOnce(() => capture.cancel());
+  mocks.fetch.mockResolvedValue(new Response(consumer, { status: 401 }));
+  await expect(evaluate()).resolves.toEqual({ status: "unavailable", reason: "authentication" });
+  expect(nativeCancel).toHaveBeenCalledOnce();
   expect(mocks.release).toHaveBeenCalledOnce();
 });
 
