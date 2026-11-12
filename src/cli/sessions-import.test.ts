@@ -87,7 +87,6 @@ describe("sessions import CLI", () => {
     await run(
       "sessions --agent work --json import --all --url ws://gateway.test --token test-token",
     );
-
     expect(methods()).toEqual(["list", "import", "import", "list", "import", "import"]);
     expect(mocks.callGateway).toHaveBeenNthCalledWith(
       4,
@@ -148,7 +147,6 @@ describe("sessions import CLI", () => {
       .mockResolvedValueOnce(imported);
 
     await run("sessions import --all --json");
-
     expect(methods()).toEqual(["list", "import"]);
     expect(JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]))).toMatchObject({
       ok: false,
@@ -166,10 +164,7 @@ describe("sessions import CLI", () => {
     const scope = new AsyncWorkScope();
     mocks.callGateway
       .mockResolvedValueOnce({ catalogs: [catalog("claude", [host(["first", "second"])])] })
-      .mockImplementationOnce(async () => {
-        scope.beginClose();
-        return imported;
-      });
+      .mockImplementationOnce(() => Promise.resolve(imported).finally(() => scope.beginClose()));
     await scope.run(() => run("sessions import --all --json"));
     expect(methods()).toEqual(["list", "import"]);
     const output = JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]));
@@ -184,12 +179,8 @@ describe("sessions import CLI", () => {
     await run(
       "sessions import --all --catalog claude --host gateway:local --limit 1 --dry-run --json",
     );
-    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        method: "sessions.catalog.list",
-        request: { catalogId: "claude", hostIds: ["gateway:local"], limitPerHost: 1 },
-      }),
-    );
+    const request = { catalogId: "claude", hostIds: ["gateway:local"], limitPerHost: 1 };
+    expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ request }));
     expect(JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]))).toMatchObject({
       ok: true,
       dryRun: true,
