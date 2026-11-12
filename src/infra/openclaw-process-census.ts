@@ -342,7 +342,12 @@ function classifyWindowsHandoffAncestry(
 }
 
 /** Process start recorded by the updater that created a retained runtime. */
-export type RetainedRuntimeCreator = { pid: number; startTimeMicros: number };
+export type RetainedRuntimeCreator = {
+  pid: number;
+  startTimeMicros: number;
+  /** Linux boot-relative start; unlike startTimeMicros it does not move with clock corrections. */
+  startTimeSinceBootMicros?: number;
+};
 
 /** What is known about who created a retained runtime directory, and when. */
 export type RetainedRuntimeCreation = {
@@ -351,9 +356,11 @@ export type RetainedRuntimeCreation = {
   creator?: RetainedRuntimeCreator;
 };
 
-// Linux derives process start times from boot ticks and the current wall clock,
-// so they can drift from filesystem timestamps and earlier reads after clock
-// adjustments. Comparisons within this margin stay conservative.
+// Linux derives epoch process start times from boot ticks and the current wall
+// clock, so they can drift from filesystem timestamps after clock adjustments.
+// Directories without a creator record compare against their birth time with
+// this margin; a larger wall-clock step while their updater is still alive can
+// release it early. Accepted: such steps are rare and a failed update retries.
 const PROCESS_START_CLOCK_MARGIN_MICROS = 60_000_000;
 
 /**
@@ -378,11 +385,17 @@ function cannotBeRuntimeCreator(pid: number, creation: RetainedRuntimeCreation):
   if (identity.exited) {
     return true;
   }
-  const margin = identity.startTimeResolutionMicros + PROCESS_START_CLOCK_MARGIN_MICROS;
-  // A recorded creator PID that now names a different process was reused.
-  return creator
-    ? Math.abs(identity.startTimeMicros - creator.startTimeMicros) > margin
-    : identity.startTimeMicros - margin > creation.createdNoLaterThanMs * 1000;
+  const resolution = identity.startTimeResolutionMicros;
+  const margin = resolution + PROCESS_START_CLOCK_MARGIN_MICROS;
+  if (creator) {
+    // A recorded creator PID that now names a different process was reused.
+    // Boot-relative starts are clock-independent, so they need no clock margin.
+    return creator.startTimeSinceBootMicros !== undefined &&
+      identity.startTimeSinceBootMicros !== undefined
+      ? Math.abs(identity.startTimeSinceBootMicros - creator.startTimeSinceBootMicros) > resolution
+      : Math.abs(identity.startTimeMicros - creator.startTimeMicros) > margin;
+  }
+  return identity.startTimeMicros - margin > creation.createdNoLaterThanMs * 1000;
 }
 
 /** Default custody decisions stay conservative; reference inspection also reports partial evidence. */
@@ -665,7 +678,9 @@ export function inspectOtherOpenClawProcesses(
       if (
         runtimeDirectory &&
         creation &&
-        !(custody.kind === "holder" && custody.paths) &&
+        // Unknown custody means the census could not inspect its references.
+        custody.kind === "holder" &&
+        !custody.paths &&
         ![
           ...(argv ?? []),
           directories.get(pid) ?? "",

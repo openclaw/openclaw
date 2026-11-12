@@ -519,13 +519,28 @@ it("classifies title-erased Darwin runtimes whose environment is unbounded", () 
       ...(pid === peer || pid === peer + 1 ? { serviceMarkerUnavailable: true } : {}),
     };
   });
-  expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual({
+  const expected = {
     pids: [peer + 1, peer + 2],
     warnings: [
       `Could not verify runtime custody for PID ${peer + 1}: process environment is unreadable`,
       `Could not verify runtime custody for PID ${peer + 2}: process command is unavailable`,
     ],
+  };
+  expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual(expected);
+  // A recorded creator elsewhere cannot excuse processes whose references went uninspected.
+  identity.mockReturnValue({
+    pid: peer,
+    parentPid: 1,
+    startTimeMicros: Date.UTC(2026, 10, 1) * 1000,
+    startTimeResolutionMicros: 1,
+    exited: false,
   });
+  expect(
+    inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01", {
+      createdNoLaterThanMs: Date.UTC(2026, 9, 1),
+      creator: { pid: 4246, startTimeMicros: 1 },
+    }),
+  ).toEqual(expected);
 });
 
 it("retains Darwin cwd holders from one partial batch without trusting other PID records", () => {
@@ -878,5 +893,25 @@ describe("retained runtime creation time", () => {
     // A reused creator PID names a different process.
     identity.mockImplementation(() => startedAt(createdNoLaterThanMs + 86_400_000));
     expect(inspectOtherOpenClawProcesses(runtime, creation)).toEqual({ pids: [peer + 2] });
+  });
+
+  it("compares a recorded creator by boot-relative start across wall-clock steps", () => {
+    const sinceBoot = 5_000_000_000;
+    processRow(peer, ["node", "/app/dist/index.js"]);
+    const creation = {
+      createdNoLaterThanMs,
+      creator: { pid: peer, startTimeMicros: 1, startTimeSinceBootMicros: sinceBoot },
+    };
+    // A two-minute clock step moves the epoch estimate, not the boot-relative start.
+    identity.mockReturnValue({
+      ...startedAt(createdNoLaterThanMs + 120_000),
+      startTimeSinceBootMicros: sinceBoot,
+    });
+    expect(inspectOtherOpenClawProcesses(runtime, creation)).toEqual({ pids: [peer] });
+    identity.mockReturnValue({
+      ...startedAt(createdNoLaterThanMs),
+      startTimeSinceBootMicros: sinceBoot + 1_000_000,
+    });
+    expect(inspectOtherOpenClawProcesses(runtime, creation)).toEqual({ pids: [] });
   });
 });

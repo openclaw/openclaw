@@ -41,6 +41,9 @@ export async function recordRetainedUpdateRuntimeCreator(directory: string): Pro
     const creator: RetainedRuntimeCreator = {
       pid: identity.pid,
       startTimeMicros: identity.startTimeMicros,
+      ...(identity.startTimeSinceBootMicros !== undefined
+        ? { startTimeSinceBootMicros: identity.startTimeSinceBootMicros }
+        : {}),
     };
     await fs.writeFile(path.join(directory, RETAINED_RUNTIME_CREATOR), JSON.stringify(creator), {
       mode: 0o600,
@@ -67,14 +70,19 @@ async function readRetainedUpdateRuntimeCreator(
   if (!isRecord(value)) {
     return undefined;
   }
-  const { pid, startTimeMicros } = value;
-  return typeof pid === "number" &&
-    Number.isSafeInteger(pid) &&
-    pid > 0 &&
-    typeof startTimeMicros === "number" &&
-    Number.isFinite(startTimeMicros)
-    ? { pid, startTimeMicros }
-    : undefined;
+  const { pid, startTimeMicros, startTimeSinceBootMicros } = value;
+  if (
+    typeof pid !== "number" ||
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    typeof startTimeMicros !== "number" ||
+    !Number.isFinite(startTimeMicros)
+  ) {
+    return undefined;
+  }
+  return typeof startTimeSinceBootMicros === "number" && Number.isFinite(startTimeSinceBootMicros)
+    ? { pid, startTimeMicros, startTimeSinceBootMicros }
+    : { pid, startTimeMicros };
 }
 
 export function reportRetainedUpdateRuntime(directory: string, reason: string): string {
