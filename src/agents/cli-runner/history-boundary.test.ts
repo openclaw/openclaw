@@ -543,6 +543,14 @@ describe("CLI transcript account boundary", () => {
       expect(prompt).toContain("B fresh canary");
       expect(prompt).not.toContain("A long history");
     });
+    // Once its run closes, the writer that established it cannot read it into a CLI input.
+    const closed = await f.run("epoch-b", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      return { params, writer: expectDefined(getCliHistoryWriter(f.target), "writer") };
+    });
+    await expect(
+      runWithCliHistoryWriter(closed.writer, () => history(true, closed.params)),
+    ).rejects.toThrow();
     // The new boundary stays account-bound: another account gets nothing, and the original
     // account does not regain history once a foreign account touched it.
     for (const epoch of ["epoch-c", "epoch-b"]) {
