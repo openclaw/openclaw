@@ -518,7 +518,7 @@ describe("session menu", () => {
       "Automation",
       "Design",
       "Docs",
-      "Support",
+      "München",
     ];
     const { menu, onAction } = await actionMenu({ session: { category: "Issues" }, groups });
     const submenu = await openSubmenu(menu, "Move to group");
@@ -534,9 +534,9 @@ describe("session menu", () => {
     await type("zzz");
     expect(menuItemLabels(submenu)).toEqual(["Remove from group", "New group"]);
     expect(submenu.textContent).toContain("No groups match your search.");
-    await type("pull");
-    await selectMenuValue(menu, `move-to-group:${encodeURIComponent("Pull requests")}`);
-    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Pull requests" });
+    await type("münchen");
+    await selectMenuValue(menu, `move-to-group:${encodeURIComponent("München")}`);
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "München" });
 
     await reopen(menu);
     const reopened = await openSubmenu(menu, "Move to group");
