@@ -33,6 +33,7 @@ import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   acquireGatewayOwnerLease,
   readGatewayOwnerLease,
+  readGatewayOwnerLeaseAsync,
   type GatewayOwnerLease,
 } from "./gateway-owner-lease.js";
 import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
@@ -892,4 +893,14 @@ describe("Gateway owner lease", () => {
     await lease.release();
     expect(readGatewayOwnerLease({ env })?.owner).toBe("replacement");
   });
+});
+
+it("reads the live Gateway owner asynchronously and filters by port", async () => {
+  await using state = fixture();
+  const lease = state.acquire();
+  await lease.ready;
+  const owner = await readGatewayOwnerLeaseAsync({ env: state.env, port: 19483 });
+  expect(owner).toMatchObject({ port: 19483, mode: "foreground" });
+  expect(owner?.owner).toBe(readGatewayOwnerLease({ env: state.env })?.owner);
+  expect(await readGatewayOwnerLeaseAsync({ env: state.env, port: 19484 })).toBeUndefined();
 });

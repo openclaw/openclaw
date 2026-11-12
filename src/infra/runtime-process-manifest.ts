@@ -89,6 +89,11 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "package-update-activation-recovery",
       ".mjs",
     ),
+    managedHandoffPostgresBridge: runtimeProcessEntrypoint(
+      "infra/update-managed-service-handoff-postgres.worker",
+      "managed-handoff-postgres-bridge.worker",
+      ".mjs",
+    ),
     managedHandoffRuntime: runtimeProcessEntrypoint(
       "infra/update-managed-service-handoff-sealed",
       "managed-handoff-runtime",
@@ -508,51 +513,6 @@ export const runtimeProcessHelperManifest = {
     sealed: true,
   },
 } as const;
-
-// Each sealed bootstrap selects only the sibling entries it owns.
-export const runtimeProcessSealedManifest = {
-  worker: {
-    ownerSource: "src/worker/worker-deploy-runtime.ts",
-    entries: [
-      ["clientCredentials", "client-credential.worker"],
-      ["codeModeNode", "code-mode-node.worker"],
-      ["stateRead", "openclaw-state-read.worker"],
-      ["workerNativeLifecycle", "worker-native-lifecycle.worker"],
-      ["fileToolPlanning", "file-tool-planning.worker"],
-      ["fileToolRead", "file-tool-read.worker"],
-      ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker"],
-      ["githubExec", "github-exec-launcher"],
-      ["imageProcessor", "image-processor.worker"],
-      ["serviceChildRelay", "service-child-relay"],
-      ["sqliteSourceRevision", "sqlite-source-revision.worker"],
-      ["sqliteStore", "sqlite-store.worker"],
-      ["sharedStateStore", "sqlite-store.worker"],
-    ],
-  },
-  serviceChildRelay: {
-    ownerSource: "src/process/supervisor/service-child-relay.ts",
-    entries: [["serviceChildGroupAnchor", "service-child-group-anchor"]],
-  },
-} as const satisfies Record<
-  string,
-  {
-    ownerSource: string;
-    entries: readonly (readonly [
-      keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
-      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
-    ])[];
-  }
->;
-
-export function createSealedRuntimeProcessEntrypoints(
-  group: keyof typeof runtimeProcessSealedManifest,
-  currentModuleUrl: string,
-) {
-  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
-    name,
-    url: new URL(`./${entry}.mjs`, currentModuleUrl),
-  }));
-}
 
 /** Source-only build workers are declared without entering the packaged runtime graph. */
 export const runtimeProcessToolingEntrypoints = {

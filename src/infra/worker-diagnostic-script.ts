@@ -3,8 +3,8 @@ import { fileURLToPath } from "node:url";
 import {
   createRuntimeProcessEntrypoints,
   pluginRuntimeProcessManifest,
-  runtimeProcessSealedManifest,
 } from "./runtime-process-manifest.js";
+import { runtimeProcessSealedManifest } from "./runtime-process-sealed-manifest.js";
 
 export const MAX_DIAGNOSTIC_WORKER_SLOTS = 64;
 
