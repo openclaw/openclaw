@@ -72,7 +72,7 @@ beforeEach(() => {
       ownerToken: "fixture-owner",
       nonOwnerToken: "fixture-reader",
     }),
-    mintMcpLoopbackClientGrant: (grant) => {
+    mintMcpLoopbackClientGrant: (grant: { context: McpLoopbackRequestContext }) => {
       grantContexts.push(grant.context);
       return createTestMcpLoopbackClientGrant(grant);
     },
@@ -127,7 +127,11 @@ it("manual compaction resends the turn's cached prefix without tool authority", 
   await run({ prompt: "follow-up", extraSystemPrompt: "TURN-ONLY-INBOUND-METADATA" });
   // Compaction runs as its own resumed process; read what that process receives.
   let compaction: { argv: string[]; systemPrompt: string } | undefined;
-  supervisorSpawnMock.mockImplementationOnce(async ({ argv }) => {
+  supervisorSpawnMock.mockImplementationOnce(async (spawn) => {
+    if (spawn.mode !== "child") {
+      throw new Error("compaction must run as a child process");
+    }
+    const { argv } = spawn;
     const file = argv.indexOf("--append-system-prompt-file") + 1;
     compaction = { argv, systemPrompt: file ? fs.readFileSync(argv[file] ?? "", "utf8") : "" };
     const stdout = [
