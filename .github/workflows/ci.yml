@@ -11,10 +11,10 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 jobs:
   producer:
-    if: github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && '74409cea4366c3d26c63622e23d32bf5793ae03b'
+    if: github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && '6d306591d7373a89dd06f6258c0955708079030b'
       != '0000000000000000000000000000000000000000'
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 34
     outputs:
       baseline_artifact_id: ${{ steps.baseline_native_runtime_upload.outputs.artifact-id }}
       baseline_bundled_recovery: 'false'
@@ -850,8 +850,8 @@ jobs:
       env:
         CHECKOUT_REPO: ${{ github.repository }}
         CHECKOUT_TOKEN: ${{ github.token }}
-        CHECKOUT_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
-        WORKFLOW_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
+        CHECKOUT_SHA: 6d306591d7373a89dd06f6258c0955708079030b
+        WORKFLOW_SHA: 6d306591d7373a89dd06f6258c0955708079030b
       run: |
         set -euo pipefail
         python_command=python3
@@ -1633,7 +1633,7 @@ jobs:
     - name: 'candidate: Package runtime for native policy tests'
       id: candidate_native_runtime_package
       env:
-        TARGET_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
+        TARGET_SHA: 6d306591d7373a89dd06f6258c0955708079030b
         BUNDLED_RECOVERY: 'true'
       run: |
         set -euo pipefail
@@ -1648,13 +1648,13 @@ jobs:
       id: candidate_native_runtime_upload
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
-        name: frv-mac-candidate-74409cea4366c3d26c63622e23d32bf5793ae03b
+        name: frv-mac-candidate-6d306591d7373a89dd06f6258c0955708079030b
         path: .artifacts/macos-native-runtime/runtime.tgz
         compression-level: 0
         if-no-files-found: error
         retention-days: 1
     - name: Capture candidate producer and archive
-      run: python3 -I -S "$FRV_CONTROL/receipt.py" producer candidate 74409cea4366c3d26c63622e23d32bf5793ae03b
+      run: python3 -I -S "$FRV_CONTROL/receipt.py" producer candidate 6d306591d7373a89dd06f6258c0955708079030b
     - name: Provision canonical pinned validator
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
@@ -3071,13 +3071,14 @@ jobs:
     timeout-minutes: 75
     env:
       NATIVE_RUNTIME_ARTIFACT_ID: ${{ needs.producer.outputs.candidate_artifact_id }}
+      BUNDLED_RECOVERY_RUNTIME: ${{ needs.producer.outputs.candidate_bundled_recovery }}
       HISTORICAL_TARGET: 'false'
       MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && 'full' != 'main' && !false && 'full' == 'full'
         && 'release' || 'tests' }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && 'full'
         != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
       FRV_ARM: candidate
-      FRV_SOURCE_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
+      FRV_SOURCE_SHA: 6d306591d7373a89dd06f6258c0955708079030b
     steps:
     - name: Start complete job clock
       run: echo "FRV_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -3110,8 +3111,8 @@ jobs:
       env:
         CHECKOUT_REPO: ${{ github.repository }}
         CHECKOUT_TOKEN: ${{ github.token }}
-        CHECKOUT_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
-        WORKFLOW_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
+        CHECKOUT_SHA: 6d306591d7373a89dd06f6258c0955708079030b
+        WORKFLOW_SHA: 6d306591d7373a89dd06f6258c0955708079030b
       run: |
         set -euo pipefail
         python_command=python3
@@ -3883,7 +3884,7 @@ jobs:
         source .ci-harness/scripts/lib/swift-toolchain.sh
         select_xcode_toolchain
     - name: Capture initial native environment
-      run: python3 -I -S "$FRV_CONTROL/receipt.py" capture candidate 74409cea4366c3d26c63622e23d32bf5793ae03b
+      run: python3 -I -S "$FRV_CONTROL/receipt.py" capture candidate 6d306591d7373a89dd06f6258c0955708079030b
     - name: Setup Node environment for Apple assets
       id: macos-node-assets
       if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
@@ -4157,7 +4158,7 @@ jobs:
       env:
         MLX_NATIVE_PROOF: 'false'
         NATIVE_STARTED: ${{ steps.swift-cache-clock.outputs.started }}
-        CHECKOUT_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
+        CHECKOUT_SHA: 6d306591d7373a89dd06f6258c0955708079030b
       run: |
         set -euo pipefail
         mlx_proof="$(mktemp -d "$RUNNER_TEMP/openclaw-mlx-tts-proof.XXXXXX")"
@@ -4180,7 +4181,7 @@ jobs:
       if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' &&
         matrix.phase == 'mlx-settings' && 'false' == 'true' }}
       env:
-        CHECKOUT_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
+        CHECKOUT_SHA: 6d306591d7373a89dd06f6258c0955708079030b
         NATIVE_STARTED: ${{ steps.swift-cache-clock.outputs.started }}
       run: |
         set -euo pipefail
@@ -4196,7 +4197,7 @@ jobs:
         if-no-files-found: error
         retention-days: 7
     - name: Capture configured native environment
-      run: python3 -I -S "$FRV_CONTROL/receipt.py" configured candidate 74409cea4366c3d26c63622e23d32bf5793ae03b
+      run: python3 -I -S "$FRV_CONTROL/receipt.py" configured candidate 6d306591d7373a89dd06f6258c0955708079030b
     - name: Build Swift tests
       id: swift-test-build
       if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' &&
@@ -4221,7 +4222,7 @@ jobs:
       id: native-test-cli
       if: ${{ !cancelled() && steps.native-runtime-download.outcome == 'success' }}
       env:
-        TARGET_SHA: 74409cea4366c3d26c63622e23d32bf5793ae03b
+        TARGET_SHA: 6d306591d7373a89dd06f6258c0955708079030b
       run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs restore .artifacts/macos-native-runtime "$TARGET_SHA"
         >> "$GITHUB_PATH"
     - name: Swift test
@@ -4312,7 +4313,6 @@ jobs:
       if: ${{ !cancelled() && steps.recovery-runtime-setup.outcome == 'success' }}
       env:
         NODE_OPTIONS: --max-old-space-size=8192
-        BUNDLED_RECOVERY_RUNTIME: ${{ needs.producer.outputs.candidate_bundled_recovery }}
         NATIVE_RUNTIME_PREPARED: ${{ steps.native-test-cli.outcome }}
       run: |
         set -euo pipefail
