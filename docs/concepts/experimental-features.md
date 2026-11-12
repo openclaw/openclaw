@@ -304,16 +304,28 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 
 ### Sign in with OpenClaw ID
 
-Sign-in uses an OpenID Connect authorization code flow with PKCE for the public
-client `clientId`, in a popup. It works only in a Control UI opened on the
-Gateway machine (direct loopback). The Gateway builds the authorization URL and
-redeems the code, because the issuer does not serve CORS; it keeps nothing but
-the short-lived pending sign-in. The popup returns to
-`<Control UI origin>/openclaw-id/callback`, so register that redirect for the
-client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port). The
-browser keeps the account and its ID token until the token expires or you sign
-out. While signed in, **Turn on remote access** gets its link code from your account
-instead of asking you to paste one.
+Sign-in uses the public client `clientId`. Where it works depends on how the
+Control UI reaches the Gateway:
+
+- **On the Gateway machine (direct loopback):** an OpenID Connect authorization
+  code flow with PKCE, in a popup. The Gateway builds the authorization URL and
+  redeems the code, because the issuer does not serve CORS; it keeps nothing but
+  the short-lived pending sign-in. The popup returns to
+  `<Control UI origin>/openclaw-id/callback`, so register that redirect for the
+  client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port).
+- **Through a personal sign-in** (Tailscale Serve, Cloudflare Access or another
+  trusted proxy, an enterprise principal: any connection whose profile comes from
+  a verified identity of its own): the issuer cannot redirect to that origin, so the
+  Gateway runs a device sign-in (RFC 8628). The Control UI shows a code; you open
+  OpenClaw ID, sign in and confirm it, and the Gateway polls until you do. The
+  issuer must offer the device grant to the client.
+- Shared token or password connections, members and owner devices over the
+  OpenClaw ID tunnel, and connections without a personal profile cannot sign in.
+
+The browser keeps the account and its ID token until the token expires or you sign
+out. Signing in only proves which OpenClaw ID account the browser holds; on its own
+it grants nothing. While signed in on the Gateway machine, **Turn on remote access**
+gets its link code from your account instead of asking you to paste one.
 
 ### How the tunnel reaches the Gateway
 

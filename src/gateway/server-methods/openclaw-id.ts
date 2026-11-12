@@ -13,6 +13,7 @@ import { createOpenClawIdSignIn, type OpenClawIdSignIn } from "../openclaw-id/ac
 import {
   resolveOpenClawIdClientChannel,
   resolveOpenClawIdClientPeerKey,
+  resolveOpenClawIdSignInRoute,
 } from "../openclaw-id/channel.js";
 import { decodeInviteProofKey } from "../openclaw-id/invites-view.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
@@ -65,7 +66,11 @@ const accountSignIn = createOpenClawIdSignIn();
 // Responds with a sign-in step's result, or maps its refusal to an RPC error.
 function respondSignIn(
   opts: GatewayRequestHandlerOptions,
-  result: Awaited<ReturnType<OpenClawIdSignIn["begin" | "complete" | "enrollmentCode"]>>,
+  result: Awaited<
+    ReturnType<
+      OpenClawIdSignIn["begin" | "complete" | "enrollmentCode" | "beginDevice" | "pollDevice"]
+    >
+  >,
 ) {
   if ("ok" in result && !result.ok) {
     refuse(opts, result);
@@ -74,26 +79,67 @@ function respondSignIn(
   opts.respond(true, result);
 }
 
-// The Control UI's OpenClaw ID account, direct loopback only, by action:
+// The Control UI's OpenClaw ID account, by action. Direct loopback only:
 // - account_begin: PKCE authorization URL for the sign-in popup (redirectUri
 //   ends with /openclaw-id/callback on the Control UI origin);
 // - account_complete: redeems the popup's code once; returns the account and ID token;
 // - account_link_code: a Discovery link code for the signed-in account, so Make
 //   reachable needs no pasted code.
+// A connection with a verified personal profile (see resolveOpenClawIdSignInRoute):
+// - account_device_begin: a device sign-in's user code and verification page;
+// - account_device_poll: polls it once; returns pending, or the account and ID token.
+//   The account is never recorded in the claw record; it proves only which account
+//   this browser holds and grants nothing.
 async function handleAccount(opts: GatewayRequestHandlerOptions, action: string) {
   const config = opts.context.getRuntimeConfig().gateway?.openclawId;
   if (config?.enabled !== true) {
     opts.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "OpenClaw ID is off"));
     return;
   }
-  if (resolveOpenClawIdClientChannel(opts.client) !== "local_operator") {
+  const route = resolveOpenClawIdSignInRoute(opts.client);
+  const params = isRecord(opts.params) ? opts.params : {};
+  if (action === "account_device_begin" || action === "account_device_poll") {
+    const owner = opts.client?.authenticatedUserProfile?.profileId;
+    if (route !== "device" || !owner) {
+      refuse(opts, {
+        code: "not_personal_connection",
+        detail: "Sign in with OpenClaw ID through a personal sign-in such as Tailscale",
+      });
+      return;
+    }
+    try {
+      if (action === "account_device_begin") {
+        if (!config.issuerUrl || !config.clientId) {
+          refuse(opts, { code: "unconfigured", detail: "set issuerUrl and clientId to sign in" });
+          return;
+        }
+        respondSignIn(
+          opts,
+          await accountSignIn.beginDevice({
+            issuerUrl: config.issuerUrl,
+            clientId: config.clientId,
+            owner,
+          }),
+        );
+        return;
+      }
+      respondSignIn(opts, await accountSignIn.pollDevice({ state: params.state, owner }));
+    } catch (error) {
+      opts.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `OpenClaw ID sign-in failed: ${String(error)}`),
+      );
+    }
+    return;
+  }
+  if (route !== "popup") {
     refuse(opts, {
       code: "not_local_operator",
       detail: "Sign in with OpenClaw ID from the Control UI on this machine",
     });
     return;
   }
-  const params = isRecord(opts.params) ? opts.params : {};
   try {
     if (action === "account_begin") {
       if (!config.issuerUrl || !config.clientId) {
@@ -171,6 +217,8 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       status: service.status(),
       link,
       channel: resolveOpenClawIdClientChannel(opts.client) ?? null,
+      // How this connection signs in with OpenClaw ID: popup (loopback), device or not at all.
+      accountSignIn: resolveOpenClawIdSignInRoute(opts.client),
       // Whether openclawId.people will answer this client.
       owner,
       ...(owner ? { ownerDeviceCount: ownerDeviceCount ?? 0 } : {}),

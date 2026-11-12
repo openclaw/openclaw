@@ -9,6 +9,8 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { resolveOpenClawIdSignInRoute } from "./openclaw-id/channel.js";
 import { openclawIdHandlers } from "./server-methods/openclaw-id.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { TEST_OPERATOR_CLIENT, openWs } from "./server.auth.test-helpers.js";
@@ -35,6 +37,34 @@ async function withOpenClawIdGateway(run: (port: number) => Promise<void>) {
   await writeConfigFile({ gateway: { openclawId: OPENCLAW_ID } });
   await withGatewayServer(async ({ port }) => run(port));
 }
+
+// Calls openclawId.authority as `client` and returns the refusal code, if any.
+async function authorityRefusal(
+  client: unknown,
+  params: Record<string, unknown>,
+  openclawId: Record<string, unknown> = OPENCLAW_ID,
+) {
+  let refusal: string | undefined;
+  await openclawIdHandlers["openclawId.authority"]!({
+    params,
+    client,
+    respond: (_ok: boolean, _payload: unknown, error?: { details?: { code?: string } }) => {
+      refusal = error?.details?.code;
+    },
+    context: {
+      openclawIdService: {},
+      getRuntimeConfig: () => ({ gateway: { openclawId } }),
+    },
+  } as unknown as GatewayRequestHandlerOptions);
+  return refusal;
+}
+
+// A Control UI connection admitted with a verified identity's own profile (Tailscale Serve).
+const personal = {
+  connect: { role: "operator", scopes: ["operator.read"] },
+  internal: { authenticatedOperator: true },
+  authenticatedUserProfile: { profileId: "profile-josh" },
+};
 
 // Starts a sign-in over `ws` and returns the refusal code, if any.
 async function beginSignIn(ws: Awaited<ReturnType<typeof openWs>>, redirectUri: string) {
@@ -110,5 +140,77 @@ describe("OpenClaw ID sign-in locality", () => {
       },
     } as unknown as GatewayRequestHandlerOptions);
     expect(refusal).toBe("not_local_operator");
+  });
+});
+
+describe("OpenClaw ID sign-in over a personal sign-in", () => {
+  test.each([
+    ["the direct-loopback operator", { internal: { isLocalClient: true } }, "popup"],
+    ["a verified personal profile", personal, "device"],
+    [
+      "a shared token or password (the shared owner profile)",
+      { ...personal, authenticatedUserProfile: { profileId: GATEWAY_OWNER_PROFILE_ID } },
+      null,
+    ],
+    ["a connection without a profile", { ...personal, authenticatedUserProfile: undefined }, null],
+    [
+      "an OpenClaw ID member over the tunnel",
+      {
+        ...personal,
+        internal: { ...personal.internal, openclawIdPeerKey: `iroh:${"ab".repeat(32)}` },
+      },
+      null,
+    ],
+    [
+      "a host-bound remote ingress grant",
+      { ...personal, internal: { ...personal.internal, remoteIngressPrincipal: {} } },
+      null,
+    ],
+    ["a node", { ...personal, connect: { role: "node" } }, null],
+  ])("routes %s", (_name, client, route) => {
+    expect(resolveOpenClawIdSignInRoute(client as never)).toBe(route);
+  });
+
+  test("starts a device sign-in only for a personal connection, never the loopback popup", async () => {
+    // The gate passes, then the unconfigured issuer refuses: no request leaves the Gateway.
+    const unconfigured = { enabled: true };
+    expect(await authorityRefusal(personal, { action: "account_device_begin" }, unconfigured)).toBe(
+      "unconfigured",
+    );
+    for (const client of [
+      { ...personal, authenticatedUserProfile: { profileId: GATEWAY_OWNER_PROFILE_ID } },
+      {
+        ...personal,
+        internal: { ...personal.internal, openclawIdPeerKey: `iroh:${"ab".repeat(32)}` },
+      },
+      { internal: { isLocalClient: true } },
+      { internal: {} },
+    ]) {
+      for (const action of ["account_device_begin", "account_device_poll"]) {
+        expect(await authorityRefusal(client, { action })).toBe("not_personal_connection");
+      }
+    }
+    // A personal connection cannot use the loopback popup or get a Discovery link code.
+    for (const action of ["account_begin", "account_complete", "account_link_code"]) {
+      expect(await authorityRefusal(personal, { action, redirectUri: LOOPBACK_REDIRECT })).toBe(
+        "not_local_operator",
+      );
+    }
+  });
+
+  test("is unavailable while the OpenClaw ID Labs switch is off", async () => {
+    let error: { code?: string; message?: string } | undefined;
+    await openclawIdHandlers["openclawId.authority"]!({
+      params: { action: "account_device_begin" },
+      client: personal,
+      respond: (_ok: boolean, _payload: unknown, shape?: { code?: string; message?: string }) => {
+        error = shape;
+      },
+      context: {
+        openclawIdService: {},
+        getRuntimeConfig: () => ({ gateway: { openclawId: { ...OPENCLAW_ID, enabled: false } } }),
+      },
+    } as unknown as GatewayRequestHandlerOptions);
+    expect(error?.message).toBe("OpenClaw ID is off");
   });
 });
