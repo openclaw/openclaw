@@ -1039,3 +1039,8 @@
 .config-accordion-nav .config-accordion-group__item--active .settings-row__title {
   color: var(--text-strong);
 }
+
+/* Inherited values stay editable while remaining distinct from authored overrides. */
+.cfg-default-control {
+  opacity: 0.55;
+}
