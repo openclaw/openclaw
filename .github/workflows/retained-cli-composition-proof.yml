@@ -14,12 +14,12 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   BASE_SHA: e0dd0206412af448b324387435dd8fed6575fd7b
-  # Bound to the verified two-test repair; original BEFORE is unchanged.
-  CANDIDATE_SHA: c9b2e8fb8343a7e130b65695045b0617876165e8
-  SOURCE_TREE: 7ff9fe45ba9808cbabbffee26b6e585cb4e569be
-  PATCH_SHA256: e8839d182bae30c04aa53a31f756026fbd103af0ee2c213ee74770b7c7e23774
+  # Bound to the verified test and canonical formatting repairs; original BEFORE is unchanged.
+  CANDIDATE_SHA: ad8dd9457c79890e4f2a6ae37b8ac6802fdabd14
+  SOURCE_TREE: e6ac38dea6c8e5f733a88b50b3e113cbe75a26a3
+  PATCH_SHA256: 0f71aab466be921c5809bd5dd5f9974c88f88209afab3a547301e56f3c37afdf
   REPAIR_PARENT: d26d3ea3eb710ea964de48a34a5599a11fb0be49
-  REPAIR_PATCH_SHA256: 89f8fbc4bb4c13d2a9a5e39ec20bbffd8fc72ec04fb1194206e34dccd5874ed0
+  REPAIR_PATCH_SHA256: 58f6fa7df2c33593c4aafee9aededb0912dc9423e1218545834ae0e14725d29d
   WORKFLOW_PATH: .github/workflows/retained-cli-composition-proof.yml
 jobs:
   tests:
@@ -53,9 +53,9 @@ jobs:
           test "$TARGET_SHA" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-          test "$(git rev-parse HEAD^)" = "$REPAIR_PARENT"
+          test "$(git rev-parse HEAD~2)" = "$REPAIR_PARENT"
           test "$(git rev-parse "$REPAIR_PARENT^")" = "$BASE_SHA"
-          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 2
+          test "$(git rev-list --count "$BASE_SHA..HEAD")" = 3
           test -z "$(git status --porcelain)"
           git diff --name-only "$BASE_SHA" HEAD > "$evidence/changed-paths.txt"
           cat > "$evidence/expected-paths.txt" <<'PATHS'
@@ -69,7 +69,7 @@ jobs:
           git diff --no-ext-diff --no-textconv --no-renames --binary --full-index "$BASE_SHA" HEAD > "$evidence/source.patch"
           echo "$PATCH_SHA256  $evidence/source.patch" | sha256sum --check --strict
           git diff --name-only "$REPAIR_PARENT" HEAD > "$evidence/repair-paths.txt"
-          printf '%s\n' test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts > "$evidence/expected-repair-paths.txt"
+          printf '%s\n' scripts/check-changed.mts test/scripts/changed-lanes.test.ts test/scripts/check-changed-compiler-delegation.test.ts > "$evidence/expected-repair-paths.txt"
           cmp "$evidence/expected-repair-paths.txt" "$evidence/repair-paths.txt"
           git diff --no-ext-diff --no-textconv --no-renames --binary --full-index "$REPAIR_PARENT" HEAD > "$evidence/repair.patch"
           echo "$REPAIR_PATCH_SHA256  $evidence/repair.patch" | sha256sum --check --strict
