@@ -4,7 +4,6 @@ import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { z } from "zod";
 import type { DoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import {
@@ -49,6 +48,7 @@ import {
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
+import type { UpdateDatabaseBackupInput as BackupInput } from "./update-database-backup.types.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
   readUpdatePhysicalDatabaseObservation,
@@ -104,24 +104,6 @@ export type UpdateDatabaseBackup = z.infer<typeof UpdateDatabaseBackupSchema> & 
   restoreRefusalDiagnostics?: string[];
 };
 
-type BackupInput = {
-  backupRoot: string;
-  stateDir: string;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  additionalPaths?: readonly string[];
-  additionalFiles?: readonly string[];
-  preserveSourceArtifacts?: boolean;
-  integrityCheck?: "quick" | "full";
-  /** Native migration owns the stopped Gateway until Doctor takes custody. */
-  stopped?: boolean;
-  postgresOffline?: boolean;
-  /** Migration exporters may require a physical engine before any server export. */
-  sourceEngine?: "sqlite";
-  /** Manual recovery evidence: live commits after its coherent image change nothing it promises. */
-  originalState?: boolean;
-  pluginOwners?: UpdateDatabaseBackup["pluginOwners"];
-};
 type InspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
 
 async function loadUpdateDatabaseBackupRuntime() {
@@ -610,11 +592,17 @@ export async function createUpdateDatabaseBackup({
   const controller = new AbortController();
   const { discoverBackupDatabasePaths, readBackupEngines } =
     await prepareUpdateDatabaseBackupRuntime();
+  const discoveryInput = {
+    ...input,
+    sqliteHeaderProbeTimeoutMs: input.config.update?.sqliteHeaderProbeTimeoutMs,
+  };
   const prepared = Object.values(resolveDatabaseFamilyEngines(input.config)).includes("postgres")
-    ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
+    ? await (
+        await import("./backup-database-discovery.js")
+      ).preparePostgresBackupDiscovery(discoveryInput)
     : {
         // Read legacy SQLite registrations from the private inspection copy, before admission.
-        paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
+        paths: await discoverBackupDatabasePaths({ ...discoveryInput, agentRegistry: [] }),
         pluginOwners: undefined,
       };
   const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>

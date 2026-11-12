@@ -90,12 +90,19 @@ it.each([
   );
 });
 
-it("splits a batch that misses its deadline so slow storage still gets an answer", () => {
-  const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValueOnce(failed("ETIMEDOUT"));
-  spawn.mockReturnValueOnce(failed("ETIMEDOUT")).mockReturnValueOnce(answered(false, true));
-  spawn.mockReturnValueOnce(answered(false)).mockReturnValueOnce(answered(false, true));
-  const paths = ["/backup/a", "/backup/b.db", "/backup/c", "/backup/d", "/backup/e.db"];
-  const expected = new Map(paths.map((pathname) => [pathname, pathname.endsWith("db")]));
-  expect(probeSqliteDatabaseHeaders(paths)).toEqual(expected);
-  expect(spawn).toHaveBeenCalledTimes(5);
-});
+it.each([undefined, 120_000])(
+  "keeps the per-child deadline while splitting a batch (%s)",
+  (timeoutMs) => {
+    const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValueOnce(failed("ETIMEDOUT"));
+    spawn.mockReturnValueOnce(failed("ETIMEDOUT")).mockReturnValueOnce(answered(false, true));
+    spawn.mockReturnValueOnce(answered(false)).mockReturnValueOnce(answered(false, true));
+    const paths = ["/backup/a", "/backup/b.db", "/backup/c", "/backup/d", "/backup/e.db"];
+    const expected = new Map(paths.map((pathname) => [pathname, pathname.endsWith("db")]));
+    expect(probeSqliteDatabaseHeaders(paths, timeoutMs)).toEqual(expected);
+    expect(spawn).toHaveBeenCalledTimes(5);
+    // The child-process deadline is an external API contract, including retries.
+    for (const call of spawn.mock.calls) {
+      expect(call[2]?.timeout).toBe(timeoutMs ?? 10_000);
+    }
+  },
+);

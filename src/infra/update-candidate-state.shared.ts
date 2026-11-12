@@ -135,6 +135,7 @@ export async function collectSupplementalStateDatabasePaths(
     ).discoverBackupDatabasePaths({
       ...input,
       agentRegistry: [],
+      sqliteHeaderProbeTimeoutMs: input.config.update?.sqliteHeaderProbeTimeoutMs,
     }));
   for (const file of additionalPaths) {
     // Supplemental realpaths must not add aliases to the legacy versions inventory.

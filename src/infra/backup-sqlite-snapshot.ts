@@ -103,6 +103,7 @@ function stripSqliteSidecarSuffix(sourcePath: string): string {
 export function classifyBackupSqliteSource(
   sourcePath: string,
   inventory: BackupResourceInventory,
+  sqliteHeaderProbeTimeoutMs?: number,
 ): "excluded" | "sqlite" | "opaque" | "opaque-skip" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
   const withinOwnedRoot =
@@ -122,7 +123,10 @@ export function classifyBackupSqliteSource(
   if (!transient && !nameTrusted) {
     const answers = getOrCreateWeakOwnerMap(sqliteHeaderAnswers, inventory);
     if (!answers.has(databasePath)) {
-      for (const [pathname, sqlite] of probeSqliteDatabaseHeaders([databasePath])) {
+      for (const [pathname, sqlite] of probeSqliteDatabaseHeaders(
+        [databasePath],
+        sqliteHeaderProbeTimeoutMs,
+      )) {
         answers.set(pathname, sqlite);
       }
     }
@@ -150,6 +154,7 @@ export function classifyBackupSqliteSource(
 async function discoverBackupSqliteSources(params: {
   inventory: BackupResourceInventory;
   resourceRoots?: readonly string[];
+  sqliteHeaderProbeTimeoutMs?: number;
 }): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
@@ -209,11 +214,20 @@ async function discoverBackupSqliteSources(params: {
   const probePaths = [...candidates.map((entry) => entry.path), ...visitedDirectories]
     .map(stripSqliteSidecarSuffix)
     .filter((pathname) => !pathname.endsWith(".sqlite"));
-  for (const [pathname, sqlite] of probeSqliteDatabaseHeaders(probePaths)) {
+  for (const [pathname, sqlite] of probeSqliteDatabaseHeaders(
+    probePaths,
+    params.sqliteHeaderProbeTimeoutMs,
+  )) {
     answers.set(pathname, sqlite);
   }
   for (const entry of candidates) {
-    if (classifyBackupSqliteSource(entry.path, params.inventory) !== "sqlite") {
+    if (
+      classifyBackupSqliteSource(
+        entry.path,
+        params.inventory,
+        params.sqliteHeaderProbeTimeoutMs,
+      ) !== "sqlite"
+    ) {
       continue;
     }
     discoveredSourcePaths.add(entry.path);
@@ -240,6 +254,7 @@ export async function discoverBackupDatabasePaths(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   agentRegistry?: readonly OpenClawRegisteredAgentDatabase[];
+  sqliteHeaderProbeTimeoutMs?: number;
 }): Promise<string[]> {
   if (
     isMainThread &&
@@ -285,6 +300,7 @@ export async function discoverBackupDatabasePaths(params: {
       await discoverBackupSqliteSources({
         inventory,
         resourceRoots: resources.pluginResourceRoots,
+        sqliteHeaderProbeTimeoutMs: params.sqliteHeaderProbeTimeoutMs,
       })
     ).snapshotPaths,
   );
@@ -301,6 +317,7 @@ export async function discoverBackupDatabasePaths(params: {
 export async function createBackupSqliteSnapshotPlan(params: {
   resources: BackupResourcePlan;
   tempDir: string;
+  sqliteHeaderProbeTimeoutMs?: number;
   legacyAuditSnapshots: readonly LegacyAuditBackupSnapshot[];
   legacyAuditDatabaseWitness?: string;
   /** Only in an isolated backup process; preserves source artifacts and snapshot row IDs. */
@@ -612,7 +629,10 @@ export async function createBackupSqliteSnapshotPlan(params: {
     },
     coreDatabases,
   );
-  const discovery = await discoverBackupSqliteSources({ inventory });
+  const discovery = await discoverBackupSqliteSources({
+    inventory,
+    sqliteHeaderProbeTimeoutMs: params.sqliteHeaderProbeTimeoutMs,
+  });
   const { sources, groups } = await planBackupSqliteSources(inventory, discovery.snapshotPaths);
   for (const source of sources) {
     if (source.archiveSourcePath !== globalPath) {
@@ -656,6 +676,7 @@ export async function createLegacyAuditStateSnapshotPlan(params: {
   resources: BackupResourcePlan;
   stateDir: string;
   tempDir: string;
+  sqliteHeaderProbeTimeoutMs?: number;
   preserveSourceArtifacts?: boolean;
 }): Promise<BackupStateSnapshotPlan> {
   const stateDir = params.stateDir;
@@ -679,6 +700,7 @@ export async function createLegacyAuditStateSnapshotPlan(params: {
         resources: params.resources,
         tempDir: attemptDir,
         legacyAuditSnapshots: firstCapture.snapshots,
+        sqliteHeaderProbeTimeoutMs: params.sqliteHeaderProbeTimeoutMs,
         legacyAuditDatabaseWitness: firstCapture.databaseWitness,
       });
       await fs.mkdir(verificationDir, { recursive: true });

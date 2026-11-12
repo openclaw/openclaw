@@ -146,7 +146,12 @@ is required.
 SQLite header-probe timeouts report the discovery path count and link to the
 manual package-manager hop. A probe batch that misses its 10-second deadline now
 splits and retries, so slow or cold storage gets an answer; a path that cannot
-answer alone still refuses the backup. Backup refusal and rollback safety are
+answer alone still refuses the backup. Set `update.sqliteHeaderProbeTimeoutMs` in
+`openclaw.json` to a positive integer (milliseconds) to override the default
+`10000` for each probe batch during update discovery and migration captures. For
+example, `update: { sqliteHeaderProbeTimeoutMs: 120000 }` allows two minutes per
+batch. Split batches inherit the same timeout. This does not change the overall
+update deadline or the timeout of standalone `openclaw backup` commands. Backup refusal and rollback safety are
 unchanged. These changes require the updater performing discovery to contain the
 fix; a candidate cannot change an older installed updater's probe.
 
