@@ -451,7 +451,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
           token === "transparent" ? transparent : colorSwatch(`var(${token})`);
 
         // Exercise the state owner with real CSS and browser input. The component
-        // scenarios below separately prove Menu and BrowserTabCard composition.
+        // scenarios below separately prove Menu composition.
         const states = [
           {
             name: "neutral",
