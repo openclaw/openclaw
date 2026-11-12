@@ -703,3 +703,27 @@ it("requires gateway.roles.default to assign a named role from definitions alone
   });
   expect(setUserProfileRole).not.toHaveBeenCalled();
 });
+
+it("refuses assigning a member profile's role outside Access but permits clearing", async () => {
+  const isMemberProfile = vi.fn(async () => true);
+  const context = { ...roleConfig, openclawIdService: { isMemberProfile } };
+  const refused = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "guest" },
+    adminClient,
+    context,
+  );
+  expectError(refused, {
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("Access page"),
+  });
+  expect(setUserProfileRole).not.toHaveBeenCalled();
+  setUserProfileRole.mockReturnValue({ ...profile, role: null });
+  const cleared = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: null },
+    adminClient,
+    context,
+  );
+  expect(cleared).toHaveBeenCalledWith(true, { profile: { ...profile, role: null } });
+});

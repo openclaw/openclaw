@@ -1,0 +1,3 @@
+# Member-definition authority across transport admission, retained/recovered work,
+# required access-policy plugins, and real Gateway activation/reload persistence.
+634

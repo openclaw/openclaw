@@ -570,9 +570,13 @@ export async function finishGatewayStartup(params: {
       for (const nodeSession of runtime.nodeRegistry.refreshRuntimePolicy(nextConfig)) {
         refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
       }
+      // Preset persistence needs managed write preflight after this publication releases
+      // its secrets lock. The service's queue and stop handle own this reconciliation.
+      void runtime.openclawIdService.reconcileRuntimePolicy().catch((error: unknown) => {
+        logReload.warn(`OpenClaw ID policy reconciliation failed: ${String(error)}`);
+      });
       const reconciled = await Promise.allSettled([
         runtime.hostDesktopService.reconcileRuntimePolicy(),
-        runtime.openclawIdService.reconcileRuntimePolicy(),
         runtime.gatewayComputerService.reconcileRuntimePolicy(),
         workerEnvironmentService?.reconcileDesktopPolicy(),
         runtime.nodeDesktopService.reconcileRuntimePolicy(),

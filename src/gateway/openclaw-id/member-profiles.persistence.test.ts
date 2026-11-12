@@ -137,12 +137,17 @@ it("keeps canonical email and assigns a new approval time on direct member re-ad
       "tunnel",
     ),
   ).toMatchObject({ ok: true });
+  const { service } = serviceFor(claw.authority);
+  const bob = (await claw.authority.memberProfiles(["acct-bob"]))["acct-bob"]!;
+  expect(await service.isMemberProfile(bob.id)).toBe(true);
   expect(
     await claw.authority.submit(
       await claw.sign({ op: "remove", account_id: "acct-bob" }),
       "tunnel",
     ),
   ).toMatchObject({ ok: true });
+  expect(await service.isMemberProfile(bob.id)).toBe(false);
+  await service.stop();
   try {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(Date.now() + 60_000);

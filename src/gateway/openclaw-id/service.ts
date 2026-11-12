@@ -26,6 +26,7 @@ import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
+import { createMemberRolePresetActivation } from "./member-role-presets.js";
 import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { armLocalExpiry, createPeopleExpiry, ownerLifecycleEvents } from "./owner-lifecycle.js";
 import { createPublicationRetry } from "./publication-retry.js";
@@ -35,7 +36,7 @@ import { signOutTunnelPeer } from "./remote-signout.js";
 import { createServiceGatewayKey } from "./service-gateway-key.js";
 import { createServiceRebindOwner } from "./service-rebind-owner.js";
 import { appliedConfigKey, resolveSettings, sameSettings } from "./service-settings.js";
-import type { OpenClawIdStatus } from "./service-status.js";
+import { openClawIdTunnelStatus, type OpenClawIdStatus } from "./service-status.js";
 import { createTokenBindingPublisher } from "./service-token-bindings.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
 import {
@@ -43,7 +44,6 @@ import {
   notifyOpenClawIdTunnelPrincipalsChanged,
 } from "./tunnel-principal.js";
 import type { TunnelRuntime } from "./tunnel-runtime.js";
-import type { TunnelSupervisorStatus } from "./tunnel-supervisor.js";
 
 /** Side effects of membership changes that other Gateway owners perform. */
 export type OpenClawIdEffects = {
@@ -102,6 +102,7 @@ export function createOpenClawIdService(params: {
   createAuthority?: () => Promise<OpenClawIdAuthority>;
 }) {
   let status: OpenClawIdStatus = { state: "off" };
+  const memberRolePresets = createMemberRolePresetActivation(params.log);
   let appliedKey: string | undefined;
   let runtime: TunnelRuntime | undefined;
   let authority: OpenClawIdAuthority | undefined;
@@ -191,12 +192,6 @@ export function createOpenClawIdService(params: {
 
   const gatewayKey = createServiceGatewayKey({ getStateDir: params.getStateDir, getAuthority });
 
-  // A tunnel child that refused its endpoint key reports why; otherwise remote access is on.
-  const tunnelStatus = (tunnel: TunnelSupervisorStatus): OpenClawIdStatus =>
-    tunnel.state === "key_refused"
-      ? { state: "keys_refused", key: "endpoint", reason: tunnel.reason }
-      : { state: "on", tunnel };
-
   // Local membership needs inactivity upkeep even when remote access cannot start.
   const armOwnerExpiry = (owner: OpenClawIdAuthority) =>
     armLocalExpiry(owner, () => stopAuthorityChanges, params.getConfig, ownerExpiry);
@@ -242,6 +237,7 @@ export function createOpenClawIdService(params: {
 
   const reconcile = async () => {
     const config = params.getConfig();
+    await memberRolePresets.reconcile(!closed && isOpenClawIdEnabled(config));
     // A reconcile queued behind a full stop leaves this Gateway's lifetime closed.
     if (closed || !config || !isOpenClawIdEnabled(config)) {
       stopLocalAuthority();
@@ -292,11 +288,11 @@ export function createOpenClawIdService(params: {
             authority?.current()?.binding?.body.k_srv ?? lastBoundEndpointKey),
         log: params.log,
         onStatus: (tunnel) => {
-          status = tunnelStatus(tunnel);
+          status = openClawIdTunnelStatus(tunnel);
         },
         handleApi: handleTunnelApi,
       });
-      status = tunnelStatus(runtime.supervisor.status());
+      status = openClawIdTunnelStatus(runtime.supervisor.status());
       appliedKey = appliedConfigKey(config);
       await startMailbox();
       await revokeBoundTokens(await (await getAuthority()).orphanedTokens());
@@ -688,7 +684,8 @@ export function createOpenClawIdService(params: {
     },
     /** Current status; never touches the network. */
     status(): OpenClawIdStatus {
-      return status;
+      const reason = memberRolePresets.error();
+      return reason && status.state !== "off" ? { state: "failed", reason } : status;
     },
 
     /**

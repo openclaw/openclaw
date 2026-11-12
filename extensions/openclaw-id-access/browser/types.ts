@@ -27,6 +27,7 @@ export type MemberDevice = {
 export type Member = {
   accountId: string;
   role: string;
+  roleDefined?: boolean;
   peerKeys: string[];
   email?: string | null;
   displayName?: string | null;
@@ -72,6 +73,7 @@ export type Link = {
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];
+  roles?: Array<{ name: string; defined: boolean }>;
   invites?: Invite[];
   nodes?: NodeRecord[];
   nodeInvites?: NodeInvite[];

@@ -692,12 +692,20 @@ export const usersHandlers: GatewayRequestHandlers = {
     const { profileId, role } = params;
     const roleAssignmentError = () =>
       resolveUserRoleAssignmentError(() => context.getRuntimeConfig(), role);
-    const assignmentError = roleAssignmentError();
-    if (assignmentError) {
-      respondError(respond, ErrorCodes.INVALID_REQUEST, assignmentError);
-      return;
-    }
     try {
+      if (role !== null && (await context.openclawIdService?.isMemberProfile(profileId))) {
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "This member's role is managed on the Access page.",
+        );
+        return;
+      }
+      const assignmentError = roleAssignmentError();
+      if (assignmentError) {
+        respondError(respond, ErrorCodes.INVALID_REQUEST, assignmentError);
+        return;
+      }
       const assertCurrent = await prepareUserProfileAdministration(options);
       holdGatewayPolicyResponse(respond);
       const profile = await setCanonicalUserProfileRole(profileId, role, {

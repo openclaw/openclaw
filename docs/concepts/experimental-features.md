@@ -389,6 +389,38 @@ No service URL has a production default yet; the Gateway reports
 `unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
 [`openclawId` configuration keys](/gateway/config-gateway) for the full list.
 
+### Member roles
+
+OpenClaw ID members use their membership role's definition in
+`gateway.roles.definitions`, not a named role assigned to their Gateway profile.
+When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
+writes any missing presets without overwriting owner-edited definitions:
+
+- `operator`: other people's sessions are writable, all agents are allowed, and
+  scopes are `operator.read`, `operator.write`, `operator.approvals`,
+  `operator.questions`, and `operator.talk`.
+- `viewer`: other people's sessions are viewable, all agents are allowed, and the
+  only scope is `operator.sessions.read`. Viewers can read visible conversations,
+  but not logs, the private user directory, or Gateway-wide diagnostic catalogs.
+
+Presets are ordinary editable definitions, not reserved names or a hardcoded
+permission ceiling. Custom definitions may include `operator.admin`. A member
+whose role has no definition cannot connect or start retained/recovered work.
+Editing a definition reconnects affected members with current permissions;
+removing one denies that role. Missing presets are installed again on the next
+activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
+clearing a stored profile role with `null` remains allowed.
+
+Preset installation never sets or changes `gateway.roles.default` or
+`gateway.roles.assignments`. Without a default, other sign-in methods keep their
+existing behavior, including device-token-only reconnects. Existing team Gateways
+keep their default and enforcement. Owner devices and nodes are unchanged.
+A preset-write failure is logged and reported in OpenClaw ID service status;
+undefined member roles remain refused and owners retain access. Nothing is written
+while OpenClaw ID is off. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+
+### Managing remote access
+
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
 - **Account menu** (your avatar, bottom left of the sidebar): **Sign in with

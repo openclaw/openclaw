@@ -24,11 +24,12 @@ export function prepareGatewayConnectOperatorAccess(client: GatewayWsClient): vo
   }
   const profile = client.authenticatedUserProfile;
   const config = getRuntimeConfig();
-  if (hasGatewayOperatorAccessPolicies(config) && !profile) {
+  const source = { openclawIdPrincipal: client.internal?.openclawIdPrincipal };
+  if (hasGatewayOperatorAccessPolicies(config, source) && !profile) {
     throw new GatewayOperatorAccessDeniedError("profile-invalidated");
   }
   const operatorAccessAuthority = profile
-    ? resolveGatewayOperatorAccessAuthority(profile.profileId, config)
+    ? resolveGatewayOperatorAccessAuthority(profile.profileId, config, source)
     : undefined;
   if (operatorAccessAuthority !== undefined) {
     client.internal = { ...client.internal, operatorAccessAuthority };

@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   bytesToBase64url,
   formatEd25519PublicKey,
@@ -11,7 +11,12 @@ import {
   signStatement,
   type IrohEndpointKey,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
 import {
   linkedClaw,
   nowSeconds,
@@ -22,7 +27,13 @@ import {
 
 let server: http.Server | undefined;
 
+beforeEach(() =>
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+  }),
+);
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   server?.close();
   server = undefined;
 });

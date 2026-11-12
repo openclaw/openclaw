@@ -3,6 +3,7 @@ import type {
   IrohEndpointKey,
   MemberRole,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 import { listInviteViews } from "./invites-view.js";
@@ -57,7 +58,13 @@ export async function readOwnerLinkStatus(params: {
   const state = record?.authority;
   const { describeOwnerDevices } = await import("./owner-devices-view.js");
 
+  const members = state ? await describeMembers(state.members, record?.member_approved_at) : [];
+  const definitions = getRuntimeConfigSnapshot()?.gateway?.roles?.definitions ?? {};
+  const defined = (name: string) => Object.hasOwn(definitions, name);
   return {
+    roles: [...new Set([...Object.keys(definitions), ...members.map((member) => member.role)])]
+      .toSorted()
+      .map((name) => ({ name, defined: defined(name) })),
     linked: Boolean(state),
     clawId: record?.claw_id,
     hostname: record?.hostname ?? undefined,
@@ -73,7 +80,7 @@ export async function readOwnerLinkStatus(params: {
         }
       : undefined,
     ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
-    members: state ? await describeMembers(state.members, record?.member_approved_at) : [],
+    members: members.map((member) => Object.assign(member, { roleDefined: defined(member.role) })),
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
     nodes: Object.entries(state?.nodes ?? {}).map(([peerKey, node]) => ({
       peerKey,
