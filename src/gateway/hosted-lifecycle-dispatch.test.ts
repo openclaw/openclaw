@@ -7,7 +7,11 @@ import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gatewa
 import { deleteCronSessionViaGateway } from "../cron/isolated-agent/session-cleanup.js";
 import { resolveQuestionOverGateway } from "../infra/question-gateway-resolver.js";
 import { listSpawnedSessionKeysWithResult } from "../plugin-sdk/session-visibility-internal.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -103,6 +107,33 @@ describe("hosted lifecycle Gateway dispatch", () => {
       },
     );
     expect(socketCall).not.toHaveBeenCalled();
+  });
+
+  it("reads child history under fresh plugin admission after the parent scope closes", async () => {
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "history-owner" });
+    registry.plugins.push(record);
+    const instance = new PluginInstance(record.id, { record, registry });
+    const invocation = new PluginInvocationScope(registry, [instance], { retained: true });
+    const historyPlugin = instance.wrap(() => "child failure");
+    const stalePlugin = invocation.wrap(historyPlugin);
+    const invoke = invocation.run(() => AsyncLocalStorage.snapshot());
+    const context = createContext({
+      "chat.history": ({ respond }) => respond(true, { messages: [historyPlugin()] }),
+    });
+    const readHistory = bindGatewayLifecycleRequest(() => context);
+    invocation.release();
+    try {
+      expect(() => stalePlugin()).toThrow("Plugin history-owner consumer is closed");
+      await expect(
+        invoke(() => readHistory({ method: "chat.history", params: {} })),
+      ).resolves.toEqual({ messages: ["child failure"] });
+      expect(() => stalePlugin()).toThrow("Plugin history-owner consumer is closed");
+      expect(socketCall).not.toHaveBeenCalled();
+    } finally {
+      invocation.release();
+      await instance.dispose();
+    }
   });
 
   it("keeps cron and detached subagent cleanup on their Gateway with lifecycle preconditions", async () => {

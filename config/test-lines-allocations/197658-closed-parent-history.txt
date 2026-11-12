@@ -1,0 +1,2 @@
+# Closed parent plugin scope history regression adapted to release fixtures.
+31
