@@ -1,0 +1,2 @@
+# Exact net test-line growth from the claude-cli replacement system prompt fix (#197166): asserts appendSystemPrompt is absent from initialize.
+2
