@@ -213,6 +213,7 @@ export async function runTrustedToolPolicies(
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
+  let requestMeta: PluginHookBeforeToolCallResult["requestMeta"];
   const sessionExtensionStateCache = new Map<string, Record<string, PluginJsonValue> | undefined>();
   let resolvedSessionConfig: OpenClawConfig | undefined = options?.config;
   let didResolveSessionConfig = Boolean(options?.config);
@@ -333,16 +334,25 @@ export async function runTrustedToolPolicies(
       if ("requireApproval" in decision && decision.requireApproval && !approval) {
         approval = decision.requireApproval;
       }
+      // Same contract as the before_tool_call hook merge: shallow per-key,
+      // later policies win per key, kept even alongside params/approval and
+      // for metadata-only decisions.
+      if ("requestMeta" in decision && isPlainObject(decision.requestMeta)) {
+        requestMeta = requestMeta
+          ? { ...requestMeta, ...decision.requestMeta }
+          : decision.requestMeta;
+      }
     } catch {
       ctx.abortSignal?.throwIfAborted();
       return trustedPolicyFailureResult(registration, "policy decision is unreadable");
     }
   }
-  if (!hasAdjustedParams && !approval) {
+  if (!hasAdjustedParams && !approval && !requestMeta) {
     return undefined;
   }
   return {
     ...(hasAdjustedParams ? { params: adjustedParams } : {}),
     ...(approval ? { requireApproval: approval } : {}),
+    ...(requestMeta ? { requestMeta } : {}),
   };
 }

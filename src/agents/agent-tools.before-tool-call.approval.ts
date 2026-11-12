@@ -211,6 +211,8 @@ type PluginToolApprovalParams = {
   signal?: AbortSignal;
   baseParams: unknown;
   overrideParams?: unknown;
+  /** Hook-authored request metadata carried onto a granted outcome. */
+  requestMeta?: Record<string, unknown>;
 };
 
 /**
@@ -274,6 +276,7 @@ async function requestPluginToolApprovalDecision(
         blocked: false,
         params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
         approvalResolution: resolution,
+        ...(params.requestMeta ? { requestMeta: params.requestMeta } : {}),
       };
     }
     return resolution === PluginApprovalResolutions.DENY
@@ -505,6 +508,7 @@ export async function requestDeferredPluginToolApproval(params: {
     signal: params.signal,
     baseParams: deferred.baseParams,
     overrideParams: deferred.overrideParams,
+    requestMeta: deferred.requestMeta,
   });
 }
 
@@ -541,12 +545,14 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     ...(params.ctx ? { ctx: params.ctx } : {}),
     baseParams: baseParamsSnapshot,
     overrideParams: overrideParamsSnapshot,
+    ...(params.result?.requestMeta ? { requestMeta: params.result.requestMeta } : {}),
   });
   if (params.approvalMode === "defer") {
     return {
       blocked: false,
       params: cloneHookIsolationValue("before_tool_call", baseParamsSnapshot),
       deferredApproval: createDeferredApproval(),
+      ...(params.result?.requestMeta ? { requestMeta: params.result.requestMeta } : {}),
     };
   }
   if (params.approvalMode === "report") {

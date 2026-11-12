@@ -50,6 +50,17 @@ import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js"
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 
+/** Later contributors win per key; mirrors the hook-result merge contract. */
+function mergeBeforeToolCallRequestMeta(
+  base: Record<string, unknown> | undefined,
+  next: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!next) {
+    return base;
+  }
+  return base ? { ...base, ...next } : next;
+}
+
 /** Keep receipt routing private without widening observable hook outcomes. */
 function markPrivateDecision(
   outcome: HookOutcome,
@@ -284,6 +295,7 @@ export async function runBeforeToolCallHook(args: {
     let finalParams = approvedParamsSnapshot ?? policyAdjustedParams;
     let finalApprovalResolution = trustedApprovalResolution;
     let ownerDecisionMarked = false;
+    let hookRequestMeta: Record<string, unknown> | undefined;
     if (hasBeforeToolCallHooks) {
       const hookParamsValue = trustedApprovalBoundary
         ? cloneHookIsolationValue("before_tool_call", approvedParamsSnapshot)
@@ -314,6 +326,7 @@ export async function runBeforeToolCallHook(args: {
         policyAdjustedToolContext,
         receipt,
       );
+      hookRequestMeta = hookResult?.requestMeta;
 
       if (hookResult?.block) {
         return {
@@ -383,9 +396,14 @@ export async function runBeforeToolCallHook(args: {
         });
       }
     }
+    const requestMeta = mergeBeforeToolCallRequestMeta(
+      trustedPolicyResult?.requestMeta,
+      hookRequestMeta,
+    );
     const allowed: HookOutcome = {
       blocked: false as const,
       params: finalParams,
+      ...(requestMeta ? { requestMeta } : {}),
     };
     if (ownerDecisionMarked || finalApprovalResolution) {
       markPrivateDecision(allowed, "ownerDecision");
