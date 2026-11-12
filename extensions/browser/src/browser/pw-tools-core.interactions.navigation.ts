@@ -8,6 +8,7 @@ import {
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
+import { translateCrashedPageError } from "./pw-session-crash-state.js";
 import {
   assertPageNavigationCompletedSafely,
   getPageForTargetId,
@@ -19,7 +20,6 @@ import {
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
-import { translateCrashedPageError } from "./pw-session-crash-state.js";
 import { toAIFriendlyError } from "./pw-tools-core.shared.js";
 
 export type InteractionTargetOptions = {
