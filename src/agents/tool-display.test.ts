@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import CLIENT_TOOL_DISPLAY from "../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
+import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 import {
   hasShellCompoundCommand,
   scanTopLevelChars,
@@ -16,6 +18,23 @@ import {
 function detailFor(name: string, args: unknown) {
   return formatToolDetail(resolveToolDisplay({ name, args }));
 }
+
+it("ships client display fields without Gateway-only progress metadata", () => {
+  const clientTools: Record<string, unknown> = CLIENT_TOOL_DISPLAY.tools;
+  for (const [name, source] of Object.entries(TOOL_DISPLAY_CONFIG.tools)) {
+    const { progress: _progress, actions, ...display } = source;
+    const clientActions =
+      actions &&
+      Object.fromEntries(
+        Object.entries(actions).map(([action, { progress: _actionProgress, ...actionDisplay }]) => [
+          action,
+          actionDisplay,
+        ]),
+      );
+    expect(clientTools[name]).toEqual(actions ? { ...display, actions: clientActions } : display);
+  }
+  expect(CLIENT_TOOL_DISPLAY.fallback).toEqual(TOOL_DISPLAY_CONFIG.fallback);
+});
 
 function execDetail(command: string, detailMode?: "explain", workdir?: string, name = "exec") {
   return formatToolDetail(resolveToolDisplay({ name, args: { command, workdir }, detailMode }));
