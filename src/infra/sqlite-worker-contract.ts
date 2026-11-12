@@ -187,7 +187,10 @@ export const SQLITE_WORKER_MAX_MESSAGE_BYTES = 32 * 1024 * 1024;
 // Larger complete results use bounded frames; this remains the inline reply budget.
 export const SQLITE_WORKER_MAX_RESULT_BYTES = 64 * 1024 * 1024;
 
-/** Only the factory's admission before agent open may certify this refusal. */
+/**
+ * Certifies a refused open that left no agent handle: the factory's admission refused it before
+ * agent open, or the host refused an existing database's open after cleanup closed its handle.
+ */
 export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerOpenRefusedError"),
   () =>

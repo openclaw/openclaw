@@ -1,0 +1,2 @@
+# Exact net test-line growth for #194032: regressions proving a host refusal of an existing agent database open keeps the SQLite Worker instead of retiring it.
+56

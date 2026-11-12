@@ -51,7 +51,10 @@ import {
   openOpenClawAgentDatabaseInWorker,
   runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
-import { createAgentDatabaseExecutionCloser } from "./openclaw-agent-execution-close.js";
+import {
+  createAgentDatabaseExecutionCloser,
+  isOpenRefusalWithoutHandle,
+} from "./openclaw-agent-execution-close.js";
 import type {
   AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionOpen,
@@ -95,16 +98,7 @@ export function createSqliteWorkerBackend(
     backend.assertSettled?.();
     return backend;
   } catch (error) {
-    try {
-      backend.closeAfterFailedOpen();
-    } catch (cleanupError) {
-      throw createSqliteLifecycleAggregateError(
-        [error, cleanupError],
-        "Agent creation and cleanup failed",
-        error,
-      );
-    }
-    throw error;
+    throw backend.closeAfterFailedOpen(error);
   }
 }
 
@@ -118,7 +112,9 @@ function openAgentDatabaseBackend(
   input: AgentDatabaseFileExecutionOpen,
   opening: { databasePath: string; existingIdentity?: string },
   preparingCreation = false,
-): SqliteWorkerPreparedBackend<AgentDatabaseOperations> & { closeAfterFailedOpen(): void } {
+): SqliteWorkerPreparedBackend<AgentDatabaseOperations> & {
+  closeAfterFailedOpen(error: unknown): unknown;
+} {
   if (opening.databasePath !== input.databasePath) {
     throw new Error("Agent database open does not match its captured execution owner");
   }
@@ -290,8 +286,9 @@ function openAgentDatabaseBackend(
         releaseBorrow = retainAgentDatabase(opened.db);
         openingResult = { ok: true, value: opened };
       } catch (error) {
-        // An explicit pre-open refusal cannot retain a native handle.
-        if (!(error instanceof SqliteWorkerOpenRefusedError)) {
+        // An explicit pre-open refusal cannot retain a native handle, and the opener closes its
+        // handle and releases its lease before a later host refusal reaches this frame.
+        if (!isOpenRefusalWithoutHandle(error, input)) {
           materializeErrorStack(error);
           openingFailure = { error };
         }
@@ -568,7 +565,7 @@ function openAgentDatabaseBackend(
         releaseBorrow,
         sharedBorrow,
       };
-    }),
+    }, input),
     prepare(command) {
       if (isSessionActorCommand(command)) {
         return import("../config/sessions/session-actor.worker.js").then(

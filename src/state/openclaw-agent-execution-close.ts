@@ -1,6 +1,9 @@
 import { collectSynchronousErrors } from "../infra/error-graph-internal.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import {
   onSqliteWalCheckpoint,
@@ -8,12 +11,18 @@ import {
 } from "../infra/sqlite-wal-checkpoint.js";
 import {
   SQLITE_WORKER_CLOSE_RECEIPT,
+  SqliteWorkerOpenRefusedError,
   type SqliteWorkerCloseReceipt,
 } from "../infra/sqlite-worker-contract.js";
+import { currentSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-settlement.js";
 import { stopAgentDatabaseWalMaintenance } from "./openclaw-agent-db-close.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-lifecycle.js";
-import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execution-contract.js";
+import { isOpenClawAgentDatabaseOpen } from "./openclaw-agent-db.js";
+import type {
+  AgentDatabaseFileExecutionIdentity,
+  AgentDatabaseFileExecutionOpen,
+} from "./openclaw-agent-execution-contract.js";
 
 type AgentDatabaseExecutionCloseState = {
   database: OpenClawAgentDatabase | undefined;
@@ -23,22 +32,55 @@ type AgentDatabaseExecutionCloseState = {
   releaseBorrow: (() => void) | undefined;
 };
 
+/**
+ * True for an explicit pre-open refusal, and for the host refusing an existing database's open
+ * (for example, for a cancelled caller) once the opener closed its handle. Neither leaves native
+ * state for Worker retirement to reclaim. A refused cold creation still retires the Worker, so
+ * its cleanup fences readers of the partly created file.
+ */
+export function isOpenRefusalWithoutHandle(
+  error: unknown,
+  opening: AgentDatabaseFileExecutionOpen,
+): boolean {
+  return (
+    error instanceof SqliteWorkerOpenRefusedError ||
+    (opening.creatingIdentity === undefined &&
+      currentSqliteWorkerOperationAdmission.getStore()?.owner.refusal === error &&
+      !isOpenClawAgentDatabaseOpen(opening.databasePath))
+  );
+}
+
 /** Keep the native receipt and both cleanup modes with the same retirement owner. */
 export function createAgentDatabaseExecutionCloser(
   capture: () => AgentDatabaseExecutionCloseState & {
     sharedBorrow: { release(): void; releaseAsync(): Promise<void> } | undefined;
   },
+  opening: AgentDatabaseFileExecutionOpen,
 ) {
   let receipt: SqliteWorkerCloseReceipt | undefined;
   return {
     [SQLITE_WORKER_CLOSE_RECEIPT]: () => receipt,
-    closeAfterFailedOpen() {
+    /** Closes a failed eager open and returns the failure its open job reports. */
+    closeAfterFailedOpen(error: unknown): unknown {
       const { sharedBorrow, ...state } = capture();
       receipt = undefined;
-      receipt = closeAgentDatabaseExecution({
-        ...state,
-        releaseSharedBorrow: () => sharedBorrow?.release(),
-      });
+      try {
+        receipt = closeAgentDatabaseExecution({
+          ...state,
+          releaseSharedBorrow: () => sharedBorrow?.release(),
+        });
+      } catch (cleanupError) {
+        return createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "Agent creation and cleanup failed",
+          error,
+        );
+      }
+      // Cleanup closed every handle, so a host refusal reaches the broker as a refused open.
+      return !(error instanceof SqliteWorkerOpenRefusedError) &&
+        isOpenRefusalWithoutHandle(error, opening)
+        ? new SqliteWorkerOpenRefusedError(error)
+        : error;
     },
     async close() {
       const { sharedBorrow, ...state } = capture();
