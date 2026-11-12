@@ -273,7 +273,7 @@ describe("task facts", () => {
       });
     });
     // Five declare runtime listing; ONNX presets are local artifacts; Rerank has no fixed list.
-    expect(unhosted.join()).toBe("baseten,clawrouter,levanto,onnx,openai,openrouter,rerank");
+    expect(unhosted.join(",")).toBe("baseten,clawrouter,levanto,onnx,openai,openrouter,rerank");
   });
 
   it("does not use native-only rows to satisfy the released chat catalog floor", async () => {
