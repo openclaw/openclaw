@@ -68,6 +68,14 @@ suite.define(() => {
           );
           await input.press("Tab");
           await page.evaluate(() => document.fonts.ready);
+          // Anchors are measured after the card settles from its mode glide.
+          await page.evaluate(() =>
+            Promise.allSettled(
+              (document.querySelector(".cmd-palette-stack")?.getAnimations() ?? []).map(
+                (animation) => animation.finished,
+              ),
+            ),
+          );
           const images = palette.locator(".chat-attachment-thumb img");
           const start = palette.getByRole("button", {
             name: "Start new session in background",

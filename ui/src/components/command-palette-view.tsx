@@ -1,5 +1,4 @@
 import { createDeferred } from "@solidjs/signals";
-import type { JSX as SolidJSX } from "@solidjs/web";
 import {
   createMemo,
   Errored,
@@ -25,7 +24,6 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
@@ -50,10 +48,12 @@ import {
 import { COMMAND_PALETTE_DIALOG_STYLE } from "./command-palette-contract.ts";
 import {
   COMMAND_PALETTE_INPUT_ID,
+  CommandPaletteDock,
+  CommandPaletteHint,
   CommandPaletteInput,
-  CommandPaletteModes,
 } from "./command-palette-input.tsx";
 import { createCommandPaletteMatches } from "./command-palette-matches.ts";
+import { createModeGlide } from "./command-palette-mode-glide.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
@@ -64,7 +64,7 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import "./modal-dialog.tsx";
 import "./tooltip.ts";
-import { Kbd, ShortcutHint, ShortcutText } from "./solid/kbd.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint, ShortcutText } from "./solid/kbd.tsx";
 
 registerCommandPaletteEnglish();
 
@@ -255,16 +255,6 @@ function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: Command
   return { hideSearch, matches, grouped, items, activeIndex };
 }
 
-function PaletteHint(props: { shortcut: SolidJSX.Element; label: string }) {
-  return (
-    <Show when={keyboardHintsVisible()}>
-      <span class="cmd-palette__hint">
-        {props.shortcut} <span>{props.label}</span>
-      </span>
-    </Show>
-  );
-}
-
 function PaletteSearch(props: {
   readProps: () => CommandPaletteProps;
   readCurrentProps: () => CommandPaletteProps;
@@ -437,25 +427,20 @@ function PaletteSearch(props: {
           </Show>
         </div>
       </Show>
-      <div id="cmd-palette-keys" class="cmd-palette__footer cmd-palette__footer--keys">
-        <Show when={current().archivedTranscriptsExcluded > 0}>
+      <Show when={current().archivedTranscriptsExcluded > 0}>
+        <div class="cmd-palette__footer">
           <span class="cmd-palette__archive-note" role="status">
             {t("palette.archivedSessionsExcluded")}
           </span>
-        </Show>
-        <Show when={results().items.length > 0 && !current().query.includes("\n")}>
-          <PaletteHint shortcut={<Kbd keys={["↑", "↓"]} />} label={t("palette.footer.navigate")} />
-          <Show when={!isMobileBrowserPlatform()}>
-            <PaletteHint shortcut={<Kbd keys="↵" />} label={t("palette.footer.select")} />
-          </Show>
-        </Show>
-      </div>
+        </div>
+      </Show>
     </>
   );
 }
 
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   let initialInput!: HTMLTextAreaElement;
+  let stack!: HTMLDivElement;
   // Share one presentation snapshot; event handlers retain synchronous owner reads.
   const current = createMemo(() => props.readProps());
   const readCurrent = () => props.readProps();
@@ -490,6 +475,10 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const mentionListboxId = () => paneDomId(current().mentionHost.paneId, "mention-menu-listbox");
   const mentionAnnouncementId = () =>
     paneDomId(current().mentionHost.paneId, "mention-announcement");
+  createModeGlide(
+    () => current().mode,
+    () => stack,
+  );
   const reason = () =>
     current().draft.disabledReason ??
     (current().draft.hasPrompt ? undefined : t("palette.promptRequired"));
@@ -513,12 +502,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
         }}
       >
         {/* The dialog relocates its direct children; conditional rows need a stable parent. */}
-        <div class="cmd-palette-stack">
-          <CommandPaletteModes
-            mode={current().mode}
-            onChange={current().onModeChange}
-            disabled={current().composing || current().draft.submitting}
-          />
+        <div ref={(element) => (stack = element)} class="cmd-palette-stack">
           <div
             id="cmd-palette-panel"
             role="tabpanel"
@@ -692,6 +676,34 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               {error()}
             </div>
           </Show>
+          <CommandPaletteDock
+            mode={current().mode}
+            onChange={current().onModeChange}
+            disabled={current().composing || current().draft.submitting}
+          >
+            <Show
+              when={hideSearch()}
+              fallback={
+                <Show when={results().items.length > 0 && !current().query.includes("\n")}>
+                  <CommandPaletteHint
+                    shortcut={<Kbd keys={["↑", "↓"]} />}
+                    label={t("palette.footer.navigate")}
+                  />
+                  <Show when={!isMobileBrowserPlatform()}>
+                    <CommandPaletteHint
+                      shortcut={<Kbd keys="↵" />}
+                      label={t("palette.footer.select")}
+                    />
+                  </Show>
+                </Show>
+              }
+            >
+              <CommandPaletteHint
+                shortcut={<KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.modifiedEnter} />}
+                label={t("palette.footer.send")}
+              />
+            </Show>
+          </CommandPaletteDock>
         </div>
       </openclaw-modal-dialog>
       <PaletteSessionAuxiliary draft={current().draft} revision={current()} />

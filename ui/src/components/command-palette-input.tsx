@@ -1,18 +1,38 @@
-import { createMemo, onSettled } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { keyboardHintsVisible } from "../lib/reactive/keyboard-hints.ts";
 import { createLayoutMeasurement } from "../lib/reactive/layout-measurement.ts";
 import { liveValue as createLiveValue } from "../lib/reactive/live-value.ts";
 import type { CommandPaletteMode } from "./command-palette-contract.ts";
+import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { Tabs } from "./solid/tabs.tsx";
 
-export function CommandPaletteModes(props: {
+const MODE_ICONS = { search: "search", compose: "pencil" } as const;
+
+export function CommandPaletteHint(props: { shortcut: JSX.Element; label: string }) {
+  return (
+    <Show when={keyboardHintsVisible()}>
+      <span class="cmd-palette__hint">
+        {props.shortcut}
+        <span>{props.label}</span>
+      </span>
+    </Show>
+  );
+}
+
+/** The footer the panel sits on: the mode switch, then the keys for the current mode. */
+export function CommandPaletteDock(props: {
   mode: CommandPaletteMode;
   disabled?: boolean;
   onChange: (mode: CommandPaletteMode) => void;
+  /** Keys for the current mode, placed before the Tab switch. */
+  children?: JSX.Element;
 }) {
+  const other = () => (props.mode === "search" ? "compose" : "search");
   return (
-    <div class="cmd-palette__modes">
+    <div class="cmd-palette__dock">
       <Tabs
         class="cmd-palette__mode-tabs"
         ariaLabel={t("palette.modeLabel")}
@@ -26,16 +46,19 @@ export function CommandPaletteModes(props: {
           disabled: props.disabled,
           label: (
             <>
-              <span class="cmd-palette__mode-label">{t(`palette.modes.${mode}`)}</span>
-              {/* The selected weight must not move the neighboring tab. */}
-              <span class="cmd-palette__mode-reserve" aria-hidden="true">
-                {t(`palette.modes.${mode}`)}
-              </span>
+              <Icon name={MODE_ICONS[mode]} />
+              <span>{t(`palette.modes.${mode}`)}</span>
             </>
           ),
         }))}
       />
-      <Kbd class="cmd-palette__mode-key" keys="Tab" ariaHidden />
+      <div id="cmd-palette-keys" class="cmd-palette__keys">
+        {props.children}
+        <CommandPaletteHint
+          shortcut={<Kbd keys="Tab" />}
+          label={t(`palette.modeSwitch.${other()}`)}
+        />
+      </div>
     </div>
   );
 }

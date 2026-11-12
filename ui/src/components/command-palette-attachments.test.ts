@@ -120,7 +120,7 @@ async function mount(options: Parameters<typeof createDraftFixture>[0] = {}) {
 }
 
 describe("command palette attachments", () => {
-  it("owns dropped files immediately, retains intent through failures/removal, and keeps the chosen mode for an empty draft", async () => {
+  it("owns dropped files immediately, retains intent through failures/removal, and returns an emptied draft to Search", async () => {
     const { palette, input, query, start, create, context } = await mount();
     const surface = query<HTMLElement>(".cmd-palette")!;
     const dispatch = (type: string, files: File[] = []) => {
@@ -160,9 +160,10 @@ describe("command palette attachments", () => {
     expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(true);
     key(input, { key: "Enter" });
     expect(context.navigate).not.toHaveBeenCalled();
+    // The files chose Compose, not the person, so an empty draft goes back to Search.
     setInputValue(input, "");
     await palette.updateComplete;
-    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(true);
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(false);
   });
 
   it("keeps ready and pending attachments when dismissed, but releases them on disconnect", async () => {
@@ -269,7 +270,7 @@ describe("command palette attachments", () => {
     await openPalette(palette);
     expect(query('[role="alert"]')).toBeNull();
     expect(query(".chat-attachment-thumb")).toBeNull();
-    expect(start().disabled).toBe(true);
+    expect(query(".cmd-palette__search")?.hasAttribute("inert")).toBe(false);
   });
 
   it.each([

@@ -2843,8 +2843,8 @@ select.data-table-pagination__size {
   display: none;
 }
 
-/* One card: the panel sits in a sunken shelf that shares its edge and radius.
-   The shelf stays above the panel, so switching content moves neither. */
+/* One card: the panel sits on a sunken dock that shares its edge and radius.
+   The panel's rounded bottom ends inside the dock, which holds the mode switch and keys. */
 .cmd-palette-stack {
   --composer-attached-surface: color-mix(
     in srgb,
@@ -2854,7 +2854,8 @@ select.data-table-pagination__size {
   display: flex;
   flex-direction: column;
   width: 100%;
-  max-height: calc(100dvh - var(--cmd-palette-top) - 24px);
+  /* The visible canvas, so a phone keyboard shortens the results and the dock stays in view. */
+  max-height: calc(var(--shell-canvas-height, 100dvh) - var(--cmd-palette-top) - 24px);
   overflow: hidden;
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: var(--chat-composer-corner-shape);
@@ -2863,13 +2864,13 @@ select.data-table-pagination__size {
     var(--bg-content, var(--bg));
 }
 
-.cmd-palette__modes {
+.cmd-palette__dock {
   display: flex;
   flex: 0 0 var(--cmd-palette-dock-height);
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding-inline: 8px;
+  gap: 12px;
+  min-width: 0;
+  padding-inline: 6px 14px;
 }
 
 .cmd-palette__mode-tabs {
@@ -2879,36 +2880,27 @@ select.data-table-pagination__size {
 }
 
 .cmd-palette__mode {
-  display: inline-grid;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  gap: 6px;
   height: 28px;
-  padding: 0 10px;
-  /* Concentric with the card: its radius minus the shelf's inset. */
+  padding: 0 10px 0 9px;
+  /* Concentric with the card: its radius minus the dock's inset. */
   border-radius: calc(14px * var(--openclaw-corner-radius-scale));
   corner-shape: var(--chat-composer-corner-shape);
   color: var(--muted);
   font-size: 13px;
   font-weight: var(--control-ui-font-weight-normal);
+  white-space: nowrap;
   transition:
     color var(--duration-fast) ease,
     background var(--duration-fast) ease;
 }
 
-.cmd-palette__mode-label,
-.cmd-palette__mode-reserve {
-  grid-area: 1 / 1;
-}
-
-/* Only the reserve sizes the tab: a regular label can run a fraction wider than the bold one. */
-.cmd-palette__mode-label {
-  width: 0;
-  min-width: 100%;
-  white-space: nowrap;
-}
-
-.cmd-palette__mode-reserve {
-  visibility: hidden;
-  font-weight: var(--control-ui-font-weight-semibold);
+.cmd-palette__mode svg {
+  width: 14px;
+  height: 14px;
 }
 
 .cmd-palette__mode:hover:not([aria-selected="true"], :disabled) {
@@ -2916,14 +2908,33 @@ select.data-table-pagination__size {
   color: var(--text-strong);
 }
 
-/* The selected tab takes the panel's surface, so it reads as part of the panel. */
+/* The selected pill is made of the panel's surface and edge. */
 .cmd-palette__mode[aria-selected="true"] {
   background: var(--chat-composer-surface);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-strong) 8%, transparent);
   color: var(--text-strong);
-  font-weight: var(--control-ui-font-weight-semibold);
 }
 
-.cmd-palette__mode-key,
+.cmd-palette__keys {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* The first-open palette shows these keys before the palette sheet loads. */
+.cmd-palette__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .cmd-palette__hint .shortcut-kbd {
   display: inline-flex;
   align-items: center;
@@ -2943,18 +2954,24 @@ select.data-table-pagination__size {
   line-height: 1;
 }
 
-.cmd-palette__modes .cmd-palette__mode-key {
-  margin-inline-end: 10px;
-}
-
+/* A phone has no keys to teach; the switch takes the whole dock. */
 @media (max-width: 560px) {
-  .cmd-palette__mode {
-    height: 32px;
+  .cmd-palette__dock {
+    padding-inline: 6px;
   }
 
-  /* A phone has no Tab key to teach. */
-  .cmd-palette__modes .cmd-palette__mode-key {
+  .cmd-palette__keys {
     display: none;
+  }
+
+  .cmd-palette__mode-tabs {
+    display: flex;
+    flex: 1;
+  }
+
+  .cmd-palette__mode {
+    flex: 1;
+    height: 32px;
   }
 }
 
@@ -2965,7 +2982,8 @@ select.data-table-pagination__size {
   position: relative;
   display: flex;
   flex-direction: column;
-  flex: 0 1 auto;
+  /* Fills the card while its height glides, so the dock stays at the bottom. */
+  flex: 1 1 auto;
   width: 100%;
   min-height: 0;
   overflow: hidden;
@@ -2989,11 +3007,15 @@ select.data-table-pagination__size {
 }
 
 :root[data-theme-mode] .cmd-palette-overlay .cmd-palette {
+  /* The composer never shrinks; this panel must, so a short card keeps its dock. */
+  flex-shrink: 1;
   border: 0;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--text-strong) 6%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--text-strong) 6%, transparent),
+    0 1px 3px rgb(0 0 0 / 6%);
 }
 
-/* A light page sits close to the panel, so the shelf needs one more step to read as sunken. */
+/* A light page sits close to the panel, so the dock needs one more step to read as sunken. */
 :root[data-theme-mode="light"] .cmd-palette-overlay .cmd-palette-stack {
   --composer-attached-surface: color-mix(
     in srgb,

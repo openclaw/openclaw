@@ -19,6 +19,7 @@ const enCommandPalette = {
     composePlaceholder: en.palette.composePlaceholder,
     modeLabel: en.palette.modeLabel,
     modes: en.palette.modes,
+    modeSwitch: en.palette.modeSwitch,
     noResults: "No results match your search.",
     noResultsStart: "Press {shortcut} to compose a new session.",
     startSession: "New session",
@@ -65,6 +66,7 @@ const enCommandPalette = {
     footer: {
       navigate: "navigate",
       select: "select",
+      send: "send",
       close: "close",
       newline: "newline",
     },

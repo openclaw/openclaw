@@ -258,6 +258,7 @@ type EnglishCatalog = TranslationMap & {
     composePlaceholder: string;
     modeLabel: string;
     modes: { search: string; compose: string };
+    modeSwitch: { search: string; compose: string };
     categories: TranslationMap & { navigation: string };
   };
   sessionsView: TranslationMap &
@@ -1415,6 +1416,8 @@ const startupEnglish = {
     placeholder: "Search or start a task…",
     modeLabel: "Command palette mode",
     modes: { search: "Search", compose: "Compose" },
+    // Footer key hint: "Tab compose" switches to the other mode.
+    modeSwitch: { search: "search", compose: "compose" },
     searchPlaceholder: "Search…",
     composePlaceholder: "Write a message…",
     attachmentPrompt: "What would you like to do with these files?",

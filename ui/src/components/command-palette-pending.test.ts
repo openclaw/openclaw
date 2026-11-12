@@ -66,117 +66,58 @@ describe("CommandPalette pending searches", () => {
     },
   );
 
-  it("cancels a pending search when switching to Compose", async () => {
-    const request = vi.fn(async (method: string) =>
-      method === "sessions.search" ? { results: [], sessions: [] } : { models: [] },
-    );
-    const list = vi.fn(async () => createSessionResult("agent:main:plugins", "Plugins discussion"));
-    const { palette } = await mountSearch({ methods: ["sessions.search"], request }, list);
-    await enterQuery(palette, "plugins");
-    expect(palette.textContent).not.toContain("Searching sessions");
-    await vi.advanceTimersByTimeAsync(199);
-
-    const input = paletteInput(palette);
-    const prompt = "plugins\nReview the available integrations and explain how to configure them.";
-    pressKey(input, "Tab", { cancelable: true });
-    setInputValue(input, prompt);
-    await settlePalette(palette, 100);
-
-    expect([list.mock.calls, request.mock.calls]).toEqual([[], []]);
-    expectPalettePromptMode(palette);
-    pressKey(input, "Enter", { cancelable: true });
-    expect(palette.onNavigate).not.toHaveBeenCalled();
-    expect(palette.onSelectSession).not.toHaveBeenCalled();
-    expect(palette.isOpen).toBe(true);
-    expect(input.value).toBe(prompt);
-  });
-
-  it("does not restore late session, transcript, or catalog results after switching to Compose", async () => {
-    const metadata = createDeferred<SessionsListResult | null>();
-    const transcript = createDeferred<SessionsSearchResult>();
-    const catalog = createDeferred<{
-      models: { id: string; provider: string; name: string }[];
-      refreshFailed: boolean;
-    }>();
-    const prompt = "zzfixtureunique\nExplain the findings in a new session.";
-    const request = vi.fn((method: string) =>
-      method === "sessions.search" ? transcript.promise : catalog.promise,
-    );
-    const list = vi.fn(() => metadata.promise);
-    const { palette, query, queryAll } = await mountSearch(
-      { methods: ["sessions.search"], request },
-      list,
-    );
-    await searchPalette(palette, "zzfixtureunique");
-    expect(list).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledTimes(2);
-
-    const input = paletteInput(palette);
-    pressKey(input, "Tab", { cancelable: true });
-    setInputValue(input, prompt);
-    await palette.updateComplete;
-    const stale = createSessionResult("agent:main:stale", "zzfixtureunique stale session");
-    metadata.resolve(stale);
-    transcript.resolve({
-      ...transcriptResult(stale, "zzfixtureunique stale transcript"),
-      indexing: true,
-      archivedTranscriptsExcluded: 2,
-    });
-    catalog.resolve({
-      models: [{ id: "stale", provider: "fixture", name: prompt }],
-      refreshFailed: true,
-    });
-    await settlePalette(palette, 100);
-
-    expectPalettePromptMode(palette);
-    expect(input.value).toBe(prompt);
-
-    setInputValue(input, "zzfixtureunique");
-    pressKey(input, "Tab", { cancelable: true });
-    await palette.updateComplete;
-    expect(query('[inert][aria-hidden="true"]')).toBeNull();
-    expect(queryAll('[role="option"]')).toHaveLength(0);
-    expect(query(".cmd-palette__source-error")).toBeNull();
-    expect(list).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["match", "empty"])(
-    "announces session search through debounce and deferred settlement: %s",
-    async (outcome) => {
-      const deferred = createDeferred<SessionsListResult | null>();
-      const list = vi.fn(() => deferred.promise);
-      const { palette, query, queryAll } = await mountSearch({}, list);
+  it.each([false, true])(
+    "cancels prompt search before dispatch or ignores late results: %s",
+    async (dispatched) => {
+      const metadata = createDeferred<SessionsListResult | null>();
+      const transcript = createDeferred<SessionsSearchResult>();
+      const catalog = createDeferred<{
+        models: { id: string; provider: string; name: string }[];
+        refreshFailed: boolean;
+      }>();
+      const prompt = "zzfixtureunique\nExplain the findings in a new session.";
+      const request = vi.fn((method: string) =>
+        method === "sessions.search" ? transcript.promise : catalog.promise,
+      );
+      const list = vi.fn(() => metadata.promise);
+      const { palette, query, queryAll } = await mountSearch(
+        { methods: ["sessions.search"], request },
+        list,
+      );
       await enterQuery(palette, "zzfixtureunique");
-      const results = query('.cmd-palette__results[role="listbox"]')!;
-      expect(results.getAttribute("aria-busy")).toBe("true");
-      expect(palette.textContent).not.toMatch(/Searching sessions|No results/);
-      await vi.advanceTimersByTimeAsync(199);
-      expect(list).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(list).toHaveBeenCalledOnce();
-      expect(query('.cmd-palette__search [role="status"]')?.textContent).toContain(
-        "Searching sessions",
-      );
-      expect(results.getAttribute("aria-busy")).toBe("true");
-      expect(queryAll('[role="option"]')).toHaveLength(0);
-      deferred.resolve(
-        outcome === "match"
-          ? createSessionResult("agent:main:fixture", "zzfixtureunique session")
-          : { ...createSessionResult("agent:main:fixture", "Unused"), sessions: [] },
-      );
-      await settlePalette(palette, 0);
-      expect(results.getAttribute("aria-busy")).toBe("false");
-      expect(palette.textContent).not.toContain("Searching sessions");
-      if (outcome === "match") {
-        findPaletteOption(palette, "zzfixtureunique session")!.click();
-        expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:fixture");
-      } else {
-        const empty = query(".cmd-palette__no-results")!;
-        expect(empty.querySelector("h2")?.textContent).toBe("No results match your search.");
-        expect(empty.textContent).toContain("to compose a new session.");
-        expect(empty.querySelector("button")).toBeNull();
-      }
+      await settlePalette(palette, dispatched ? 200 : 199);
+      expect(list).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+      expect(request).toHaveBeenCalledTimes(dispatched ? 2 : 0);
+
+      const input = paletteInput(palette);
+      setInputValue(input, prompt);
+      await palette.updateComplete;
+      const stale = createSessionResult("agent:main:stale", "zzfixtureunique stale session");
+      metadata.resolve(stale);
+      transcript.resolve({
+        ...transcriptResult(stale, "zzfixtureunique stale transcript"),
+        indexing: true,
+        archivedTranscriptsExcluded: 2,
+      });
+      catalog.resolve({
+        models: [{ id: "stale", provider: "fixture", name: prompt }],
+        refreshFailed: true,
+      });
+      await settlePalette(palette, 100);
+
+      expectPalettePromptMode(palette);
+      expect(input.value).toBe(prompt);
+
+      // An automatic Compose holds until the draft is emptied.
+      setInputValue(input, "zzfixtureunique");
+      await palette.updateComplete;
+      expectPalettePromptMode(palette);
+      setInputValue(input, "");
+      setInputValue(input, "zzfixtureunique");
+      await palette.updateComplete;
+      expect(query('[inert][aria-hidden="true"]')).toBeNull();
+      // Emptying the draft settled the navigation list; no stale row may return.
+      expect(palette.querySelector('[role="listbox"]')?.textContent).not.toContain("stale");
       expect(query(".cmd-palette__source-error")).toBeNull();
       expect(list).toHaveBeenCalledTimes(dispatched ? 1 : 0);
       expect(request).toHaveBeenCalledTimes(dispatched ? 2 : 0);
@@ -203,7 +144,7 @@ describe("CommandPalette pending searches", () => {
     expect(palette.textContent).not.toContain("Searching sessions");
     const empty = query(".cmd-palette__no-results")!;
     expect(empty.querySelector("h2")?.textContent).toBe("No results match your search.");
-    expect(empty.textContent).toContain("to start a new session.");
+    expect(empty.textContent).toContain("to compose a new session.");
     expect(empty.querySelector("button")).toBeNull();
   });
 

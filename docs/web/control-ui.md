@@ -111,11 +111,14 @@ Rewinding does not undo external actions.
 
 ## Command palette file attachments
 
-The command palette has **Search** and **Compose** tabs. Press **Tab** from its
-main input to switch modes without moving the palette or losing text. The last
-selected mode is remembered when you close and reopen it in the same app window.
+The command palette has **Search** and **Compose** modes, switched from the bar
+along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
-**Shift+Tab** keeps normal focus navigation to the tabs and session controls.
+While you are in Search, text of 60 characters or more, a second line, or a file
+moves the palette to Compose; emptying that draft returns it to Search. Choosing
+Search again keeps it for the current draft. Reopening the palette in the same
+app window returns to the mode you last chose, not to an automatic switch.
+**Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
 images or files onto the palette, or paste images into its input, to prepare a
@@ -130,7 +133,8 @@ session with the remaining text and files; a rejected file cancels a pending
 automatic start. File admission and size limits match the chat composer.
 
 Closing the palette keeps its attachment draft in memory for the same Gateway
-and account. Removing attachments or clearing instructions does not change the selected mode.
+and account. When files moved the palette to Compose, removing them and clearing
+the instructions returns it to Search.
 Reloading or leaving the app does not preserve this in-memory draft.
 
 ## Choose a session workspace

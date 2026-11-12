@@ -296,7 +296,7 @@
   font-size: 12px;
 }
 
-/* On the shelf below the panel, as the composer's status band sits below its surface. */
+/* On the dock below the panel, as the composer's status band sits below its surface. */
 .cmd-palette-stack .cmd-palette__creation-error {
   flex: 0 0 auto;
   border: 0;
@@ -325,12 +325,6 @@
   line-height: 16px;
 }
 
-.cmd-palette__hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
 @media (max-width: 560px) {
   .cmd-palette__filters {
     padding-inline: 8px;
@@ -339,9 +333,5 @@
   .cmd-palette__item {
     gap: 10px;
     padding-inline: 8px;
-  }
-
-  .cmd-palette__footer--keys {
-    display: none;
   }
 }

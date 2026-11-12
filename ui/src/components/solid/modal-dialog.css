@@ -264,8 +264,7 @@ openclaw-modal-dialog.palette {
   --openclaw-modal-show-duration: 0ms;
   --openclaw-modal-hide-duration: 0ms;
   --cmd-palette-dock-height: 40px;
-  /* The shelf takes the space above the panel, so the field keeps its place. */
-  --cmd-palette-top: max(8px, calc(min(20dvh, 160px) - var(--cmd-palette-dock-height)));
+  --cmd-palette-top: min(20dvh, 160px);
 }
 
 @media (max-width: 560px) {

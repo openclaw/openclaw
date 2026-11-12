@@ -1,6 +1,6 @@
 import { createMemo, lazy, Show } from "solid-js";
 import { COMMAND_PALETTE_DIALOG_STYLE } from "../components/command-palette-contract.ts";
-import { CommandPaletteInput, CommandPaletteModes } from "../components/command-palette-input.tsx";
+import { CommandPaletteDock, CommandPaletteInput } from "../components/command-palette-input.tsx";
 import { t } from "../lib/reactive/i18n.ts";
 import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
 import { ShellComponentBoundary } from "./app-shell-component-boundary.tsx";
@@ -30,11 +30,6 @@ export function CommandPaletteLoading(props: {
       >
         {/* The same stack as the loaded palette, so the handoff moves nothing. */}
         <div class="cmd-palette-stack">
-          <CommandPaletteModes
-            mode={props.state.mode()}
-            onChange={(mode) => props.state.setMode(mode)}
-            disabled={props.state.submitRequested()}
-          />
           <div
             id="cmd-palette-panel"
             role="tabpanel"
@@ -71,6 +66,11 @@ export function CommandPaletteLoading(props: {
               </div>
             </Show>
           </div>
+          <CommandPaletteDock
+            mode={props.state.mode()}
+            onChange={(mode) => props.state.setMode(mode)}
+            disabled={props.state.submitRequested()}
+          />
         </div>
       </ModalDialog>
     </ShellComponentBoundary>

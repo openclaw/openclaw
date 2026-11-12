@@ -260,15 +260,23 @@ describe("CommandPalette search", () => {
     },
   );
 
-  it("keeps explicit search mode for long and multiline queries", async () => {
+  it("moves a long query to Compose until Search is chosen for it", async () => {
     const list = vi.fn(async () => null);
     const { palette } = await mountSearch({ methods: ["sessions.search"] }, list);
     const query =
       "Search for this full sentence without starting a background session.\nKeep searching.";
     await searchPalette(palette, query);
     const input = paletteInput(palette);
+    expectPalettePromptMode(palette);
+    expect(list).not.toHaveBeenCalled();
+
+    pressKey(input, "Tab", { cancelable: true });
+    setInputValue(input, query + " Still searching.");
+    await settlePalette(palette);
     expect(input.getAttribute("aria-controls")).toBe("cmd-palette-listbox");
-    expect(list).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ search: query }));
+    expect(list).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ search: query + " Still searching." }),
+    );
     expect(palette.querySelector(".cmd-palette__create")).toBeNull();
   });
   it("waits for two characters before searching sessions", async () => {
