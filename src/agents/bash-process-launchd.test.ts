@@ -13,26 +13,24 @@ const { spawn } = vi.hoisted(() => ({
 }));
 // mock-isolation: launchctl would load real jobs into the test host's launchd.
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ spawn }) }));
-vi.mock("../infra/executable-path.js", () => ({ resolveExecutablePath: (name: string) => name }));
+vi.mock("../infra/executable-path.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/executable-path.js")>()),
+  resolveExecutablePath: (name: string) => name,
+}));
 
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const label = supervisor.unitName("quiet-raven:0123456789ab");
 let dir: string;
 const file = (suffix: string) => path.join(dir, "processes", `${label}${suffix}`);
 const status = (value: object) => fs.writeFile(file(".status.json"), JSON.stringify(value));
+const activity = { resultSettled: true, lastOutputAtMs: 0 };
 const respond = (stdout = "", exitCode = 0, whileInFlight?: () => Promise<unknown>) =>
   spawn.mockImplementationOnce(async (input) => {
     input.assertCurrent?.();
     await whileInFlight?.();
     const exit = { reason: "exit" as const, stdout, stderr: "", exitCode, exitSignal: null };
     const wait = async () => ({ ...exit, durationMs: 1, timedOut: false, noOutputTimedOut: false });
-    return {
-      runId: "",
-      activity: { resultSettled: true, lastOutputAtMs: 0 },
-      startedAtMs: 0,
-      wait,
-      cancel() {},
-    };
+    return { runId: "", activity, startedAtMs: 0, wait, cancel() {} };
   });
 const list = (row?: string, whileInFlight?: () => Promise<unknown>) =>
   respond(`PID\tStatus\tLabel\n-\t0\tcom.apple.other\n${row ? `${row}\n` : ""}`, 0, whileInFlight);
