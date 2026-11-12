@@ -167,13 +167,6 @@ export async function startGatewaySidecars(params: {
         ),
       );
     })(),
-    // Prepare common agent imports and connection handling before readiness.
-    measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-      // Keep channel reply resolution and its runner demand-loaded; agent RPCs do not need them.
-      const { loadEmbeddedAgentRuntime, loadSessionUpdatesRuntime } =
-        await import("../auto-reply/reply/get-reply-run-helpers.js");
-      await Promise.all([loadEmbeddedAgentRuntime(), loadSessionUpdatesRuntime()]);
-    }),
     measureStartup(
       params.startupTrace,
       "sidecars.connection-runtime",

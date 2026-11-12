@@ -407,7 +407,7 @@ describe("startGatewayPostAttachRuntime", () => {
     let closing = false;
     const hooksStarted = createDeferred();
     const requestsPrepared = createDeferred();
-    hoisted.loadEmbeddedAgentRuntime.mockImplementationOnce(async () => {
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
       requestsPrepared.resolve();
     });
     hoisted.prepareInternalHooks.mockImplementationOnce(() => {
@@ -1482,6 +1482,15 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
+  it("reaches readiness without loading request-owned agent runtimes", async () => {
+    const onSidecarsReady = vi.fn();
+    await startGatewayPostAttachRuntime({ ...createPostAttachParams(), onSidecarsReady });
+
+    expect(onSidecarsReady).toHaveBeenCalledOnce();
+    expect(hoisted.loadEmbeddedAgentRuntime).not.toHaveBeenCalled();
+    expect(hoisted.loadSessionUpdatesRuntime).not.toHaveBeenCalled();
+  });
+
   it("prepares the model runtime with the active Gateway plugin registry", async () => {
     const pluginRegistry = createPostAttachParams().pluginRegistry;
     hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(async () => {
@@ -1496,25 +1505,19 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
-  it.each(["model", "reply", "session", "connection"] as const)(
+  it.each(["model", "connection"] as const)(
     "prepares request runtimes concurrently and keeps readiness blocked on %s",
     async (lastRuntime) => {
       const gates = {
         model: createDeferred(),
-        reply: createDeferred(),
-        session: createDeferred(),
         connection: createDeferred(),
       };
       const started = {
         model: createDeferred(),
-        reply: createDeferred(),
-        session: createDeferred(),
         connection: createDeferred(),
       };
       const completed = {
         model: createDeferred(),
-        reply: createDeferred(),
-        session: createDeferred(),
         connection: createDeferred(),
       };
       const prepare = async (name: keyof typeof gates) => {
@@ -1523,8 +1526,6 @@ describe("startGatewayPostAttachRuntime", () => {
         completed[name].resolve();
       };
       hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(() => prepare("model"));
-      hoisted.loadEmbeddedAgentRuntime.mockImplementationOnce(() => prepare("reply"));
-      hoisted.loadSessionUpdatesRuntime.mockImplementationOnce(() => prepare("session"));
       const trace = createStartupTraceRecorder();
       const startChannels = vi.fn(async () => {});
       const onSidecarsReady = vi.fn();
@@ -1551,7 +1552,7 @@ describe("startGatewayPostAttachRuntime", () => {
         );
         expect(startChannels).not.toHaveBeenCalled();
         expect(onSidecarsReady).not.toHaveBeenCalled();
-        for (const name of ["model", "reply", "session", "connection"] as const) {
+        for (const name of ["model", "connection"] as const) {
           if (name !== lastRuntime) {
             gates[name].resolve();
             await completed[name].promise;
@@ -1578,19 +1579,13 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("joins pending request imports after preparation fails and preserves the model failure", async () => {
     const model = createDeferred();
-    const reply = createDeferred();
     const connection = createDeferred();
     const modelStarted = createDeferred();
-    const replyStarted = createDeferred();
     const connectionStarted = createDeferred();
     const modelFailure = new Error("model preparation failed");
     hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(() => {
       modelStarted.resolve();
       return model.promise;
-    });
-    hoisted.loadEmbeddedAgentRuntime.mockImplementationOnce(() => {
-      replyStarted.resolve();
-      return reply.promise;
     });
     const trace = createStartupTraceRecorder();
     const startChannels = vi.fn(async () => {});
@@ -1624,11 +1619,10 @@ describe("startGatewayPostAttachRuntime", () => {
 
     try {
       await awaitGateBeforeSettlement(
-        Promise.all([modelStarted.promise, replyStarted.promise, connectionStarted.promise]),
+        Promise.all([modelStarted.promise, connectionStarted.promise]),
         startup,
         "startup settled before all request runtimes started",
       );
-      reply.reject(new Error("reply import failed"));
       model.reject(modelFailure);
       await vi.dynamicImportSettled();
       expect(settled).toBe(false);
@@ -1638,31 +1632,30 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(onSidecarsReady).not.toHaveBeenCalled();
     } finally {
       model.resolve();
-      reply.resolve();
       connection.resolve();
       await outcome;
     }
   });
 
   it("does not start channels when close begins during deferred sidecar preparation", async () => {
-    const replyRuntime = createDeferred();
+    const modelRuntime = createDeferred();
     let closing = false;
-    hoisted.loadEmbeddedAgentRuntime.mockReturnValueOnce(replyRuntime.promise);
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockReturnValueOnce(modelRuntime.promise);
     const params = createPostAttachParams({ sidecarStartup: "defer", isClosing: () => closing });
     const onChannelsStarted = vi.fn();
     const runtime = await startGatewayPostAttachRuntime({ ...params, onChannelsStarted });
     try {
       await waitForGatewayTestState(() =>
-        expect(hoisted.loadEmbeddedAgentRuntime).toHaveBeenCalledOnce(),
+        expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce(),
       );
       closing = true;
-      replyRuntime.resolve();
+      modelRuntime.resolve();
       await expect(runtime.startupSettled).resolves.toBeUndefined();
       expect(params.startChannels).not.toHaveBeenCalled();
       expect(onChannelsStarted).not.toHaveBeenCalled();
       expect(params.unlockStartupMethods).not.toHaveBeenCalled();
     } finally {
-      replyRuntime.resolve();
+      modelRuntime.resolve();
       await runtime.startupSettled;
     }
   });
