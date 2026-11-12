@@ -273,6 +273,16 @@ const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
 agentDatabase.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 const agentDatabaseBytes = fs.statSync(agentDatabase.path).size;
 const preparationFlushMs: number[] = [];
+const pressureFiles = [1, 2, 3, 4, 5, 30].map((full) => {
+  const file = path.join(output, `synthetic-psi-${full}`);
+  if (values["psi-trace"]) {
+    fs.writeFileSync(
+      file,
+      `some avg10=${full + 10} avg60=20 total=0\nfull avg10=${full} avg60=3 total=0\n`,
+    );
+  }
+  return file;
+});
 if (values["psi-trace"]) {
   assert.equal(process.platform, "linux", "PSI trace requires Linux; no platform spoofing");
   for (let flush = 0; flush < 2; flush++) {
@@ -335,27 +345,21 @@ managedWorktrees.remove = async (input) => {
 const inspector = new Session();
 const maintenanceErrors: string[] = [];
 const kernelSamples: Array<{ atMs: number; psi: string; commits: string[] }> = [];
-const pressureFile = path.join(output, "synthetic-psi");
+let pressureIndex = 0;
 const open = fsPromises.open;
 let pressureProbeReads = 0;
 if (values["psi-trace"]) {
   fsPromises.open = (file, flags, mode) => {
     if (file === "/proc/pressure/io") {
       pressureProbeReads++;
-      return open(pressureFile, flags, mode);
+      return open(pressureFiles[pressureIndex]!, flags, mode);
     }
     return open(file, flags, mode);
   };
 }
 const sampleKernel = () => {
   const tick = kernelSamples.length;
-  if (values["psi-trace"]) {
-    const full = tick % 7 === 6 ? 30 : (tick % 5) + 1;
-    fs.writeFileSync(
-      pressureFile,
-      `some avg10=${full + 10} avg60=20 total=0\nfull avg10=${full} avg60=3 total=0\n`,
-    );
-  }
+  pressureIndex = tick % 7 === 6 ? 5 : tick % 5;
   kernelSamples.push({
     atMs: performance.now(),
     psi: fs.existsSync("/proc/pressure/io") ? fs.readFileSync("/proc/pressure/io", "utf8") : "",
