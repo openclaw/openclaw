@@ -101,7 +101,7 @@ describe("agent database write admission", () => {
       await reservation.entered;
       const queued = write("queued");
       const refused = expect(queued).rejects.toThrow(
-        /^(?:Agent database target changed before write admission|SQLite database pathname changed during admission)$/u,
+        /^(?:Agent database target changed before write admission|SQLite database pathname changed during admission|SQLite database file identity changed before existing-only open)$/u,
       );
       try {
         retarget();

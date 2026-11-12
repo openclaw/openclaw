@@ -321,6 +321,54 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
+it.for(["per-agent", "shared"] as const)(
+  "qualifies unrelated readiness during a pending %s sharing acquisition",
+  async (kind, { state, signal }) => {
+    const storePath =
+      kind === "per-agent"
+        ? resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
+        : state.statePath("shared-acquisition.sqlite");
+    const cfg = {
+      agents: { entries: { main: {}, other: {} } },
+      ...(kind === "shared" ? { session: { store: storePath } } : {}),
+    };
+    const harness = sharingHarness(cfg, "agent:main:acquiring", storePath);
+    harness.write(restrictedEntry("acquiring", "first"));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
+    vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+      async (...args) => {
+        const result = await readEntries(...args);
+        if (args[0].projection === "full" && args[0].includeAuthorization) {
+          entered.resolve();
+          await release.promise;
+        }
+        return result;
+      },
+    );
+    const pending = harness.prepare();
+    void pending.catch(() => {});
+    try {
+      await withinTest(entered.promise, signal);
+      sessionChanges.emit({ all: true, scope: { agentId: "other", topology: true } });
+      release.resolve();
+      if (kind === "per-agent") {
+        using prepared = releasing(await pending);
+        expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring");
+      } else {
+        await expect(pending).rejects.toThrow(unavailableMessage);
+      }
+    } finally {
+      release.resolve();
+      await pending.then(
+        (prepared) => prepared.release(),
+        () => {},
+      );
+    }
+  },
+);
+
 it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
   "applies %s topology publications to retained sharing facts",
   async (change, { state }) => {

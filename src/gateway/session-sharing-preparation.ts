@@ -13,6 +13,7 @@ import type {
   SessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import {
   createSessionStoreRegistryMutationFilter,
@@ -92,6 +93,7 @@ export async function prepareSessionMutationFacts(
   let beforeDiscovery = params.storageReady !== undefined;
   let waitingForStorage = false;
   let invalidated = false;
+  let acquisitionBoundToAgent = false;
   let facts: PreparedSessionSourceFacts | undefined;
   let assertRegistryPublication: (() => void) | undefined;
   let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
@@ -164,11 +166,11 @@ export async function prepareSessionMutationFacts(
         // Another agent's admission cannot revoke this retained logical/physical store pair.
         if (
           beforeDiscovery ||
-          (facts?.target &&
-            typeof change.scope === "object" &&
+          (typeof change.scope === "object" &&
             change.scope.agentId &&
             change.scope.agentId !== agentId &&
-            change.scope.agentId !== facts.sourceAgentId)
+            ((!facts && acquisitionBoundToAgent) ||
+              (facts?.target && change.scope.agentId !== facts.sourceAgentId)))
         ) {
           return;
         }
@@ -320,6 +322,18 @@ export async function prepareSessionMutationFacts(
         candidate,
         identity: candidate.identity ?? readDatabasePathIdentitySync(candidate.path),
       }));
+    acquisitionBoundToAgent =
+      !discoveryInventory.registryDiscovery &&
+      candidateIdentities.length > 0 &&
+      candidateIdentities.every(
+        ({ candidate, identity }) =>
+          !candidate.scope &&
+          identity.key.startsWith("file:") &&
+          identity.birthtime !== undefined &&
+          resolveUnsuffixedSqliteTargetFromSessionStorePath(candidate.path).agentId === agentId &&
+          resolveUnsuffixedSqliteTargetFromSessionStorePath(candidate.physicalPath).agentId ===
+            agentId,
+      );
     const missingCandidates = candidateIdentities.filter(
       ({ identity }) => identity.birthtime === undefined,
     );

@@ -29,6 +29,7 @@ import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.work
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import {
   closeProvider,
   listenProvider,
@@ -76,15 +77,6 @@ function send(
     idempotencyKey: randomUUID(),
     ...params,
   });
-}
-
-async function waitForRun(client: Client, runId: string) {
-  const terminal = await client.request<{ status: string }>(
-    "agent.wait",
-    { runId, timeoutMs: 30_000 },
-    { timeoutMs: 35_000 },
-  );
-  expect(terminal).toMatchObject({ status: "ok" });
 }
 
 const expectHeld = (entered: Promise<unknown>, completed: Promise<unknown>, stage: string) =>
@@ -185,6 +177,18 @@ it(
     }
     const cleanups: Array<() => Promise<unknown>> = [() => state.cleanup()];
     try {
+      const runExecution = await observeGatewayRunExecution();
+      cleanups.push(() => runExecution.restore());
+      const waitForRun = async (client: Client, runId: string) => {
+        // A queued RPC observation is nonterminal; join the run's actual effects first.
+        await runExecution.waitForCompletion(runId);
+        const terminal = await client.request<{ status: string }>(
+          "agent.wait",
+          { runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
+        expect(terminal).toMatchObject({ status: "ok" });
+      };
       const providerServer = productProvider(providerErrors, async (body, response) => {
         requests.push(body);
         const reply = providerReply;
