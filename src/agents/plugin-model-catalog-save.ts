@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { runOutsideAgentDatabasePreparation } from "../state/agent-database-admission.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { capturePluginModelCatalogAuth } from "./plugin-model-catalog-auth.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
@@ -19,20 +20,23 @@ import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.kernel.
 export async function preparePluginModelCatalogSave(agentDir: string, env: NodeJS.ProcessEnv) {
   const authSnapshot = await capturePluginModelCatalogAuth(agentDir, env);
   return async (pluginCatalogs: readonly PersistedPluginModelCatalog[]) => {
-    // Share the models.json queue with the other writers of this agent's catalogs.
+    // Share the models.json queue with the other writers of this agent's catalogs. Discovery
+    // can outlive the startup preparation that started it; write as an ordinary caller.
     await MODELS_JSON_STATE.writeQueue
       .enqueue(path.join(agentDir, "models.json"), () =>
-        replacePersistedPluginModelCatalogs({
-          agentDir,
-          pluginCatalogWrites: Object.fromEntries(
-            pluginCatalogs.map(({ pluginId, contents }) => [
-              encodePluginModelCatalogRelativePath(pluginId),
-              contents,
-            ]),
-          ),
-          authSnapshot,
-          env,
-        }),
+        runOutsideAgentDatabasePreparation(() =>
+          replacePersistedPluginModelCatalogs({
+            agentDir,
+            pluginCatalogWrites: Object.fromEntries(
+              pluginCatalogs.map(({ pluginId, contents }) => [
+                encodePluginModelCatalogRelativePath(pluginId),
+                contents,
+              ]),
+            ),
+            authSnapshot,
+            env,
+          }),
+        ),
       )
       .catch((error: unknown) => {
         // The rows still publish; only the copy for the next start is lost.
