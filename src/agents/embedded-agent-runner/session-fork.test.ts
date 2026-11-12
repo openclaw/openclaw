@@ -347,6 +347,41 @@ it("uses the current prepared proxy and TLS transport policy", async () => {
   );
 });
 
+it("replays the parent's prepared request before the fork's rebuilt suffix", async () => {
+  const { streamFn, request } = guardedTransport();
+  const note: Message = { role: "user", content: "Runtime note", timestamp: 2 };
+  const call = (id: string) => [assistant([toolCall(id, "lookup")]), toolResult(id, "lookup", "1")];
+  await complete(streamFn, model, history(note, ...call("call_sent")));
+  const parent = await request().json();
+  // Rebuilt history orders the note first and keeps the ID the parent's stream rewrote.
+  const rebuilt = { ...context, messages: [note, ...context.messages, ...call("call_raw")] };
+  await fork(streamFn, model, rebuilt, { preparedRequest: parent });
+  const { input } = await request().json();
+  expect(input.slice(0, -1)).toEqual(parent.input);
+  expect(JSON.stringify(input.at(-1))).toContain("Review only");
+});
+
+const answerAfterPayload = (payload: object) =>
+  vi.fn<StreamFn>(async (activeModel, _, options) => {
+    await options?.onPayload?.(payload, activeModel);
+    const stream = createAssistantMessageEventStream();
+    const message = makeAgentAssistantMessage({ content: [{ type: "text", text: "Answer" }] });
+    stream.push({ type: "done", reason: "stop", message });
+    return stream;
+  });
+
+it("replays parent request data but keeps the fork's own transport handles", async () => {
+  const signal = new AbortController().signal;
+  const contents = [{ role: "model", parts: [{ functionCall: { args: { value: null } } }] }];
+  const payload = { contents: [...contents], config: { abortSignal: signal } };
+  const preparedRequest = { contents, config: { abortSignal: AbortSignal.abort(), top_k: 4 } };
+  await fork(answerAfterPayload(payload), { ...model, api: "google-generative-ai" }, context, {
+    preparedRequest,
+  });
+  expect(payload).toEqual({ contents, config: { abortSignal: signal, top_k: 4 } });
+  expect(payload.config.abortSignal).toBe(signal);
+});
+
 it("rebuilds full history independently when the parent uses HTTP continuation", async () => {
   const { streamFn, request } = guardedTransport();
   const requestModel: Model = { ...model, compat: { supportsResponsesContinuation: true } };
@@ -357,7 +392,7 @@ it("rebuilds full history independently when the parent uses HTTP continuation",
   const continuation = await request().json();
   expect(continuation.previous_response_id).toBe("resp_fork");
   expect(JSON.stringify(continuation.input)).not.toContain("Parent question");
-  await expect(fork(streamFn, requestModel, prepared, { options })).resolves.toBe("Answer");
+  await fork(streamFn, requestModel, prepared, { options, preparedRequest: continuation });
   const replay = await request().json();
   expect(replay.previous_response_id).toBeUndefined();
   expectText(JSON.stringify(replay.input), ["Parent question", "Continue parent", "Review only"]);
@@ -370,13 +405,7 @@ it.each([
   ["bedrock-converse-stream", {}, "cannot enforce live fork authority"],
 ])("forks %s requests with %j tools by their tool surface", async (api, tool, outcome) => {
   const payload = { tools: [tool], tool_choice: "auto" };
-  const streamFn = vi.fn<StreamFn>(async (activeModel, _, options) => {
-    await options?.onPayload?.(payload, activeModel);
-    const stream = createAssistantMessageEventStream();
-    const message = makeAgentAssistantMessage({ content: [{ type: "text", text: "Answer" }] });
-    stream.push({ type: "done", reason: "stop", message });
-    return stream;
-  });
+  const streamFn = answerAfterPayload(payload);
   const result = fork(streamFn, { ...model, api });
   await (outcome === "Answer"
     ? expect(result).resolves.toBe(outcome)
