@@ -12,8 +12,8 @@ import { withSessionManagerWrite } from "../../agents/sessions/session-manager-w
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
-import type { PluginHookBeforeAgentRunEvent } from "../../plugins/hook-types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookBeforeAgentRunEvent } from "../../plugins/hook-types.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -86,17 +86,21 @@ type WorkerTurnInputParams = {
 type WorkerTurnPreparedInput = Pick<
   Awaited<ReturnType<typeof prepareWorkerTurnMedia>>,
   "prompt" | "history" | "images"
-> & Pick<PluginHookBeforeAgentRunEvent, "systemPrompt">;
+> &
+  Pick<PluginHookBeforeAgentRunEvent, "systemPrompt">;
 
-export async function gateWorkerTurnInput({
-  turn,
-  transcriptTarget,
-  identity,
-  modelRef,
-  startedAt,
-  assertCurrent,
-  onBlocked,
-}: WorkerTurnInputParams, event: WorkerTurnPreparedInput) {
+export async function gateWorkerTurnInput(
+  {
+    turn,
+    transcriptTarget,
+    identity,
+    modelRef,
+    startedAt,
+    assertCurrent,
+    onBlocked,
+  }: WorkerTurnInputParams,
+  event: WorkerTurnPreparedInput,
+) {
   const recorder = turn.userTurnTranscriptRecorder;
   const runner = getGlobalHookRunner();
   if (!runner?.hasHooks("before_agent_run")) {
@@ -184,12 +188,13 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     provider: modelRef.provider,
     model: modelRef.model,
   });
-  const manager = recorder || userMessageAlreadyPersisted
-    ? await SessionManager.openModelContextAsync(transcriptTarget, {
-        admission,
-        signal: turn.abortSignal,
-      })
-    : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
+  const manager =
+    recorder || userMessageAlreadyPersisted
+      ? await SessionManager.openModelContextAsync(transcriptTarget, {
+          admission,
+          signal: turn.abortSignal,
+        })
+      : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
   assertCurrent();
   const contextMessages = manager.buildSessionContext().messages;
   const leaf = manager.getLeafEntry();

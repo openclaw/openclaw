@@ -11,8 +11,8 @@ import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-l
 import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
-import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,

@@ -10,13 +10,12 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
-import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
-import { hasUnrestrictedGatewayExecution } from "../agents/execution-authority.js";
-import { resolveRunEntryCliRuntime } from "../agents/embedded-agent-runner/run-entry-runtime.js";
-import { isConversationToolAllowed } from "../agents/conversation-tool-policy-pipeline.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
+import { isConversationToolAllowed } from "../agents/conversation-tool-policy-pipeline.js";
+import { resolveRunEntryCliRuntime } from "../agents/embedded-agent-runner/run-entry-runtime.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
+import { hasUnrestrictedGatewayExecution } from "../agents/execution-authority.js";
+import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
@@ -26,6 +25,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
+import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import { readUtilityModelSetting } from "../agents/utility-model-setting.js";
 import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
 import { hasWorkspaceGitCheckout } from "../agents/workspace-git.js";
@@ -421,10 +421,9 @@ function resolveAgentDefaultPermissionLabel(params: {
     modelId: model.model,
   });
   return hasUnrestrictedGatewayExecution({
-    execAuthority:
-      isConversationToolAllowed(capabilityProfile, "exec")
-        ? "gateway-host"
-        : undefined,
+    execAuthority: isConversationToolAllowed(capabilityProfile, "exec")
+      ? "gateway-host"
+      : undefined,
     execPolicy: policy,
     workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId }),
   })
@@ -494,7 +493,12 @@ export async function listAgentsForGateway(
     // by session, the effective policy is unknowable at agent scope: omit the label.
     const defaultPermissionMode =
       resolveSandboxConfigForAgent(cfg, id).mode === "off"
-        ? resolveAgentDefaultPermissionLabel({ cfg, agentId: id, model: resolvedModel, execApprovals })
+        ? resolveAgentDefaultPermissionLabel({
+            cfg,
+            agentId: id,
+            model: resolvedModel,
+            execApprovals,
+          })
         : undefined;
     const model = resolveGatewayAgentModel(cfg, id, resolvedModel);
     const utilitySetting = readUtilityModelSetting(cfg, id);

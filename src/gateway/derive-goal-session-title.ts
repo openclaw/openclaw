@@ -5,7 +5,6 @@
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-
 import { isInternalWakeSessionTitleSource } from "../sessions/session-title-source.js";
 
 const DERIVED_GOAL_TITLE_MAX_LEN = 60;

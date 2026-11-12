@@ -313,7 +313,9 @@ suite.define(() => {
       await row.locator(".sidebar-recent-session__link").tap();
       await expect
         .poll(() => new URL(page.url()).pathname)
-        .toBe(new URL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:touch-forked")).pathname);
+        .toBe(
+          new URL(controlUiSessionUrl(suite.server.baseUrl, "agent:main:touch-forked")).pathname,
+        );
     } finally {
       await context.close();
     }

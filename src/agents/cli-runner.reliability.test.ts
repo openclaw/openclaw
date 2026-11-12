@@ -1725,12 +1725,12 @@ describe("runCliAgent reliability", () => {
       runBeforeAgentRun: vi.fn(async (event: PluginHookBeforeAgentRunEvent) => {
         expect(event.images).toEqual([image]);
         return {
-        pluginId: "policy-plugin",
-        decision: {
-          outcome: "block" as const,
-          reason: "matched secret prompt: secret prompt",
-          message: "The agent cannot read this message.",
-        },
+          pluginId: "policy-plugin",
+          decision: {
+            outcome: "block" as const,
+            reason: "matched secret prompt: secret prompt",
+            message: "The agent cannot read this message.",
+          },
         };
       }),
       runLlmInput: vi.fn(async () => undefined),

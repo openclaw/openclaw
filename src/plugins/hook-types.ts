@@ -1,4 +1,3 @@
-import type { ImageContent } from "../llm/types.js";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -10,6 +9,7 @@ import type {
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { ImageContent } from "../llm/types.js";
 import type {
   PluginHookAgentContext,
   PluginHookContextWindow,

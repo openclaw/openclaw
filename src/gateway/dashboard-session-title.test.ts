@@ -1,8 +1,8 @@
-import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 // Dashboard title tests cover eligibility, routing, normalization, and guarded persistence.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());

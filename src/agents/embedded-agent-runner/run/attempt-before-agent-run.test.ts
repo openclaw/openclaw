@@ -1,5 +1,5 @@
-import type { ImageContent } from "../../../llm/types.js";
 import { describe, expect, it, vi } from "vitest";
+import type { ImageContent } from "../../../llm/types.js";
 import type { GlobalHookRunnerRegistry } from "../../../plugins/hook-registry.types.js";
 import type {
   PluginHookAgentContext,

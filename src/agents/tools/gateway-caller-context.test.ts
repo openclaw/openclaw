@@ -51,9 +51,8 @@ describe("gateway caller context wrapper", () => {
       }
     };
     const caller = { agentId: "main", sessionKey: "agent:main:main" };
-    await withGatewayToolCallerIdentity(
-      { ...caller, assertAutoApproveChangesCurrent: outer },
-      () => withGatewayToolCallerIdentity({ ...caller, assertAutoApproveChangesCurrent: inner }, () => {
+    await withGatewayToolCallerIdentity({ ...caller, assertAutoApproveChangesCurrent: outer }, () =>
+      withGatewayToolCallerIdentity({ ...caller, assertAutoApproveChangesCurrent: inner }, () => {
         const assertCurrent = getGatewayToolCallerIdentity()?.assertAutoApproveChangesCurrent;
         expect(assertCurrent).toBeDefined();
         expect(assertCurrent).not.toThrow();

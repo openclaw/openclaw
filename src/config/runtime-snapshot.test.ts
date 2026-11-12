@@ -269,7 +269,9 @@ describe("runtime snapshot state", () => {
     ).toBe(foreignConfig);
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
-    const readRuntimeCopy = createRuntimeConfigReader(cloneConfigWithResolutionFacts(runtimeConfig));
+    const readRuntimeCopy = createRuntimeConfigReader(
+      cloneConfigWithResolutionFacts(runtimeConfig),
+    );
     const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
     const readForeign = createRuntimeConfigReader(foreignConfig);
     const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };

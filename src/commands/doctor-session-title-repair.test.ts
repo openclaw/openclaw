@@ -1,6 +1,6 @@
-import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";

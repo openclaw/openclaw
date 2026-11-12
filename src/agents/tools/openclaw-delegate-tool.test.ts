@@ -1,7 +1,13 @@
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { initializeGlobalHookRunner, resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -138,90 +144,93 @@ describe("openclaw delegation tool", () => {
   });
 
   it.each<[string, Options, boolean]>([
-
-  ["available unrestricted Gateway exec", { delegationExecAuthority: () => "gateway-host" }, true],
-  [
-    "inferred full with false",
-    {
-      delegationExecAuthority: () => "gateway-host",
-      config: { tools: { openclaw: { autoApproveChanges: false } } },
-    },
-    false,
-  ],
-  [
-    "inferred full with true",
-    {
-      delegationExecAuthority: () => "gateway-host",
-      config: { tools: { openclaw: { autoApproveChanges: true } } },
-    },
-    true,
-  ],
-  [
-    "explicit full with true",
-    {
-      execSession: { permissionMode: "full" },
-      config: { tools: { openclaw: { autoApproveChanges: true } } },
-    },
-    true,
-  ],
-  [
-    "agent grant overrides global false",
-    {
-      config: {
-        tools: { openclaw: { autoApproveChanges: false } },
-        agents: { entries: { main: { tools: { openclaw: { autoApproveChanges: true } } } } },
+    [
+      "available unrestricted Gateway exec",
+      { delegationExecAuthority: () => "gateway-host" },
+      true,
+    ],
+    [
+      "inferred full with false",
+      {
+        delegationExecAuthority: () => "gateway-host",
+        config: { tools: { openclaw: { autoApproveChanges: false } } },
       },
-    },
-    true,
-  ],
-  ["missing callable exec", { config: { tools: { exec: { mode: "full" } } } }, false],
-  [
-    "node exec",
-    { delegationExecAuthority: () => "gateway-host", execOverrides: { host: "node" } },
-    false,
-  ],
-  [
-    "standing grant with prompting exec",
-    { config: { tools: { exec: { mode: "ask" }, openclaw: { autoApproveChanges: true } } } },
-    true,
-  ],
-  [
-    "explicit Off in Full Access",
-    {
-      execSession: { permissionMode: "full" },
-      config: { tools: { openclaw: { autoApproveChanges: false } } },
-    },
-    false,
-  ],
-  [
-    "agent Off overrides global grant",
-    {
-      config: {
-        tools: { openclaw: { autoApproveChanges: true } },
-        agents: { entries: { main: { tools: { openclaw: { autoApproveChanges: false } } } } },
+      false,
+    ],
+    [
+      "inferred full with true",
+      {
+        delegationExecAuthority: () => "gateway-host",
+        config: { tools: { openclaw: { autoApproveChanges: true } } },
       },
-    },
-    false,
-  ],
-  [
-    "explicit full overrides configured prompting",
-    { execSession: { permissionMode: "full" }, config: { tools: { exec: { mode: "ask" } } } },
-    true,
-  ],
-  [
-    "agent-restricted default",
-    {
-      agentChannel: "telegram",
-      config: { agents: { entries: { main: { tools: { exec: { mode: "ask" } } } } } },
-    },
-    false,
-  ],
-  [
-    "turn-tightened full",
-    { execSession: { permissionMode: "full" }, execOverrides: { ask: "always" } },
-    false,
-  ],
-  ["filesystem-restricted", { fsPolicy: { workspaceOnly: true } }, false],
+      true,
+    ],
+    [
+      "explicit full with true",
+      {
+        execSession: { permissionMode: "full" },
+        config: { tools: { openclaw: { autoApproveChanges: true } } },
+      },
+      true,
+    ],
+    [
+      "agent grant overrides global false",
+      {
+        config: {
+          tools: { openclaw: { autoApproveChanges: false } },
+          agents: { entries: { main: { tools: { openclaw: { autoApproveChanges: true } } } } },
+        },
+      },
+      true,
+    ],
+    ["missing callable exec", { config: { tools: { exec: { mode: "full" } } } }, false],
+    [
+      "node exec",
+      { delegationExecAuthority: () => "gateway-host", execOverrides: { host: "node" } },
+      false,
+    ],
+    [
+      "standing grant with prompting exec",
+      { config: { tools: { exec: { mode: "ask" }, openclaw: { autoApproveChanges: true } } } },
+      true,
+    ],
+    [
+      "explicit Off in Full Access",
+      {
+        execSession: { permissionMode: "full" },
+        config: { tools: { openclaw: { autoApproveChanges: false } } },
+      },
+      false,
+    ],
+    [
+      "agent Off overrides global grant",
+      {
+        config: {
+          tools: { openclaw: { autoApproveChanges: true } },
+          agents: { entries: { main: { tools: { openclaw: { autoApproveChanges: false } } } } },
+        },
+      },
+      false,
+    ],
+    [
+      "explicit full overrides configured prompting",
+      { execSession: { permissionMode: "full" }, config: { tools: { exec: { mode: "ask" } } } },
+      true,
+    ],
+    [
+      "agent-restricted default",
+      {
+        agentChannel: "telegram",
+        config: { agents: { entries: { main: { tools: { exec: { mode: "ask" } } } } } },
+      },
+      false,
+    ],
+    [
+      "turn-tightened full",
+      { execSession: { permissionMode: "full" }, execOverrides: { ask: "always" } },
+      false,
+    ],
+    ["filesystem-restricted", { fsPolicy: { workspaceOnly: true } }, false],
   ])("carries %s authority privately, not in RPC data", async (_name, options, full) => {
     const runController = new AbortController();
     const toolController = new AbortController();
@@ -324,8 +333,7 @@ it.each<[Options, string[]]>([
   "explains the verified restriction and recovery without inventing its source: %j",
   async (options, parts) => {
     callGateway.mockImplementation(async () => {
-      const assertCurrent =
-        getGatewayToolCallerIdentity()?.assertAutoApproveChangesCurrent;
+      const assertCurrent = getGatewayToolCallerIdentity()?.assertAutoApproveChangesCurrent;
       for (const part of parts) {
         expect(assertCurrent).toThrow(part);
       }
@@ -342,8 +350,7 @@ it("names the sandbox policy changed since this run was admitted", async () => {
     const tool = delegate({ config });
     callGateway.mockImplementation(async () => {
       setRuntimeConfigSnapshot({ ...config, agents: { defaults: { sandbox: { mode: "all" } } } });
-      const assertCurrent =
-        getGatewayToolCallerIdentity()?.assertAutoApproveChangesCurrent;
+      const assertCurrent = getGatewayToolCallerIdentity()?.assertAutoApproveChangesCurrent;
       expect(assertCurrent).toThrow("agents.defaults.sandbox changed");
       expect(assertCurrent).toThrow("new run");
       expect(assertCurrent).toThrow("autoApproveChanges");

@@ -21,8 +21,8 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
-import { isInternalWakeSessionTitleSource } from "../sessions/session-title-source.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { isInternalWakeSessionTitleSource } from "../sessions/session-title-source.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ChatAttachment } from "./chat-attachments.js";
@@ -137,9 +137,9 @@ export function isDashboardSessionTitleCandidate(params: {
   const sourceText = params.userMessage.trim();
   return Boolean(
     sourceText &&
-      !sourceText.startsWith("/") &&
-      !isInternalWakeSessionTitleSource(sourceText) &&
-      isAutoTitleSessionKey(params.sessionKey),
+    !sourceText.startsWith("/") &&
+    !isInternalWakeSessionTitleSource(sourceText) &&
+    isAutoTitleSessionKey(params.sessionKey),
   );
 }
 

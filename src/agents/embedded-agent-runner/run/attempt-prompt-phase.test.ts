@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
-import { createHookRunner } from "../../../plugins/hooks.js";
-import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import type { Context, ImageContent, Model, SimpleStreamOptions } from "../../../llm/types.js";
+import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
+import { createHookRunner } from "../../../plugins/hooks.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import {
