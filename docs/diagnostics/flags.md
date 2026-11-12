@@ -206,10 +206,10 @@ requests or external runtime billing.
 Flags emit logs into the standard diagnostics log file. By default:
 
 ```
-/tmp/openclaw/openclaw-YYYY-MM-DD.log
+~/.openclaw/logs/openclaw-YYYY-MM-DD.log
 ```
 
-Named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`; for
+Named profiles use `~/.openclaw-<profile>/logs/openclaw-<profile>-YYYY-MM-DD.log`; for
 example, `--dev` uses `openclaw-dev-YYYY-MM-DD.log`.
 
 If you set `logging.file`, use that path instead. Logs are JSONL (one JSON

@@ -90,11 +90,17 @@ export function prepareFileLogTarget(file: string, rolling: boolean): void {
   }
 }
 
-export type DefaultFileLogRoot = { tmpDir: string; stateDir: string };
+export type DefaultFileLogRoot = { stateDir: string };
 
 export function resolveDefaultFileLogTarget(file: string, root: DefaultFileLogRoot): string {
+  // First-run writers and subsequent readers must select the same preferred directory.
+  fs.mkdirSync(root.stateDir, { recursive: true, mode: 0o700 });
   return path.join(
-    resolvePreferredOpenClawTmpDir({ tmpdir: () => root.tmpDir, stateDir: root.stateDir }),
+    resolvePreferredOpenClawTmpDir({
+      preferredDir: path.join(root.stateDir, "logs"),
+      tmpdir: () => path.join(root.stateDir, "tmp"),
+      stateDir: root.stateDir,
+    }),
     file,
   );
 }
