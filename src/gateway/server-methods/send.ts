@@ -283,9 +283,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                 replyToIsExplicit: request.reply?.source === "explicit",
                 idempotencyKey: request.idempotencyKey,
                 toolCallId: trustedContext.sourceReplyToolCallId,
-                ...(trustedContext.sourceReplyFinal !== undefined
-                  ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
-                  : {}),
+                sourceReplyFinal: trustedContext.sourceReplyFinal,
+                runId: client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId,
               };
               // Attachment preparation can outlive the admitted run.
               if (!authorize()) {

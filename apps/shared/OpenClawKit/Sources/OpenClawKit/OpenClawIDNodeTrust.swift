@@ -54,7 +54,6 @@ public struct OpenClawIDNodeTrustState: Codable, Sendable, Equatable {
     }
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Adapter to the existing app state owner, not a parallel database or sidecar.
 public protocol OpenClawIDNodeTrustStore: Sendable {
     func load(hostname: String) async throws -> OpenClawIDNodeTrustState?
@@ -77,14 +76,13 @@ public struct OpenClawIDNodeTrustTarget: Sendable {
     public let evidence: Data
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Verified observations survive a refused dialing verdict. Persist observation before using verdict.
 public struct OpenClawIDNodeTrustAssessment: Sendable {
     public let observation: OpenClawIDNodeTrustState?
     public let verdict: Result<OpenClawIDNodeTrustTarget, OpenClawIDNodeEnrollmentError>
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
+// periphery:ignore - Verification namespace used through its static members by enrollment and the native trust store.
 /// Strict schema, signature, pin and snapshot verification for the node descriptor response.
 public enum OpenClawIDNodeTrust {
     /// Separates verified nonfuture high-water facts from permission to install a dialable target.

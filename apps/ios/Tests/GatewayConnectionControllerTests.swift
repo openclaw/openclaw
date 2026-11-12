@@ -1771,7 +1771,7 @@ private func pendingHandoffDiagnostic(
             appModel.applyGatewayConnectConfig(Self.makeGatewayConnectConfig())
             await appModel.resetGatewaySessionsForTargetSwitch()
 
-            #expect(!appModel.gatewayAutoReconnectEnabled)
+            #expect(!appModel.canAutoReconnect)
             #expect(!defaults.bool(forKey: "gateway.autoconnect"))
             #expect(appModel.activeGatewayConnectConfig == nil)
             #expect(appModel.gatewayServerName == nil)
@@ -2377,7 +2377,7 @@ private func pendingHandoffDiagnostic(
                 controller.cancelPendingConnectionAttempts()
                 await waitUntil(timeout: .milliseconds(250)) { appModel._test_hasGatewayLoopTasks().node }
                 #expect(appModel.activeGatewayConnectConfig == nil)
-                #expect(!appModel.gatewayAutoReconnectEnabled)
+                #expect(!appModel.canAutoReconnect)
                 #expect(!appModel._test_hasGatewayLoopTasks().node)
                 return
             }
@@ -3047,73 +3047,92 @@ private func pendingHandoffDiagnostic(
         #expect(!controller._test_isAutoConnectSuppressed())
     }
 
-    @Test @MainActor func `cancellation lease restores previous auto connect state`() {
-        withUserDefaults([
-            "gateway.autoconnect": true,
-            "gateway.manual.enabled": false,
-            "gateway.preferredStableID": nil,
-            "gateway.lastDiscoveredStableID": nil,
-        ]) {
-            let appModel = NodeAppModel()
-            appModel.gatewayAutoReconnectEnabled = true
-            let controller = GatewayConnectionController(
-                appModel: appModel,
-                startDiscovery: false,
-                ingress: makeOrdinaryIngress())
-            let scannerLease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
-
-            #expect(!appModel.gatewayAutoReconnectEnabled)
-            #expect(UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
-
-            let replacementLease = controller.cancelPendingConnectionAttempts()
-            controller.resumeAutoConnect(after: scannerLease)
-            #expect(!appModel.gatewayAutoReconnectEnabled)
-
-            controller.resumeAutoConnect(after: replacementLease)
-            #expect(appModel.gatewayAutoReconnectEnabled)
-            #expect(UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
-        }
-    }
-
-    @Test @MainActor func `completed target switch does not restore auto connect state`() {
-        withUserDefaults(["gateway.autoconnect": true]) {
-            let appModel = NodeAppModel()
-            appModel.gatewayAutoReconnectEnabled = true
-            let controller = GatewayConnectionController(
-                appModel: appModel,
-                startDiscovery: false,
-                ingress: makeOrdinaryIngress())
-            let lease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
-
-            controller.releaseAutoConnectSuppression(after: lease)
-
-            #expect(!controller._test_isAutoConnectSuppressed())
-            #expect(!appModel.gatewayAutoReconnectEnabled)
-            #expect(UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
-        }
-    }
-
-    @Test @MainActor func `auto connect choice made during target review wins`() throws {
-        try withUserDefaults(["gateway.autoconnect": true]) {
+    @Test @MainActor func `user disconnect during QR scan stays disconnected after scan cancel`() async throws {
+        try await withUserDefaults(["gateway.autoconnect": true]) {
             let appModel = NodeAppModel()
             defer { appModel.disconnectGateway() }
             let suspendedConfig = try Self.makeGatewayConnectConfig(
                 url: #require(URL(string: "wss://127.0.0.1:1")),
                 stableID: "manual|127.0.0.1|1")
             appModel.applyGatewayConnectConfig(suspendedConfig)
-            appModel.gatewayAutoReconnectEnabled = true
             let controller = GatewayConnectionController(
                 appModel: appModel,
                 startDiscovery: false,
                 ingress: makeOrdinaryIngress())
-            let lease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+            let scannerLease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
-            UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
-            controller.resumeAutoConnect(after: lease)
+            appModel.disconnectGateway()
+            controller.resumeAutoConnect(after: scannerLease)
+            await waitUntil(timeout: .milliseconds(250)) { appModel.activeGatewayConnectConfig != nil }
 
-            #expect(!appModel.gatewayAutoReconnectEnabled)
             #expect(appModel.activeGatewayConnectConfig == nil)
+            #expect(!appModel.canAutoReconnect)
+            #expect(!appModel._test_hasGatewayLoopTasks().node)
             #expect(!UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
+        }
+    }
+
+    @Test @MainActor func `lease resume does not restore a node-paused route`() async throws {
+        try await withUserDefaults(["gateway.autoconnect": true]) {
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let pausedConfig = try Self.makeGatewayConnectConfig(
+                url: #require(URL(string: "wss://127.0.0.1:1")),
+                stableID: "manual|127.0.0.1|1")
+            appModel.applyGatewayConnectConfig(pausedConfig)
+            let rateLimit = try #require(GatewayConnectionProblemMapper.map(error: GatewayConnectAuthError(
+                message: "too many failed authentication attempts",
+                detailCode: "AUTH_RATE_LIMITED",
+                canRetryWithDeviceToken: false)))
+            appModel.apply(.failed(rateLimit), to: .node, route: nil)
+            #expect(appModel.connection.node.pausedProblem == rateLimit)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
+            let scannerLease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+
+            controller.resumeAutoConnect(after: scannerLease)
+            await waitUntil(timeout: .milliseconds(250)) { appModel.activeGatewayConnectConfig != nil }
+
+            // Teardown reset the phases; the lease kept no config for the paused route, so it stays down.
+            #expect(appModel.connection.node.pausedProblem == nil)
+            #expect(appModel.activeGatewayConnectConfig == nil)
+            #expect(!appModel.canAutoReconnect)
+            #expect(UserDefaults.standard.bool(forKey: "gateway.autoconnect"))
+        }
+    }
+
+    @Test @MainActor func `cancelling a QR scan with no active route keeps auto connect on`() async {
+        let registryIsolation = await GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let updates: [String: Any?] = [
+            "gateway.autoconnect": false,
+            "gateway.manual.enabled": false,
+            "node.instanceId": "ios-test",
+        ]
+        withUserDefaults(updates) {
+            #expect(saveActiveManualGateway(
+                host: "127.0.0.1",
+                port: 1,
+                useTLS: false,
+                stableID: "manual|127.0.0.1|1"))
+            let appModel = NodeAppModel()
+            defer { appModel.disconnectGateway() }
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
+            // Enable launch auto-connect after init so the scanner opens before any attempt or route.
+            UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+            #expect(appModel.activeGatewayConnectConfig == nil)
+            let scannerLease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+            #expect(!controller._test_didAutoConnect())
+
+            controller.resumeAutoConnect(after: scannerLease)
+
+            #expect(appModel.canAutoReconnect)
+            #expect(controller._test_didAutoConnect())
         }
     }
 
@@ -3140,7 +3159,6 @@ private func pendingHandoffDiagnostic(
                 stableID: "manual|127.0.0.1|1",
                 nodeOptions: controller.makeConnectOptions(deviceAuthGatewayID: nil))
             appModel.applyGatewayConnectConfig(suspendedConfig)
-            appModel.gatewayAutoReconnectEnabled = true
             _ = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
             await controller.connectManual(host: "invalid.example.com", port: 70000, useTLS: true)
@@ -3149,7 +3167,7 @@ private func pendingHandoffDiagnostic(
             }
 
             #expect(!controller._test_isAutoConnectSuppressed())
-            #expect(appModel.gatewayAutoReconnectEnabled)
+            #expect(appModel.canAutoReconnect)
             #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: suspendedConfig) == true)
             #expect(defaults.bool(forKey: "gateway.autoconnect"))
         }

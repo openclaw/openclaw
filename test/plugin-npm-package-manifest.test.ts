@@ -1382,6 +1382,25 @@ it("installs bundled dependencies whose shared node npm reloads under another ov
   });
 });
 
+it("preserves npm JSON and verbose diagnostics when packing a patched dependency fails", () => {
+  const { repoDir, packageDir, sourceManifest } = writePatchedRuntimeFixture();
+  writeJsonFile(join(packageDir, "package.json"), {
+    ...sourceManifest,
+    devEngines: { packageManager: { name: "pnpm", onFail: "error" } },
+  });
+  const result = spawnSync(
+    process.execPath,
+    manifestArgs(packageDir, [process.execPath, "-e", "process.exit(0)"]),
+    { cwd: repoDir, encoding: "utf8", env: process.env },
+  );
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    "packing patched runtime dependency failed: local-runtime-dep@1.0.0",
+  );
+  expect(result.stderr).toContain('"code": "EBADDEVENGINES"');
+  expect(result.stderr).toContain("verbose stack");
+});
+
 it.each([
   "bundle opt-out",
   "unselected opt-out patch",
