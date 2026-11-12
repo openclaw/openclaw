@@ -69,6 +69,23 @@ import Testing
         #expect(appModel.connection.operator == .connecting(reconnect: true))
     }
 
+    @Test func `an action notice stays readable while the node is connected`() {
+        let connection = GatewayConnection(
+            node: .connected(GatewaySessionInfo(serverName: "gateway.example.com")),
+            operator: .connected(GatewaySessionInfo()))
+        let notice = "Could not remove offline data for this gateway"
+
+        let source = GatewayStatusBuilder.source(
+            for: connection.node,
+            connection: connection,
+            lastGatewayProblem: nil,
+            progress: nil,
+            notice: notice)
+
+        #expect(source.statusText == notice)
+        #expect(source.displayState == .connected)
+    }
+
     @Test(arguments: [nil, "gateway.example.com"] as [String?])
     func `paused problem keeps error status`(_ gatewayServerName: String?) {
         let problem = GatewayConnectionProblem(

@@ -17,16 +17,17 @@ enum GatewayConnectionProgress: Equatable {
 
     var statusText: String {
         switch self {
-        case .connecting: "Connecting…"
-        case .verifyingTLS: "Verifying gateway TLS fingerprint…"
-        case .awaitingTrust: "Verify gateway TLS fingerprint"
+        case .connecting: String(localized: "Connecting…")
+        case .verifyingTLS: String(localized: "Verifying gateway TLS fingerprint…")
+        case .awaitingTrust: String(localized: "Verify gateway TLS fingerprint")
         }
     }
 }
 
-/// What a connection surface shows, in precedence order: a problem, a live connection, preconnect
-/// progress, a one-off notice, then the condition of the session the surface follows. A notice and
-/// progress never coexist, and a node transition clears the notice.
+/// What a connection surface shows, in precedence order: a problem, a one-off notice, a live
+/// connection, preconnect progress, then the condition of the session the surface follows. A notice
+/// keeps its session's state, so an action's failure stays readable while connected; a node
+/// transition clears it. A notice and progress never coexist.
 enum GatewayStatusSource: Equatable {
     case problem(GatewayConnectionProblem)
     case progress(GatewayConnectionProgress)
@@ -88,9 +89,9 @@ enum GatewayStatusBuilder {
         notice: String?) -> GatewayStatusSource
     {
         if let problem = lastGatewayProblem ?? connection.pausedProblem { return .problem(problem) }
+        if let notice { return .notice(notice, phase) }
         if phase.connectedInfo != nil { return .phase(phase) }
         if let progress { return .progress(progress) }
-        if let notice { return .notice(notice, phase) }
         return .phase(phase)
     }
 
@@ -139,9 +140,10 @@ enum GatewayStatusBuilder {
     /// One session's condition, as the Quick Setup rows show it.
     static func statusText(_ phase: GatewaySessionPhase) -> String {
         switch phase {
-        case .idle: "Offline"
-        case let .connecting(reconnect): reconnect ? "Reconnecting…" : "Connecting…"
-        case .connected: "Connected"
+        case .idle: String(localized: "Offline")
+        case .connecting(reconnect: true): String(localized: "Reconnecting…")
+        case .connecting(reconnect: false): String(localized: "Connecting…")
+        case .connected: String(localized: "Connected")
         case let .paused(problem): problem.localizedStatusText
         }
     }
