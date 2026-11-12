@@ -13,10 +13,15 @@ import { readBackupEngine } from "../snapshot/database-backup.js";
 import { withArtifactPreservingStateReads as preserveArtifacts } from "../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION as AGENT_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION as STATE_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { agentPortProvider } from "./database-engine/agent-port.js";
 import { writePortAnchor } from "./database-engine/port-backup.test-support.js";
 import { materializeDatabasePort } from "./database-engine/port.worker.js";
 import { statePortProvider } from "./database-engine/state-port.js";
+import { workboardPortProvider } from "./database-engine/workboard-port.js";
 import { ignoreMissingPath } from "./errno.js";
 import { openNodeSqliteDatabase as openDatabase } from "./node-sqlite.js";
 import {
@@ -25,6 +30,10 @@ import {
 } from "./sqlite-database-admission.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { readUpdateStateSchemaVersions as readVersions } from "./update-candidate-state.js";
+import {
+  createStateSnapshotInput,
+  runUpdateCandidateSnapshotWorker,
+} from "./update-candidate-state.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -226,4 +235,52 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
       }
     },
   );
+  // Released drivers serialize their own config read, without the candidate's
+  // 2026.11.1 Workboard-only normalization; inventory must not switch shared state.
+  it("snapshots SQLite state under the published Workboard-only PostgreSQL setting", async () => {
+    const root = await fs.realpath(directories.make("update-legacy-workboard-postgres-"));
+    const stateDir = path.join(root, "source");
+    const targetStateDir = path.join(root, "snapshot");
+    const input = createStateSnapshotInput(root, stateDir, targetStateDir);
+    const shared = openOpenClawStateDatabase({ env: input.env }).path;
+    await closeOpenClawStateDatabaseByPathAsync(shared);
+    const workboard = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+    await fs.mkdir(path.dirname(workboard), { recursive: true });
+    const descriptor = await workboardPortProvider.loadDescriptor();
+    const storeId = randomUUID();
+    const namespace = `openclaw_workboard_${storeId.replaceAll("-", "")}`;
+    namespaces.add(namespace);
+    {
+      using source = openDatabase(":memory:");
+      source.exec(descriptor.sqlite);
+      for (const fragment of descriptor.fragments ?? []) {
+        source.exec(fragment.sqlite);
+      }
+      source.exec(
+        "INSERT INTO workboard_boards (id,name,created_at,updated_at) VALUES ('board','Card A board',1,1)",
+      );
+      await materializeDatabasePort({
+        source: { engine: "sqlite", db: source },
+        destination: { engine: "postgres", db: client, namespace },
+        descriptor,
+        storeId,
+        assertCurrent() {},
+      });
+    }
+    writePortAnchor(workboard, storeId, namespace);
+    const versions = await runUpdateCandidateSnapshotWorker({
+      ...input,
+      config: { database: { engine: "postgres", postgres: { connection: connection! } } },
+    });
+    expect(versions.find((entry) => entry.path === shared)).toMatchObject({
+      userVersion: STATE_VERSION,
+    });
+    // The rehearsal copy is a private SQLite image of the PostgreSQL store.
+    using copied = openDatabase(path.join(targetStateDir, path.relative(stateDir, workboard)), {
+      readOnly: true,
+    });
+    expect(copied.prepare("SELECT name FROM workboard_boards").all()).toEqual([
+      { name: "Card A board" },
+    ]);
+  });
 });
