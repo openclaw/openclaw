@@ -303,10 +303,10 @@ export async function persistAgentSessionPhase(params: {
       }
       patchBuild = await params.buildSessionPatch(entryForPatch);
       if (
-        resetReason &&
-        (patchBuild.automaticResetReason !== resetReason ||
-          freshEntry?.sessionId !== params.entry?.sessionId ||
-          freshEntry?.lifecycleRevision !== params.entry?.lifecycleRevision)
+        patchBuild.automaticResetReason !== resetReason ||
+        (resetReason &&
+          (freshEntry?.sessionId !== params.entry?.sessionId ||
+            freshEntry?.lifecycleRevision !== params.entry?.lifecycleRevision))
       ) {
         rejectMutation(ErrorCodes.UNAVAILABLE, "Session changed before automatic reset. Retry.");
       }

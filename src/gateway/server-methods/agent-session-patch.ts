@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import { clearRotatedSessionMetadata } from "../../agents/session-reset-metadata.js";
+import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.registry.js";
 import { evaluateSessionFreshness, type SessionFreshness } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../../config/sessions/lifecycle-read.js";
@@ -134,9 +135,15 @@ export async function evaluateAgentSessionReuse(params: AgentSessionReuseInput) 
     Boolean(params.freshEntry?.sessionId) &&
     params.visibleRequest &&
     isRecoverableTerminalSessionStatus(params.freshEntry?.status);
+  const activeOperation = replyRunRegistry.get(params.canonicalSessionKey);
+  // Implicit expiry must leave the exact executing writer's lifecycle intact.
+  const deferImplicitRollover =
+    freshness?.fresh === false &&
+    activeOperation?.phase !== "queued" &&
+    activeOperation?.sessionId === params.freshEntry?.sessionId;
   const canReuseSession =
     Boolean(params.freshEntry?.sessionId) &&
-    ((freshness?.fresh ?? false) || recoverableTerminalSession) &&
+    ((freshness?.fresh ?? false) || deferImplicitRollover || recoverableTerminalSession) &&
     !(failedSession && !metadata?.present) &&
     !terminalMainTranscriptNewerThanRegistry;
   const usableRequestedSessionId =

@@ -361,6 +361,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/sessions.acp-model-display.test.ts",
   "src/gateway/agent-turn/agent-request-preflight.source-lineage.test.ts",
   "src/gateway/agent-turn/agent-session-persist.test.ts",
+  "src/gateway/agent-turn/agent-session-persist.rollover.test.ts",
   "src/gateway/boot.test.ts",
   "src/gateway/mcp-http.runtime.portal-readiness.test.ts",
   "src/gateway/server-methods/chat-history-worker.test.ts",
