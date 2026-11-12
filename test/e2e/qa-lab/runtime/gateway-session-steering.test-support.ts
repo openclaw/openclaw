@@ -588,7 +588,10 @@ function personHeaders(email: string) {
  * Shared-token Gateways have one owner identity, so these scenarios need their own.
  */
 export async function withPeopleGateway(
-  options: { allowCollaborativeSteering?: boolean },
+  options: {
+    allowCollaborativeSteering?: boolean;
+    collaborativeSteeringFallback?: "queue" | "reject";
+  },
   run: (
     gateway: SteeringApi & {
       alice: GatewayClient;
@@ -637,6 +640,8 @@ export async function withPeopleGateway(
         config.agents!.defaults!.workspace = workspaceDir;
         config.agents!.entries = { main: {} };
         config.messages!.queue!.allowCollaborativeSteering = options.allowCollaborativeSteering;
+        config.messages!.queue!.collaborativeSteeringFallback =
+          options.collaborativeSteeringFallback;
         const gatewayConfig: NonNullable<OpenClawConfig["gateway"]> = {
           trustedProxies: ["127.0.0.1"],
           auth: {

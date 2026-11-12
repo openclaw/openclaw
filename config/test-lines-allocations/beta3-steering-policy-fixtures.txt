@@ -1,0 +1,3 @@
+# Select explicit strict-refusal policy in existing real Gateway regressions,
+# retaining default-enabled collaboration coverage and all no-effect assertions.
+18

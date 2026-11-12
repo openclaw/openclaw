@@ -622,7 +622,12 @@ export async function updateSenderPolicies(policies: Record<string, { deny: stri
 export function configureProofCollaboration(allow: boolean | undefined, bobDenied = false) {
   return patchProofConfig(
     {
-      messages: { queue: { allowCollaborativeSteering: allow ?? null } },
+      messages: {
+        queue: {
+          allowCollaborativeSteering: allow ?? null,
+          collaborativeSteeringFallback: "reject",
+        },
+      },
       tools: {
         toolsBySender: {
           "id:alice": { deny: null },
