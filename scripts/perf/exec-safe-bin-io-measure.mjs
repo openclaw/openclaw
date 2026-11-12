@@ -54,27 +54,29 @@ if (values.allocation) {
 }
 const counts = {};
 const restorers = [];
-for (const { owner, methods, prefix } of [
-  { owner: fs, methods: ["statSync", "accessSync", "realpathSync"], prefix: "main" },
-  { owner: fsp, methods: ["stat", "access", "realpath"], prefix: "async" },
-]) {
-  for (const method of values.counts ? methods : []) {
-    const original = owner[method];
-    const key = `${prefix}.${method}`;
-    owner[method] = function (...args) {
-      counts[key] = (counts[key] ?? 0) + 1;
-      return original.apply(this, args);
-    };
-    if (method === "realpathSync") {
-      owner[method].native = function (...args) {
-        const nativeKey = `${key}.native`;
-        counts[nativeKey] = (counts[nativeKey] ?? 0) + 1;
-        return original.native.apply(this, args);
-      };
+function counted(original, key) {
+  return Object.assign(function (...args) {
+    counts[key] = (counts[key] ?? 0) + 1;
+    return original.apply(this, args);
+  }, original);
+}
+if (values.counts) {
+  for (const { owner, methods, prefix } of [
+    { owner: fs, methods: ["statSync", "accessSync", "realpathSync"], prefix: "main" },
+    { owner: fsp, methods: ["stat", "access", "realpath"], prefix: "async" },
+  ]) {
+    for (const method of methods) {
+      const original = owner[method];
+      const key = `${prefix}.${method}`;
+      const observed = counted(original, key);
+      if (method === "realpathSync") {
+        observed.native = counted(original.native, `${key}.native`);
+      }
+      owner[method] = observed;
+      restorers.push(() => {
+        owner[method] = original;
+      });
     }
-    restorers.push(() => {
-      owner[method] = original;
-    });
   }
 }
 if (values.counts && values.owner === "command") {
@@ -158,23 +160,30 @@ try {
             : disabled
               ? "disabled"
               : "default-wc-admission",
-        runtime: process.version,
+        runtime: { node: process.version, bun: process.versions.bun ?? null },
         platform: process.platform,
         arch: process.arch,
-        bun: process.versions.bun,
         nativeMode: values["native-mode"],
         phase: values.cold ? "cold-owner" : "warm-process",
         operations,
         rssBefore,
         rssAfter: process.memoryUsage().rss,
-        allocation: values.allocation,
-        counts: values.counts,
+        mode: values.counts ? "counts" : values.allocation ? "allocation" : "timing",
         hostLoad,
-        calls,
-        wallMs,
-        mainCpuUs: mainCpu.user + mainCpu.system,
-        processCpuUs: processCpu.user + processCpu.system,
-        sampledAllocatedBytes: profile?.samples.reduce((sum, sample) => sum + sample.size, 0),
+        ...(values.counts
+          ? { calls }
+          : values.allocation
+            ? {
+                sampledAllocatedBytes: profile.samples.reduce(
+                  (sum, sample) => sum + sample.size,
+                  0,
+                ),
+              }
+            : {
+                wallMs,
+                mainCpuUs: mainCpu.user + mainCpu.system,
+                processCpuUs: processCpu.user + processCpu.system,
+              }),
       }),
     );
   }

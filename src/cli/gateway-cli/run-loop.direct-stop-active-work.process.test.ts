@@ -49,7 +49,25 @@ const childScript = `
 
   const trace = (line) => writeSync(1, "process proof: " + line + "\\n");
   if (process.argv[1] === "SIGUSR2") {
-    process.once("SIGUSR2", () => trace("SIGUSR2-received"));
+    const { onWorkerRequestMetrics } = await import(${JSON.stringify(pathToFileURL(path.resolve("src/infra/worker-request-diagnostics.ts")).href)});
+    const origin = performance.now();
+    const elapsed = (at = performance.now()) => Number((at - origin).toFixed(1));
+    process.once("SIGUSR2", () => trace("SIGUSR2-received atMs=" + elapsed()));
+    onWorkerRequestMetrics((kind, requestClass, phase, queueDepth, queueWaitMs, durationMs, timing) => {
+      if (kind !== "sqlite_writer") return;
+      trace("worker-timing " + JSON.stringify({
+        op: requestClass === "open" || requestClass === "close" ? requestClass : "execute",
+        requestClass,
+        phase,
+        atMs: elapsed(),
+        queueDepth,
+        queueWaitMs,
+        durationMs,
+        timingMs: Object.fromEntries(
+          Object.entries(timing ?? {}).map(([name, at]) => [name, elapsed(at)]),
+        ),
+      }));
+    });
   }
   let starts = 0;
   const code = await runGatewayLoop({
@@ -109,6 +127,7 @@ posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_NO_RESPAWN: "1",
+      ...(stopSignal === "SIGUSR2" ? { OPENCLAW_DIAGNOSTICS: "sqlite.worker-timing" } : {}),
       VITEST: undefined,
       ...(historical
         ? {

@@ -8,6 +8,14 @@
   background: var(--popover);
 }
 
+/* Owner rows lead with a 24px avatar slot. */
+.people-menu__search > .header-search {
+  --header-search-icon-slot: 24px;
+  --header-search-gap: 6px;
+
+  padding-inline-start: 0;
+}
+
 .people-menu__status {
   padding: 6px 8px;
   color: var(--muted);
