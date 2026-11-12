@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { userProfileEditableDisplayName } from "../shared/user-profile-display-name.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
@@ -31,9 +32,15 @@ export function ensureProfileForEmailInDatabase(
   if (existingAlias) {
     return toUserProfile(requireResolvedUserProfileMetadataById(db, existingAlias.profile_id));
   }
+  const inferredName = userProfileEditableDisplayName(email);
   const displayName =
     initialDisplayName ??
-    truncateUtf16Safe(email.split("@", 1)[0] || email, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH);
+    (inferredName
+      ? truncateUtf16Safe(
+          inferredName.split("@", 1)[0] || inferredName,
+          MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+        )
+      : null);
   const row = insertUserProfile(db, displayName, now, mutation);
   setUserProfileEmailBinding(db, email, row.id, now);
   mutation?.authority(row.id);

@@ -331,7 +331,7 @@ export function GitHubConnections() {
                   />
                 ),
                 view().account?.account?.login,
-                view().profileId ? t("githubConnections.personalUse") : undefined,
+                view().profileId ? t("githubConnections.personalDescription") : undefined,
               )}
               control={
                 view().profileId && view().canRead ? (

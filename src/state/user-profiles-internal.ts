@@ -14,7 +14,11 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
-import { userProfileDisplayName } from "../shared/user-profile-display-name.js";
+import {
+  isUserProfileEmailAddress,
+  userProfileDisplayName,
+  userProfileEditableDisplayName,
+} from "../shared/user-profile-display-name.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
@@ -64,7 +68,7 @@ export function insertUserProfile(
 export function toUserProfile(row: Omit<UserProfileMetadataRow, "avatar_sha256">): UserProfile {
   return {
     id: row.id,
-    displayName: row.display_name,
+    displayName: userProfileEditableDisplayName(row.display_name),
     avatarMime: normalizeUserProfileAvatarMime(row.avatar_mime),
     mergedInto: row.merged_into,
     ...(row.role ? { role: row.role } : {}),
@@ -105,9 +109,9 @@ export function projectUserProfileListItem(
 ) {
   return {
     ...toUserProfile(row),
-    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
-      Buffer.compare(Buffer.from(left), Buffer.from(right)),
-    ),
+    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])]
+      .filter(isUserProfileEmailAddress)
+      .toSorted((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right))),
     githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
     hasAvatar: row.has_avatar === 1,
   };

@@ -402,17 +402,15 @@ export function ProfilePage() {
                     </form>
                   }
                 />
-                <Show when={!isOwnerProfile()}>
+                <Show when={!isOwnerProfile() && profile().emails.length > 0}>
                   <SettingsRow
                     title={t("profilePage.identity.linkedEmails")}
                     description={
-                      profile().emails.length ? (
-                        <span class="identity-emails">
-                          <For each={profile().emails}>
-                            {(email) => <span class="identity-account">{email}</span>}
-                          </For>
-                        </span>
-                      ) : undefined
+                      <span class="identity-emails">
+                        <For each={profile().emails}>
+                          {(email) => <span class="identity-account">{email}</span>}
+                        </For>
+                      </span>
                     }
                   />
                 </Show>

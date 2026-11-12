@@ -146,7 +146,7 @@ const enGitHub = {
     unidentified: "Sign in with a personal profile to use My GitHub.",
     sharedUnavailable: {
       unavailable:
-        "No GitHub account is available on the computer running OpenClaw. Sign in with gh auth login on the computer running OpenClaw, or add an account in Settings \u2192 Profile \u2192 GitHub accounts. My GitHub is separate and optional.",
+        "No GitHub account is available on the computer running OpenClaw. Sign in with gh auth login on the computer running OpenClaw, or add an account in Settings \u2192 Profile \u2192 GitHub connections. My GitHub is separate and optional.",
       changed: "The shared GitHub account changed. Reload and try publishing again.",
       rate_limited:
         "Couldn’t verify the GitHub account because of a rate limit. Wait and try publishing again; you don’t need to reconnect.",

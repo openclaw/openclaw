@@ -1253,7 +1253,7 @@ const startupEnglish = {
       'Too many publications are awaiting review. Finish an existing publication, then select "{newAction}" to make room. Existing retries remain available.',
   },
   githubConnections: {
-    title: "GitHub accounts",
+    title: "GitHub connections",
     mine: "My GitHub",
     system: "System GitHub",
     forMe: "For me",

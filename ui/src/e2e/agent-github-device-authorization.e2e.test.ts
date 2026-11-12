@@ -79,7 +79,10 @@ suite.define(() => {
         await helpButton.click();
         const help = page.locator(".settings-section__help-panel");
         await expect(help).toContainText("My GitHub is used only when");
-        await expect(help).toContainText("Your account when you choose it to publish a PR.");
+        await expect(help).toContainText("Choose it in the session’s PR publishing control");
+        await expect(help).toContainText(
+          "use individual sign-ins for separate personal connections",
+        );
         await helpButton.click();
         await expect(help).toHaveCount(0);
         const button = (name: string) => section.getByRole("button", { name, exact: true });
@@ -88,6 +91,9 @@ suite.define(() => {
         await expect(connection("system")).toContainText("@system-octocat");
         await expect(button("Change System GitHub")).toHaveCount(0);
         await expect(connection("agent")).toHaveCount(0);
+        await expect(connection("personal")).toContainText(
+          "connecting does not change the shared default",
+        );
         const configReads = (await gateway.getRequests("config.get")).length;
         const configWrites = (await gateway.getRequests("config.set")).length;
         await button("Connect My GitHub").click();

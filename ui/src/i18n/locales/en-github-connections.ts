@@ -4,15 +4,16 @@ import { en } from "./en.ts";
 const enGitHubConnections = {
   githubConnections: {
     title: en.githubConnections.title,
-    description: "These accounts are separate from your GitHub sign-in and co-author credit.",
+    description:
+      "Connect accounts for agent GitHub access and PR publishing, separate from sign-in and attribution.",
     descriptionMore: "Check the accounts used for agent commands, dashboard data, and publishing.",
     mine: en.githubConnections.mine,
     system: en.githubConnections.system,
-    personalUse: "Publishing",
-    personalDescription: "Your account when you choose it to publish a PR.",
+    personalDescription:
+      "Connect your account to publish PRs as you. Choose it in the session’s PR publishing control; connecting does not change the shared default.",
     systemUse: "Agent commands, dashboards, publishing",
     systemDescription:
-      "Default account for agent commands, authenticated dashboards, and publishing.",
+      "Shared default for agent commands, authenticated dashboards, and publishing, unless an agent has its own connection.",
     unboundDescription:
       "Sign in with a personal profile to connect My GitHub. Admins can still manage System GitHub.",
     signInRequired: "Personal sign-in required",
@@ -41,7 +42,7 @@ const enGitHubConnections = {
     continue: "Continue with GitHub",
     usage: "Where these accounts are used",
     usageDescription:
-      "My GitHub is used only when you choose it to publish a PR. You need write access to the session, and work must be finished and accepted on this computer. Agent commands, model actions, previews, and cloud devices keep the shared account. Finish work on a cloud device and bring it back to this computer before publishing with My GitHub. Connecting My GitHub changes no defaults.",
+      "My GitHub is used only when you choose it in the session’s PR publishing control. You need write access to the session. Agent commands and model actions keep the shared account. People using the same shared owner login share its My GitHub connection; use individual sign-ins for separate personal connections.",
     details: "Account details",
     agentTitle: "GitHub account",
     agentFor: "GitHub for {agent}",
