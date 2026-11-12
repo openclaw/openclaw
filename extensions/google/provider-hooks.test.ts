@@ -37,6 +37,39 @@ describe("GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn", () => {
   });
 
   it.each([
+    [{ minimal: null, xhigh: "xhigh" }, "xhigh", "XHIGH"],
+    [{ minimal: null, xhigh: "xhigh" }, "max", "XHIGH"],
+    [{ minimal: null }, "xhigh", "HIGH"],
+  ] as const)(
+    "keeps Gemini 4 thinkingLevelMap %o at %s as %s",
+    (thinkingLevelMap, thinkingLevel, expected) => {
+      const capture = createCapturedThinkingConfigStream();
+      const wrapped = GOOGLE_GEMINI_PROVIDER_HOOKS.wrapStreamFn({
+        provider: "google-vertex",
+        modelId: "gemini-4-hydrogen",
+        thinkingLevel,
+        streamFn: capture.streamFn,
+      });
+
+      void wrapped(
+        {
+          api: "google-vertex",
+          provider: "google-vertex",
+          id: "gemini-4-hydrogen",
+          thinkingLevelMap,
+        } as never,
+        { messages: [] } as never,
+        {},
+      );
+
+      const capturedConfig = capture.getCapturedPayload()?.config as
+        | { thinkingConfig?: unknown }
+        | undefined;
+      expect(capturedConfig?.thinkingConfig).toEqual({ thinkingLevel: expected });
+    },
+  );
+
+  it.each([
     ["google-interactions", { fastMode: true }, "priority"],
     ["google-interactions", { fastMode: () => true }, "priority"],
     ["google-interactions", { fastMode: false }, undefined],

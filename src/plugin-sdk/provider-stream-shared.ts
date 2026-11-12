@@ -689,6 +689,7 @@ export function createGoogleThinkingPayloadWrapper(
         payload,
         modelId: model.id,
         thinkingLevel,
+        thinkingLevelMap: model.thinkingLevelMap,
       });
     }
   });
