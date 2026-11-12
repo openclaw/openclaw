@@ -1305,7 +1305,7 @@ describe("gateway run option collisions", () => {
     expect(options.auth?.mode).toBe("password");
     expect(options.auth?.password).toBe("pw_from_file"); // pragma: allowlist secret
     expect(runtimeErrors).not.toContain(
-      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+      "Warning: process listings can expose --password. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
     );
   });
 
@@ -1313,7 +1313,7 @@ describe("gateway run option collisions", () => {
     await runUnconfigured("--auth", "password", "--password", "pw_inline");
 
     expect(runtimeErrors).toContain(
-      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+      "Warning: process listings can expose --password. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
     );
   });
 

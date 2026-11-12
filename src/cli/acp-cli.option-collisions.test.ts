@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, expect, it, vi } from "vitest";
+import { redactSensitiveText } from "../logging/redact.js";
 import { ExitError } from "../runtime.js";
 import { withTempSecretFiles } from "../test-utils/secret-file-fixture.js";
 import { registerAcpCli } from "./acp-cli.js";
@@ -73,9 +74,10 @@ it("warns when inline secret flags are used", async () => {
   await parseAcp(["--token", "tok_inline", "--password", "pw_inline"]);
 
   for (const flag of ["token", "password"]) {
-    expect(errors()).toContain(
-      `Warning: --${flag} can be exposed via process listings. Prefer --${flag}-file or environment variables.`,
-    );
+    const warning = `Warning: process listings can expose --${flag}. Prefer --${flag}-file or environment variables.`;
+    expect(errors()).toContain(warning);
+    // Console redaction must not mask part of the warning as a secret.
+    expect(redactSensitiveText(warning)).toBe(warning);
   }
 });
 
