@@ -158,8 +158,8 @@ export function composerFixture(
     }
   }
   renderCurrent();
-  const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
   const edit = (next: string, options: EditOptions = {}) => {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
     const start = options.start ?? textarea.value.length;
     const caret = options.caret ?? next.length;
     const eventInit = {
@@ -175,6 +175,7 @@ export function composerFixture(
     renderCurrent();
   };
   const pressKey = (key: string, extra: KeyboardEventInit = {}) => {
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
     const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...extra });
     textarea.dispatchEvent(event);
     renderCurrent();
@@ -210,6 +211,11 @@ export function composerFixture(
       expect({ draft, mentions }).toEqual({ draft: expectedDraft, mentions: expectedMentions }),
     mentionAccess: () => mentionAccess,
     refresh: renderCurrent,
+    restoreDraft: (next: string, selected: readonly HumanMention[] = []) => {
+      draft = next;
+      mentions = selected;
+      renderCurrent();
+    },
     replaceOwner: () => {
       ownerKey = "sender-two";
       renderCurrent();

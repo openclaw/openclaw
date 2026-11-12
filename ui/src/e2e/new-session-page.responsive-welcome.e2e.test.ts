@@ -373,7 +373,6 @@ suite.define(() => {
     const mark = editor.locator(".chat-composer-mention");
     await pollText(mark).toContain("averylongmentionlabel");
     await pollCount(surface.getByRole("textbox")).toBe(1);
-    await pollCount(page.locator(".chat-compose__mention-preview")).toBe(0);
     await expect
       .poll(() => backing.evaluate((element) => element instanceof HTMLElement && element.hidden))
       .toBe(true);

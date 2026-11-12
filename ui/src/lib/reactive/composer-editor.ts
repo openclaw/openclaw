@@ -1,8 +1,5 @@
-import {
-  prepareHumanMentionPaste,
-  readHumanMentionClipboard,
-} from "../chat/human-mention-clipboard.ts";
-import { readHumanMentions, withHumanMentionEdit } from "../chat/human-mentions.ts";
+import type { HumanMention } from "../chat/chat-types.ts";
+import { HUMAN_MENTION_CLIPBOARD_TYPE, readHumanMentions } from "../chat/human-mentions.ts";
 import { createIdleImport } from "../idle-import.ts";
 import { useOptionalApplication } from "./context.ts";
 import { elementRef } from "./element-ref.ts";
@@ -10,45 +7,49 @@ import { listen } from "./listener.ts";
 
 /** One foreign-DOM owner shared by Chat and New Session. Load CM only when a
  * selected person needs inline layout; retain it until this draft unmounts. */
-export function createComposerEditorBinding(avatarUrls?: ReadonlyMap<string, string>) {
+export function createMentionComposerBinding(
+  getMentions: () => readonly HumanMention[],
+  avatarUrls?: ReadonlyMap<string, string>,
+) {
   const application = useOptionalApplication();
-  let input: HTMLTextAreaElement | undefined;
-  let composing = false;
-  let entryHistory:
-    | import("../../pages/chat/components/composer-editor-view.tsx").ComposerEditorSnapshot
-    | undefined;
-  let editor: { sync: () => void; destroy: () => void } | undefined;
-  let mountEditor:
-    | typeof import("../../pages/chat/components/composer-editor-view.tsx").mountComposerEditor
-    | undefined;
-  function mentions() {
-    if (!input) {
-      return [];
-    }
-    try {
-      return (
-        readHumanMentions(input.value, JSON.parse(input.dataset.composerMentions ?? "[]")) ?? []
-      );
-    } catch {
-      return [];
-    }
-  }
-  function activate() {
-    if (input && !editor && !composing && mentions().length && mountEditor) {
-      editor = mountEditor(input, mentions, application, entryHistory, avatarUrls);
-      entryHistory = undefined;
-    }
-  }
-  const loader = createIdleImport(
-    () => import("../../pages/chat/components/composer-editor-view.tsx"),
-    (module) => {
-      mountEditor = module.mountComposerEditor;
-      activate();
-    },
-  );
   return elementRef<HTMLTextAreaElement>((node) => {
-    input = node;
-    let pasting = false;
+    const native = new AbortController();
+    let composing = false;
+    let entryHistory:
+      | import("../../pages/chat/components/composer-editor-mentions.tsx").ComposerMentionSnapshot
+      | undefined;
+    let mountEditor:
+      | typeof import("../../pages/chat/components/composer-editor-mentions.tsx").mountMentionComposerEditor
+      | undefined;
+    let editor: ReturnType<NonNullable<typeof mountEditor>> | undefined;
+    const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
+    // A transfer mounts for its own insertion, which the editor's history then owns.
+    function activate(forTransfer = false) {
+      if (
+        !native.signal.aborted &&
+        !composing &&
+        (forTransfer || mentions().length) &&
+        mountEditor
+      ) {
+        editor = mountEditor(
+          node,
+          getMentions,
+          application,
+          forTransfer ? undefined : entryHistory,
+          avatarUrls,
+        );
+        entryHistory = undefined;
+        // Retire only after a successful handoff; a failed mount keeps native editing.
+        native.abort();
+      }
+    }
+    const loader = createIdleImport(
+      () => import("../../pages/chat/components/composer-editor-mentions.tsx"),
+      (module) => {
+        mountEditor = module.mountMentionComposerEditor;
+        activate();
+      },
+    );
     const snapshot = () => ({
       value: node.value,
       mentions: mentions(),
@@ -58,87 +59,128 @@ export function createComposerEditorBinding(avatarUrls?: ReadonlyMap<string, str
         direction: node.selectionDirection,
       },
     });
-    const stopFocus = listen(node, "focus", () => {
-      if (!editor && !composing && !mentions().length) {
-        entryHistory = snapshot();
-      }
-    });
-    const stopInput = listen(node, "input", () => {
-      if (!editor && !composing && !pasting) {
-        entryHistory = snapshot();
-      }
-    });
-    // Solid owns the selected-range attribute; this foreign-DOM owner consumes
-    // its committed changes without adding a second reactive state/effect.
+    listen(
+      node,
+      "focus",
+      () => {
+        if (!composing && !mentions().length) {
+          entryHistory = snapshot();
+        }
+      },
+      { signal: native.signal },
+    );
+    listen(
+      node,
+      "input",
+      () => {
+        if (!composing) {
+          entryHistory = snapshot();
+        }
+      },
+      { signal: native.signal },
+    );
+    // One observer follows the native port before and after rich-editor activation.
+    // Both attributes and feature metadata reconcile through the same owner.
     const observer = new MutationObserver(() => {
       if (editor) {
         editor.sync();
       } else if (!composing && mentions().length) {
-        void loader.load().catch(() => undefined);
-      }
-    });
-    observer.observe(node, { attributes: true, attributeFilter: ["data-composer-mentions"] });
-    // Keep clipboard behavior consistent before the first chip loads CM.
-    const stopPaste = listen(node, "paste", (event) => {
-      if (editor || composing || event.defaultPrevented || node.disabled || node.readOnly) {
-        return;
-      }
-      const copied = readHumanMentionClipboard(event.clipboardData);
-      if (!copied) {
-        return;
-      }
-      const value = node.value;
-      const start = node.selectionStart;
-      const end = node.selectionEnd;
-      const paste = prepareHumanMentionPaste(value, start, end, copied);
-      entryHistory = snapshot();
-      event.preventDefault();
-      node.setRangeText(paste.text, start, end, "end");
-      const restored = paste.mentions.map((mention) => ({
-        profileId: mention.profileId,
-        start: mention.start + start,
-        end: mention.end + start,
-      }));
-      pasting = true;
-      try {
-        withHumanMentionEdit(
-          node.value,
-          { mode: "merge", mentions: restored },
-          { value, start, end, inputType: "insertFromPaste" },
-          () => {
-            node.dispatchEvent(
-              new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
-            );
-          },
+        // The load callback fires once; a later mention must still activate.
+        void loader.load().then(
+          () => activate(),
+          () => undefined,
         );
-      } finally {
-        pasting = false;
       }
     });
-    const stopStart = listen(node, "compositionstart", () => {
-      composing = true;
-    });
-    const stopEnd = listen(node, "compositionend", () => {
-      composing = false;
-      if (!editor) {
+    observer.observe(node, { attributes: true });
+    // Recipient transfers have one owner, the rich editor: mount it, then replay the
+    // paste or drop there. DataTransfer is readable only during its event.
+    type Transfer = { text: string; raw: string };
+    const readTransfer = (data: DataTransfer | null): Transfer | undefined => {
+      const raw = data && !data.files.length && data.getData(HUMAN_MENTION_CLIPBOARD_TYPE);
+      return raw ? { text: data.getData("text/plain"), raw } : undefined;
+    };
+    async function transfer(event: Event, copied: Transfer | undefined, drop: boolean) {
+      if (!copied || composing || event.defaultPrevented || node.disabled || node.readOnly) {
+        return;
+      }
+      event.preventDefault();
+      try {
+        await loader.load();
+        activate(true);
+      } catch {
+        // Handled below: the transfer still arrives, as plain text.
+      }
+      if (editor) {
+        editor.transfer(copied.text, copied.raw, drop);
+      } else if (!native.signal.aborted) {
+        // Without the editor nothing can show a recipient, so none is bound.
+        node.setRangeText(copied.text, node.selectionStart, node.selectionEnd, "end");
+        node.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            inputType: drop ? "insertFromDrop" : "insertFromPaste",
+            data: null,
+          }),
+        );
+      }
+    }
+    listen(
+      node,
+      "paste",
+      (event) => void transfer(event, readTransfer(event.clipboardData), false),
+      { signal: native.signal },
+    );
+    let dropped: Transfer | undefined;
+    listen(
+      node,
+      "drop",
+      (event) => {
+        dropped = readTransfer(event.dataTransfer);
+      },
+      { signal: native.signal },
+    );
+    listen(
+      node,
+      "beforeinput",
+      (event) => {
+        const copied = dropped;
+        dropped = undefined;
+        if (event.inputType === "insertFromDrop") {
+          // The browser resolves the drop caret after drop, before beforeinput.
+          void transfer(event, copied, true);
+        }
+      },
+      { signal: native.signal },
+    );
+    listen(
+      node,
+      "compositionstart",
+      () => {
+        composing = true;
+      },
+      { signal: native.signal },
+    );
+    listen(
+      node,
+      "compositionend",
+      () => {
+        composing = false;
         entryHistory = snapshot();
-      }
-      requestAnimationFrame(activate);
-    });
+        requestAnimationFrame(() => activate());
+      },
+      { signal: native.signal },
+    );
     if (mentions().length) {
-      void loader.load().catch(() => undefined);
+      void loader.load().then(
+        () => activate(),
+        () => undefined,
+      );
     }
     return () => {
-      input = undefined;
-      entryHistory = undefined;
+      native.abort();
       observer.disconnect();
-      stopFocus();
-      stopInput();
-      stopPaste();
-      stopStart();
-      stopEnd();
       editor?.destroy();
-      editor = undefined;
       loader.dispose();
     };
   });

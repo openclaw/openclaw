@@ -84,7 +84,6 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     view.expectValue("@Alex ", [mention("profile-alex-offline")]);
     expect(view.send).not.toHaveBeenCalled();
     expect(view.query<HTMLTextAreaElement>("textarea")!.value).toContain("@Alex");
-    expect(view.query(".chat-compose__mention-preview")).toBeNull();
     view.key("Enter");
     expect(view.send).toHaveBeenCalledWith(view.value());
   });
@@ -235,7 +234,6 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
       }
       expect(view.query<HTMLTextAreaElement>("textarea")!.value).toContain("@Peter Steinberger");
       expect(view.value().mentions).toEqual([{ profileId: "profile-peter", start: 0, end: 18 }]);
-      expect(view.query(".chat-compose__mention-preview")).toBeNull();
       view.edit("Peter Steinberger ", {
         start: 0,
         end: 1,
@@ -244,7 +242,6 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
         data: null,
       });
       view.expectValue("Peter Steinberger ", []);
-      expect(view.query(".chat-composer-mention-layer")).toBeNull();
       view.key("Enter");
       expect(view.send).toHaveBeenCalledWith(view.value());
     },

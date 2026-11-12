@@ -1,65 +1,61 @@
-import "../../../styles/chat/person-reference.css";
-import { defaultKeymap, history, historyKeymap, isolateHistory } from "@codemirror/commands";
+import { history, historyKeymap, insertNewline, standardKeymap } from "@codemirror/commands";
 import {
   Compartment,
   EditorSelection,
   EditorState,
   Prec,
-  StateEffect,
   Transaction,
+  type Extension,
+  type StateEffect,
 } from "@codemirror/state";
-import {
-  Decoration,
-  EditorView,
-  keymap,
-  placeholder,
-  type DecorationSet,
-  type ViewUpdate,
-} from "@codemirror/view";
-import type { ApplicationContext } from "../../../app/context-types.ts";
-import type { HumanMention } from "../../../lib/chat/chat-types.ts";
-import {
-  HUMAN_MENTION_CLIPBOARD_TYPE,
-  readHumanMentionClipboard,
-  prepareHumanMentionPaste,
-} from "../../../lib/chat/human-mention-clipboard.ts";
-import { readHumanMentions, withHumanMentionEdit } from "../../../lib/chat/human-mentions.ts";
+import { drawSelection, EditorView, keymap, placeholder, type ViewUpdate } from "@codemirror/view";
 import { registerComposerEditor } from "../../../lib/composer-input.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
-import {
-  MentionChip,
-  separateTypedTextFromMentions,
-  setMentionDecorations,
-  keepSelectionOutsideMentions,
-  restoreMentions,
-  rememberMentionHistory,
-  mentionDecorations,
-} from "./composer-editor-mentions.tsx";
 import { composerEditorTheme } from "./composer-editor-theme.ts";
 
+const INPUT_TYPES: Partial<Record<string, string>> = {
+  "input.paste": "insertFromPaste",
+  "input.drop": "insertFromDrop",
+  "delete.cut": "deleteByCut",
+  "delete.backward": "deleteContentBackward",
+  "delete.forward": "deleteContentForward",
+  undo: "historyUndo",
+  redo: "historyRedo",
+};
+
+type ComposerInputEdit = { value: string; start: number; end: number; inputType: string };
+type PublishComposerInput = (
+  wrap?: (edit: ComposerInputEdit, emit: () => void, next: string) => void,
+) => void;
+
+/** Native CodeMirror extensions own decoration semantics. These two hooks bridge
+ * external draft state and input metadata without teaching the editor a token kind. */
+export type ComposerEditorOptions = {
+  extensions: Extension;
+  sync?: (view: EditorView, previous: string) => readonly StateEffect<unknown>[];
+  onEdit?: (update: ViewUpdate, publish: PublishComposerInput) => void;
+};
+
 /** CM owns layout, selection, history, clipboard and IME. The hidden native field
- * is only the existing controller's raw-value/event port; its geometry is never used. */
+ * is only the existing controller's raw-value/event port; its geometry is never used.
+ * The binding owns attribute observation and calls sync after external changes. */
 export type ComposerEditorSnapshot = {
   value: string;
-  mentions: readonly HumanMention[];
   selection: { start: number; end: number; direction: "forward" | "backward" | "none" };
 };
 
 export function mountComposerEditor(
   input: HTMLTextAreaElement,
-  mentions: () => readonly HumanMention[],
-  application?: ApplicationContext,
+  options: ComposerEditorOptions,
   initialHistory?: ComposerEditorSnapshot,
-  avatarUrls?: ReadonlyMap<string, string>,
 ) {
   const configuration = new Compartment();
+  const undoHistory = new Compartment();
   let syncing = false;
   let publishing = false;
   let syncScheduled = false;
   let destroyed = false;
-  let currentMentions: readonly HumanMention[] = [];
   let currentAttributes = "";
-  let mentionSignature = "";
   const focused = input.ownerDocument.activeElement === input;
   const initialSelection = {
     start: input.selectionStart,
@@ -68,27 +64,6 @@ export function mountComposerEditor(
   };
 
   const startingSelection = initialHistory?.selection ?? initialSelection;
-  function decorations(value = input.value): DecorationSet {
-    return Decoration.set(
-      currentMentions.flatMap((mention) => {
-        const label = value.slice(mention.start, mention.end);
-        return label.startsWith("@") && mention.start + 1 < mention.end
-          ? [
-              Decoration.replace({
-                widget: new MentionChip(
-                  mention.profileId,
-                  label,
-                  application,
-                  avatarUrls?.get(mention.profileId),
-                ),
-              }).range(mention.start, mention.end),
-            ]
-          : [];
-      }),
-      true,
-    );
-  }
-
   function attributes() {
     const attrs: Record<string, string> = {
       role: "textbox",
@@ -104,9 +79,6 @@ export function mountComposerEditor(
       "aria-haspopup",
       "aria-activedescendant",
       "enterkeyhint",
-      "autocapitalize",
-      "autocorrect",
-      "spellcheck",
       "dir",
     ]) {
       const value = input.getAttribute(name);
@@ -114,6 +86,11 @@ export function mountComposerEditor(
         attrs[name] = value;
       }
     }
+    // CodeMirror defaults these off for code; keep the composer's native text entry.
+    attrs.spellcheck = String(input.spellcheck);
+    attrs.autocorrect = input.getAttribute("autocorrect") ?? "on";
+    attrs.autocapitalize = input.getAttribute("autocapitalize") ?? "sentences";
+    attrs.writingsuggestions = input.getAttribute("writingsuggestions") ?? "true";
     attrs["aria-disabled"] = String(input.disabled);
     attrs["aria-readonly"] = String(input.readOnly);
     attrs.tabindex = input.disabled ? "-1" : "0";
@@ -170,8 +147,6 @@ export function mountComposerEditor(
     return forwarded.defaultPrevented;
   }
 
-  const admittedMentions = readHumanMentions(input.value, mentions()) ?? [];
-  currentMentions = initialHistory?.mentions ?? admittedMentions;
   const view = new EditorView({
     parent: input.parentElement!,
     state: EditorState.create({
@@ -185,44 +160,33 @@ export function mountComposerEditor(
           : startingSelection.end,
       ),
       extensions: [
-        mentionDecorations.init(() => decorations(initialHistory?.value ?? input.value)),
-        separateTypedTextFromMentions,
-        keepSelectionOutsideMentions,
-        rememberMentionHistory,
+        options.extensions,
         configuration.of(extensions()),
         EditorView.lineWrapping,
-        history(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        drawSelection({ drawRangeCursor: false }),
+        undoHistory.of(history()),
+        // Textarea editing, not code editing: no auto-indent or line commands.
+        keymap.of([
+          { key: "Enter", run: insertNewline, shift: insertNewline },
+          ...standardKeymap,
+          ...historyKeymap,
+        ]),
         Prec.highest(
           EditorView.domEventHandlers({
-            keydown(event) {
-              return forward(event);
-            },
-            keyup(event) {
-              return forward(event);
-            },
-            pointerdown(event) {
-              return forward(event);
-            },
-            pointerup(event) {
-              return forward(event);
-            },
-            click(event) {
-              return forward(event);
-            },
-            beforeinput(event) {
-              return forward(event);
-            },
+            keydown: forward,
+            keyup: forward,
+            pointerdown: forward,
+            pointerup: forward,
+            click: forward,
+            beforeinput: forward,
             compositionstart(event) {
               if (!canEdit()) {
                 return true;
               }
-              prepareComposition();
               forward(event);
               return false;
             },
             compositionend(event) {
-              finishComposition(event);
               forward(event);
               return false;
             },
@@ -234,31 +198,17 @@ export function mountComposerEditor(
               forward(event);
               return false;
             },
-            copy(event) {
-              return copySelection(event, false);
-            },
-            cut(event) {
-              return copySelection(event, true);
+            drop(event) {
+              // Files belong to the attachment owner, whose listener still receives
+              // the bubbling drop; CodeMirror must not also insert their contents.
+              return Boolean(event.dataTransfer?.files.length);
             },
             paste(event) {
               if (!canEdit()) {
                 event.preventDefault();
                 return true;
               }
-              rememberPastedMentions(event);
-              if (forwardPaste(event)) {
-                pendingPaste = undefined;
-                return true;
-              }
-              if (!pendingPaste) {
-                return false;
-              }
-              event.preventDefault();
-              view.dispatch({
-                ...view.state.replaceSelection(pendingPaste.text),
-                userEvent: "input.paste",
-              });
-              return true;
+              return forwardPaste(event);
             },
           }),
         ),
@@ -266,82 +216,76 @@ export function mountComposerEditor(
           if (syncing || destroyed) {
             return;
           }
-          const restoring = update.transactions.some((transaction) =>
-            transaction.effects.some((effect) => effect.is(restoreMentions)),
-          );
-          if (update.docChanged || restoring) {
-            input.value = update.state.doc.toString();
+          let published = false;
+          const publish: PublishComposerInput = (wrap) => {
+            published = true;
+            const next = update.state.doc.toString();
+            input.value = next;
             publishSelection();
+            const source =
+              update.transactions
+                .find(
+                  (transaction) =>
+                    transaction.docChanged ||
+                    transaction.annotation(Transaction.userEvent) !== undefined,
+                )
+                ?.annotation(Transaction.userEvent) ?? "";
+            const knownInputType = INPUT_TYPES[source.split(".").slice(0, 2).join(".")];
             let inserted = "";
             let editStart = update.startState.doc.length;
             let editEnd = update.docChanged ? 0 : editStart;
             update.changes.iterChanges((from, to, _newFrom, _newTo, text) => {
               editStart = Math.min(editStart, from);
               editEnd = Math.max(editEnd, to);
-              inserted += text.toString();
+              if (knownInputType === undefined) {
+                inserted += text.toString();
+              }
             });
-            const source =
-              update.transactions
-                .find(
-                  (transaction) =>
-                    transaction.docChanged ||
-                    transaction.effects.some((effect) => effect.is(restoreMentions)),
-                )
-                ?.annotation(Transaction.userEvent) ?? "";
-            const inputType = source.startsWith("input.paste")
-              ? "insertFromPaste"
-              : source.startsWith("input.drop")
-                ? "insertFromDrop"
-                : source.startsWith("delete.cut")
-                  ? "deleteByCut"
-                  : source.startsWith("delete.backward")
-                    ? "deleteContentBackward"
-                    : source.startsWith("delete.forward")
-                      ? "deleteContentForward"
-                      : source === "undo"
-                        ? "historyUndo"
-                        : source === "redo"
-                          ? "historyRedo"
-                          : view.composing
-                            ? "insertCompositionText"
-                            : inserted === "\n"
-                              ? "insertLineBreak"
-                              : "insertText";
-            // Grouped history stores the earliest complete snapshot last.
-            // It must replace identity, not concatenate overlapping snapshots.
-            const historical = update.transactions
-              .flatMap((transaction) => transaction.effects)
-              .findLast((effect) => effect.is(restoreMentions))?.value;
-            const pasted = pastedMentions(update);
-            const restored = historical ?? pasted;
+            const inputType =
+              knownInputType ??
+              (view.composing
+                ? "insertCompositionText"
+                : inserted === "\n"
+                  ? "insertLineBreak"
+                  : "insertText");
+
+            const emit = () =>
+              input.dispatchEvent(
+                new InputEvent("input", {
+                  bubbles: true,
+                  inputType,
+                  data:
+                    inputType === "insertText" || inputType === "insertCompositionText"
+                      ? inserted || null
+                      : null,
+                  isComposing: view.composing,
+                }),
+              );
             publishing = true;
             try {
-              withHumanMentionEdit(
-                input.value,
-                { mode: restoring ? "replace" : "merge", mentions: restored },
-                {
-                  value: update.startState.doc.toString(),
-                  start: editStart,
-                  end: editEnd,
-                  inputType,
-                },
-                () =>
-                  input.dispatchEvent(
-                    new InputEvent("input", {
-                      bubbles: true,
-                      inputType,
-                      data:
-                        inputType === "insertText" || inputType === "insertCompositionText"
-                          ? inserted || null
-                          : null,
-                      isComposing: view.composing,
-                    }),
-                  ),
-              );
+              if (wrap) {
+                wrap(
+                  {
+                    value: update.startState.doc.toString(),
+                    start: editStart,
+                    end: editEnd,
+                    inputType,
+                  },
+                  emit,
+                  next,
+                );
+              } else {
+                emit();
+              }
             } finally {
               publishing = false;
             }
-          } else if (update.selectionSet) {
+          };
+          options.onEdit?.(update, publish);
+          if (!published && update.docChanged) {
+            publish();
+          }
+          if (!published && update.selectionSet) {
             publishSelection();
             publishing = true;
             try {
@@ -356,123 +300,6 @@ export function mountComposerEditor(
     }),
   });
 
-  let compositionPadding: { value: string; removals: { from: number; to: number }[] } | undefined;
-  function prepareComposition() {
-    compositionPadding = undefined;
-    const selection = view.state.selection.main;
-    let padLeft = false;
-    let padRight = false;
-    view.state.field(mentionDecorations).between(selection.from, selection.to, (from, to) => {
-      padLeft ||= to === selection.from;
-      padRight ||= from === selection.to;
-    });
-    if (!padLeft && !padRight) {
-      return;
-    }
-    const changes = [
-      ...(padLeft ? [{ from: selection.from, insert: " " }] : []),
-      ...(padRight ? [{ from: selection.to, insert: " " }] : []),
-    ];
-    const start = selection.from + Number(padLeft);
-    const end = selection.to + Number(padLeft);
-    // Reserve boundaries outside the selection BEFORE the IME owns its DOM
-    // range. Candidate rewrites must not touch the composed range or join the
-    // preceding edit's undo group (compose events always join in CM history).
-    view.dispatch({
-      changes,
-      selection:
-        selection.anchor <= selection.head
-          ? EditorSelection.range(start, end)
-          : EditorSelection.range(end, start),
-      userEvent: "input.type.compose.start",
-      annotations: isolateHistory.of("before"),
-    });
-    compositionPadding = {
-      value: view.state.doc.toString(),
-      removals: changes.map((change, index) => ({
-        from: change.from + index,
-        to: change.from + index + 1,
-      })),
-    };
-  }
-  function finishComposition(event: CompositionEvent) {
-    const padding = compositionPadding;
-    compositionPadding = undefined;
-    if (padding && !event.data && view.state.doc.toString() === padding.value) {
-      view.dispatch({
-        changes: padding.removals,
-        userEvent: "delete.compose",
-        annotations: Transaction.addToHistory.of(false),
-      });
-    }
-  }
-
-  let pendingPaste: { text: string; mentions: readonly HumanMention[] } | undefined;
-  function copySelection(event: ClipboardEvent, cut: boolean) {
-    const { from, to, empty } = view.state.selection.main;
-    if (empty || !event.clipboardData) {
-      return false;
-    }
-    const copied: HumanMention[] = [];
-    view.state.field(mentionDecorations).between(from, to, (start, end, value) => {
-      if (start >= from && end <= to && value.spec.widget instanceof MentionChip) {
-        copied.push({
-          profileId: value.spec.widget.profileId,
-          start: start - from,
-          end: end - from,
-        });
-      }
-    });
-    if (!copied.length) {
-      return false;
-    }
-    event.clipboardData.setData("text/plain", view.state.sliceDoc(from, to));
-    event.clipboardData.setData(HUMAN_MENTION_CLIPBOARD_TYPE, JSON.stringify(copied));
-    event.preventDefault();
-    if (cut && canEdit()) {
-      view.dispatch({
-        changes: { from, to },
-        selection: EditorSelection.cursor(from),
-        userEvent: "delete.cut",
-        scrollIntoView: true,
-      });
-    }
-    return true;
-  }
-  function rememberPastedMentions(event: ClipboardEvent) {
-    const copied = readHumanMentionClipboard(event.clipboardData);
-    const selection = view.state.selection.main;
-    pendingPaste = copied
-      ? prepareHumanMentionPaste(view.state.doc.toString(), selection.from, selection.to, copied)
-      : undefined;
-  }
-  function pastedMentions(update: ViewUpdate) {
-    const paste = pendingPaste;
-    pendingPaste = undefined;
-    if (
-      !paste ||
-      !update.transactions.some((transaction) => transaction.isUserEvent("input.paste"))
-    ) {
-      return [];
-    }
-    const restored: HumanMention[] = [];
-    update.changes.iterChanges((_fromA, _toA, fromB, _toB, inserted) => {
-      const text = inserted.toString();
-      // The atomic boundary filter may pad either side with one separator.
-      const offset = text.startsWith(paste.text) ? 0 : text.startsWith(" " + paste.text) ? 1 : -1;
-      if (offset < 0 || !["", " "].includes(text.slice(offset + paste.text.length))) {
-        return;
-      }
-      restored.push(
-        ...paste.mentions.map((mention) => ({
-          profileId: mention.profileId,
-          start: mention.start + fromB + offset,
-          end: mention.end + fromB + offset,
-        })),
-      );
-    });
-    return restored;
-  }
   function forwardPaste(event: ClipboardEvent) {
     // Existing attachment paste owns files; CM owns ordinary raw-text paste.
     publishSelection();
@@ -493,6 +320,17 @@ export function mountComposerEditor(
   input.setAttribute("aria-hidden", "true");
   input.tabIndex = -1;
 
+  // Coalesces owner writes made in one task; they run inside Solid's apply
+  // phase, so the foreign renderer reconciles after that commit.
+  function requestSync() {
+    if (!syncScheduled) {
+      syncScheduled = true;
+      queueMicrotask(() => {
+        syncScheduled = false;
+        sync();
+      });
+    }
+  }
   function sync() {
     if (destroyed || syncing) {
       return;
@@ -500,29 +338,14 @@ export function mountComposerEditor(
     // Existing input owners may request autosize synchronously while CM is
     // publishing a transaction. Reconcile only after that transaction finishes.
     if (publishing) {
-      if (!syncScheduled) {
-        syncScheduled = true;
-        queueMicrotask(() => {
-          syncScheduled = false;
-          sync();
-        });
-      }
+      requestSync();
       return;
     }
     syncing = true;
     try {
       const next = input.value;
       const previous = view.state.doc.toString();
-      const effects: StateEffect<unknown>[] = [];
-      const nextMentions = readHumanMentions(input.value, mentions()) ?? [];
-      const nextMentionSignature = JSON.stringify(
-        nextMentions.map((mention) => [
-          mention.profileId,
-          mention.start,
-          mention.end,
-          avatarUrls?.get(mention.profileId),
-        ]),
-      );
+      let effects = options.sync?.(view, previous) ?? [];
       const nextAttributes = JSON.stringify([
         attributes(),
         input.disabled,
@@ -530,18 +353,9 @@ export function mountComposerEditor(
         input.placeholder,
         input.classList.contains("new-session-page__message"),
       ]);
-      if (
-        nextMentionSignature !== mentionSignature ||
-        nextAttributes !== currentAttributes ||
-        next !== previous
-      ) {
-        currentMentions = nextMentions;
-        mentionSignature = nextMentionSignature;
+      if (nextAttributes !== currentAttributes) {
         currentAttributes = nextAttributes;
-        effects.push(
-          configuration.reconfigure(extensions()),
-          setMentionDecorations.of(decorations()),
-        );
+        effects = [...effects, configuration.reconfigure(extensions())];
       }
       view.dom.dataset.composerSingleLine = input.dataset.composerSingleLine ?? "";
       if (input.disabled && view.hasFocus) {
@@ -563,9 +377,19 @@ export function mountComposerEditor(
           oldEnd--;
           newEnd--;
         }
-        view.dispatch({ changes: { from, to: oldEnd, insert: next.slice(from, newEnd) }, effects });
+        view.dispatch({
+          changes: { from, to: oldEnd, insert: next.slice(from, newEnd) },
+          effects,
+          userEvent: "input.complete",
+        });
       } else if (effects.length) {
-        view.dispatch({ effects });
+        view.dispatch({ effects, userEvent: "input.complete" });
+      }
+      if (!next && previous) {
+        // An owner clear (send, discard) ends the draft; undo must not restore it,
+        // matching a native textarea's programmatic value replacement.
+        view.dispatch({ effects: undoHistory.reconfigure([]) });
+        view.dispatch({ effects: undoHistory.reconfigure(history()) });
       }
     } finally {
       syncing = false;
@@ -584,14 +408,16 @@ export function mountComposerEditor(
       return view.coordsAtPos(Math.min(position, view.state.doc.length));
     },
     sync,
-    focus(options) {
-      view.contentDOM.focus(options);
+    requestSync,
+    focus(focusOptions) {
+      view.contentDOM.focus(focusOptions);
     },
     select,
     replace(text, from, to) {
       sync();
       view.dispatch({
         changes: { from, to, insert: text },
+        userEvent: "input.complete",
         selection: { anchor: from + text.length },
         scrollIntoView: true,
       });
@@ -626,27 +452,6 @@ export function mountComposerEditor(
     typeof ResizeObserver === "function" ? new ResizeObserver(requestViewportScroll) : undefined;
   resizeObserver?.observe(view.scrollDOM);
   const stopResize = resizeObserver ? undefined : listen(window, "resize", requestViewportScroll);
-  const observer = new MutationObserver(sync);
-  observer.observe(input, {
-    attributes: true,
-    attributeFilter: [
-      "disabled",
-      "readonly",
-      "placeholder",
-      "aria-label",
-      "aria-keyshortcuts",
-      "aria-describedby",
-      "aria-controls",
-      "aria-haspopup",
-      "aria-activedescendant",
-      "dir",
-      "data-composer-single-line",
-      "style",
-    ],
-  });
-  const stopScroll = listen(view.scrollDOM, "scroll", () =>
-    input.dispatchEvent(new Event("scroll")),
-  );
   if (initialHistory) {
     // Native insertion already updated its owner while CM was loading. Seed
     // text and recipient history without publishing that insertion twice.
@@ -654,9 +459,12 @@ export function mountComposerEditor(
     try {
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: input.value },
-        selection: EditorSelection.single(initialSelection.start, initialSelection.end),
+        selection:
+          initialSelection.direction === "backward"
+            ? EditorSelection.single(initialSelection.end, initialSelection.start)
+            : EditorSelection.single(initialSelection.start, initialSelection.end),
         userEvent: "input.paste",
-        effects: restoreMentions.of(admittedMentions),
+        effects: options.sync?.(view, view.state.doc.toString()),
       });
     } finally {
       syncing = false;
@@ -670,19 +478,17 @@ export function mountComposerEditor(
     view.focus();
   }
   return {
+    view,
     sync,
     destroy() {
       destroyed = true;
-      observer.disconnect();
       resizeObserver?.disconnect();
       stopResize?.();
       if (resizeFrame !== undefined) {
         cancelAnimationFrame(resizeFrame);
       }
-      stopScroll();
       unregister();
       view.destroy();
-      view.dom.remove();
       input.hidden = false;
       input.removeAttribute("aria-hidden");
       input.removeAttribute("tabindex");

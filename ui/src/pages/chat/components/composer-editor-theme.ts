@@ -1,6 +1,9 @@
 import { EditorView } from "@codemirror/view";
 
-// The lazy editor owns its document styles; responsive frame rules stay with the composer.
+// The lazy editor owns its document styles. Geometry it shares with the textarea
+// lists the editor in the composer stylesheet's own selectors.
+// Mirrors the textarea's WebKit scrollbar rules: the same inset becomes the gutter.
+const webkitScrollbar = CSS.supports("selector(::-webkit-scrollbar)");
 export const composerEditorTheme = EditorView.theme({
   "&": {
     outline: "none",
@@ -19,7 +22,15 @@ export const composerEditorTheme = EditorView.theme({
     color: "var(--text-strong)",
     fontSize: "var(--chat-composer-editor-size)",
     lineHeight: "var(--chat-composer-editor-line)",
+    ...(webkitScrollbar && { "--scrollbar-size": "8px", "--scrollbar-thumb-inset": "1px" }),
   },
+  ...(webkitScrollbar && {
+    "&[data-composer-overflow]": {
+      paddingInlineEnd: "calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size))",
+    },
+  }),
+  // Enter before the session is ready keeps the draft, dimmed, until it sends.
+  ".agent-chat__input--submit-queued &": { color: "var(--muted)" },
   "&.cm-focused": { outline: "none" },
   "&.chat-composer-editor--disabled": { opacity: "0.5", cursor: "default" },
   ".cm-scroller": {
@@ -33,13 +44,9 @@ export const composerEditorTheme = EditorView.theme({
     padding: "0",
     minHeight: "1lh",
     font: "inherit",
-    caretColor: "var(--text-strong)",
   },
-  ".chat-composer-mention": { whiteSpace: "nowrap" },
-  ".chat-composer-mention .markdown-person-reference__avatar": {
-    userSelect: "text",
-    WebkitUserSelect: "text",
-  },
+  ".cm-cursor": { borderLeftColor: "var(--text-strong)" },
+  "&.cm-focused .cm-selectionBackground": { backgroundColor: "var(--selection-bg)" },
   ".cm-line": { padding: "0" },
   ".cm-placeholder": { color: "var(--muted)" },
 });

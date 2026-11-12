@@ -355,7 +355,7 @@
 
 @media (forced-colors: active) {
   /* Forced colors drop the box shadows and border shift that mark focus above. */
-  .agent-chat__input:has(.agent-chat__composer-combobox:focus-within) {
+  .agent-chat__input:has(.agent-chat__composer-combobox :focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }
@@ -423,8 +423,7 @@
     --chat-composer-editor-scroll-inset: 0px;
   }
 
-  .agent-chat__composer-combobox > textarea,
-  .agent-chat__composer-combobox > .chat-composer-editor {
+  .agent-chat__composer-combobox > textarea {
     --scrollbar-size: 8px;
     --scrollbar-thumb-inset: 1px;
 
@@ -437,10 +436,6 @@
     /* Exchange the same inset for a real gutter without changing the text width. */
     padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
     scrollbar-gutter: stable;
-  }
-
-  .agent-chat__composer-combobox > .chat-composer-editor[data-composer-overflow] {
-    padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
   }
 
   .agent-chat__composer-combobox > textarea::-webkit-scrollbar-track {
@@ -473,7 +468,7 @@
   --chat-composer-scroll-mask-bottom: transparent;
 }
 
-.agent-chat__composer-combobox:focus-within {
+.agent-chat__composer-combobox > :is(textarea, input):focus-visible {
   box-shadow: none;
 }
 
@@ -1168,8 +1163,9 @@
     align-self: stretch;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input, .agent-chat__composer-placeholder),
-  .agent-chat__composer-combobox > .chat-composer-editor {
+  /* .cm-editor is the rich mention editor, mounted beside its hidden textarea. */
+  .agent-chat__composer-combobox
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     flex: 1 1 auto;
     padding-top: 10px;
     padding-bottom: 10px;
@@ -1220,7 +1216,7 @@
     background: var(--chat-composer-surface);
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
+  .agent-chat__composer-combobox > :is(textarea, input, .cm-editor) {
     min-height: 48px;
     max-height: 56px;
     overflow-y: auto;
@@ -1401,7 +1397,7 @@
 
   .agent-chat__input--mobile-toolbar
     .agent-chat__composer-combobox
-    > :is(textarea, input, .agent-chat__composer-placeholder) {
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     padding-block: var(--chat-composer-editor-inset-block);
   }
 
@@ -1522,7 +1518,7 @@
 
   .agent-chat__input
     .agent-chat__composer-combobox
-    > :is(textarea, input, .agent-chat__composer-placeholder, .chat-composer-editor) {
+    > :is(textarea, input, .agent-chat__composer-placeholder, .cm-editor) {
     min-height: calc(var(--chat-composer-editor-line) + 4px);
     max-height: calc(var(--chat-composer-editor-line) + 4px);
     padding-block: 2px;

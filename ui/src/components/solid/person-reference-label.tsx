@@ -7,7 +7,6 @@ export function PersonReferenceLabel(props: {
   profileId: string;
   label: string;
   avatarUrl?: string;
-  literalPrefix?: boolean;
 }) {
   const avatar = useIdentityAvatarView(() => ({
     id: props.profileId,
@@ -35,11 +34,7 @@ export function PersonReferenceLabel(props: {
       {props.label.startsWith("@") ? (
         <>
           <span class="markdown-person-reference__prefix" aria-hidden="true">
-            {props.literalPrefix ? (
-              <span class="markdown-person-reference__literal-prefix">@</span>
-            ) : (
-              "@"
-            )}
+            @
           </span>
           {props.label.slice(1)}
         </>

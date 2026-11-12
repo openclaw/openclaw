@@ -1,15 +1,14 @@
 import type { HumanMention } from "./chat-types.ts";
-import { readHumanMentions } from "./human-mentions.ts";
+import { HUMAN_MENTION_CLIPBOARD_TYPE, readHumanMentions } from "./human-mentions.ts";
 
-export const HUMAN_MENTION_CLIPBOARD_TYPE = "application/x-openclaw-mentions";
+export type HumanMentionTransfer = { text: string; mentions: readonly HumanMention[] };
 
-/** Plain @Name text alone never creates a recipient. */
-export function readHumanMentionClipboard(
-  data: DataTransfer | null,
-): { text: string; mentions: readonly HumanMention[] } | undefined {
-  const text = data?.getData("text/plain");
-  const raw = data?.getData(HUMAN_MENTION_CLIPBOARD_TYPE);
-  if (!text || !raw || data?.files.length) {
+/** Untrusted transfer metadata; plain @Name text alone never creates a recipient. */
+export function parseHumanMentionTransfer(
+  text: string,
+  raw: string,
+): HumanMentionTransfer | undefined {
+  if (!text || !raw) {
     return undefined;
   }
   try {
@@ -20,20 +19,33 @@ export function readHumanMentionClipboard(
   }
 }
 
+export function readHumanMentionClipboard(
+  data: DataTransfer | null,
+): HumanMentionTransfer | undefined {
+  // Files belong to the attachment owner; read no text for them.
+  return data && !data.files.length
+    ? parseHumanMentionTransfer(
+        data.getData("text/plain"),
+        data.getData(HUMAN_MENTION_CLIPBOARD_TYPE),
+      )
+    : undefined;
+}
+
+// The protocol requires a boundary around "@Name".
+export const MENTION_BEFORE = /[\p{L}\p{N}\p{M}_@.%+-]$/u;
+export const MENTION_AFTER = /^[\p{L}\p{N}\p{M}_-]/u;
+
 /** Reserve protocol boundaries for incoming chips, not just existing chips. */
 export function prepareHumanMentionPaste(
   value: string,
   start: number,
   end: number,
-  copied: { text: string; mentions: readonly HumanMention[] },
-) {
+  copied: HumanMentionTransfer,
+): HumanMentionTransfer {
   const prefix =
-    copied.mentions[0]?.start === 0 && /[\p{L}\p{N}\p{M}_@.%+-]$/u.test(value.slice(0, start))
-      ? " "
-      : "";
+    copied.mentions[0]?.start === 0 && MENTION_BEFORE.test(value.slice(0, start)) ? " " : "";
   const suffix =
-    copied.mentions.at(-1)?.end === copied.text.length &&
-    /^[\p{L}\p{N}\p{M}_-]/u.test(value.slice(end))
+    copied.mentions.at(-1)?.end === copied.text.length && MENTION_AFTER.test(value.slice(end))
       ? " "
       : "";
   return {

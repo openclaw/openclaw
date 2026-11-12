@@ -637,7 +637,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     void chatAvatars.refreshSenderAgentAvatars(this.state);
     const textarea = getChatComposerState(this.presentationId).composerTextarea;
     if (!this.chatRouteReadyReported && textarea) {
-      // Keep the handoff cover until the pane commits a usable composer, not just a router commit.
+      // The outer router commit is not a meaningful chat paint. Keep the
+      // handoff cover until this pane has committed its usable composer.
       this.chatRouteReadyReported = true;
       this.element.dispatchEvent(
         new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true, composed: true }),

@@ -183,9 +183,6 @@ function setTextareaScrollbarGutter(
   scrollable: boolean,
   state: ComposerTextareaResizeObserverState | undefined,
 ) {
-  if (readComposerEditor(el)) {
-    return;
-  }
   const reserveGutter = scrollable && state?.scrollbarWidth !== 0;
   const overflow = reserveGutter ? "scroll" : scrollable ? "auto" : "hidden";
   if (el.style.overflowY !== overflow) {
@@ -237,12 +234,8 @@ function updateTextareaOverflow(
   if (editor) {
     const port = editor.scrollElement;
     const scrollable = port.scrollHeight > port.clientHeight + 1;
-    const canScrollUp = port.scrollTop > 1;
-    const canScrollDown = port.scrollTop + port.clientHeight < port.scrollHeight - 1;
     for (const target of [el, editor.element]) {
       target.toggleAttribute("data-composer-overflow", scrollable);
-      target.toggleAttribute("data-scroll-fade-top", canScrollUp && !state?.editing);
-      target.toggleAttribute("data-scroll-fade-bottom", canScrollDown && !state?.editing);
     }
     if (state) {
       const height = editor.element.clientHeight;
@@ -579,6 +572,10 @@ export function handleTextareaOverflowInteraction(event: TextareaEvent) {
     // Retain the transcript owner's committed end intent before native caret
     // scrolling can move an ancestor. This signal performs no layout reads.
     invalidateNativeTextareaLayout(el, state);
+  }
+  // Rich geometry still describes the old draft; input and resize publish the edit.
+  if (event.type === "beforeinput" && readComposerEditor(el)) {
+    return;
   }
   // Navigation can blur the field while hiding its retained route. Its fades
   // need no synchronous layout; a reveal's resize observation restores them.

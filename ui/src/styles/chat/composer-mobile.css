@@ -211,7 +211,7 @@
    the measured pane limit still lowers it when space runs out. */
 .agent-chat__composer-shell[data-mobile-composer="true"]
   .agent-chat__composer-combobox
-  > :is(textarea, .agent-chat__composer-placeholder) {
+  > :is(textarea, .agent-chat__composer-placeholder, .cm-editor) {
   --chat-composer-editor-max-lines: 3;
 
   font-family: var(--font-body);

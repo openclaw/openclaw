@@ -2,11 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createStore, onCleanup } from "solid-js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
-import {
-  focusComposerInput,
-  readComposerEditor,
-  replaceComposerInput,
-} from "../../../lib/composer-input.ts";
+import { focusComposerInput, readComposerEditor } from "../../../lib/composer-input.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 
 export type ComposerPredictionSource = {
@@ -93,8 +89,9 @@ export function createComposerPrediction(read: () => ComposerPredictionSource | 
       return;
     }
     focusComposerInput(target, { preventScroll: true });
-    if (readComposerEditor(target)) {
-      replaceComposerInput(target, text, 0, 0);
+    const editor = readComposerEditor(target);
+    if (editor) {
+      editor.replace(text, 0, 0);
       return;
     }
     // Native insertion preserves the browser undo transaction, as with emoji insertion.

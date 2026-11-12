@@ -7,6 +7,7 @@ export type ComposerEditorBridge = {
     position: number,
   ) => { left: number; right: number; top: number; bottom: number } | null;
   sync: () => void;
+  requestSync: () => void;
   focus: (options?: FocusOptions) => void;
   select: (start: number, end: number, direction?: "forward" | "backward" | "none") => void;
   replace: (text: string, start: number, end: number) => void;
@@ -25,21 +26,9 @@ export function composerInputElement(input: HTMLElement): HTMLElement {
 export function composerInputFocusElement(input: HTMLTextAreaElement): HTMLElement {
   return editors.get(input)?.focusElement ?? input;
 }
-const scheduled = new WeakSet<ComposerEditorBridge>();
+/** For controlled-value writers; the editor reconciles after the current commit. */
 export function syncComposerInput(input: HTMLTextAreaElement) {
-  const editor = editors.get(input);
-  if (!editor || scheduled.has(editor)) {
-    return;
-  }
-  scheduled.add(editor);
-  // Controlled-value writers run in Solid effects. Let the foreign renderer
-  // reconcile after that commit, outside the Solid computation/apply phase.
-  queueMicrotask(() => {
-    scheduled.delete(editor);
-    if (editors.get(input) === editor) {
-      editor.sync();
-    }
-  });
+  editors.get(input)?.requestSync();
 }
 export function focusComposerInput(
   input: HTMLTextAreaElement | null | undefined,
@@ -73,18 +62,5 @@ export function selectComposerInput(
   if (editor) {
     editor.sync();
     editor.select(start, end, direction);
-  }
-}
-export function replaceComposerInput(
-  input: HTMLTextAreaElement,
-  text: string,
-  start: number,
-  end: number,
-) {
-  const editor = editors.get(input);
-  if (editor) {
-    editor.replace(text, start, end);
-  } else {
-    input.setRangeText(text, start, end, "end");
   }
 }

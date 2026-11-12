@@ -1,6 +1,7 @@
 import { redo, undo } from "@codemirror/commands";
-import { EditorView } from "@codemirror/view";
-import { afterEach, describe, expect, it } from "vitest";
+import { StateEffect } from "@codemirror/state";
+import { Decoration, EditorView } from "@codemirror/view";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import "../../test-helpers/load-styles.ts";
 import "../../styles/chat/composer-surface.css";
@@ -12,6 +13,7 @@ import {
   selectComposerInput,
   syncComposerInput,
 } from "../../lib/composer-input.ts";
+import { mountMentionComposerEditor } from "./components/composer-editor-mentions.tsx";
 import { mountComposerEditor } from "./components/composer-editor-view.tsx";
 
 const cleanups: (() => void)[] = [];
@@ -28,6 +30,7 @@ function fixture(
   text = "Ask @Alex after",
   width = 230,
   selected?: readonly HumanMention[],
+  mount = mountMentionComposerEditor,
 ) {
   const surface = document.createElement("div");
   surface.className = "agent-chat__input";
@@ -55,7 +58,7 @@ function fixture(
   wrapper.append(input);
   surface.append(wrapper);
   document.body.append(surface);
-  const editor = mountComposerEditor(input, () => mentions);
+  const editor = mount(input, () => mentions);
   cleanups.push(() => {
     editor.destroy();
     surface.remove();
@@ -92,6 +95,41 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
       expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 1, end: 6 }]);
     },
   );
+
+  it("reuses mapped mention state on owner echoes while refreshing changed avatars", async () => {
+    const avatarUrls = new Map<string, string>();
+    const f = fixture(kind, "Ask @Alex after", 800, undefined, (input, mentions) =>
+      mountMentionComposerEditor(input, mentions, undefined, undefined, avatarUrls),
+    );
+    focusComposerInput(f.input);
+    selectComposerInput(f.input, 0, 0);
+    await layout();
+    let reconciliations = 0;
+    f.view.dispatch({
+      effects: StateEffect.appendConfig.of(
+        EditorView.updateListener.of((update) => {
+          reconciliations += update.transactions.filter(
+            (transaction) => !transaction.docChanged && transaction.isUserEvent("input.complete"),
+          ).length;
+        }),
+      ),
+    });
+    await userEvent.keyboard("Hello ");
+    await layout();
+    expect(f.raw()).toBe("Hello Ask @Alex after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 10, end: 15 }]);
+    expect(reconciliations).toBe(0);
+    const avatar = "/api/users/alex-one/avatar?v=mapped-echo";
+    avatarUrls.set("alex-one", avatar);
+    syncComposerInput(f.input);
+    await layout();
+    expect(f.content.querySelector(".chat-composer-mention img")?.getAttribute("src")).toBe(avatar);
+    expect(reconciliations).toBe(1);
+    syncComposerInput(f.input);
+    await layout();
+    expect(reconciliations).toBe(1);
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 10, end: 15 }]);
+  });
 
   it("fits the compact conversation height after activating a chip", async () => {
     const f = fixture(kind);
@@ -282,14 +320,39 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
       }
     }
     expect(nameNodes).toHaveLength(1);
-    expect(f.surface.querySelectorAll(".chat-composer-mention-layer")).toHaveLength(0);
     expect(f.view.coordsAtPos(4)!.right).toBeCloseTo(chip.getBoundingClientRect().left, 0);
-    expect(f.view.coordsAtPos(9)!.left).toBeCloseTo(chip.getBoundingClientRect().right, 0);
+    // Measure the widget side; WebKit rounds the following text range differently.
+    expect(f.view.coordsAtPos(9, -1)!.left).toBeCloseTo(chip.getBoundingClientRect().right, 0);
     f.surface.style.width = "70px";
     await layout();
     const after = f.view.coordsAtPos(f.view.state.doc.length)!;
     expect(after.bottom).toBeGreaterThan(f.view.coordsAtPos(0)!.bottom);
     expect(after.right).toBeLessThanOrEqual(f.content.getBoundingClientRect().right + 1);
+  });
+
+  it("keeps one text-sized caret across mention boundaries", async () => {
+    const f = fixture(kind);
+    focusComposerInput(f.input);
+    const heights: number[] = [];
+    for (const position of [3, 4, 9, 10]) {
+      selectComposerInput(f.input, position, position);
+      await layout();
+      const cursors = f.view.dom.querySelectorAll<HTMLElement>(".cm-cursor-primary");
+      expect(cursors).toHaveLength(1);
+      const cursor = cursors[0]!;
+      const rect = cursor.getBoundingClientRect();
+      expect(rect.height).toBeGreaterThan(0);
+      expect(rect.height).toBeLessThanOrEqual(20);
+      heights.push(rect.height);
+      expect(getComputedStyle(f.content).caretColor).toBe("rgba(0, 0, 0, 0)");
+    }
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+    selectComposerInput(f.input, 4, 9);
+    await layout();
+    expect(f.view.dom.querySelectorAll(".cm-cursor-primary")).toHaveLength(0);
+    expect(f.view.dom.querySelector(".cm-selectionBackground")).not.toBeNull();
+    expect(f.raw()).toBe("Ask @Alex after");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 4, end: 9 }]);
   });
 
   it("moves, selects and clicks over a mention as one character", async () => {
@@ -417,8 +480,14 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     f.content.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "" }));
     // Real IME candidate windows cannot be automated. Exercise CM's DOM observer
     // and production composition bridge rather than mutating the backing textarea.
-    const last = f.content.querySelector(".cm-line")!.lastChild!;
-    last.textContent += "に";
+    const selection = window.getSelection()!;
+    const text = selection.anchorNode;
+    if (!(text instanceof Text)) {
+      throw new Error("Expected the composition caret in trailing text");
+    }
+    const offset = selection.anchorOffset;
+    text.insertData(offset, "に");
+    selection.collapse(text, offset + 1);
     f.content.dispatchEvent(
       new InputEvent("input", {
         bubbles: true,
@@ -429,9 +498,19 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     );
     f.content.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "に" }));
     await expect.poll(f.raw).toBe("Ask @Alex afterに");
-    await userEvent.keyboard("{Enter}");
+    expect(f.view.state.selection.main.head).toBe(16);
+    expect(events).toEqual(["compositionstart", "compositionend"]);
+    // A distinct send action, beyond Safari's 100ms IME-confirmation guard.
+    const now = Date.now;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + 101);
+    try {
+      await userEvent.keyboard("{Enter}");
+    } finally {
+      clock.mockRestore();
+    }
     expect(events).toEqual(["compositionstart", "compositionend", "send"]);
-    expect(f.raw()).not.toContain("\n");
+    expect(f.raw()).toBe("Ask @Alex afterに");
+    expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 4, end: 9 }]);
     f.input.readOnly = true;
     syncComposerInput(f.input);
     await userEvent.keyboard("x");
@@ -512,4 +591,83 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     await layout();
     await expect.poll(() => f.view.dom.getBoundingClientRect().height).toBeLessThan(before);
   });
+});
+
+it("retains one mention theme across Chat and New editor lifetimes", async () => {
+  const styles = () =>
+    Array.from(document.head.querySelectorAll("style"))
+      .map((style) => style.textContent ?? "")
+      .filter((text) => text.includes(".chat-composer-mention"))
+      .join("\n");
+  fixture("chat");
+  await layout();
+  const initial = styles();
+  expect(initial).toContain(".chat-composer-mention");
+  cleanups.pop()!();
+  for (const kind of ["new-session", "chat", "new-session"] as const) {
+    const f = fixture(kind);
+    await layout();
+    const chip = f.content.querySelector<HTMLElement>(".chat-composer-mention")!;
+    const avatar = chip.querySelector<HTMLElement>(".markdown-person-reference__avatar")!;
+    expect(getComputedStyle(chip).whiteSpace).toBe("nowrap");
+    expect(getComputedStyle(avatar).userSelect).toBe("text");
+    expect(styles()).toBe(initial);
+    cleanups.pop()!();
+  }
+});
+
+it("reuses unchanged readonly effects and combines attribute changes without mutation", async () => {
+  const iterate = vi.fn(() => [][Symbol.iterator]());
+  let effects: readonly StateEffect<unknown>[] = Object.freeze(
+    Object.assign([], { [Symbol.iterator]: iterate }),
+  );
+  const marker = StateEffect.define<string>();
+  const received: string[] = [];
+  const f = fixture("chat", "Hello", 230, [], (input) =>
+    mountComposerEditor(input, {
+      extensions: EditorView.updateListener.of((update) => {
+        for (const transaction of update.transactions) {
+          for (const effect of transaction.effects) {
+            if (effect.is(marker)) {
+              received.push(effect.value);
+            }
+          }
+        }
+      }),
+      sync: () => effects,
+    }),
+  );
+  iterate.mockClear();
+  syncComposerInput(f.input);
+  await Promise.resolve();
+  syncComposerInput(f.input);
+  await Promise.resolve();
+  expect(iterate).not.toHaveBeenCalled();
+  effects = Object.freeze([marker.of("first"), marker.of("second")]);
+  f.input.value = "Changed";
+  f.input.setAttribute("aria-label", "Updated message");
+  syncComposerInput(f.input);
+  await Promise.resolve();
+  expect(f.view.state.doc.toString()).toBe("Changed");
+  expect(f.content.getAttribute("aria-label")).toBe("Updated message");
+  expect(received).toEqual(["first", "second"]);
+  expect(effects.map((effect) => effect.value)).toEqual(["first", "second"]);
+});
+
+it("hosts an ordinary non-atomic decoration without the mention feature", async () => {
+  const f = fixture("chat", "Hello world", 230, [], (input) =>
+    mountComposerEditor(input, {
+      extensions: EditorView.decorations.of(
+        Decoration.set([Decoration.mark({ class: "test-inline-highlight" }).range(0, 5)]),
+      ),
+    }),
+  );
+  expect(f.surface.querySelector(".test-inline-highlight")?.textContent).toBe("Hello");
+  expect(f.surface.querySelector(".chat-composer-mention")).toBeNull();
+  focusComposerInput(f.input);
+  selectComposerInput(f.input, 2, 2);
+  await userEvent.keyboard("!");
+  expect(f.raw()).toBe("He!llo world");
+  expect(undo(f.view)).toBe(true);
+  expect(f.raw()).toBe("Hello world");
 });

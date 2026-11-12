@@ -267,6 +267,14 @@ it("restores full mention names after narrowing and reconnecting the composer", 
   await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@" + longName]);
   const editor = container.querySelector<HTMLElement>(".chat-composer-editor")!;
   expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth + 1);
+  // The editor's theme mirrors the textarea's queued and scrollbar-gutter rules.
+  const textarea = container.querySelector("textarea")!;
+  textarea.toggleAttribute("data-composer-scrollable", true);
+  editor.toggleAttribute("data-composer-overflow", true);
+  container.querySelector(".agent-chat__input")!.classList.add("agent-chat__input--submit-queued");
+  const [native, rich] = [getComputedStyle(textarea), getComputedStyle(editor)];
+  expect([rich.paddingRight, rich.color]).toEqual([native.paddingRight, native.color]);
+  expect(rich.paddingRight).not.toBe(rich.paddingLeft);
 });
 
 async function expectEdges(

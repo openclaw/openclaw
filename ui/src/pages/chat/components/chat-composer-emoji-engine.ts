@@ -7,7 +7,6 @@ import {
   composerInputHasFocus,
   focusComposerInput,
   readComposerEditor,
-  replaceComposerInput,
   selectComposerInput,
 } from "../../../lib/composer-input.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
@@ -118,8 +117,9 @@ export function createComposerEmojiEngine(
     inserting = true;
     close();
     selectComposerInput(target, token.start, token.end);
-    if (readComposerEditor(target)) {
-      replaceComposerInput(target, replacement, token.start, token.end);
+    const editor = readComposerEditor(target);
+    if (editor) {
+      editor.replace(replacement, token.start, token.end);
       inserting = false;
       return true;
     }
