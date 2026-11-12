@@ -44,6 +44,8 @@ openclaw approvals resolve <id> <allow-once|allow-always|deny>
 
 `get` shows the effective exec policy for the target: the requested `tools.exec` policy, the host approvals-file policy, and the merged effective result. Nodes with a host-native policy, such as the Windows companion, show that policy directly instead of applying OpenClaw approvals-file policy math.
 
+Ctrl-C or SIGTERM stops a pending `get` snapshot read without printing a late result; the CLI exits with status 130 or 143. Interrupted writes such as `set` and `resolve` still report their admitted receipts.
+
 For file-backed nodes, the merged view requires a host-resolved policy snapshot. Older nodes show the effective policy as unavailable instead of assuming the Gateway's requested policy also applies on the host.
 
 <Note>
