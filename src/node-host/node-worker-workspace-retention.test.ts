@@ -20,7 +20,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
-import { NodeWorkerPreparedWorkspaceStore } from "./node-worker-prepared-workspace-store.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   TEST_WORKER_ENDPOINT,
@@ -480,8 +479,6 @@ for (const cancelled of [false, true]) {
   }) => {
     const f = fixture("publication-drain");
     const workspaceDir = f.seed();
-    // This fixture has no prepared workspace; keep its metadata read independent of disk/SQLite.
-    vi.spyOn(NodeWorkerPreparedWorkspaceStore.prototype, "find").mockResolvedValue(undefined);
     const entered = createDeferred();
     const work = createDeferred();
     const cleaning = createDeferred();
@@ -537,6 +534,16 @@ for (const cancelled of [false, true]) {
         awaitGateBeforeSettlement(entered.promise, publication, "publication did not start"),
         signal,
       );
+      await f.collect(1);
+      expect(fs.existsSync(workspaceDir)).toBe(true);
+      drain = f.workspace
+        .exec({ ...identity, argv: [NODE_WORKSPACE_DRAIN_COMMAND] })
+        .then((result) => {
+          events.push("drained");
+          return result;
+        });
+      await nextEventLoopTurn();
+      expect(events).toEqual([]);
       const edited = await withinTest(
         f.workspace.exec({
           ...identity,
@@ -552,16 +559,6 @@ for (const cancelled of [false, true]) {
       expect(fs.readFileSync(path.join(workspaceDir, "edited.txt"), "utf8")).toBe(
         "editing continues",
       );
-      await f.collect(1);
-      expect(fs.existsSync(workspaceDir)).toBe(true);
-      drain = f.workspace
-        .exec({ ...identity, argv: [NODE_WORKSPACE_DRAIN_COMMAND] })
-        .then((result) => {
-          events.push("drained");
-          return result;
-        });
-      await nextEventLoopTurn();
-      expect(events).toEqual([]);
       expect(
         await withinTest(
           f.workspace.exec({

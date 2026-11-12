@@ -531,13 +531,16 @@ export class NodeWorkerWorkspaceRuntime {
         // Drain proves prior queued work settled, including an interrupted prepared
         // mutation whose durable row is now retiring; it does not reopen that workspace.
         if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
-          await this.publicationQueue.enqueue(sessionRootCandidate, async () => {});
-          signal?.throwIfAborted();
+          const drained = this.publicationQueue.enqueue(sessionRootCandidate, async () => {});
           const workspaceDir =
             deviceFolder ??
             prepared?.workspace_dir ??
             path.join(sessionRootCandidate, String(input.generation));
-          return projectWorkspaceOperationResult(workspaceDir, "drained\n");
+          return async () => {
+            await drained;
+            signal?.throwIfAborted();
+            return projectWorkspaceOperationResult(workspaceDir, "drained\n");
+          };
         }
         let sessionRoot: string;
         let workspacePath: string;
