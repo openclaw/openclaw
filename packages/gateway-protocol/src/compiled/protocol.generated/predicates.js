@@ -1112,7 +1112,7 @@ var External = [
     /(^path$)/u,
     /^[A-Za-z0-9_./\[\]\-*]+$/u,
     /(^path$|^schema$|^reloadKind$|^hint$|^hintPath$|^children$)/u,
-    /(^label$|^help$|^docsUrl$|^tags$|^group$|^groups$|^order$|^advanced$|^sensitive$|^placeholder$|^multiline$|^presentation$|^itemTemplate$)/u,
+    /(^label$|^help$|^docsUrl$|^tags$|^group$|^groups$|^order$|^advanced$|^sensitive$|^placeholder$|^multiline$|^inheritedDefault$|^presentation$|^itemTemplate$)/u,
     /(^id$|^title$|^order$|^properties$)/u,
     /(^key$|^path$|^type$|^required$|^hasChildren$|^reloadKind$|^hint$|^hintPath$)/u,
     /(^sessionId$|^message$|^wizardAnswer$|^wizardCancel$|^welcomeVariant$|^reset$|^context$|^delegation$)/u,
@@ -10165,6 +10165,9 @@ var External = [
     (value.sensitive === void 0 || !("sensitive" in value) || check_181(value.sensitive)) &&
     (value.placeholder === void 0 || !("placeholder" in value) || check_276(value.placeholder)) &&
     (value.multiline === void 0 || !("multiline" in value) || check_181(value.multiline)) &&
+    (value.inheritedDefault === void 0 ||
+      !("inheritedDefault" in value) ||
+      check_181(value.inheritedDefault)) &&
     (value.presentation === void 0 ||
       !("presentation" in value) ||
       check_1496(value.presentation)) &&
