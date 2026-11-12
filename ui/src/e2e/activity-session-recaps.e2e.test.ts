@@ -1,6 +1,6 @@
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { expectAttribute, expectText } from "./activity-assertions.test-support.ts";
@@ -121,6 +121,11 @@ suite.define(() => {
       async ({ page }) => {
         const { gateway, recap } = await openRecap(page, true);
         await expectText(recap).toContain(oldText);
+        // Recap prose keeps macOS stem darkening; app chrome stays antialiased.
+        const smoothing = (target: Locator) =>
+          target.evaluate((el) => getComputedStyle(el).getPropertyValue("-webkit-font-smoothing"));
+        expect(await smoothing(recap.locator(".activity-feed__recap-text"))).toBe("auto");
+        expect(await smoothing(page.locator("body"))).toBe("antialiased");
         expect(await recap.getByRole("button").count()).toBe(0);
         expect(await gateway.getRequests(ensureMethod)).toEqual([]);
       },

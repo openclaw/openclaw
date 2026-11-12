@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
@@ -142,6 +142,12 @@ suite.define(() => {
       expect(
         await page.locator(".chat-group.user").getByText(QUEUED[0], { exact: true }).count(),
       ).toBe(1);
+      // Waiting text keeps macOS stem darkening like the sent message; chrome stays antialiased.
+      const smoothing = (target: Locator) =>
+        target.evaluate((el) => getComputedStyle(el).getPropertyValue("-webkit-font-smoothing"));
+      expect(await smoothing(rows.locator(".chat-queue__text").first())).toBe("auto");
+      expect(await smoothing(page.locator(".chat-group.user .chat-text").first())).toBe("auto");
+      expect(await smoothing(page.locator("body"))).toBe("antialiased");
 
       const handle = rows.filter({ hasText: QUEUED[2] }).locator(".chat-queue__grip");
       if (interaction === "keyboard") {
