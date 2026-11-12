@@ -108,7 +108,9 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
   }
 
   return (
-    <div class="chat-video-preview__content">
+    <div
+      class={["chat-video-preview__content", { "chat-video-preview__content--poster": !failed() }]}
+    >
       <Show when={!failed()} fallback={props.fallback}>
         <button
           ref={(element) => {
@@ -116,7 +118,7 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
           }}
           type="button"
           class="chat-message-image-button"
-          aria-label={`${t("chat.attachments.open")}: ${props.label}`}
+          aria-label={`${t("chat.mediaPlayer.play")}: ${props.label}`}
           onClick={() => props.onOpen()}
         >
           <Show

@@ -44,8 +44,8 @@ export function CompactAttachmentCard(
       ref={[ref, copyRef]}
       onFocusIn={() => props.onFocus?.()}
       class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
-      data-openable={props.onExpand ? "" : undefined}
-      onClick={(event) => openAttachmentCardFromClick(event, props.onExpand)}
+      data-openable={props.onPlay || props.onExpand ? "" : undefined}
+      onClick={(event) => openAttachmentCardFromClick(event, props.onPlay ?? props.onExpand)}
     >
       <AttachmentCardHeader {...props} visualMode="large-placeholder" />
     </div>
@@ -198,6 +198,17 @@ export function AttachmentCardHeader(
             {view().downloadLabel ? <span>{view().downloadLabel}</span> : <Icon name="download" />}
           </a>
         ) : null}
+        <Show when={props.onPlay}>
+          <button
+            type="button"
+            class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled"
+            aria-label={t("chat.mediaPlayer.play") + ": " + props.label}
+            onClick={() => props.onPlay?.()}
+          >
+            <Icon name="play" />
+            <span>{t("chat.mediaPlayer.play")}</span>
+          </button>
+        </Show>
         {props.onExpand !== undefined ? (
           <button
             type="button"
