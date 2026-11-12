@@ -264,6 +264,22 @@ async function wheel(page: Page, delta: number) {
   await waitForChatScrollIdle(page);
 }
 
+async function waitForChatFollow(page: Page, renderedText: string, message: string) {
+  // A quiet viewport can precede streamed DOM growth. Wait for the rendered
+  // paragraph before measuring smooth follow, then verify its settled position.
+  await expect
+    .poll(() => page.locator(".chat-pane-cache__pane--active .chat-thread").textContent(), {
+      message,
+      timeout: 15_000,
+    })
+    .toContain(renderedText);
+  await expect
+    .poll(() => chatThreadDistanceFromBottom(page), { message, timeout: 15_000 })
+    .toBeLessThanOrEqual(8);
+  await waitForChatScrollIdle(page);
+  expect(await chatThreadDistanceFromBottom(page), message).toBeLessThanOrEqual(8);
+}
+
 suite.define(() => {
   it("preserves reader intent through remote queue, stream, and persistence", async (context) => {
     await suite.runScenario(context, {
@@ -365,8 +381,11 @@ suite.define(() => {
               await expect.poll(provider.requests).toBe(turn.index);
               await turn.append(paragraphs(mode));
               await waitForDelta(a, mode + " paragraph 14.", sessionKey);
-              await waitForChatScrollIdle(reader);
-              await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
+              await waitForChatFollow(
+                reader,
+                mode + " paragraph 14.",
+                mode + ": own submit follows its assistant stream",
+              );
               if (reading) {
                 const delta =
                   mode === "near-bottom"
@@ -470,13 +489,11 @@ suite.define(() => {
             await expect.poll(() => chatThreadDistanceFromBottom(reader)).toBeLessThanOrEqual(8);
             await expect.poll(provider.requests).toBe(local.index);
             await local.append(paragraphs("local-resume", 3));
-            await waitForChatScrollIdle(reader);
-            expect
-              .soft(
-                await chatThreadDistanceFromBottom(reader),
-                "local submit follows its assistant stream",
-              )
-              .toBeLessThanOrEqual(8);
+            await waitForChatFollow(
+              reader,
+              "local-resume paragraph 3.",
+              "local submit follows its assistant stream",
+            );
             await local.finish();
             for (const page of pages) {
               await waitForSettlement(page);
