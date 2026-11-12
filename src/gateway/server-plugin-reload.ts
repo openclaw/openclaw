@@ -322,10 +322,16 @@ export async function reloadGatewayPlugins(
     if (!params.pluginLifecycle && priorCleanupResult) {
       recordCleanup(priorCleanupResult);
     }
+    let configEffects: ReturnType<typeof params.prepareConfigEffects> | undefined;
     if (!params.pluginLifecycle) {
-      // Config effects fence model admission and can retire a pending publication.
-      // Keep them after the final checkpoint and idle check, alongside reservation.
+      // Prepare and revalidate while ordinary admission is still open. No await may
+      // separate the final idle check from the actual reservation and handoff.
       assertAutomaticReloadIdle(changedPluginIds);
+      configEffects = params.prepareConfigEffects({
+        pluginIds: changedPluginIds,
+        channels: channelTargets,
+      });
+      rollbackConfigEffects = configEffects.rollback;
       await checkpoint();
       assertAutomaticReloadIdle(changedPluginIds);
     }
@@ -333,7 +339,7 @@ export async function reloadGatewayPlugins(
     releaseResourceHandoff = assertResourceHandoff(resourceHandoffIds);
     const reservedReplacement = kernel.pluginRuntimeGeneration.reserve();
     replacement = reservedReplacement;
-    const configEffects = params.prepareConfigEffects({
+    configEffects ??= params.prepareConfigEffects({
       pluginIds: changedPluginIds,
       channels: channelTargets,
     });
