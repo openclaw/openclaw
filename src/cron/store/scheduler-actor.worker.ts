@@ -243,11 +243,7 @@ function armActor(
   }
   // A conversation turn ending frees a run slot without any automation event. While a run is
   // queued or a fired condition waits for a slot, look again within a minute.
-  const awaitingRunSlot = jobs.some(
-    (job) =>
-      job.state.queuedAtMs !== undefined ||
-      (job.state.runningReceiptId !== undefined && awaitsRunSlot(job, job.state.runningReceiptId)),
-  );
+  const awaitingRunSlot = jobs.some(waitsForRunSlot);
   if (!enabled && !awaitingRunSlot) {
     return undefined;
   }
@@ -261,6 +257,14 @@ function armActor(
   // alone cannot notice a clock step or suspend on every supported platform.
   scheduleWake(storeKey, actor, Math.min(wakeAtMs - nowMs, MAX_CRON_TIMER_DELAY_MS), wakeAtMs);
   return nextWakeAtMs ?? wakeAtMs;
+}
+
+/** A queued run, or a fired condition whose payload waits for a run slot. */
+function waitsForRunSlot(job: CronJob): boolean {
+  return (
+    job.state.queuedAtMs !== undefined ||
+    (job.state.runningReceiptId !== undefined && awaitsRunSlot(job, job.state.runningReceiptId))
+  );
 }
 
 function isAgentWork(job: CronJob): boolean {
@@ -556,9 +560,7 @@ export function runCronSchedulerInWorker(
     );
     if (
       command.type !== "cron.schedulerRefresh" &&
-      (owned.length > 0 ||
-        (input.requests?.length ?? 0) > 0 ||
-        currentJobs().some((job) => job.state.queuedAtMs !== undefined))
+      (owned.length > 0 || (input.requests?.length ?? 0) > 0 || currentJobs().some(waitsForRunSlot))
     ) {
       currentJobs();
       for (const job of owned) {
