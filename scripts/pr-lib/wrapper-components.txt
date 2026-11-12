@@ -372,6 +372,7 @@ src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
 src/agents/worktrees/capacity-contract.ts
 src/agents/worktrees/capacity-store.ts
+src/agents/worktrees/base-fetch.ts
 src/agents/worktrees/capacity.runtime.ts
 src/agents/worktrees/capacity.ts
 src/agents/worktrees/capacity.worker.ts
@@ -1100,6 +1101,7 @@ src/infra/git-content-budget.ts
 src/infra/git-exec.ts
 src/infra/git-maintenance-env.ts
 src/infra/git-network-retry.ts
+src/infra/git-object-store-transport.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
@@ -1475,6 +1477,7 @@ src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
 src/infra/worker-memory.ts
 src/infra/worker-message-metrics.ts
+src/infra/worker-fs-safe.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
@@ -2421,6 +2424,7 @@ src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
 src/shared/model-fallback-notice.ts
 src/shared/transcript-only-openclaw-assistant.ts
+src/shared/transcript-payload-ownership.ts
 src/state/openclaw-agent-execution-work.ts
 packages/gateway-protocol/src/schema/session-participant.ts
 src/config/sessions/internal-session-key.ts
@@ -2954,5 +2958,9 @@ src/plugins/installed-plugin-snapshot-candidates.ts
 src/plugins/installed-plugin-snapshot-candidates.kernel.ts
 src/plugins/installed-plugin-snapshot-candidates.types.ts
 src/plugins/plugin-source-snapshot-publication.ts
+packages/agent-core/src/harness/compaction/compaction-cut-point.ts
+packages/agent-core/src/harness/compaction/utils.ts
+src/agents/sessions/context-token-pressure.ts
+src/config/sessions/session-context-seed.ts
 src/agents/code-mode-session-store-replay.ts
 src/config/sessions/session-transcript-maintenance-suffix.ts

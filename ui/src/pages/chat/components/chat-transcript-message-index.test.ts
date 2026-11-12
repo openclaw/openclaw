@@ -421,10 +421,10 @@ it("distinguishes terminal frame geometry when a hidden terminal changes its out
     makeTool("read", 3, "run-1", 30),
   ];
   const stopped = [...messages, makeMessage("terminal", 4, { content: [], stopReason: "stop" })];
-  const before = chainFor(chatItems({ messages }), { messages });
+  const session = { key: sessionKey, lastRunId: "run-1", abortedLastRun: true };
+  const before = chainFor(chatItems({ messages }), { messages, session });
   const after = chainFor(chatItems({ messages: stopped }), { messages: stopped });
-  const first = onlyFrame(before);
-  const last = onlyFrame(after);
+  const [first, last] = [onlyFrame(before), onlyFrame(after)];
   expect(first.outcome.kind).toBe("interrupted");
   expect(last.outcome.kind).toBe("completed");
   expect(last.key).toBe(first.key);

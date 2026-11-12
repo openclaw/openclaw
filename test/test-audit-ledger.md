@@ -556,6 +556,26 @@ formatting, source-line and test-line ratchets passed. Full local ClawSweeper
 review of `6c07f87ef1c397281053836c97af0968d3e6be01` found no actionable issues.
 Hosted CI and landing remain pending.
 
+### Diagnostics OTel content-capture completion proof
+
+At `7814aa8d127a93d136cda3445d109b79c9edb43b`, three capture-disabled rows
+accepted missing span attributes as an empty object. One shared outcome
+assertion now requires terminal telemetry before checking private-content
+absence. It also rejects unfinished run/harness spans exported during shutdown.
+Both declarations and all nine cases remain, including multiline redaction;
+production and shared helpers are unchanged. One test line is allocated.
+
+The unchanged nine-case file passed in 38.55 seconds wall time, including a cold
+compiler preparation. Independently suppressing terminal tracing when capture
+was disabled made each original message, run and harness row pass; each repaired
+row failed on the absent completed outcome. All three producer mutations were
+restored byte for byte. The repaired nine-case file passed in 37.33 seconds wall
+time (32.40 seconds Vitest duration; assertions took 27 ms). Independent
+preservation review and full local ClawSweeper review found no actionable issues.
+Extension-test typecheck, typed lint, formatting, diff and both line-budget checks
+passed. Hosted CI and landing remain pending. These are correctness timings,
+not a speedup claim; real recorder/SDK export proof retains its existing compiler setup.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
@@ -563,7 +583,7 @@ Hosted CI and landing remain pending.
 - Retain the CodeMode worker-leg deadline case: its real warmed worker and interruption path are distinct from the cancellation table's typed host-error precedence. Both suites keep their active-run settlement checks; this is a source-only retention decision.
 - Repair Android runtime/model fixture custody through existing guaranteed closers; no measured leak is claimed. Retarget misleading coroutine/authority/streaming assertions. Qualify Android dropdown arithmetic, IPv6 URL, empty SMS defaults and component-state mapping against their stronger keepers.
 - Repair swallowed/unrelated setup errors, silent auth/symlink skips, SSRF negative controls, content-absence/privacy results, delayed observer proofs, missing CLI fixture cleanup and aggregate-only tool-result fidelity. Retain CI inventory gaps as route repairs, including PostgreSQL conformance and removed Logbook worker paths.
-- Diagnostics OTel: the NodeSDK replay removal is runtime-qualified above; content capture proof remains a separate repair.
+- Diagnostics OTel: the NodeSDK replay removal remains qualified above; content capture completion proof is recorded separately above.
 - SDK removal search was incomplete: public2,115/2,527 complete and bundled169/179 complete. No observed consumer is not proof of no external reliance. The retired target facade was private and excluded from packaging since `780bc791470`.
 - Retain duplicate Swift TLS fixtures in separate packages, renderer-discovered Blobster JSON (also production prompt inputs), process-entry helpers referenced extensionlessly, stable borrowed-reference assertions, and independent release/architecture/platform guards.
 - CI merge-preparation source/comment candidates remain pending Linux keeper proof; the independent Git-owner admission guard stays. Do not treat a stopped Testbox allocation as a product result.
