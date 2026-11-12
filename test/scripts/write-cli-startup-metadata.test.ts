@@ -211,6 +211,24 @@ describe("write-cli-startup-metadata", () => {
     });
   }
 
+  it("reports the exit code when a help renderer fails without stderr", async () => {
+    const metadata = metadataFixture("openclaw-startup-metadata-silent-failure-");
+    writeFixtureFile(
+      metadata.distDir,
+      "root-help-fixture.js",
+      "export function outputRootHelp() { process.exit(23); }\n",
+    );
+
+    await expect(
+      testing.writeCliStartupMetadata({ ...metadata, ...sourceHelpRenderers }),
+    ).rejects.toMatchObject({
+      code: "ECLI_STARTUP_METADATA_RENDER",
+      message: expect.stringContaining("exited with code 23"),
+      renderFailureKind: "nonzero-exit",
+    });
+    expect(existsSync(metadata.outputPath)).toBe(false);
+  });
+
   it("renders source root help without blocking sibling child events", async () => {
     const child = createSpawnTextChild();
     const spawnMock = vi.mocked(spawn);
