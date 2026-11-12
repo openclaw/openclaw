@@ -103,6 +103,12 @@ Run `openclaw id status` to check the result; do not automatically repeat `rebin
 Repeating the whole command after a committed move prepares another rotation, not a replay
 of the previous commit. A refused commit still reports an error, not `moved: true`.
 
+If you interrupt the publication wait after the move committed, the command stops reading
+Discovery at that point and reports the same committed move once instead of a publication
+failure: with `--json`, `moved: true`, the committed `bindingSeq`, `published: null` (unknown),
+`cancelled: true`, and `nextStep: "openclaw id status"`. The keys already moved, so check the
+result with `openclaw id status` rather than repeating `rebind`.
+
 If `openclaw id status` says Discovery lists newer keys for this claw that this computer
 doesn't have, either this computer was restored from an older backup, or someone with your
 recovery kit moved the claw. Either way, run `openclaw id rebind`: it signs above the binding
