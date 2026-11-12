@@ -1,12 +1,13 @@
 import { For, Show } from "solid-js";
 import { sessionIconMask } from "../../../components/solid/icon.tsx";
-import { getSlashCommandDescription, type SlashCommandDef } from "../../../lib/chat/commands.ts";
-import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
 import {
-  renderSlashMatchedName,
-  SlashCommandTrail,
-  slashCommandTitle,
-} from "./chat-composer-slash-menu-dom.tsx";
+  getSlashCommandDescription,
+  getSlashCommandTitle,
+  type SlashCommandDef,
+} from "../../../lib/chat/commands.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
+import { renderSlashMatchedName, SlashCommandTrail } from "./chat-composer-slash-menu-dom.tsx";
 import {
   getSlashArgOptionId,
   getSlashCommandOptionId,
@@ -45,7 +46,7 @@ export function SlashMenuOptions(props: {
         }
         name={
           <>
-            {slashCommandTitle(childProps.command) ?? (
+            {getSlashCommandTitle(childProps.command, t) ?? (
               <>/{renderSlashMatchedName(childProps.command.name, props.query)}</>
             )}
             {childProps.command.args ? (

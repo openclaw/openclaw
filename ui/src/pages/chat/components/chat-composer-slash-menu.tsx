@@ -3,13 +3,14 @@ import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
+  getSlashCommandTitle,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
-import { SlashCommandTrail, slashCommandTitle } from "./chat-composer-slash-menu-dom.tsx";
+import { SlashCommandTrail } from "./chat-composer-slash-menu-dom.tsx";
 import {
   getActiveSlashMenuOptionId,
   getSlashArgOptionId,
@@ -135,7 +136,7 @@ export function SlashMenu(props: {
                             id: getSlashCommandOptionId(props.host.paneId, command),
                             name: (
                               <>
-                                {slashCommandTitle(command) ?? `/${command.name}`}
+                                {getSlashCommandTitle(command, t) ?? `/${command.name}`}
                                 {command.args ? (
                                   <span class="slash-menu-args"> {command.args}</span>
                                 ) : null}

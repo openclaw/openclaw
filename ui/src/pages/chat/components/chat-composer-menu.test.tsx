@@ -2,6 +2,7 @@ import { createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { i18n } from "../../../i18n/index.ts";
 import { projectMutableSource } from "../../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -910,5 +911,40 @@ it.each(["mcp-not-yet-connected", "mcp-not-yet-listed", "mcp-stale-catalog"])(
     await waitForSolid(() => expect(view.getByRole("status").textContent).toBe(message));
     expect(view.queryByRole("button", { name: "Retry", hidden: true })).toBeNull();
     expect(view.container.textContent).not.toContain("The server didn’t respond.");
+  },
+);
+
+it.each([
+  ["en", "Effort", "think"],
+  ["en", "Speed", "fast"],
+  ["de", "Aufwand", "think"],
+] as const)(
+  "finds the displayed %s command title %s and completes its invocation",
+  async (locale, title, key) => {
+    await i18n.setLocale(locale);
+    onTestFinished(() => i18n.setLocale("en"));
+    const draft = "/" + title.toLowerCase();
+    const host: SlashMenuHost = {
+      paneId: "display-title",
+      getDraft: () => draft,
+      commitDraft: vi.fn(),
+      getTextarea: () => null,
+      resolveArgOptions: () => [],
+      runCommand: vi.fn(),
+      canRun: () => true,
+    };
+    let menu!: ReturnType<typeof createSlashMenu>;
+    const view = mountSolid(() => {
+      menu = createSlashMenu();
+      return <SlashMenu menu={menu} host={host} draft={draft} />;
+    });
+    menu.update(draft, host);
+    await import("./chat-composer-slash-menu-options.tsx");
+    await waitForSolid(() => expect(view.getByText(title, { exact: true })).not.toBeNull());
+    expect(menu.state.slashMenuItems[menu.state.slashMenuIndex]?.key).toBe(key);
+    menu.handleKeydown(new KeyboardEvent("keydown", { key: "Tab" }), host);
+    flush();
+    expect(host.commitDraft).toHaveBeenCalledExactlyOnceWith("/" + key + " ");
+    expect(host.runCommand).not.toHaveBeenCalled();
   },
 );
