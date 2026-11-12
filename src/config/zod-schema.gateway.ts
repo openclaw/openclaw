@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
@@ -20,6 +21,7 @@ import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
 } from "./gateway-portal-ingress.js";
+import { GatewayOpenClawIdConfigSchema } from "./zod-schema.gateway-openclaw-id.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
@@ -111,7 +113,7 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       deny: z.array(z.string().trim().min(1)).optional(),
     })
     .optional(),
-  /** Nonstandard Access requires an explicit grant, independent of model membership. */
+  /** Explicit Access ceiling; omission uses admin authority or Standard for restricted roles. */
   accessPrograms: z
     .strictObject({
       cyber: z
@@ -191,6 +193,8 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    /** Experimental OpenClaw ID remote access (Labs); inert unless enabled. */
+    openclawId: GatewayOpenClawIdConfigSchema.optional(),
     github: GatewayGitHubEndpointSchema.optional(),
     repositoryIntegration: z.string().trim().min(1).optional(),
     projects: z
@@ -377,6 +381,14 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+            /** Revision-scoped delegation from OpenClaw Enterprise's private browser proxy. */
+            delegation: z
+              .strictObject({
+                credentialFile: z
+                  .string()
+                  .refine(isAbsolute, "Expected an absolute credential file path"),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({

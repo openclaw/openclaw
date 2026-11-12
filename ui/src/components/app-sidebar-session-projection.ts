@@ -17,7 +17,6 @@ import { sidebarPresencePresentation, type SidebarPresenceScope } from "./app-si
 import {
   catalogErrorMessages,
   catalogSessionActivity,
-  catalogSessionRowsByKey,
   type SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
 import {
@@ -48,7 +47,8 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
-  /** Personal placements participate in disclosure lifetime, not canonical grouping. */
+  selectedSessionKey: string | null;
+  /** Catalog and personal placements share disclosure lifetime, not canonical grouping. */
   referencedRows?: readonly SidebarRecentSession[];
   sections?: SidebarSessionSection<SidebarRecentSession>[];
   /** Personal pins render in the Pinned section above these sections, never twice. */
@@ -113,7 +113,7 @@ type SidebarPresentationHost = Pick<
   };
   pluginNavigation(): readonly ControlUiRegistration<ControlUiNavigationItem>[];
   reconciledSidebarZone(): SidebarPinZone;
-  getSessionNavigationState(): { toSidebarSession(row: GatewaySessionRow): SidebarRecentSession };
+  catalogSessionRows(): ReadonlyMap<string, SidebarRecentSession>;
   mainSessionRow(agentId: string): GatewaySessionRow | null;
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarRecentSession;
   sessionNavigationAgentId(session: Pick<SidebarRecentSession, "key" | "agentId">): string;
@@ -126,7 +126,6 @@ type SidebarPresentationReaders = {
   sections(): SidebarVisibleSections["sections"];
   tree(): SidebarRecentSession[];
   catalogs(): SidebarSessionCatalog[];
-  catalogRows(): GatewaySessionRow[];
   ownerOptions(): readonly SessionOwnerOption[];
 };
 
@@ -178,7 +177,6 @@ export class SidebarSessionProjection {
     const chip = host.activeChipAgent();
     const replacement =
       sessionsVisible && host.sessionDataContext?.plugins.selectedReplacement("session-list");
-    const navigation = host.getSessionNavigationState();
     const sections = sessionsVisible ? readers.sections() : [];
     const roster =
       sessionsVisible && host.sidebarAgentsMode === "roster" ? host.rosterSessionSource : null;
@@ -258,19 +256,15 @@ export class SidebarSessionProjection {
       catalogs &&
         this.catalogPresentation.readRevision(
           () => [
+            // Catalog and prepared-row owners already track roster and session revisions.
             catalogs,
-            data.sessionsResult,
-            data.sessionResultsByAgent,
-            navigation,
-            context?.sessions.revision,
+            host.catalogSessionRows(),
             this.mountedCatalogRevision,
             areSessionCatalogsSettled(data),
             data.visibleSessionLimits,
           ],
           () => {
-            const catalogRowsByKey = catalogSessionRowsByKey(
-              catalogs.length ? readers.catalogRows() : [],
-            );
+            const projectedRowsByKey = host.catalogSessionRows();
             return [
               catalogs.map(({ hosts, ...visible }) => [
                 visible,
@@ -280,14 +274,11 @@ export class SidebarSessionProjection {
               catalogs.map((catalog) =>
                 catalogSessionActivity(
                   catalog.visibleHosts.flatMap((catalogHost) => catalogHost.sessions),
-                  catalogRowsByKey,
-                  (row) => context?.sessions.isRunVisuallyActive(row) ?? false,
+                  projectedRowsByKey,
                 ),
               ),
-              Array.from(this.mountedCatalogRows, ({ key }) => {
-                const row = catalogRowsByKey.get(key);
-                return row ? navigation.toSidebarSession(row) : null;
-              }),
+              // Explicit disclosure actions invalidate directly; compare prepared facts here.
+              Array.from(this.mountedCatalogRows, ({ key }) => projectedRowsByKey.get(key)),
               areSessionCatalogsSettled(data),
               data.visibleSessionLimits,
             ];
@@ -523,11 +514,7 @@ export class SidebarSessionProjection {
     ) {
       this.resetMembership();
     }
-    this.children.beginPass(
-      previous !== null &&
-        (previous.agentId !== input.agentId ||
-          previous.connectionIdentity !== input.connectionIdentity),
-    );
+    this.children.beginPass(input, previous);
     if (scopeChanged) {
       this.heldSubtitles.clear();
     }
@@ -633,7 +620,7 @@ export class SidebarSessionProjection {
       const { initialLimit, key } = sidebarSessionPagination(grouping, section.id);
       const visibleLimit = input.visibleSessionLimits.get(key) ?? initialLimit;
       const requiredRowCount = section.rows.reduce(
-        (count, row) => count + Number(row.active || row.pinned),
+        (count, row) => count + Number(row.active || row.containsActiveDescendant || row.pinned),
         0,
       );
       const collapsedVisibleRowCount = Math.max(
@@ -648,7 +635,7 @@ export class SidebarSessionProjection {
         // Keep one prior page through run-state and recency changes. An unbounded
         // union eventually renders the entire roster without a Show more action.
         section.rows = section.rows.filter((row) => {
-          if (row.active || row.pinned) {
+          if (row.active || row.containsActiveDescendant || row.pinned) {
             return true;
           }
           if (optionalSlots > 0) {

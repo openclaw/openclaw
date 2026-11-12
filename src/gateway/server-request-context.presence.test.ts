@@ -22,6 +22,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { clearSessionTypingState } from "./server-methods/session-typing-state.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -234,6 +235,78 @@ describe("createGatewayRequestContext presence", () => {
         avatarUrl: `/api/users/${target.profileId}/avatar?v=${display.avatarRevision}`,
       });
       expect(presence.some((entry) => entry.user?.id === unrelatedId)).toBe(false);
+    });
+  });
+
+  it("delivers drafts to connected viewers absent from the beacon cache and stops after disconnect", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      clearSessionTypingState();
+      onTestFinished(clearSessionTypingState);
+      let now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      onTestFinished(() => clock.mockRestore());
+      const sessionKey = "agent:main:typing-live-viewers";
+      const sessionId = "typing-live-viewers";
+      const clients = ["writer", "reader"].map((name) => {
+        const email = `live-viewer-${name}@example.test`;
+        const profile = ensureProfileForEmail(email);
+        const client = makeProfileClient(`live-viewer-${name}`, email, { profileId: profile.id });
+        return Object.assign(client, {
+          socket: { readyState: 1 } as GatewayWsClient["socket"],
+          usesSharedGatewayAuth: false,
+          watchedSessions: [sessionKey],
+          personPresence: { onlineSince: now },
+        });
+      });
+      for (const client of clients) {
+        client.connect.client.mode = GATEWAY_CLIENT_MODES.WEBCHAT;
+        client.connect.scopes = ["operator.read", "operator.write"];
+      }
+      const writer = clients[0]!;
+      const reader = clients[1]!;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId,
+          updatedAt: now,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: writer.authenticatedUserProfile!.profileId,
+          },
+          visibility: "shared",
+        },
+      );
+      const registry = new GatewayClientRegistry(clients);
+      const params = makePresenceContextParams({ clients: registry });
+      const context = createGatewayRequestContext(params);
+      await initializeSessionReadContext(context);
+      expect(listSystemPresence().some((entry) => entry.connectionId === reader.connId)).toBe(
+        false,
+      );
+      const type = async (typing: boolean) => {
+        const request = { sessionKey, sessionId, typing, preview: "shared draft" };
+        const respond = vi.fn();
+        await sessionSuggestionHandlers["session.typing"]!({
+          req: { type: "req", id: "live-viewer-typing", method: "session.typing", params: request },
+          params: request,
+          client: writer,
+          context,
+          isWebchatConnect: () => true,
+          respond,
+        });
+        return respond;
+      };
+      expect(await type(true)).toHaveBeenCalledWith(true, { ok: true, broadcast: true });
+      expect(params.runtime.broadcast).toHaveBeenCalledWith(
+        "session.typing",
+        expect.objectContaining({ preview: "shared draft" }),
+        expect.objectContaining({ sessionKeys: [sessionKey] }),
+      );
+      registry.delete(reader);
+      now += 1_000;
+      expect(await type(false)).toHaveBeenCalledWith(true, { ok: true, broadcast: false });
     });
   });
 

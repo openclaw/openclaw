@@ -1,7 +1,11 @@
 import { ok } from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
-import { readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
+import {
+  evaluateWorkflowRunner,
+  readCiWorkflow,
+  readWorkflow,
+} from "./ci-workflow.test-support.js";
 
 type Job = {
   if?: string;
@@ -77,6 +81,21 @@ it.each(["success", "failure", "cancelled", "skipped"])(
     admission(release.if ?? "", context).toBe(result === "success");
     expect(storeQualify.with).toEqual({ target_sha: "${{ github.sha }}" });
     expect(storeQualify.permissions).toEqual({ actions: "read", contents: "read" });
+  },
+);
+
+it.each(["", "blacksmith", "hybrid", "runson", "github", "boat"] as const)(
+  "keeps Android Store runner routing stable across retries for backend %s",
+  (runnerBackend) => {
+    const release = readWorkflow(".github/workflows/android-store-release.yml").jobs.release;
+    for (const runAttempt of [1, 2]) {
+      expect(
+        evaluateWorkflowRunner(release["runs-on"], {
+          runnerBackend,
+          runAttempt,
+        }),
+      ).toBe(runnerBackend === "boat" ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
+    }
   },
 );
 

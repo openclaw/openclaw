@@ -132,7 +132,7 @@ export async function runPluginForkedTurn<T>(
         if (!turn) {
           // Without the turn's own requester, sender-specific policy cannot be checked.
           throw new Error(
-            `Session "${params.sessionKey}" no longer holds the input of entry "${params.through.entryId}".`,
+            `Session "${params.sessionKey}" no longer holds the input within the bounded fork context of entry "${params.through.entryId}".`,
           );
         }
         const sessionModel = resolveSessionModelRef(cfg, target.entry, agentId);

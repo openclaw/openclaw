@@ -27,7 +27,11 @@ export function replaceMdSource(
     blocks: ast.blocks.map((block) => ({
       ...block,
       line: shift(block.line),
-      items: block.items.map((item) => ({ ...item, line: shift(item.line) })),
+      items: block.items.map((item) => ({
+        ...item,
+        line: shift(item.line),
+        textLine: item.textLine === null ? null : shift(item.textLine),
+      })),
     })),
   });
   const lines = edited.raw.replace(/^\uFEFF/, "").split(/\r?\n/);
@@ -78,8 +82,13 @@ export function emitJsoncObjectEntries<T>(
   emit: (entry: JsoncEntry, path: string) => T,
 ): T[] {
   return entries.map((entry) => {
-    const path = `${parentPath}/${entry.key}`;
-    guardSentinel(entry.key, path);
+    const path = guardedJsoncKeyPath(entry.key, parentPath);
     return emit(entry, path);
   });
+}
+
+export function guardedJsoncKeyPath(key: string, parentPath: string): string {
+  const path = `${parentPath}/${key}`;
+  guardSentinel(key, path);
+  return path;
 }

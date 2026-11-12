@@ -99,10 +99,16 @@ type Flags<K extends string> = Partial<Record<K, boolean>>;
 type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maintainerCommands"> &
   Strings<"dispatchId" | "headRepository" | "headSha" | "job" | "ref" | "sha"> &
   Strings<"preflightResult" | "failureReportResult" | "releaseScope"> &
-  Strings<"releaseRunnerGroup" | "releasePublishRunId" | "releasePriorityRun" | "runnerGroup"> &
+  Strings<
+    | "boatReleaseRunnerGroup"
+    | "releaseRunnerGroup"
+    | "releasePublishRunId"
+    | "releasePriorityRun"
+    | "runnerGroup"
+  > &
   Strings<"runnerTemp" | "ciOnPush" | "targetContextRef" | "targetRef"> &
   Strings<"testRuntimePolicy" | "workflow" | "workflowSha" | "workflowToken"> &
-  Strings<"windowsCiReplay" | "workspace"> &
+  Strings<"windowsCiReplay" | "workflowRef" | "workspace"> &
   Flags<"cancelled" | "draft" | "failed" | "frozenTarget" | "hostedRunnerProfileContract"> &
   Flags<"releaseGate" | "runCheck" | "runWindowsCi" | "includeAndroid"> &
   Flags<"skipDefenderExclusions" | "useGithubHostedRunners"> & {
@@ -137,7 +143,7 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     resolveTargetOutputs?: Record<string, string>;
     validationTier?: "full" | "main";
     repository: string;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson" | "boat";
     requestedRunnerBackend?: "default" | "hybrid" | "runson" | "boat";
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
@@ -152,17 +158,17 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     >;
   };
 
-export function evaluateWorkflowExpression(expression: unknown, context: WorkflowContext) {
+export function evaluateWorkflowExpression(
+  expression: unknown,
+  context: WorkflowContext,
+  sandbox = {},
+) {
   if (typeof expression !== "string") {
     throw new TypeError("workflow expression must be a string");
   }
-  const match = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u);
-  if (!match) {
-    throw new Error(`invalid workflow expression: ${expression}`);
-  }
-  const source = match[1];
+  const source = expression.match(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/u)?.[1];
   if (source === undefined) {
-    throw new Error(`workflow expression has no body: ${expression}`);
+    throw new Error(`invalid workflow expression: ${expression}`);
   }
   // Actions permits dashes in property names; preserve quoted literals while
   // translating those accesses for the JavaScript fixture evaluator.
@@ -173,7 +179,8 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       (token: string, property: string | undefined) =>
         property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
     );
-  return runInNewContext(evaluableSource, {
+  const effectiveRunnerBackend = (context.runnerBackend ?? context.runnerProfile) || "blacksmith";
+  const globals = {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
     failure: () => context.failed ?? false,
@@ -209,6 +216,7 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       sha: context.sha,
       workflow: context.workflow,
       workflow_sha: context.workflowSha,
+      workflow_ref: context.workflowRef,
       workspace: context.workspace,
       token: context.workflowToken,
       event:
@@ -286,6 +294,9 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
+          effective_runner_backend: effectiveRunnerBackend,
+          placement_runner_backend:
+            effectiveRunnerBackend === "boat" ? "hybrid" : effectiveRunnerBackend,
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           // Preflight defaults the Node planner backend to the logical profile.
           node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
@@ -306,10 +317,12 @@ export function evaluateWorkflowExpression(expression: unknown, context: Workflo
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
       OPENCLAW_RELEASE_RUNNER_GROUP: context.releaseRunnerGroup ?? "",
+      BOAT_RELEASE_RUNNER_GROUP: context.boatReleaseRunnerGroup ?? "",
       OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
       OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
-  });
+  };
+  return runInNewContext(evaluableSource, Object.assign(sandbox, globals));
 }
 
 export function evaluateWorkflowRunner(
@@ -396,8 +409,14 @@ export function runWorkflowShellScript(
     let moduleIndex = 0;
     const rewritten = script
       .replace(
-        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
-        (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
+        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module( >>? (?:"[^"\n]*"|'[^'\n]*'|[^\s<>|;&]+))? <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\3(?=\n|$)/gu,
+        (
+          _match,
+          nodeOptions: string | undefined,
+          stdoutRedirection: string | undefined,
+          _marker: string,
+          body: string,
+        ) => {
           // Keep scratch outside the checkout's compiler namespace. File-backed stdin
           // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
           const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
@@ -407,7 +426,7 @@ export function runWorkflowShellScript(
             nodeOptions === "--import tsx "
               ? `--import ${quoteShell(TSX_IMPORT)} `
               : (nodeOptions ?? "");
-          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module${stdoutRedirection ?? ""} < ${quoteShell(modulePath)}`;
         },
       )
       .replace(

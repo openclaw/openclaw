@@ -203,6 +203,10 @@ Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 30-second deadline. A cancelled caller
 interrupts its retry wait.
 
+A tool-owned deadline allows an immediate `memory_search` retry. Genuine provider
+failures still pause memory-corpus searches for up to 60 seconds; wiki-only searches
+remain independent of that cooldown.
+
 After an OpenClaw index-format upgrade, the first search rebuilds the index before
 returning results. Rebuilding can take longer, and the search result discloses
 possible costs from the configured embedding provider. An index written by a

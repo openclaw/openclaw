@@ -57,10 +57,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
-import {
-  hasDanglingSkillWorkshopCollectionReviewIndex,
-  openDoctorStateSchemaReadAdmission,
-} from "./openclaw-state-db-doctor-schema.js";
+import { openDoctorStateSchemaReadAdmission } from "./openclaw-state-db-doctor-schema.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import {
@@ -73,7 +70,6 @@ import {
   runStateSchemaMigrationTransaction,
   executeCanonicalStateSchema,
   prepareStateDatabaseSchemaRepair,
-  repairStateDatabaseSchemaReadability,
 } from "./openclaw-state-db-maintenance.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
@@ -221,7 +217,10 @@ export async function repairStateSchemaAsync(
       },
     );
   try {
-    let step = await resume();
+    // Native reads can recover a journal or rebuild retained WAL evidence before yielding.
+    const capture =
+      !["doctor", "version", "readability"].includes(scope) || existsSync(`${pathname}-wal`);
+    let step = capture || existsSync(`${pathname}-journal`) ? await resume() : operation.next();
     while (!step.done) {
       let failure: { error: unknown } | undefined;
       let prepared: void | (() => void) = undefined;
@@ -266,6 +265,13 @@ function* repairOpenedStateSchemaSteps(
   const rebuiltIndexNames = new Set<string>();
   let indexChanges: string[] = [];
   let ownershipRefused = false;
+  const assertWriteAllowed = () =>
+    assertOpenClawStateWriteAllowed({
+      database: db,
+      databasePath: pathname,
+      env,
+      inspectOwnership: scope === "automatic" ? undefined : true,
+    });
   try {
     if (scope !== "automatic") {
       revokeSqliteDatabaseAdmissions(db);
@@ -274,12 +280,7 @@ function* repairOpenedStateSchemaSteps(
     const closeReadAdmission =
       scope === "automatic" ? undefined : openDoctorStateSchemaReadAdmission(db);
     try {
-      assertOpenClawStateWriteAllowed({
-        database: db,
-        databasePath: pathname,
-        env,
-        inspectOwnership: scope === "automatic" ? undefined : true,
-      });
+      assertWriteAllowed();
       assertCanonicalAgentDatabasesPrimaryKey(db, pathname);
     } finally {
       closeReadAdmission?.();
@@ -303,21 +304,26 @@ function* repairOpenedStateSchemaSteps(
     }
     // Private preservation readers cannot inspect the recognized malformed catalog.
     // Publish its owner-rechecked repair before credential or orphan preparation.
-    const unreadableCatalog =
-      scope === "doctor" && hasDanglingSkillWorkshopCollectionReviewIndex(db);
+    const preparedSchemaRepair =
+      scope === "doctor" || scope === "readability"
+        ? prepareStateDatabaseSchemaRepair(db, pathname, env)
+        : undefined;
     let catalogChanges: string[] = [];
-    if (unreadableCatalog) {
+    if (preparedSchemaRepair?.needed) {
+      const repairCatalog = () => {
+        catalogChanges = preparedSchemaRepair.applyReadability();
+      };
       const apply = yield {
-        sync() {},
+        sync() {
+          if (scope === "readability") {
+            repairCatalog();
+          }
+        },
         async prepare() {
-          return () => {
-            catalogChanges = repairStateDatabaseSchemaReadability(db, pathname, env);
-          };
+          return repairCatalog;
         },
       };
-      if (apply) {
-        apply();
-      }
+      apply?.();
     }
     if (scope === "version" || scope === "doctor") {
       yield {
@@ -386,9 +392,10 @@ function* repairOpenedStateSchemaSteps(
       // Full-shape admission and quarantine cleanup belong to later Doctor repair.
       return { changes, warnings: [] };
     }
-    const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(db, pathname, env);
+    const repairAdmittedSchema =
+      preparedSchemaRepair ?? prepareStateDatabaseSchemaRepair(db, pathname, env);
     const canInspectIndexes =
-      scope !== "readability" && !hasDanglingSkillWorkshopCollectionReviewIndex(db);
+      scope !== "readability" && (!repairAdmittedSchema.needed || catalogChanges.length > 0);
     let previousVersion = canInspectIndexes ? readStateSchemaContentVersion(db) : undefined;
     let integrity =
       previousVersion === undefined
@@ -403,12 +410,7 @@ function* repairOpenedStateSchemaSteps(
           );
     const assertIndexRepairCurrent = () => {
       assertOpenClawStateDatabaseOwner(db, { pathname });
-      assertOpenClawStateWriteAllowed({
-        database: db,
-        databasePath: pathname,
-        env,
-        inspectOwnership: true,
-      });
+      assertWriteAllowed();
     };
     const recordedDamage =
       canInspectIndexes &&
@@ -475,42 +477,37 @@ function* repairOpenedStateSchemaSteps(
       return { changes: indexChanges, warnings: [] };
     }
     if (scope === "readability") {
-      const changes = repairStateDatabaseSchemaReadability(db, pathname, env);
-      // Recovery snapshots committed source bytes in another process. Publish
-      // catalog readability before its preservation transaction inspects them.
-      let recover = () => recoverOrphanTaskDeliveryRows(db, pathname);
       if (hasOrphanTaskDeliveryRows(db)) {
+        let recover = () => recoverOrphanTaskDeliveryRows(db, pathname);
         yield {
           sync() {},
           async prepare() {
             recover = await prepareOrphanTaskDeliveryRecovery(db, pathname);
           },
         };
+        catalogChanges.push(
+          ...runSqliteImmediateTransactionSync(
+            db,
+            () => {
+              assertWriteAllowed();
+              return recover();
+            },
+            {
+              busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+              databaseLabel: pathname,
+              operationLabel: "state.schema.readability-recovery",
+            },
+          ),
+        );
       }
-      changes.push(
-        ...runSqliteImmediateTransactionSync(
-          db,
-          () => {
-            assertOpenClawStateWriteAllowed({
-              database: db,
-              databasePath: pathname,
-              env,
-              inspectOwnership: true,
-            });
-            return recover();
-          },
-          {
-            busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-            databaseLabel: pathname,
-            operationLabel: "state.schema.readability-recovery",
-          },
-        ),
-      );
-      return { changes, warnings: [] };
+      return { changes: catalogChanges, warnings: [] };
     }
     const applied: string[] = [...catalogChanges, ...indexChanges];
     let recover = () => recoverOrphanTaskDeliveryRows(db, pathname);
-    if ((!unreadableCatalog || catalogChanges.length > 0) && hasOrphanTaskDeliveryRows(db)) {
+    if (
+      (!preparedSchemaRepair?.needed || catalogChanges.length > 0) &&
+      hasOrphanTaskDeliveryRows(db)
+    ) {
       yield {
         sync() {},
         async prepare() {
@@ -669,7 +666,7 @@ function* repairOpenedStateSchemaSteps(
         operationLabel: "state.schema.repair",
       },
       () => {
-        applied.push(...repairAdmittedSchema());
+        applied.push(...repairAdmittedSchema.apply());
         configureSqliteMaintenanceCache(db);
       },
     );

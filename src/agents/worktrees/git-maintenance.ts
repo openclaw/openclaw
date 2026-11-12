@@ -15,15 +15,15 @@ import {
   withChildProcessOperation,
   type GitProcessOperation,
 } from "../../process/spawn-diagnostics.js";
-import {
-  ProjectCheckoutBusyError,
-  withProjectCheckoutLifecycle,
-} from "../../projects/project-checkout.js";
+import { withProjectCheckoutLifecycle } from "../../projects/project-checkout.js";
 import {
   readConfigMachineStateAsync,
   writeConfigMachineStateAsync,
 } from "../../state/config-machine-state-async.js";
-import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+import {
+  OpenClawStateLeaseError,
+  withOpenClawStateLease,
+} from "../../state/openclaw-state-lease.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -37,6 +37,7 @@ const PACK_BATCH_BYTES = 16 * 1024 * 1024 * 1024;
 const PACK_BATCH_INDEX_BYTES = 128 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
 const PACK_BATCH_TIMEOUT_MS = WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS;
+const PACK_RETIREMENT_BUDGET_MS = 250;
 const TEMP_PACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const OBJECT_REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
 const OBJECT_REPAIR_BATCH_SIZE = 256;
@@ -46,6 +47,7 @@ type MaintenanceParams = {
   signal?: AbortSignal;
   commitGuard?: () => void;
   retryDeferred?: boolean;
+  checkBacklog?: boolean;
   progress?: WorktreeGcProgress;
   checkpoint?: (progress: ManagedWorktreeGcResult) => Promise<void>;
 };
@@ -179,9 +181,11 @@ async function repairWorktreeObjects(
 
 async function maintainWorktreePacks(
   repoRoot: string,
+  env: NodeJS.ProcessEnv,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
   report: (before: number, after?: number) => Promise<void>,
-): Promise<void> {
+  onlyIfBacklogged: boolean,
+): Promise<boolean> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.commitGuard?.();
@@ -212,19 +216,33 @@ async function maintainWorktreePacks(
     // Packs arriving after this inventory can wait until the next maintenance pass.
     assertCurrent();
     await report(0, 0);
-    return;
+    return false;
   }
   const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
   // Content writers acquire their slot before publishing refs; keep that order
   // so maintenance cannot hold the ref queue while waiting for those writers.
-  await withContentGitSlot(async () => {
+  return await withContentGitSlot(async () => {
     const packs = await readPacks();
     assertCurrent();
     const before = packs.filter((name) => name.endsWith(".pack")).length;
     await report(before);
-    await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
-    const after = await consolidatePacks(repoRoot, commonDir, packDirectory, packs, options);
-    await report(before, after);
+    if (!onlyIfBacklogged) {
+      await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
+    }
+    const after = await consolidatePacks(
+      repoRoot,
+      env,
+      commonDir,
+      packDirectory,
+      packs,
+      options,
+      onlyIfBacklogged,
+    );
+    await report(before, after?.remaining ?? before);
+    if (after && after.remaining !== before) {
+      log.info(`worktree Git packs in ${repoRoot}: ${before} -> ${after.remaining}`);
+    }
+    return after?.retirementPending ?? false;
   }, params.signal);
 }
 
@@ -285,19 +303,15 @@ async function cleanTemporaryPacks(
 
 async function consolidatePacks(
   repoRoot: string,
+  env: NodeJS.ProcessEnv,
   commonDir: string,
   directory: string,
   names: string[],
   options: NonNullable<Parameters<typeof requireGit>[2]>,
+  onlyIfBacklogged: boolean,
 ) {
-  // MIDX is optional lookup metadata. Invalidate both entry points, including
-  // stale indexes, without enumerating every object to rebuild the whole repo.
-  for (const name of ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"]) {
-    options.beforeRun?.();
-    await fs.rm(path.join(directory, name), { force: true });
-  }
   const present = new Set(names);
-  const packs = [];
+  const packs: Array<{ name: string; size: number; indexBytes: number; promisor: boolean }> = [];
   for (const name of names) {
     // Git also publishes indexed loose-* packs; dot-temporary packs stay excluded.
     if (!/^(?:pack|loose)-[a-f0-9]+\.pack$/.test(name)) {
@@ -321,7 +335,38 @@ async function consolidatePacks(
       promisor: present.has(`${stem}.promisor`),
     });
   }
+  // Half a batch of individually small inputs fits the existing byte/index
+  // budgets. Count each pack class separately; they must never be combined.
+  if (
+    onlyIfBacklogged &&
+    ![true, false].some(
+      (promisor) =>
+        packs.filter(
+          (pack) =>
+            pack.promisor === promisor &&
+            pack.size <= PACK_BATCH_BYTES / PACK_BATCH_COUNT &&
+            pack.indexBytes <= PACK_BATCH_INDEX_BYTES / PACK_BATCH_COUNT,
+        ).length >=
+        PACK_BATCH_COUNT / 2,
+    )
+  ) {
+    return null;
+  }
+  // MIDX is optional lookup metadata. Invalidate both entry points without
+  // enumerating every object to rebuild the whole repo.
+  await withProjectCheckoutLifecycle(
+    repoRoot,
+    { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.index" },
+    async (lease) => {
+      for (const name of ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"]) {
+        options.beforeRun?.();
+        lease.assertCurrent();
+        await fs.rm(path.join(directory, name), { force: true });
+      }
+    },
+  );
   packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
+  let retirementPending = false;
   let objectFormat: string | undefined;
   for (const promisor of [true, false]) {
     const candidates = packs.filter((pack) => pack.promisor === promisor);
@@ -380,10 +425,10 @@ async function consolidatePacks(
         },
       );
     }
-    // index-pack publishes the promisor marker and verified index before returning
-    // the hash. Plain --stdin-packs copies every object, including unreachable ones.
+    // Copy every object, including unreachable ones, and compress separately fetched revisions.
+    // index-pack publishes the promisor marker and verified index before returning the hash.
     const alias =
-      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
+      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
       (promisor ? " --promisor" : "");
     const result = await requireGit(
       repoRoot,
@@ -404,35 +449,51 @@ async function consolidatePacks(
     await enqueueGitRefMutation(
       repoRoot,
       commonDir,
-      async () => {
-        for (const name of selected) {
-          const stem = path.join(directory, name.slice(0, -5));
-          // The union can already be one of the inputs. Never retire the output or
-          // a pack another Git writer has since pinned or marked as cruft.
-          if (
-            name === `pack-${hash}.pack` ||
-            (await lstatIfExists(`${stem}.keep`)) ||
-            (await lstatIfExists(`${stem}.mtimes`))
-          ) {
-            continue;
-          }
-          for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-            options.beforeRun?.();
-            await fs.rm(`${stem}.${extension}`, { force: true });
-          }
-        }
-      },
+      () =>
+        withProjectCheckoutLifecycle(
+          repoRoot,
+          { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.retire" },
+          async (lease) => {
+            // Leave valid duplicate packs for a later sweep rather than queue foreground
+            // preparation behind a large retirement. Finish each pack's sidecars together.
+            const deadline = performance.now() + PACK_RETIREMENT_BUDGET_MS;
+            for (const name of selected) {
+              if (performance.now() >= deadline) {
+                retirementPending = true;
+                break;
+              }
+              const stem = path.join(directory, name.slice(0, -5));
+              // The union can already be one of the inputs. Never retire the output or
+              // a pack another Git writer has since pinned or marked as cruft.
+              if (
+                name === `pack-${hash}.pack` ||
+                (await lstatIfExists(`${stem}.keep`)) ||
+                (await lstatIfExists(`${stem}.mtimes`))
+              ) {
+                continue;
+              }
+              for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+                options.beforeRun?.();
+                lease.assertCurrent();
+                await fs.rm(`${stem}.${extension}`, { force: true });
+              }
+            }
+          },
+        ),
       options.signal,
     );
   }
   const remainingNames = await fs.readdir(directory);
-  return remainingNames.filter((name) => name.endsWith(".pack")).length;
+  return {
+    remaining: remainingNames.filter((name) => name.endsWith(".pack")).length,
+    retirementPending,
+  };
 }
 
 export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
-  const nextRunAt = new Map<string, number>();
+  const nextRunAt = new Map<string, { at: number; retirementPending: boolean }>();
   return async (params: MaintenanceParams): Promise<void> => {
     const progress = params.progress ?? new WorktreeGcProgress();
     const assertCurrent = () => {
@@ -475,15 +536,26 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         await report("suspended");
         continue;
       }
-      if (!params.retryDeferred && Date.now() < (nextRunAt.get(repoRoot) ?? 0)) {
+      const onlyIfBacklogged =
+        !params.retryDeferred && Date.now() < (nextRunAt.get(repoRoot)?.at ?? 0);
+      if (onlyIfBacklogged && !params.checkBacklog) {
         await report("throttled");
         continue;
       }
       const state: { stage: "objects" | "packs" | "maintenance" } = { stage: "packs" };
       try {
-        await withProjectCheckoutLifecycle(
-          repoRoot,
-          { env, signal: params.signal, waitMs: 0 },
+        // Serialize pack writers across processes without excluding project preparation.
+        await withOpenClawStateLease(
+          {
+            scope: "projects.git-maintenance",
+            key: repoRoot,
+            database: { scope: "shared", options: { env } },
+            signal: params.signal,
+            leaseMs: 30_000,
+            waitMs: 0,
+            operationLabel: "worktree.maintenance",
+            leaseLabel: "project Git maintenance lease",
+          },
           async (lease) => {
             const ownedParams = {
               ...params,
@@ -494,17 +566,31 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
               },
             };
             // A busy checkout leaves its hourly slot available for the next sweep.
-            nextRunAt.set(repoRoot, Date.now() + 60 * 60_000);
+            const scheduled = nextRunAt.get(repoRoot) ?? { at: 0, retirementPending: false };
+            if (!onlyIfBacklogged) {
+              scheduled.at = Date.now() + 60 * 60_000;
+            }
+            nextRunAt.set(repoRoot, scheduled);
             await report(state.stage);
             // Snapshot failures describe graph availability, not pack integrity.
             // Verify bounded pack inputs before expiry; never gate them on full fsck.
-            await maintainWorktreePacks(repoRoot, ownedParams, async (before, after) => {
-              if (after !== undefined) {
-                progress.result.packsRemoved =
-                  (progress.result.packsRemoved ?? 0) + Math.max(0, before - after);
-              }
-              await report(state.stage, { packsBefore: before, packsAfter: after });
-            });
+            scheduled.retirementPending = await maintainWorktreePacks(
+              repoRoot,
+              env,
+              ownedParams,
+              async (before, after) => {
+                if (after !== undefined) {
+                  progress.result.packsRemoved =
+                    (progress.result.packsRemoved ?? 0) + Math.max(0, before - after);
+                }
+                await report(state.stage, { packsBefore: before, packsAfter: after });
+              },
+              onlyIfBacklogged && !scheduled.retirementPending,
+            );
+            if (onlyIfBacklogged) {
+              await report("completed");
+              return;
+            }
             const options = {
               operation,
               executionIntent: "agent-tool" as const,
@@ -563,15 +649,17 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         );
       } catch (error) {
         assertCurrent();
-        // Busy or lost checkout ownership says nothing about repository health. The
+        // Busy or lost maintenance ownership says nothing about repository health. The
         // lease reports its loss even when that loss killed the running Git child.
         if (error instanceof OpenClawStateLeaseError) {
+          nextRunAt.delete(repoRoot);
+          log.warn(`worktree Git maintenance deferred for ${repoRoot}: ${error.message}`);
           progress.record(
             "git-maintenance",
             "deferred",
-            error instanceof ProjectCheckoutBusyError
-              ? "Project checkout is busy; retry on the next cleanup pass"
-              : "Project checkout lease was lost; retry on the next maintenance pass",
+            error.code === "OPENCLAW_STATE_LEASE_HELD"
+              ? "Project checkout or Git maintenance is busy; retry on the next cleanup pass"
+              : "Git maintenance lease was lost; retry on the next cleanup pass",
             repoRoot,
           );
           await report("throttled");

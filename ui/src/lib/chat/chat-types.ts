@@ -1,5 +1,6 @@
 import type { HumanMention, SessionPermissionMode } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { ChatAppContextAttachment } from "../../../../packages/gateway-protocol/src/chat-app-context.js";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type { NodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import type {
@@ -115,7 +116,7 @@ export type ChatReplyTarget = {
 };
 
 export type ChatGoalDraftMode = { sessionId?: string } & (
-  | { action: "start" }
+  | { action: "start"; fromCommand?: true }
   | { action: "edit"; goalId: string; previousDraft: string }
 );
 
@@ -170,6 +171,7 @@ export type ChatQueueItem = {
   storageScope?: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
   asyncQuestionItemId?: string;
+  appContext?: ChatAppContextAttachment[];
   workContext?: ChatWorkContext;
   workContextUnavailable?: true;
   text: string;
@@ -404,6 +406,7 @@ export type MessageImageSource = {
 
 export type MessageContentItem =
   | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
+  | import("../../../../src/shared/template-install-notice.js").TemplatePluginInstallNotice
   | ClawHubRecommendation
   | {
       type: "image";

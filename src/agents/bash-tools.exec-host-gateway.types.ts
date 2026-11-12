@@ -1,12 +1,11 @@
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { SecretEgressSentinelBinding } from "../secrets/egress-proxy/proxy-server.js";
+import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type {
   DurableExecOptions,
   ExecHostCommandParams,
   ExecApprovalFollowupFactory,
-  ExecToolApprovalReview,
-  ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 

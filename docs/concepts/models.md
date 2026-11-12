@@ -76,9 +76,12 @@ Related model-config surfaces:
 Full key reference, defaults, and JSON5 examples: [Configuration reference](/gateway/config-agents#agent-defaults).
 
 If repeated utility-model failures stop session-observer assessments, the watching
-Control UI chat shows one warning for that run, naming the model and suggesting a
+Control UI chat shows one warning for that run when a utility model or fallback
+is explicitly configured, naming the model and suggesting a
 capable utility model or `utilityModel.fallbacks`. Missing model IDs and exhausted fallback attempts are named in the notice without including raw provider errors or auth-profile IDs. The explicit route stays selected;
-the next run tries it again. Model-free activity headlines remain available. `models status` uses the Gateway’s agent-scoped utility decision when available, rather than reconstructing private account availability from public model rows.
+the next run tries it again. Automatically selected utility models stop assessments
+without a chat warning; Gateway logs retain the failure details. Model-free activity
+headlines remain available. `models status` uses the Gateway’s agent-scoped utility decision when available, rather than reconstructing private account availability from public model rows.
 
 Title generation requests thinking off where supported. Custom OpenAI-compatible
 endpoints with an inferred Z.AI (`zai`) thinking format keep the provider's default
@@ -127,6 +130,7 @@ Other selection rules:
 - Changing the global or per-agent primary does not rewrite existing session pins, including automatic creation pins. Select the effective agent default with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch`, or reset with `/model default` or `sessions.patch {model: null}`, to follow subsequent default changes. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published provider rows, including rows matched by a trailing `provider/*` policy entry, and discovers native harness models for that agent on first use. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, or exact policy entry. An alias or settings entry under `agents.defaults.models` does not keep it visible. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI chat model picker and selected-model button omit redundant family aliases, such as `opus` for `Opus 5.5`. Aliases remain searchable and selectable, and distinctive custom aliases stay in the label.
 - When a chat already has messages, the Control UI asks before switching models. Local models skip the confirmation. Choose **Don’t ask again** to skip future confirmations for this Gateway in this browser. A change appears in the chat history with the next message you send. Changing the selection alone does not add a notice.
 - Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and exact `modelPolicy.allow` refs. Entries under `agents.defaults.models` or per-agent `models` only hold aliases and per-model settings; they do not add a model to the picker.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.

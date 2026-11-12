@@ -10,8 +10,6 @@ export const agentChip = {
   newConversation: "New session",
   workspaceMenuLabel: "Workspace menu",
   switchAgent: "Switch agent",
-  working: "Working…",
-  ready: "Ready to chat",
   help: "Help",
   getHelp: "Get support",
   getApps: "Get the apps",

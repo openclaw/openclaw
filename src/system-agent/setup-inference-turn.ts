@@ -10,6 +10,7 @@ import {
   extractAgentRunText,
 } from "../agents/agent-run-result.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { CONNECTION_CHECK_PROMPT } from "../agents/connection-check.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { AgentHarnessPluginSelection } from "../agents/harness/runtime-plugin-load-plan.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
@@ -34,6 +35,7 @@ import {
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+import { isLocalSystemAgentRoute } from "./route-locality.js";
 import {
   type BoundVerifySetupInferenceResult,
   describeSetupInferenceError,
@@ -42,7 +44,7 @@ import {
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
   resolveToolFreeCliSetupError,
-  SETUP_INFERENCE_TEST_PROMPT,
+  SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS,
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
   SetupInferenceCancelledError,
   type SetupInferenceFailureStatus,
@@ -53,7 +55,6 @@ import {
 import {
   registerHiddenSetupInferenceProbeRun,
   runSetupInferenceProbeWork,
-  SETUP_INFERENCE_TEST_MAX_TOKENS,
   type SetupTurnFailure,
   type SetupTurnSuccess,
 } from "./setup-inference-probe-work.js";
@@ -86,7 +87,14 @@ export async function runSetupInferenceTurn(params: {
   // Probe ids stay under OpenAI's 64-char session cap and match the command-lane log filters.
   const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionKey = `agent:${route.agentId}:setup-inference:incognito-${runId}`;
-  const timeoutMs = params.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
+  const timeoutMs =
+    params.timeoutMs ??
+    // Setup pins the built-in runtime as "openclaw"; only other harnesses keep the long budget.
+    (route.runner === "embedded" &&
+    (!route.agentHarnessRuntimeOverride || route.agentHarnessRuntimeOverride === "openclaw") &&
+    !isLocalSystemAgentRoute(route)
+      ? SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS
+      : SETUP_INFERENCE_TEST_TIMEOUT_MS);
   const started = Date.now();
   // A scratch workspace keeps the probe from reading the real workspace's bootstrap files.
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-"));
@@ -119,7 +127,7 @@ export async function runSetupInferenceTurn(params: {
     params.assertSourceCurrent,
   );
   let successfulAuth: AgentExecutionAuthBinding | undefined;
-  const prompt = params.prompt ?? SETUP_INFERENCE_TEST_PROMPT;
+  const prompt = params.prompt ?? CONNECTION_CHECK_PROMPT;
   const shared = {
     preparedRunAdmission,
     sessionId: runId,
@@ -189,10 +197,6 @@ export async function runSetupInferenceTurn(params: {
         reasoningLevel: "off",
         verboseLevel: "off",
         disableTrajectory: true,
-        // The "reply OK" probe stays bounded; custom completions keep the model's own budget.
-        ...(params.prompt === undefined && (!harness || harness === "openclaw")
-          ? { streamParams: { maxTokens: SETUP_INFERENCE_TEST_MAX_TOKENS } }
-          : {}),
         modelRun: true,
       });
     }

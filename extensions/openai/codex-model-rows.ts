@@ -4,10 +4,10 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
   OPENAI_GPT_56_VARIANT_MODEL_IDS,
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
-import { OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS } from "./shared.js";
 
 const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
 

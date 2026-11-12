@@ -49,13 +49,13 @@ final class GatewayConnectionController {
     private var localNetworkAccessRequested: Bool
     private(set) var currentScenePhase: ScenePhase = .inactive
     private var didAutoConnect = false
-    private var pendingServiceResolvers: [String: BonjourServiceResolver<(host: String, port: Int)>] = [:]
+    private var pendingServiceResolvers: [UUID: BonjourServiceResolver<(host: String, port: Int)>] = [:]
     private var pendingTrustConnect: GatewayPendingTrustConnect?
     private var preconnectRetryContext: PreconnectRetryContext?
     private var trustProbeGeneration: UInt64 = 0
     private var connectAttemptGeneration: UInt64 = 0
     private var autoConnectSuppression: AutoConnectSuppressionLease?
-    @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
+    @ObservationIgnored private(set) var pendingAutoConnectTask: Task<Void, Never>?
     @ObservationIgnored var operatorFleetReconcileTask: Task<Void, Never>?
     private var pendingAutoConnectGeneration: UInt64?
     @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
@@ -114,6 +114,7 @@ final class GatewayConnectionController {
 
         self.updateFromDiscovery()
         self.observeDiscovery()
+        self.observeGatewayRegistration()
 
         if self.discoveryEnabled, self.localNetworkAccessRequested {
             self.discovery.start()
@@ -699,6 +700,7 @@ extension GatewayConnectionController {
             } ?? false
             self.appModel?.disconnectForgottenGateway(
                 preservingPendingConnectAttempt: hasDifferentPendingTarget)
+            self.appModel?.focusChatSession(nil)
         }
         if shouldDisconnect, let appModel = self.appModel {
             await appModel.waitForGatewaySessionResetIfNeeded()
@@ -729,6 +731,8 @@ extension GatewayConnectionController {
         _ = GatewaySettingsStore.clearGatewayCustomHeaders(gatewayStableID: stableID)
         _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        // Re-pairing the same Gateway must not reopen the forgotten conversation.
+        GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
         let shareRelayGatewayID = ShareGatewayRelaySettings.loadConfig()?.gatewayStableID
         if GatewayStableIdentifier.matches(shareRelayGatewayID, stableID) {
             ShareGatewayRelaySettings.clearConfig()
@@ -786,8 +790,11 @@ extension GatewayConnectionController {
     private func beginAutoConnectSuppression(restoresAutoReconnect: Bool) -> AutoConnectSuppressionLease {
         let lease = AutoConnectSuppressionLease(
             generation: self.connectAttemptGeneration &+ 1,
+            // User intent, unless the node itself is paused. An operator-only pause (scope approval)
+            // must not strand the route Offline after the review is cancelled.
             previousAutoReconnectEnabled: self.autoConnectSuppression?.previousAutoReconnectEnabled ??
-                self.appModel?.gatewayAutoReconnectEnabled ?? false,
+                (self.appModel.map { $0.gatewayAutoReconnectEnabled && $0.connection.node.pausedProblem == nil } ??
+                    false),
             restoresAutoReconnect: self.autoConnectSuppression?.restoresAutoReconnect == true || restoresAutoReconnect,
             suspendedConfig: self.autoConnectSuppression?.suspendedConfig ??
                 (restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil))
@@ -945,6 +952,9 @@ extension GatewayConnectionController {
             return false
         }
 
+        if GatewayStableIdentifier.matches(ShareGatewayRelaySettings.loadConfig()?.gatewayStableID, stableID) {
+            ShareGatewayRelaySettings.clearConfig()
+        }
         guard self.persistTLSFingerprint(fingerprint, stableID) else {
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
@@ -1028,6 +1038,8 @@ extension GatewayConnectionController {
         guard !self.didAutoConnect else { return }
         guard let appModel else { return }
         guard appModel.gatewayServerName == nil else { return }
+        // Reapplying the active config restarts a paused route; only the user leaves a pause.
+        guard !appModel.connection.isPaused else { return }
 
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "gateway.autoconnect") else { return }
@@ -1155,7 +1167,7 @@ extension GatewayConnectionController {
 
     private func attemptAutoReconnectIfNeeded() {
         guard let appModel else { return }
-        guard appModel.gatewayAutoReconnectEnabled else { return }
+        guard appModel.canAutoReconnect else { return }
         guard self.autoConnectSuppression == nil else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
@@ -1232,7 +1244,7 @@ extension GatewayConnectionController {
             @MainActor func canRetryAutomatically() -> Bool {
                 guard !userInitiated, isCurrent(),
                       appModel.activeGatewayConnectConfig == nil,
-                      appModel.gatewayAutoReconnectEnabled,
+                      appModel.canAutoReconnect,
                       UserDefaults.standard.bool(forKey: "gateway.autoconnect"),
                       UserDefaults.standard.string(forKey: "node.instanceId") == instanceID,
                       let automaticGateway, let active = GatewaySettingsStore.activeGatewayEntry(),
@@ -1382,7 +1394,7 @@ extension GatewayConnectionController {
                 fingerprintSha256: fp,
                 isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+            self.appModel?.awaitGatewayTrustDecision()
             return .accepted
         case let .failure(failure):
             let problem = self.tlsProbeFailureProblem(failure, host: host, port: port)
@@ -1418,9 +1430,7 @@ extension GatewayConnectionController {
                 activeConfig?.hasSameConnectionInputs(as: $0.config) == true
         } == true
         let generation = appModel.beginGatewayConnectAttempt()
-        let shouldRestoreActiveConfig = appModel.gatewayAutoReconnectEnabled &&
-            !appModel.gatewayPairingPaused &&
-            appModel.lastGatewayProblem?.pauseReconnect != true &&
+        let shouldRestoreActiveConfig = appModel.canAutoReconnect &&
             (inheritedRestoration || appModel.hasGatewaySessionResetInFlight)
         self.pendingGatewayRestoration = if shouldRestoreActiveConfig, let activeConfig {
             GatewayRestoration(config: activeConfig, generation: generation, replacementStableID: targetStableID)
@@ -1455,10 +1465,7 @@ extension GatewayConnectionController {
             {
                 return
             }
-            guard appModel.gatewayAutoReconnectEnabled,
-                  !appModel.gatewayPairingPaused,
-                  appModel.lastGatewayProblem?.pauseReconnect != true
-            else { return }
+            guard appModel.canAutoReconnect else { return }
             self.pendingGatewayRestoration = nil
             appModel.applyGatewayConnectConfig(restoration.config, expectedGeneration: generation)
         }
@@ -1483,7 +1490,9 @@ extension GatewayConnectionController {
             return await serviceEndpointResolver(endpoint)
         }
         guard case let .service(name, type, domain, _) = endpoint else { return nil }
-        let key = "\(domain)|\(type)|\(name)"
+        // One resolver per call: callers resolving the same service at once (Settings connect and
+        // the background fleet) each keep their resolver alive until it finishes.
+        let key = UUID()
         return await withCheckedContinuation { continuation in
             let resolver = BonjourServiceResolver(
                 name: name,

@@ -119,6 +119,38 @@ afterEach(() => {
 });
 
 describe("MCP App unmount gate", () => {
+  it("keeps equal row keys mounted and retires them when their order changes", async () => {
+    const pending = createDeferred();
+    const target = Object.assign(document.createElement(targetTag), {
+      teardown: vi.fn(() => pending.promise),
+      restartAfterTeardown: vi.fn(),
+    });
+    const root = document.createElement("div");
+    root.append(target);
+    onTestFinished(registerMcpAppUnmountTarget(target));
+    const settled = createDeferred();
+    const gate = createMcpAppUnmountGate<string>(() => settled.resolve());
+    const render = (keys: string[], value: string, retainRenderedValue = false) =>
+      gate.render(
+        keys,
+        () => value,
+        () => [root],
+        { retainRenderedValue },
+      );
+
+    expect(render(["first", "second"], "initial")).toBe("initial");
+    expect(render(["first", "second"], "retained", true)).toBe("initial");
+    expect(render(["first", "second"], "updated")).toBe("updated");
+    expect(target.teardown).not.toHaveBeenCalled();
+    expect(render(["second", "first"], "reordered")).toBe("updated");
+    expect(target.teardown).toHaveBeenCalledOnce();
+    expect(render(["third"], "latest")).toBe("updated");
+    expect(target.teardown).toHaveBeenCalledOnce();
+    pending.resolve();
+    await settled.promise;
+    expect(render(["third"], "latest")).toBe("latest");
+  });
+
   it("retires a registered root once when leaving roots overlap", async () => {
     const target = Object.assign(document.createElement(targetTag), {
       teardown: vi.fn(async () => {}),

@@ -161,7 +161,6 @@ export async function runMemorySearch(
     options: opts,
     requiresMemorySlot: true,
     purpose: "cli",
-    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const result = await searchMemoryForCli({

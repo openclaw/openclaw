@@ -282,7 +282,8 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
   expectRuntimeErrorContaining("timed out waiting for cron run");
 });
 
-const interruptPhases = ["sleep", "request", "completion", "cron list", "cron show job-1"];
+const reads = ["list", "show job-1", "status", "get job-1", "runs job-1", "scratch job-1"];
+const interruptPhases = ["sleep", "request", "completion", ...reads.map((c) => `cron ${c}`)];
 it.each(interruptPhases)("cancels cron %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
@@ -295,9 +296,8 @@ it.each(interruptPhases)("cancels cron %s", async (phase) => {
       if (method === "cron.run") {
         return { ok: true, enqueued: true, runId: "queued-run" };
       }
-      if (!["sleep", "completion"].includes(phase) && extra?.signal) {
-        const { signal } = extra;
-        signal.addEventListener("abort", () => read.reject(signal.reason), { once: true });
+      if (!["sleep", "completion"].includes(phase)) {
+        extra?.signal?.addEventListener("abort", () => read.reject(extra.signal?.reason));
       }
       return phase === "sleep" ? { entries: [] } : read.promise;
     },
@@ -732,6 +732,7 @@ it.each([
       "--failure-alert-cooldown": "1h",
       "--failure-alert-channel": "telegram",
       "--failure-alert-to": "19098680",
+      "--failure-alert-thread-id": "42",
       "--failure-alert-mode": "webhook",
       "--failure-alert-account-id": "bot-a",
       "--failure-alert-include-skipped": true,
@@ -742,6 +743,7 @@ it.each([
         cooldownMs: 3_600_000,
         channel: "telegram",
         to: "19098680",
+        threadId: "42",
         mode: "webhook",
         accountId: "bot-a",
         includeSkipped: true,

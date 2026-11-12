@@ -119,18 +119,16 @@ export function validateDecisionResult(
       if (!distribution(values)) {
         return false;
       }
-    } else {
-      if (
-        !Array.isArray(answer.probabilities) ||
-        answer.probabilities.length !== question.criteria.length ||
-        !distribution(answer.probabilities) ||
-        typeof answer.score !== "number" ||
-        !Number.isFinite(answer.score) ||
-        answer.score < 0 ||
-        answer.score > question.criteria.length - 1
-      ) {
-        return false;
-      }
+    } else if (
+      !Array.isArray(answer.probabilities) ||
+      answer.probabilities.length !== question.criteria.length ||
+      !distribution(answer.probabilities) ||
+      typeof answer.score !== "number" ||
+      !Number.isFinite(answer.score) ||
+      answer.score < 0 ||
+      answer.score > question.criteria.length - 1
+    ) {
+      return false;
     }
   }
   return true;

@@ -46,6 +46,10 @@ GitHub CLI identity is native by default. When `tools.github` is omitted, local 
 
 Gateway GitHub reads and Publish PR account options reuse successful `gh auth token --hostname github.com` reads for up to 60 seconds, matching the credential-verification cache. Host `gh auth login`, `logout`, or `switch` changes can therefore take up to 60 seconds to appear on those read surfaces. Concurrent reads share one native lookup. OAuth shutdown, profile replacement or rotation, and disconnect clear the native-token cache. Environment tokens, managed profile credentials, caller permissions, and session access are still checked live; publication obtains its own live native credential. Failed token reads and anonymous-access absence proofs are not cached.
 
+Publication credentials read from native `gh` storage retain their configured issuer
+in the child environment, even when the Gateway's ambient `GH_HOST` is unset or
+points elsewhere. Ambient Enterprise tokens still require a matching issuer.
+
 Use **Settings → Profile → GitHub accounts** to see **My GitHub** and **System GitHub** together. Administrators explicitly choose **For the system** to configure this shared execution identity; the general connection flow defaults to **For me** for identified users. Per-agent overrides remain an advanced administrative setting under **Agents → Tools**. A personal connection is separate from `tools.github`: it supports explicitly selected Gateway-brokered publication and does not change agent shell credentials, shared defaults, or verified sign-in identity. See [GitHub connections](/concepts/user-model#github-connections).
 
 OpenClaw displays a one-time user code with a **Copy code** button beside it; clicking the code selects it in full for manual copying. Open the fixed `https://github.com/login/device` link, paste the code, and approve `repo`, `workflow`, `read:org`, and `gist`. The latter two are part of GitHub CLI's minimum classic-token contract. The Gateway owns the device code, token exchange, account verification, private managed `gh` profile, and rotating refresh token. Setup and refresh do not return credentials in browser responses or place them in config, logs, command arguments, transcripts, or the model runtime environment. OpenClaw-owned local exec receives an access token only through its private process-launch environment, as described below.
@@ -174,11 +178,16 @@ identity, and keeps current authority through any preparation handoff. The reque
 can be made in one message or established earlier in the conversation before the
 URL arrives.
 An explicitly empty managed workspace can receive the PR without selecting a
-project first. Existing managed projects must match the PR's head or base
+project first. If it has no PR base history and an accessible registered project
+already provides that history, preparation asks you to start a session in that
+project before fetching. This preserves the empty workspace's files and avoids
+repeating a full-history download. Existing managed projects must match the PR's head or base
 repository.
 
 An ordinary conversation without a project ends its active turn, prepares a new
-session-owned workspace, and resumes in the same conversation. Existing files
+session-owned workspace, and resumes in the same conversation. When its PR base
+matches an accessible registered project, preparation uses that project's shared
+Git history, including for a PR whose head belongs to a fork. Existing files
 stay in their original source; earlier message links open them read-only,
 including downloads and relative HTML assets. The Files panel shows the current
 PR workspace. Sibling conversations keep their original source. Open editors
@@ -232,8 +241,12 @@ deleted.
 
 Content acquisition errors identify the failed Git stage and retain a bounded,
 redacted native reason. A fetch timeout, failed object inventory, and objects
-still missing after a successful fetch are reported separately. Use that reason
-to investigate before retrying `prepare_pr`.
+still missing after a successful fetch are reported separately. A commit-fetch
+timeout directs you to a new session in the PR's base project, where Git can reuse
+its history, instead of repeating the same full-history download. Successful
+commit acquisitions retain `refs/openclaw/fetched/<sha>` in the source repository
+so later fetches can advertise the acquired history even before PR preparation
+finishes. Content-only hydration does not create these refs.
 
 An interrupted preparation retains the same accepted source for retry while
 reconciling the current destination for its review comparison.
@@ -396,7 +409,7 @@ Publication stages workspace changes with ordinary Git attribute conversion. It 
 
 <a id="workflow-and-ci-changes" />
 
-Session-only write access can publish ordinary source changes from the requester's own sessions through the configured shared account. Membership in another session does not grant that publication authority. Changes to GitHub Actions definitions in `.github/workflows/*.yml` or `.github/workflows/*.yaml` require the original requester's full operator write authority. This includes committed edits, deletions, and renames. If an accepted snapshot changes those definitions, publication preserves the saved work and asks a maintainer to publish it, or asks the requester to restore the definitions before requesting publication again. The check compares exact paths, modes, and blobs (including deleted definitions) with the published branch or original pull request base. Unchanged published definitions remain allowed. An update inherited unchanged from the authenticated target branch is also allowed when the published definition still matches their unambiguous common ancestor. Newly authored changes and conflicting resolutions still require full write authority, even when the result matches the target branch. Repository-only checkpoints cannot prove unambiguous inheritance from a source base that has diverged from the target, or infer a merge from previously copied workflow contents; those ambiguous updates still require a maintainer.
+Session-only write access can publish ordinary source changes from the requester's own sessions through the configured shared account. Membership in another session does not grant that publication authority. Changes to GitHub Actions definitions in `.github/workflows/*.yml` or `.github/workflows/*.yaml` require the original requester's full operator write authority. This includes committed edits, deletions, and renames. If an accepted snapshot changes those definitions, publication preserves the saved work and asks a maintainer to publish it, or asks the requester to restore the definitions before requesting publication again. The check compares exact paths, modes, and blobs (including deleted definitions) with the published branch or original pull request base. Unchanged published definitions remain allowed. An update inherited unchanged from the authenticated target branch is also allowed when the published definition still matches their unambiguous common ancestor. Newly authored changes and conflicting resolutions still require full write authority, even when the result matches the target branch. Repository-only checkpoints can inherit target-only workflow updates from a diverged source when the complete source-side commit graph proves a unique common ancestor. Ambiguous ancestry and previously copied workflow contents do not prove a safe merge and still require a maintainer. Each ancestry proof is bounded to 1,000 source-side commits and 32 additional ancestry boundaries; larger or unrelated-root histories also require a maintainer.
 
 This is an OpenClaw requester-permission check, not a GitHub token-scope check. Reconnecting the publisher or granting its token additional scopes does not grant the requester full operator write authority.
 
