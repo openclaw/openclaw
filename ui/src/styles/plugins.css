@@ -1692,41 +1692,6 @@
   background: var(--bg);
 }
 
-/* Transparent artwork leaves the active canvas visible in every theme. The
-   intensity masks retain the grain while a quiet tint follows the live primary. */
-.plugin-recommended-prompts__art {
-  position: absolute;
-  inset: 0;
-  isolation: isolate;
-  pointer-events: none;
-  opacity: 0.18;
-}
-
-.plugin-recommended-prompts__art > span {
-  position: absolute;
-  inset: 0;
-  mix-blend-mode: screen;
-  mask: var(--plugin-prompt-mask) 38% 50% / cover no-repeat;
-}
-
-.plugin-recommended-prompts__art > [data-channel="r"] {
-  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-r.png");
-
-  background: rgb(from var(--primary) r 0 0);
-}
-
-.plugin-recommended-prompts__art > [data-channel="g"] {
-  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-g.png");
-
-  background: rgb(from var(--primary) 0 g 0);
-}
-
-.plugin-recommended-prompts__art > [data-channel="b"] {
-  --plugin-prompt-mask: url("../assets/plugin-prompts-ember-b.png");
-
-  background: rgb(from var(--primary) 0 0 b);
-}
-
 .plugin-recommended-prompts__list {
   position: relative;
   display: grid;
@@ -1734,7 +1699,7 @@
   width: min(100%, 680px);
 }
 
-.plugin-recommended-prompts__list > button.btn.plugin-recommended-prompts__prompt {
+.plugin-recommended-prompts__list > .btn.plugin-recommended-prompts__prompt {
   --btn-bg: var(--card);
   --btn-bg-hover: var(--bg-hover);
 
@@ -1847,4 +1812,52 @@
   > textarea:is([data-composer-overflow], [data-composing])
   ~ .agent-chat__plugin-draft-overlay {
   display: none;
+}
+
+/* Shared compact chat chrome; installed and catalog owners supply their own data. */
+.plugin-theme-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+}
+
+.plugin-theme-preview__theme {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.plugin-recommended-prompts.plugin-theme-preview__chat {
+  min-height: 220px;
+  color: var(--text);
+  font-family: var(--font-body);
+  --accent-subtle: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.plugin-theme-preview__background {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.4;
+}
+
+.plugin-theme-preview__background img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.plugin-theme-preview__content {
+  gap: 24px;
+}
+
+.plugin-prompt-mention.plugin-theme-preview__brand {
+  color: var(--primary);
+}
+
+.plugin-catalog-detail__icon > .settings-theme-card__swatch {
+  width: 100%;
+  height: 100%;
+  padding: 18px;
 }

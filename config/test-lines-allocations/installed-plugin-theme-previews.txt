@@ -1,0 +1,2 @@
+# Installed theme previews: production UI palette/artwork and no-mutation proof plus single-theme versus mixed-capability identity coverage.
+285

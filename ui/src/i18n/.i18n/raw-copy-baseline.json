@@ -227,6 +227,13 @@
     },
     {
       "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/components/theme-chat-preview.tsx",
+      "text": "OpenClaw"
+    },
+    {
+      "count": 1,
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",

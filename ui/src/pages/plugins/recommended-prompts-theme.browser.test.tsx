@@ -12,9 +12,6 @@ let initialTheme: string | undefined;
 let initialMode: string | undefined;
 const frame = () => new Promise<number>(requestAnimationFrame);
 const panel = () => container.querySelector<HTMLElement>(".plugin-recommended-prompts")!;
-const layers = () => [
-  ...container.querySelectorAll<HTMLElement>(".plugin-recommended-prompts__art > span"),
-];
 const rgb = (color: string, background = "transparent") => {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 1;
@@ -69,20 +66,7 @@ afterEach(() => {
   container.remove();
   styles.remove();
 });
-it("recolors the real artwork layers from live primary, independently of accent", async () => {
-  const art = container.querySelector<HTMLElement>(".plugin-recommended-prompts__art")!;
-  expect(getComputedStyle(art).isolation).toBe("isolate");
-  expect(getComputedStyle(art).backgroundImage).toBe("none");
-  const masks = layers().map((layer) => getComputedStyle(layer).maskImage);
-  expect(masks).toHaveLength(3);
-  for (const source of masks) {
-    const url = /^url\(["']?(.*?)["']?\)$/u.exec(source)?.[1];
-    expect(url).toBeTruthy();
-    const image = new Image();
-    image.src = url!;
-    await image.decode();
-    expect([image.naturalWidth, image.naturalHeight]).toEqual([1600, 560]);
-  }
+it("keeps recommendation contrast in light, dark and custom palettes", async () => {
   for (const [mode, primary] of [
     ["light", [245, 101, 74]],
     ["dark", [32, 128, 244]],
@@ -96,13 +80,6 @@ it("recolors the real artwork layers from live primary, independently of accent"
     }
     container.style.setProperty("--primary", `rgb(${primary.join(" ")})`);
     await frame();
-    expect(layers().map((layer) => rgb(getComputedStyle(layer).backgroundColor))).toEqual([
-      [primary[0], 0, 0],
-      [0, primary[1], 0],
-      [0, 0, primary[2]],
-    ]);
-    expect(layers().map((layer) => getComputedStyle(layer).maskImage)).toEqual(masks);
-    expect(layers().every((layer) => getComputedStyle(layer).mixBlendMode === "screen")).toBe(true);
     expect(getComputedStyle(panel()).backgroundColor).toBe(
       getComputedStyle(container).backgroundColor,
     );

@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { ThemeChatPreview } from "../../components/theme-chat-preview.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
@@ -50,15 +51,7 @@ export function PluginRecommendedPrompts(props: {
 }) {
   return (
     <Show when={props.prompts?.length}>
-      <section
-        class="plugin-recommended-prompts"
-        aria-label={t("pluginsPage.recommendedPrompts.label")}
-      >
-        <div class="plugin-recommended-prompts__art" aria-hidden="true">
-          <span data-channel="r" />
-          <span data-channel="g" />
-          <span data-channel="b" />
-        </div>
+      <ThemeChatPreview label={t("pluginsPage.recommendedPrompts.label")}>
         <div class="plugin-recommended-prompts__list" aria-busy={props.busy ? "true" : "false"}>
           <For each={props.prompts}>
             {(prompt) => (
@@ -88,7 +81,7 @@ export function PluginRecommendedPrompts(props: {
             )}
           </For>
         </div>
-      </section>
+      </ThemeChatPreview>
     </Show>
   );
 }
