@@ -413,6 +413,18 @@
   outline: none;
 }
 
+/* The draft is reading text, not chrome: keep macOS stem darkening so it
+   matches the sent message (`.chat-text`). The app-wide `antialiased`
+   (base.css body) thins light faces; buttons and labels keep it. The hint and
+   prediction overlays sit on the same line, so they match the draft. */
+.agent-chat__composer-combobox > textarea,
+.agent-chat__composer-combobox > input,
+.agent-chat__composer-placeholder,
+.agent-chat__composer-prediction {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
 /* Enter before the session is ready keeps the draft, dimmed, until it sends. */
 .agent-chat__input--submit-queued .agent-chat__composer-combobox > textarea {
   color: var(--muted);
