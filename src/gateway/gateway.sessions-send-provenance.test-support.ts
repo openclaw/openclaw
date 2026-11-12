@@ -619,10 +619,19 @@ export async function updateSenderPolicies(policies: Record<string, { deny: stri
   );
 }
 
-export function configureProofCollaboration(allow: boolean | undefined, bobDenied = false) {
+export function configureProofCollaboration(
+  allow: boolean | undefined,
+  bobDenied = false,
+  fallback?: "queue" | "reject" | null,
+) {
   return patchProofConfig(
     {
-      messages: { queue: { allowCollaborativeSteering: allow ?? null } },
+      messages: {
+        queue: {
+          allowCollaborativeSteering: allow ?? null,
+          collaborativeSteeringFallback: fallback,
+        },
+      },
       tools: {
         toolsBySender: {
           "id:alice": { deny: null },
@@ -632,6 +641,7 @@ export function configureProofCollaboration(allow: boolean | undefined, bobDenie
     },
     [
       "messages.queue.allowCollaborativeSteering",
+      ...(fallback !== undefined ? ["messages.queue.collaborativeSteeringFallback"] : []),
       "tools.toolsBySender.id:alice.deny",
       ...(!bobDenied ? ["tools.toolsBySender.id:bob.deny"] : []),
     ],

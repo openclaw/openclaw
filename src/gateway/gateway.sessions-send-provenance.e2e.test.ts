@@ -618,11 +618,7 @@ async function verifyCrossHumanAdmission(
   await using _ = {
     async [Symbol.asyncDispose]() {
       await settleProofScenario(scenario, [running.alice, running.bob]);
-      await configureProofCollaboration(previousSetting);
-      await patchProofConfig(
-        { messages: { queue: { collaborativeSteeringFallback: previousFallback ?? null } } },
-        ["messages.queue.collaborativeSteeringFallback"],
-      );
+      await configureProofCollaboration(previousSetting, false, previousFallback ?? null);
     },
   };
   if (collaborative) {
@@ -631,16 +627,10 @@ async function verifyCrossHumanAdmission(
       agentId: "deployment",
     });
   }
-  await configureProofCollaboration(allowCollaborativeSteering, allowCollaborativeSteering);
-  await patchProofConfig(
-    {
-      messages: {
-        queue: {
-          collaborativeSteeringFallback: fallback ?? null,
-        },
-      },
-    },
-    ["messages.queue.collaborativeSteeringFallback"],
+  await configureProofCollaboration(
+    allowCollaborativeSteering,
+    allowCollaborativeSteering,
+    fallback ?? null,
   );
   expect(getRuntimeConfig().messages?.queue?.allowCollaborativeSteering).toBe(
     allowCollaborativeSteering,
