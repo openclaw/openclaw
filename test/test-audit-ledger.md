@@ -576,6 +576,17 @@ Extension-test typecheck, typed lint, formatting, diff and both line-budget chec
 passed. Hosted CI and landing remain pending. These are correctness timings,
 not a speedup claim; real recorder/SDK export proof retains its existing compiler setup.
 
+### CLI source-helper multiplicity
+
+At `df5a2f36076fe50335487abc806d70d6fbfe3cfc`, the helper has two cases:
+retain traversal through re-export shims and lazy runtime modules; retire the
+repeated-import case if qualification confirms it only pins concatenated-source
+multiplicity. The sole consumer, command secret-resolution coverage, uses
+membership and regex predicates across 17 cases and never counts occurrences.
+The deleted case does not exercise cycle termination. Keep the helper and its
+visited-module guard unchanged. Baseline, mutation controls, focused validation,
+independent review and hosted CI remain pending; no test is removed yet.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
