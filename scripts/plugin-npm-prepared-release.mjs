@@ -1001,10 +1001,9 @@ async function runPreparedNpmCommand(argv) {
             client: createReleaseEvidenceClient(common.repository),
             shareAcquisitionReads: true,
           });
-    } else if (command === "authorize") {
-      // The parent dispatch precedes child preview, so it has no carrier. Share
-      // this invocation's raw graph reads; the final sweep still refreshes live
-      // dependencies and authority. Nothing is serialized or trusted as a verdict.
+    } else if (command === "authorize" || command === "consume") {
+      // Parent dispatch and direct recovery lack a carrier. Share raw reads only
+      // within this command; the final sweep still refreshes live authority.
       adoptionParams.immutableReads = createReleaseEvidenceReplay({}, undefined, {
         shareAcquisitionReads: true,
       });

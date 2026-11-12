@@ -1,6 +1,6 @@
-# 2,905 net test lines minus the universal 400-line PR allowance.
+# 2,904 net test lines minus the universal 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
 # Existing fixtures are reused; these distinct effect boundaries need native workers.
-2505
+2504

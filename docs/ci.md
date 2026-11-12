@@ -390,6 +390,8 @@ Changed compiler planning queries each config's complete file membership with `-
 
 When shared SDK declarations are enabled, explicitly selected core-only lint rows skip SDK restoration. Selected extension consumers restore this run's SDK; unselected legacy rows retain their existing cache restoration.
 
+Central lint also skips the SDK cache when the check planner assigns it no extension work. A retained extension tail, missing planner metadata, or a frozen or compatibility target keeps the existing restore path.
+
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
 canary, and cleanup. Hosted four-CPU runs spent about 19 minutes in the compile

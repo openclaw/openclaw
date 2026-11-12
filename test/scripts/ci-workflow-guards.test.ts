@@ -6833,6 +6833,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(assetCheckStep.run).toContain("predates plugins:assets:check");
   });
 
+  it.each([
+    [{}, true],
+    [{ runAttempt: 2 }, true],
+    [{ eventName: "workflow_dispatch" }, false],
+    [{ eventName: "workflow_dispatch", ref: "refs/heads/feature" }, false],
+    [{ repository: "example/fork" }, false],
+    [{ ref: "refs/heads/feature" }, false],
+    [{ runnerBackend: "" }, false],
+    [{ runnerBackend: "blacksmith" }, false],
+    [{ runnerBackend: "hybrid" }, false],
+    [{ runnerBackend: "runson" }, false],
+    [{ runnerBackend: "github" }, false],
+  ] as const)("routes Android CodeQL to Boat only on scheduled main: %j", (context, boat) => {
+    const job = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs.android;
+    expect(
+      evaluateWorkflowRunner(job["runs-on"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runnerBackend: "boat",
+        ...context,
+      }),
+    ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
+  });
+
   it("keeps network CodeQL off unrelated source-only refactors", () => {
     const workflow = readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
     const networkConfig = readFileSync(
