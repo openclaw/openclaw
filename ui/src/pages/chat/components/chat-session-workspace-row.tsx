@@ -145,9 +145,12 @@ export function RailRow(props: {
   view?: "list" | "grid";
   onToggle?: (instant: boolean) => void;
 }) {
+  // Default session rows retain selection when a read publishes its canonical ID.
   const selected = createMemo(() =>
     props.file.artifactId ||
-    (props.file.origin === "session" && props.file.workspacePath === undefined)
+    (props.workspace.presentation !== undefined &&
+      props.file.origin === "session" &&
+      props.file.workspacePath === undefined)
       ? props.workspace.activeId === props.file.key
       : isSessionWorkspaceFileSelected(
           props.workspace.activeId,
