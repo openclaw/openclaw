@@ -251,6 +251,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       "conversationRef",
       "timeoutSeconds",
     ]),
+    knowledge_record: {
+      ...displayTool("fileText", "Knowledge Record"),
+      progress: { label: "Read knowledge record", detailKeys: [] },
+    },
     knowledge_remember: {
       ...displayTool("brain", "Knowledge Remember"),
       progress: { label: "Remember knowledge", detailKeys: [] },
