@@ -44,8 +44,8 @@ export class ScopeUpgradeCoordinator {
 
   constructor(scheduler: GatewayScheduler) {
     this.scheduler = scheduler.scope();
-    // Observer reads end at the scheduler fence; received execution can retain
-    // its authority until restart recovery has been recorded.
+    // Scheduler retirement is a fallback; the Gateway close prelude fences
+    // observers earlier while received execution retains recovery authority.
     if (this.scheduler.signal.aborted) {
       void this.close();
     } else {

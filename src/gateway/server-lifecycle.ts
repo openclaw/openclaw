@@ -422,6 +422,9 @@ export async function prepareGatewayLifecycle(params: {
     // Fence new entry now; the run-shutdown owner records recovery before
     // canceling admitted work or withdrawing its runtime capabilities.
     requestEntryLifetime.beginClose();
+    // Read-only observers stop at admission fencing, before retained writes lose authority.
+    // Its existing lifetime sidecar joins held reads after transports drain.
+    void runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.close();
     void mentionInbox.dispose();
     healthWork.beginClose();
     broadcast("shutdown", notice);
