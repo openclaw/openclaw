@@ -307,6 +307,7 @@ export function SettingsToggleRow(
     description?: JSX.Element;
     /** Secondary actions beside the switch, such as opening related settings. */
     actions?: JSX.Element;
+    controlClass?: string;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -330,7 +331,7 @@ export function SettingsToggleRow(
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
-      <div class="settings-row__control">
+      <div class={["settings-row__control", props.controlClass]}>
         {props.actions}
         <Switch
           {...props}

@@ -551,9 +551,13 @@ it("ends adoption instead of joining a timed-out owner build", async () => {
 it("does not hold Gateway shutdown on an adoption's pricing preparation", async ({ signal }) => {
   await setup();
   const pricingGate = createEnteredGate();
+  const preparePricing = pricing.prepareModelPricingContext;
   const pricingSpy = vi
     .spyOn(pricing, "prepareModelPricingContext")
-    .mockImplementation(pricingGate.wait);
+    .mockImplementation(async (...args) => {
+      await pricingGate.wait();
+      return preparePricing(...args);
+    });
   const adoption = applyRemoteModelCatalogUpdate(() => config);
   try {
     await pricingGate.entered;

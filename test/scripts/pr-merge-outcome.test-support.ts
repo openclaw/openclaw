@@ -1009,10 +1009,12 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
   if [ "\${14:-false}" = true ]; then
     PR_WORKFLOW_RECOVERY_OUTCOME="$2"
     PR_WORKFLOW_RECOVERY_HEAD="$3"
+    PR_WORKFLOW_RECOVERY_ACTION=merge
+    [ "$7" != true ] || PR_WORKFLOW_RECOVERY_ACTION=cancel-auto
     PR_WORKFLOW_ADMISSION=0
     selection_mode=workflow-recovery-select
     if [ -z "$2" ]; then PR_WORKFLOW_ADMISSION=1; selection_mode=workflow-admission-select; fi
-    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3")
+    binding=$(pr_batch_wrapper_git "$selection_mode" "$canonical_repo_root" 123 "$2" "$3" refs/remotes/origin/main "" "$PR_WORKFLOW_RECOVERY_ACTION")
     IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
     PR_WORKFLOW_BOOTSTRAP=0
     PR_WORKFLOW_TRUST_ANCHOR=refs/remotes/origin/main
@@ -1020,7 +1022,7 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     script_parent_dir="$FIXTURE_WORKFLOW_DIRECTORY/scripts"
     hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$FIXTURE_WORKFLOW_DIRECTORY"
     [ -z "\${FIXTURE_WORKFLOW_AFTER_HOLD:-}" ] || source "$FIXTURE_WORKFLOW_AFTER_HOLD"
-    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" >/dev/null
+    pr_batch_wrapper_git workflow-context-read "$canonical_repo_root" 123 "$$" "$PPID" "$2" "$3" "$PR_WORKFLOW_ADMISSION" "" "$PR_WORKFLOW_RECOVERY_ACTION" >/dev/null
     admit_pr_workflow_binding 123
     script_parent_dir="$original_scripts"
   fi

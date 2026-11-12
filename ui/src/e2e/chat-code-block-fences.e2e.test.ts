@@ -76,14 +76,15 @@ suite.define(() => {
             expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(
               true,
             );
-            const scrolled = viewport.evaluate(
-              (element) =>
-                new Promise<void>((resolve) => {
-                  element.addEventListener("scrollend", () => resolve(), { once: true });
-                }),
-            );
+            // A locator resolves asynchronously; arm the listener before sending the key.
+            const scrolled = await viewport.evaluateHandle((element) => ({
+              finished: new Promise<void>((resolve) => {
+                element.addEventListener("scrollend", () => resolve(), { once: true });
+              }),
+            }));
             await page.keyboard.press("ArrowRight");
-            await scrolled;
+            await scrolled.evaluate((state) => state.finished);
+            await scrolled.dispose();
             before = await viewport.evaluate((element) => element.scrollLeft);
             expect(before).toBeGreaterThan(0);
             await page.keyboard.press("Tab");

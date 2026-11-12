@@ -1,2 +1,0 @@
-73
-# Retained-database deletion authority, restart recovery, migration-race refusal, and non-failing deletion readiness regressions.

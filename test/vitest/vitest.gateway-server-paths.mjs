@@ -10,6 +10,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/deep-research-recovery.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
   "test/plugins/deep-research-startup.gateway.test.ts",
+  "test/plugins/reef-shutdown.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
 ];
 

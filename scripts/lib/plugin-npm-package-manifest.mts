@@ -655,6 +655,7 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
             "pack",
             source,
             "--json",
+            "--loglevel=verbose",
             "--ignore-scripts",
             "--workspaces=false",
             "--pack-destination",
@@ -664,14 +665,16 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
             cwd: packageDir,
             env: process.env,
             encoding: "utf8",
-            stdio: ["ignore", "pipe", "inherit"],
+            stdio: ["ignore", "pipe", "pipe"],
           },
         );
         if (result.error) {
           throw result.error;
         }
         if (result.status !== 0) {
-          throw new Error(`packing patched runtime dependency failed: ${name}@${version}`);
+          throw new Error(
+            `packing patched runtime dependency failed: ${name}@${version}\n${String(result.stdout ?? "")}${String(result.stderr ?? "")}`,
+          );
         }
         const output = JSON.parse(String(result.stdout));
         const entries = Array.isArray(output) ? output : Object.values(output);
@@ -711,10 +714,16 @@ function shouldBundleDependencies(
   patchedDependencies: WorkspacePatchedDependency[] = [],
 ) {
   if (packageJson?.openclaw?.release?.bundleRuntimeDependencies === false) {
-    if (patchedDependencies.length > 0) {
+    const configured = packageJson.bundleDependencies ?? packageJson.bundledDependencies;
+    if (
+      patchedDependencies.some(
+        ({ name }) => !Array.isArray(configured) || !configured.includes(name),
+      )
+    ) {
       throw new Error("patched runtime dependencies conflict with bundleRuntimeDependencies=false");
     }
-    return false;
+    // Explicit patch names may ship without opting native-heavy packages into the full closure.
+    return patchedDependencies.length > 0;
   }
   return patchedDependencies.length > 0 || value === true || value === "1" || value === "true";
 }
