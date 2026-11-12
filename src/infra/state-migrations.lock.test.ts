@@ -45,7 +45,11 @@ it.each([
   const ownerPath = resolveGatewayStateOwnerPath(databasePath);
   const open = fs.openSync;
   vi.spyOn(fs, "openSync").mockImplementation((file, flags, mode) => {
-    if (file === ownerPath && typeof flags === "number" && (flags & fs.constants.O_CREAT) !== 0) {
+    if (
+      path.dirname(String(file)) === path.dirname(ownerPath) &&
+      typeof flags === "number" &&
+      (flags & fs.constants.O_CREAT) !== 0
+    ) {
       throw Object.assign(new Error(message), { code });
     }
     return open(file, flags, mode);

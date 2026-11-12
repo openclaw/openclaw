@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -84,16 +83,17 @@ describe("workspace bootstrap file caching", () => {
     const { dev, ino, size, mtimeMs } = originalStat;
     expect(editedStat).toMatchObject({ dev, ino, size, mtimeMs });
 
-    const originalFstatSync = fsSync.fstatSync;
-    vi.spyOn(fsSync, "fstatSync").mockImplementationOnce((fd, options) => {
-      const stat = originalFstatSync(fd, options);
-      // Filesystems may coalesce rapid ctime updates; isolate the identity contract.
-      if ("ctimeNs" in stat) {
-        stat.ctimeNs = BigInt(Math.trunc(originalStat.ctimeMs + 1)) * 1_000_000n;
-      } else {
-        stat.ctimeMs = originalStat.ctimeMs + 1;
+    const openRootFile = boundaryFileRead.openRootFile;
+    vi.spyOn(boundaryFileRead, "openRootFile").mockImplementation(async (params) => {
+      const opened = await openRootFile(params);
+      if (!opened.ok || params.absolutePath !== filePath) {
+        return opened;
       }
-      return stat;
+      // Filesystems may coalesce rapid ctime updates; isolate the identity contract.
+      return {
+        ...opened,
+        stat: Object.assign(opened.stat, { ctimeMs: originalStat.ctimeMs + 1 }),
+      };
     });
     await expectAgents(content2);
   });

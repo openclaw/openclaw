@@ -1,0 +1,2 @@
+40
+# Preserve staged-publication failures, async read races, and consistent identity fixtures.

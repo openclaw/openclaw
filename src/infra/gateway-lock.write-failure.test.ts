@@ -61,13 +61,17 @@ it("closes handle and preserves an unowned lock file when writeFile fails after 
   const write = fsSync.writeFileSync.bind(fsSync);
   const close = fsSync.closeSync.bind(fsSync);
   const descriptors = { opened: 0, closed: 0 };
-  const activeDescriptors = new Set<number>();
+  const activeDescriptors = new Map<number, string>();
   let foreignIdentity: BigIntStats | undefined;
   vi.spyOn(fsSync, "openSync").mockImplementation((pathname, flags, mode) => {
     const fd = open(pathname, flags, mode);
-    if (pathname === lockPath && typeof flags === "number" && flags & fsSync.constants.O_EXCL) {
+    if (
+      path.dirname(String(pathname)) === lockDir &&
+      typeof flags === "number" &&
+      flags & fsSync.constants.O_EXCL
+    ) {
       descriptors.opened += 1;
-      activeDescriptors.add(fd);
+      activeDescriptors.set(fd, String(pathname));
     }
     return fd;
   });
@@ -80,8 +84,8 @@ it("closes handle and preserves an unowned lock file when writeFile fails after 
   });
   vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, data, options) => {
     if (typeof file === "number" && activeDescriptors.has(file)) {
-      // A competing writer replaces the pathname while the admitted inode stays open.
-      fsSync.renameSync(lockPath, `${lockPath}.opened`);
+      // A competing writer displaces the stage and publishes an unowned lock.
+      fsSync.renameSync(activeDescriptors.get(file)!, `${lockPath}.opened`);
       write(lockPath, "partial", "utf8");
       foreignIdentity = fsSync.lstatSync(lockPath, { bigint: true });
       throw writeError;
