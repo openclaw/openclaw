@@ -168,6 +168,8 @@ describe("production lint suppressions", () => {
         "scripts/bench-control-ui-rpc-hostage.ts|unicorn/prefer-dom-node-text-content|1",
         // The Talk readiness probe calls the saved media method with its original receiver.
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
+        // Node MessagePort and Worker postMessage have no Window target-origin parameter.
+        "scripts/diagnostics/windows-link-service.mjs|unicorn/require-post-message-target-origin|5",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -241,6 +243,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-entry-patch-payload.ts|unicorn/require-post-message-target-origin|1",
         // The setup probe executes an expression from the same trusted source input it imports.
         "scripts/perf/session-history-reader-setup-measure.mjs|typescript/no-implied-eval|1",
+        // Setup observes the native work scope through a receiver-preserving Proxy and restores track before measurement.
+        "scripts/perf/session-pr-currency-measure.ts|typescript/unbound-method|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         // The admission-charge probe forwards runTask with the original pool receiver.

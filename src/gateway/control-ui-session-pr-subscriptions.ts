@@ -451,14 +451,11 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       return Promise.resolve();
     }
     return scope.track(async () => {
-      // One union pass owns each key once; the loader retains its failure and
-      // rate-limit cache, so the poller never creates a second quota policy.
+      // Only active views poll GitHub; passive receipts follow committed owner facts.
       const loads = [];
       for (const [sessionKey, state] of keyStates) {
-        if (state.connIds.size > 0) {
-          loads.push(
-            state.target.taskReceiptsOnly ? currentKeyState(sessionKey) : loadSnapshot(sessionKey),
-          );
+        if (state.connIds.size > 0 && !state.target.taskReceiptsOnly) {
+          loads.push(loadSnapshot(sessionKey));
         }
       }
       await Promise.all([Promise.allSettled(replacements), prepared.settle(), ...loads]);
@@ -478,7 +475,10 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       keyStates.size === 0 ||
       (!ownAuthorityChanged && !sessionChangeScopeAffectsStoredRows(change)) ||
       (!change.factsInvalidated &&
-        (facts === "unchanged" || facts === "participants" || facts === "category")) ||
+        (("sessionKey" in change && !facts) ||
+          facts === "unchanged" ||
+          facts === "participants" ||
+          facts === "category")) ||
       change.factsInvalidated === "category"
     ) {
       return;
@@ -487,7 +487,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     const keys: string[] = [];
     for (const [key, state] of keyStates) {
       // A removed root may be immediately replaced under the same key. The next
-      // entry notification (or normal poll) reconciles that watch after replacement.
+      // entry publication reconciles that watch after replacement.
       const removedRoot =
         "sessionKey" in change &&
         change.sessionKey === state.target.params.sessionKey &&

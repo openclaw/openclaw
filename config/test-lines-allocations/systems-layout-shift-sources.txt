@@ -1,2 +1,0 @@
-# Retain layout-shift source geometry and exercise its native browser diagnostic contract.
-107

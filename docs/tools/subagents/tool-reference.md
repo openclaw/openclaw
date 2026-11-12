@@ -152,7 +152,20 @@ Cloud placement requires a live hosted Gateway session; standalone and local-emb
 
 An error with `childSessionKey` means the child was retained. `initialTaskStatus: "not-sent"` means the tool did not submit its initial task; `"unknown"` means task admission was attempted but not confirmed. Inspect that child and its placement before retrying. Do not repeat the spawn merely because provisioning or the initial reply timed out. An attempted task that cannot be registered is settled through exact-run cancellation; its session and worker are preserved for inspection.
 
-Selecting a cloud profile is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
+To run the child on one paired device instead, pass that device's node ID (the `nodeId` the `nodes` tool reports):
+
+```json
+{
+  "task": "Run the macOS UI tests and report failures",
+  "visible": true,
+  "worktree": true,
+  "placement": { "kind": "device", "deviceId": "<paired-device-id>" }
+}
+```
+
+The Gateway dispatches the child with the same checks as `sessions.dispatch` with `deviceId`: the device must be paired and connected, and it must support the child's runtime and execution mode. Otherwise the spawn returns an error naming the device and the reason, keeps the child with `initialTaskStatus: "not-sent"`, and runs nothing elsewhere. On success, the receipt's `placement` names the selected device. See [Placement and machine selection](/gateway/cloud-workers/placement-and-machine-selection) for device requirements.
+
+Selecting a cloud profile or paired device is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
 
 ### Delegation prompt mode
 
@@ -258,7 +271,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Create a persistent dashboard session only when the user requests a separate session or needs to return to and steer the work independently. Omit this flag or use `false` for internal QA, research, coding, review, and test workers supporting the parent task. Visible spawns support only `runtime: "subagent"` and always keep the created session.
 </ParamField>
 <ParamField path="placement" type="object">
-  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
+  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. For one paired device, use `{ kind: "device", deviceId }` with the same `visible: true` and `worktree: true`; an unavailable or incompatible device fails the spawn. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
 </ParamField>
 <ParamField path="group" type="string">
   Optional custom sidebar group for a visible session; a new name creates the group. Omitted, empty, and whitespace-only values mean ungrouped and are also accepted for hidden or ACP runs. A nonempty group requires `visible: true`.

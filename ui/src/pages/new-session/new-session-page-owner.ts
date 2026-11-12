@@ -14,6 +14,7 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
+import { showBackgroundSessionCreated } from "./background-session-notice.ts";
 import * as catalog from "./catalog-target.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
@@ -61,8 +62,23 @@ export class NewSessionPageOwner {
     this.listeners.publish();
   };
   submit(background = false) {
-    const operation = () => this.submission.submit(undefined, background);
-    return this.presentSubmit ? this.presentSubmit(operation) : operation();
+    const lifetime = this.submissionLifetime;
+    const textarea = this.submission.composerTextarea.getTextarea();
+    const restoreFocus = background && this.host.ownerDocument.activeElement === textarea;
+    const operation = async () => {
+      await this.submission.submit(undefined, background);
+      if (
+        restoreFocus &&
+        this.submissionLifetime === lifetime &&
+        (this.host.ownerDocument.activeElement === textarea ||
+          this.host.ownerDocument.activeElement === this.host.ownerDocument.body)
+      ) {
+        this.focusComposer();
+      }
+    };
+    // Only foreground starts hold a navigation presentation. Background admission
+    // keeps the existing composer and uses the draft owner's submitting state.
+    return !background && this.presentSubmit ? this.presentSubmit(operation) : operation();
   }
   private readonly listeners = createChangeListeners();
   private contextSubscriptions: Array<() => void> = [];
@@ -153,6 +169,7 @@ export class NewSessionPageOwner {
           closeMenusWithin(this.host);
         },
         takePreparedTitle: () => this.titlePreparation?.takePreparedTitle(),
+        onAccepted: (result) => showBackgroundSessionCreated(() => this.context, result),
         updateComplete: () => this.host.updateComplete,
         retainForHandoff: () => {
           if (!this.data || !this.isConnected) {

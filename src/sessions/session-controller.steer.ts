@@ -4,6 +4,7 @@ import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
 } from "../auto-reply/reply/queue/lifecycle.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import type {
   ReplySteerNowResult,
   ReplySteerNowState,
@@ -157,6 +158,14 @@ export async function beginSessionControllerSteer(
       }
       // The failure owner already retains ambiguous acceptance and releases proven withdrawal.
       await finish(nativeOutcome.status === "accepted" || nativeOutcome.status === "indeterminate");
+      if (nativeOutcome.status === "rejected" && nativeOutcome.errorMessage) {
+        diagnosticLogger.warn("steering runtime rejected input", {
+          sessionKey: params.input.mailbox.key,
+          activeRunId: attempt.targetRunId,
+          reason: nativeOutcome.reason,
+          error: nativeOutcome.errorMessage.slice(0, 512),
+        });
+      }
       return nativeOutcome;
     },
     async (error: unknown) => {
