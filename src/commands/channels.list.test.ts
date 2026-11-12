@@ -5,6 +5,7 @@ import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { makeCatalogEntry, makeMeta } from "../flows/channel-setup.test-helpers.js";
 import type { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -260,11 +261,13 @@ describe("channels list", () => {
 
     await channelsListCommand({ all: true }, runtime);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "channels.status",
-      params: { probe: false, timeoutMs: 5000 },
-      timeoutMs: 5000,
-    });
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "channels.status",
+        params: { probe: false, timeoutMs: 5000 },
+        timeoutMs: 5000,
+      }),
+    );
     const output = stripAnsi(loggedText(runtime));
     const accountLines = output.split("\n").filter((line) => line.startsWith("- Discord "));
     expect(accountLines).toHaveLength(2);
@@ -416,5 +419,29 @@ describe("channels list", () => {
     expect(payload.chat.qqbot).toMatchObject({ label: "QQ Bot", docsPath: "/channels/qqbot" });
     expect(payload.chat.discord).toMatchObject({ label: "Discord" });
     expect(payload.chat.discord).not.toHaveProperty("docsPath");
+  });
+
+  it("propagates cancellation during a pending gateway status read", async () => {
+    const scope = new AsyncWorkScope();
+    const reason = new Error("channels list interrupted");
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
+    ]);
+    mocks.resolveChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: false,
+      tokenSource: "none",
+      enabled: true,
+    });
+    // The gateway read starts and is cancelled while pending; the settled failure
+    // must surface as the cancellation, not as a late command-local fallback list.
+    mocks.callGateway.mockImplementation(() => {
+      scope.beginClose(reason);
+      return Promise.reject(new Error("gateway unavailable"));
+    });
+
+    await expect(scope.run(() => channelsListCommand({ all: true }, runtime))).rejects.toBe(reason);
+    expect(runtime.log).not.toHaveBeenCalled();
+    await scope.drain();
   });
 });
