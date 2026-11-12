@@ -74,16 +74,7 @@ function progressLineText(
     return markdownProgressText(text);
   }
   const tool = Boolean(line.toolName);
-  const marker = tool
-    ? line.status === "completed" || line.status === "exit 0"
-      ? "✓"
-      : line.status === "running"
-        ? "◌"
-        : isChannelProgressAttentionLine(line)
-          ? "!"
-          : "•"
-    : line.icon;
-  const label = [marker, line.label].filter(Boolean).join(" ");
+  const label = [line.icon, line.label].filter(Boolean).join(" ");
   const detail =
     line.detail && line.detail !== line.label
       ? line.detail
@@ -100,7 +91,10 @@ function progressLineText(
   }
   const heading = tool
     ? joinProgressText(
-        [literalProgressText(marker ?? "•"), literalProgressText(line.label, "bold")],
+        [
+          ...(line.icon ? [literalProgressText(line.icon)] : []),
+          literalProgressText(line.label, "bold"),
+        ],
         " ",
       )
     : literalProgressText(label, "bold");

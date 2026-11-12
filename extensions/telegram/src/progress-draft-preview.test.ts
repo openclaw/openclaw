@@ -41,7 +41,7 @@ describe.each([false, true])("progress draft item labels (rich=%s)", (richMessag
     [
       { name: "read", summary: "from…f", status: "failed" },
       true,
-      ["! <b>Read</b> · from…f <i>failed</i>", "! Read · from…f failed"],
+      ["📖 <b>Read</b> · from…f <i>failed</i>", "📖 Read · from…f failed"],
     ],
   ] as const)("renders item %j", (input, raw, expected) => {
     const line = lineFor(
@@ -58,13 +58,13 @@ describe.each([false, true])("progress draft item labels (rich=%s)", (richMessag
   });
 
   it.each([
-    ["running", "◌", " <i>running</i>", " running"],
-    ["completed", "✓", "", ""],
-    ["failed", "!", " <i>failed</i>", " failed"],
-    [undefined, "•", "", ""],
+    ["running", " <i>running</i>", " running"],
+    ["completed", "", ""],
+    ["failed", " <i>failed</i>", " failed"],
+    [undefined, "", ""],
   ] as const)(
-    "separates operation, context, and lifecycle (%s)",
-    (status, marker, htmlStatus, textStatus) => {
+    "keeps tool icons separate from operation, context, and lifecycle (%s)",
+    (status, htmlStatus, textStatus) => {
       const preview = render(
         {
           lines: [
@@ -83,8 +83,8 @@ describe.each([false, true])("progress draft item labels (rich=%s)", (richMessag
       );
       expect(preview.text).toBe(
         richMessages
-          ? `${marker} Find executables · git, node, pnpm · Test node${textStatus}`
-          : `${marker} <b>Find executables</b> · git, node, pnpm · Test node${htmlStatus}`,
+          ? `🖥️ Find executables · git, node, pnpm · Test node${textStatus}`
+          : `🖥️ <b>Find executables</b> · git, node, pnpm · Test node${htmlStatus}`,
       );
     },
   );
@@ -104,7 +104,7 @@ describe.each([false, true])("progress draft item labels (rich=%s)", (richMessag
       )!;
       const text = render({ lines: [line] }).text.replace(/<[^>]*>/g, "");
       expect(Array.from(text).length).toBeLessThanOrEqual(40);
-      expect(text).toContain(`${status === "running" ? "◌" : "✓"} Exec · `);
+      expect(text).toContain("🛠️ Exec · ");
       expect(text).toContain("…");
       if (status === "running") {
         expect(text).toMatch(/ running$/);
