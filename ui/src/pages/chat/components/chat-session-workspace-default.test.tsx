@@ -261,7 +261,7 @@ it.each(["changed", "read", "artifacts"] as const)(
       expect(mounted.queryByRole("button", { name: "changed.md" })).not.toBeNull(),
     );
     const expandedPaths = [...state.sessionWorkspaceState!.tree!.expandedPaths];
-    const group = () => mounted.getByRole("button", { name: "Session files", exact: true });
+    const group = () => mounted.getByRole("button", { name: "Session files" });
     group().click();
     flush();
     expect(group().getAttribute("aria-expanded")).toBe("false");
@@ -281,7 +281,6 @@ it.each(["changed", "read", "artifacts"] as const)(
     expect(
       mounted.queryByRole("button", {
         name: filter === "changed" ? "changed.md" : filter === "read" ? "read.md" : "Report",
-        exact: true,
       }),
     ).not.toBeNull();
     expect(state.sessionWorkspaceState!.tree!.expandedPaths).toEqual(expandedPaths);
@@ -317,7 +316,7 @@ it.each([undefined, "desktop"] as const)(
     await state.sessionWorkspaceState!.readResult;
     flush();
     if (presentation === "desktop") {
-      mounted.getByRole("button", { name: "Search files", exact: true }).click();
+      mounted.getByRole("button", { name: "Search files" }).click();
       flush();
     }
     const input = mounted.getByRole("searchbox") as HTMLInputElement;
@@ -332,9 +331,7 @@ it.each([undefined, "desktop"] as const)(
     await state.sessionWorkspaceState!.readResult;
     await waitForSolid(() =>
       expect(document.activeElement).toBe(
-        presentation === undefined
-          ? input
-          : mounted.getByRole("button", { name: "Search files", exact: true }),
+        presentation === undefined ? input : mounted.getByRole("button", { name: "Search files" }),
       ),
     );
     expect(state.sessionWorkspaceState!.browserSearch).toBe("");
