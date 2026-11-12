@@ -5,9 +5,11 @@ import { DatabaseSync } from "node:sqlite";
 import { it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { doctorConfigRuntimeEntrypoints } from "../commands/doctor-config-runtime.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { storageProcessTestEntrypoints } from "../infra/storage-process-runtime.test-support.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   cliMessageExitEntrypoints,
   gatewayDirectStopEntrypoints,
@@ -178,15 +180,27 @@ it.for([
     if (terminated && process.platform === "win32") {
       return;
     }
+    const detailedLeak = leak && exitCode === 7 && !oneShot;
     const script = `
+      import { spawn } from "node:child_process";
       import { createServer } from "node:net";
+      import { connect, createServer as createTlsServer } from "node:tls";
       import { setTimeout as delay } from "node:timers/promises";
       import { requestOneShotSettledExitWatchdog, requestSettledExitWatchdog, runCliWithExitFinalization } from ${JSON.stringify(resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit).href)};
       process.on("SIGTERM", () => {});
       if (${leak}) {
-        const server = createServer().listen(0, "127.0.0.1");
+        const server = (${detailedLeak} ? createTlsServer({ key: ${JSON.stringify(TEST_TLS_KEY_PEM)}, cert: ${JSON.stringify(TEST_TLS_CERT_PEM)} }, socket => socket.resume()) : createServer()).listen(0, "127.0.0.1");
+        let tls, child;
+        if (${detailedLeak}) {
+          await new Promise(resolve => server.once("listening", resolve));
+          tls = connect({ host: "127.0.0.1", port: server.address().port, servername: "exit-probe.test", rejectUnauthorized: false });
+          await new Promise(resolve => tls.once("secureConnect", resolve));
+          child = spawn(process.execPath, ["-e", "process.stdin.resume()", "private-child-argument"], {
+            argv0: "exit-child\\n" + "x".repeat(300), stdio: ["pipe", "ignore", "ignore"],
+          });
+        }
         // The leak outlives the watchdog; only an unterminated child closes it later.
-        setTimeout(() => server.close(), 1_500).unref();
+        setTimeout(() => { tls?.destroy(); child?.stdin.end(); server.close(); }, 1_500).unref();
       }
       await runCliWithExitFinalization({
         run: async () => {
@@ -201,12 +215,16 @@ it.for([
         onError: (error) => { throw error; },
       });
     `;
-    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
-      encoding: "utf8",
-      env: { ...process.env, VITEST: undefined },
-      killSignal: "SIGKILL",
-      timeout: 5_000,
-    });
+    const result = spawnSync(
+      detailedLeak ? resolveTestNodeExecPath() : process.execPath,
+      ["--input-type=module", "--eval", script],
+      {
+        encoding: "utf8",
+        env: { ...process.env, VITEST: undefined },
+        killSignal: "SIGKILL",
+        timeout: 5_000,
+      },
+    );
     const diagnostics = JSON.stringify(result);
     expect(result.error, diagnostics).toBeUndefined();
     expect(result.stdout, diagnostics).toContain("finalized");
@@ -219,6 +237,16 @@ it.for([
       );
       expect(result.stderr, diagnostics).toContain("; active handles:");
       expect(result.stderr.includes("; terminating"), diagnostics).toBe(terminated);
+      if (detailedLeak) {
+        const line = result.stderr.split("\n").find((entry) => entry.includes("still alive"))!;
+        expect(line).toContain("; handle details: ");
+        const details = JSON.parse(line.split("; handle details: ")[1] ?? "");
+        expect(details).toContain("stdout");
+        expect(details).toContain("stderr");
+        expect(details).toContainEqual({ tls: "exit-probe.test", remote: "127.0.0.1" });
+        expect(details).toContainEqual({ argv0: ("exit-child\n" + "x".repeat(300)).slice(0, 255) });
+        expect(line).not.toContain("private-child-argument");
+      }
     } else {
       expect(result.stderr, diagnostics).not.toContain("still alive");
     }

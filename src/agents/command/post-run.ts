@@ -267,8 +267,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
-      admittedSource: params.admittedDeliverySource,
-      compactionTransitions: compactionFact?.admissionTransitions,
+      // The runner fact already names the committed writer and accepted successor.
+      admittedSource: compactionFact?.target ?? params.admittedDeliverySource,
       assertCurrent: () => {
         assertSourceCurrent?.();
         operatorAuthority?.assertCurrent();
