@@ -214,6 +214,49 @@ export function openclawIdTunnelRolePolicy(
   return principal.role === "operator" ? OPERATOR_POLICY : VIEWER_POLICY;
 }
 
+/**
+ * The named-role policy of a captured operator subject. OpenClaw ID members and nodes are
+ * capped by their membership. An owner device is the Gateway owner, so no named role applies,
+ * even when it is attributed to the personal profile its account is linked to (OCF-510): the
+ * profile decides who it is, its certificate what it may do. Others follow their profile's role.
+ */
+export function openclawIdSubjectRolePolicy(
+  principal: OpenClawIdTunnelPrincipal | undefined,
+  resolveProfileRole: () => GatewayOperatorRoleDefinition | undefined,
+): GatewayOperatorRoleDefinition | undefined {
+  if (principal?.kind === "owner") {
+    return undefined;
+  }
+  return openclawIdTunnelRolePolicy(principal) ?? resolveProfileRole();
+}
+
+/**
+ * The OpenClaw ID owner principal of a real tunnel socket, while its owner authority is current.
+ * Synthetic and host-bound ingress clients never qualify: they carry no certificate of their own.
+ */
+export function currentOwnerDevicePrincipal(
+  client:
+    | {
+        connId?: string;
+        internal?: {
+          openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+          syntheticClient?: boolean;
+          remoteIngressPrincipal?: unknown;
+        };
+      }
+    | null
+    | undefined,
+): OpenClawIdTunnelPrincipal | undefined {
+  const principal = client?.internal?.openclawIdPrincipal;
+  return principal?.kind === "owner" &&
+    client?.connId &&
+    !client.internal?.syntheticClient &&
+    !client.internal?.remoteIngressPrincipal &&
+    isOpenClawIdTunnelPrincipalCurrent(principal)
+    ? principal
+    : undefined;
+}
+
 /** Wait only for local authority hydration; recovery does not count as a tunnel admission. */
 export async function prepareOpenClawIdTunnelPrincipal(
   principal: OpenClawIdTunnelPrincipal,

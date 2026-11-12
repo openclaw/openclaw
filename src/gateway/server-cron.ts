@@ -28,7 +28,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { emitLegacyHeartbeatCronOutcome } from "../infra/heartbeat-events.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
-import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
+import { getChildLogger, getFileLogLevel, toPinoLikeLogger } from "../logging.js";
 import type {
   PluginHookCronChangedEvent,
   PluginHookGatewayCronService,
@@ -104,7 +104,7 @@ export function buildGatewayCronService(params: {
   resolvePluginRegistry?: () => PluginRegistry | undefined;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const cronServiceLogger = toPinoLikeLogger(cronLogger, getResolvedLoggerSettings().level);
+  const cronServiceLogger = toPinoLikeLogger(cronLogger, getFileLogLevel());
   const scheduledGatewayContextResolver = fenceScheduledGatewayContextResolver(
     params.resolveGatewayContext,
   );
@@ -542,7 +542,7 @@ export function buildGatewayCronService(params: {
     ...createGatewayCronFailureRepair(params.cfg, scheduledGatewayContextResolver),
     log: toPinoLikeLogger(
       getChildLogger({ module: "cron", storeKey: storePath }),
-      getResolvedLoggerSettings().level,
+      getFileLogLevel(),
     ),
     onDefinitionChange: publishCronInventoryChange,
     onEvent: (evt, eventContext) => {
@@ -841,7 +841,7 @@ export function buildGatewayCronService(params: {
   let startPromise: Promise<void> | undefined;
   let schedulingPaused = false;
   let schedulingResume: Deferred | undefined;
-  const stopCronLifecycle = (preserveExitWatchers = false) => {
+  const stopCronLifecycle = (handover = false) => {
     stopped = true;
     heartbeatSummary.clear();
     started = false;
@@ -851,13 +851,14 @@ export function buildGatewayCronService(params: {
     schedulingResume = undefined;
     settleExitWatcherHandoff(false);
     try {
-      stopCron();
-      if (preserveExitWatchers) {
+      if (handover) {
+        cron.handOver();
         // A committed replacement owns these children; fence this scheduler
         // without terminating the adopted manager.
         exitWatchersStopped = true;
         exitWatcherMutationRevision += 1;
       } else {
+        stopCron();
         stopExitWatchers();
       }
       void stopStreamWatchers().catch((err: unknown) => {
@@ -872,11 +873,9 @@ export function buildGatewayCronService(params: {
       unregisterSessionAutomationSource(automationSource);
     }
   };
-  cron.stop = () => {
+  cron.stop = () => stopCronLifecycle();
+  cron.stopAndDrain = async () => {
     stopCronLifecycle();
-  };
-  const stopAndDrainCron = async (preserveExitWatchers = false) => {
-    stopCronLifecycle(preserveExitWatchers);
     await drainGatewayCron({
       settlements: [
         cron.waitForIdle(),
@@ -887,7 +886,6 @@ export function buildGatewayCronService(params: {
       logger: cronLogger,
     });
   };
-  cron.stopAndDrain = () => stopAndDrainCron();
   const pauseScheduling = cron.pauseScheduling.bind(cron);
   const resumeScheduling = cron.resumeScheduling.bind(cron);
   cron.pauseScheduling = () => {
@@ -1001,8 +999,10 @@ export function buildGatewayCronService(params: {
         exitWatchers = watchers;
         return watchers.updateHandlers(exitWatcherHandlers);
       },
+      // A reload lets runs still executing here finish instead of aborting them.
       stopOwner: async () => {
-        await stopAndDrainCron(true);
+        stopCronLifecycle(true);
+        await Promise.all([startPromise, stopStreamWatchers()]);
       },
     }),
     reconcileExitWatchers,

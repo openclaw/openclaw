@@ -49,6 +49,7 @@ import {
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
 import { createOAuthRefreshAuthority } from "./model-auth-availability.oauth-refresh.js";
+import { projectOpenAIModelAuth } from "./model-auth-availability.openai.js";
 import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
 import type {
   ModelAuthAvailability,
@@ -1178,82 +1179,19 @@ export function createModelAuthAvailabilityResolver(
         evidence: "synthetic",
       };
     }
-    if (routeAuthDecision.kind !== "selected") {
-      const rejectedSource =
-        routeAuthDecision.kind === "rejected" ? routeAuthDecision.source : undefined;
-      const projectRejectedSource =
-        routeAuthDecision.kind === "rejected" &&
-        rejectedSource &&
-        (routeAuthDecision.reason === "all-cooldown" || rejectedSource.readiness === "unavailable")
-          ? rejectedSource
-          : undefined;
-      const rejectedRequirement = resolveProviderModelRouteAuthRequirement(
-        rejectedSource?.mode,
-        rejectedSource?.authRequirement,
-      );
-      const rejectedRoute =
-        routeAuthDecision.kind === "rejected" ? routeAuthDecision.route : undefined;
-      const rejectedSourceRoute = rejectedRequirement
-        ? routeResolution.routes.find(
-            (candidate) => candidate.authRequirement === rejectedRequirement,
-          )
-        : undefined;
-      const selectedRoute =
-        rejectedRoute ??
-        rejectedSourceRoute ??
-        (routeResolution.routes.length === 1 ? routeResolution.routes[0] : undefined);
-      return {
-        ...(routeAuthDecision.kind === "rejected"
-          ? rejectedSourceEvaluation(routeAuthDecision.reason, sourcePlan, {
-              ...ref,
-              authRequirement:
-                rejectedRoute?.authRequirement ??
-                (routeResolution.routes.length === 1 ? selectedRoute?.authRequirement : undefined),
-            })
-          : { availability: false }),
-        ...(sourcePlan.kind === "automatic" &&
-        sourcePlan.profiles.kind === "empty" &&
-        !sourcePlan.profiles.explicitOrder &&
-        !policy.hasDirectFallback
-          ? { unavailableReason: policy.evaluation.unavailableReason }
-          : {}),
-        routeResolution,
-        ...(routeAuthDecision.kind === "rejected" && routeAuthDecision.authModeIncompatible
-          ? { availabilityAuthoritative: true as const }
-          : {}),
-        ...(projectRejectedSource
-          ? {
-              selectedProfileId: projectRejectedSource.profileId,
-              selectedAuthMode: projectRejectedSource.mode,
-              evidence: "profile" as const,
-            }
-          : {}),
-        ...(selectedRoute ? { selectedRoute } : {}),
-      };
-    }
-    const selectedRoute = routeAuthDecision.selection.route;
-    const evaluation = sourceEvaluation(
-      routeAuthDecision.selection,
-      provider,
-      { ...ref, ...selectedRoute },
-      policy.evaluation,
-    );
-    const syntheticSubscriptionRoute = routeResolution.routes.find(
-      (route) => route.authRequirement === "subscription",
-    );
-    if (syntheticCodexOwnsAuth && evaluation.availability !== true && syntheticSubscriptionRoute) {
-      return {
-        availability: undefined,
-        routeResolution,
-        evidence: "synthetic",
-      };
-    }
-    return {
-      ...evaluation,
-      availability: evaluation.availability ?? (evaluation.evidence ? undefined : false),
+    return projectOpenAIModelAuth({
+      routeAuthDecision,
       routeResolution,
-      selectedRoute,
-    };
+      sourcePlan,
+      ref,
+      directUnavailableReason: policy.evaluation.unavailableReason,
+      hasDirectFallback: policy.hasDirectFallback,
+      syntheticCodexOwnsAuth,
+      evaluateSource: (selection, target) =>
+        sourceEvaluation(selection, provider, target, policy.evaluation),
+      evaluateRejectedSource: (reason, target) =>
+        rejectedSourceEvaluation(reason, sourcePlan, target),
+    });
   };
   const withSelectedCredential = (
     provider: string,

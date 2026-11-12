@@ -29,34 +29,34 @@ describe("resolveConfiguredLogFilePath", () => {
     ["Default", "openclaw"],
     ["dev", "openclaw-dev"],
     ["QA_Profile", "openclaw--1q-1a-0-1profile"],
-  ])("uses the %s profile filename", (profile, prefix) => {
-    expect(path.basename(resolveForProfile(profile))).toBe(`${prefix}-2026-07-22.log`);
+  ])("uses the %s profile filename", async (profile, prefix) => {
+    expect(path.basename(await resolveForProfile(profile))).toBe(`${prefix}-2026-07-22.log`);
   });
 
   it.each([
     ["qa-profile", "openclaw-qa--profile-2026-07-22.log"],
     ["-1q-1a-0-1profile", undefined],
-  ])("keeps QA_Profile distinct from %s", (profile, expected) => {
-    const other = resolveForProfile(profile);
-    expect(resolveForProfile("QA_Profile")).not.toBe(other);
+  ])("keeps QA_Profile distinct from %s", async (profile, expected) => {
+    const other = await resolveForProfile(profile);
+    expect(await resolveForProfile("QA_Profile")).not.toBe(other);
     if (expected) {
       expect(path.basename(other)).toBe(expected);
     }
   });
 
-  it("bounds direct environment profiles that exceed the CLI length contract", () => {
-    const first = resolveForProfile("A".repeat(80));
-    const second = resolveForProfile("B".repeat(80));
+  it("bounds direct environment profiles that exceed the CLI length contract", async () => {
+    const first = await resolveForProfile("A".repeat(80));
+    const second = await resolveForProfile("B".repeat(80));
 
     expect(path.basename(first)).toMatch(/^openclaw--3[a-f0-9]{64}-2026-07-22\.log$/u);
     expect(path.basename(first).length).toBeLessThanOrEqual(255);
     expect(first).not.toBe(second);
   });
 
-  it("preserves an explicit logging.file override", () => {
+  it("preserves an explicit logging.file override", async () => {
     vi.stubEnv("OPENCLAW_PROFILE", "dev");
     expect(
-      resolveConfiguredLogFilePath({ logging: { file: "/var/log/openclaw/custom.log" } }),
+      await resolveConfiguredLogFilePath({ logging: { file: "/var/log/openclaw/custom.log" } }),
     ).toBe("/var/log/openclaw/custom.log");
   });
 });

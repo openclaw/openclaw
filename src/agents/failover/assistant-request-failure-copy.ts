@@ -12,6 +12,7 @@ import {
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
@@ -77,6 +78,7 @@ const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> =
     "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
 
+export const API_KEY_EXPIRED_ERROR_CODE = "api_key_expired";
 const API_KEY_EXPIRED_USER_TEXT =
   "This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
 
@@ -119,7 +121,7 @@ export function renderAssistantRequestFailureCopy(
   if (facts.storageFailure) {
     return `⚠️ ${STORAGE_FAILURE_COPY[facts.storageFailure]} ${ERROR_DETAILS_HINT}`;
   }
-  if (facts.code === "api_key_expired") {
+  if (facts.code === API_KEY_EXPIRED_ERROR_CODE) {
     return `⚠️ ${API_KEY_EXPIRED_USER_TEXT}`;
   }
   if (facts.code === "incomplete_tool_call") {
@@ -307,6 +309,7 @@ export function renderRecordedAssistantFailureCopy(
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
   // Terminal lifecycle errors can already contain our safe copy without the original failure facts.
   for (const copy of [
+    MODEL_REQUEST_POLICY_DENIED_TEXT,
     API_KEY_EXPIRED_USER_TEXT,
     ...Object.values(ASSISTANT_REQUEST_FAILURE_COPY),
   ]) {

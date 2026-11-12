@@ -1,2 +1,0 @@
-20
-# Serialized Azure SDK requests must honor the existing cache-key opt-out on both clients.

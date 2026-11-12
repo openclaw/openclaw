@@ -273,7 +273,7 @@ newer Doctor reports that limitation instead of treating current bytes as the
 pre-update state. If capture discovery cannot verify an older driver's history,
 Doctor warns and continues repairs under its existing maintenance and update
 ownership. Required migration backups still apply.
-Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+Take a [verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 before an upgrade when you need a complete recovery copy.
 
 #### Inspect migration preservation
@@ -467,9 +467,11 @@ checkout before settling that recovery. A changed link or occupied path keeps
 recovery intact; this path does not reclaim cancelled update custody through
 the link.
 
-For private retained package trees, recovery ignores widened group/other permission
-bits while verifying the package, then restores owner-only access and reports one
-warning. This includes POSIX ACL access masks introduced by recursive `setfacl`.
+For retained package contents, recovery ignores group/other permission drift
+while verifying the package. It clears group/other write access, including
+POSIX ACL write masks, but preserves read/execute access so a non-root service
+can still run a root-owned global npm installation after rollback. Private
+activation anchors, controls, helpers, and journals remain owner-only.
 File contents, ownership, identity, owner permissions, and symlink targets must
 still match. If the filesystem prevents tightening permissions, recovery warns
 and continues with the verified package. Older fingerprints that included public
@@ -1106,9 +1108,23 @@ retirement after it records success. A failed update that never reached repair o
 activation attempts the same retirement after its failure is recorded, including
 its own capture.
 
-Eligibility and identity checks are unchanged: the just-finished update's capture
+External supervisors using `update migrate` and `update finish` attempt the same
+cleanup when they finish an accepted update, after retiring their rollback journal.
+The recorded migration start time keeps that update's own migration originals
+protected until a later accepted update supersedes them. This includes verified
+originals produced by standalone Doctor or startup migration. `update finish`
+returns the cleanup summary in `diagnostics` and any cleanup warning without
+changing the accepted update's outcome. Receipts without a migration start time
+cannot establish this ordering and do not trigger automatic cleanup.
+
+Once the update's Gateway health verification is recorded (service running, version
+match, readiness, settled channels, and no plugin errors), that update retires its
+own original-state capture and the Doctor migration originals it produced. Without that
+verification, for example after `--no-restart`, the just-finished update's capture
 stays until a **later successful update** supersedes it, unless that update failed
-before repair or activation. Unfinished runs, pending
+before repair or activation. To keep a downgrade path, create a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup) before
+updating. Identity checks are unchanged. Unfinished runs, pending
 recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
 and blocked artifacts remain. Standalone Doctor captures keep their existing
 newest-three/30-day policy, always retaining the newest sealed capture. Historical
@@ -1193,7 +1209,7 @@ reports `Stop the Gateway first (openclaw gateway stop)` before any removal.
 Cleanup permanently removes the selected rollback originals, including branches
 and metadata intentionally removed by a verified repair. Doctor restore cannot
 recreate them afterward. Preserve an independent backup containing them if you
-need that rollback path beyond a later successful update. Current SQLite history
+need that rollback path beyond a verified or later successful update. Current SQLite history
 stays in place.
 </Warning>
 
@@ -1269,6 +1285,9 @@ summary adds an `Update captures:` line with their total, candidate, and protect
 bytes. Cleanup attributes update captures through update history and standalone Doctor
 captures through their sealed manifests; it never reads the captured payload:
 
+- `candidate` / `verified-update-capture`: the capture of a successful update
+  whose Gateway health verification is recorded. That update retires it
+  automatically when it finishes.
 - `candidate` / `superseded-update-capture`: a sealed capture from a finished
   update, when a later update succeeded.
 - `candidate` / `unsealed-update-capture`: a capture that never sealed (the
@@ -1276,7 +1295,9 @@ captures through their sealed manifests; it never reads the captured payload:
   later update succeeded with recorded Gateway readiness verification. The
   incomplete copy may still contain useful pre-failure bytes until then.
 - `protected` / `awaiting-later-completed-update`: the capture of the latest
-  successful update, or of any update that finished after it.
+  successful update without recorded Gateway health verification, or of any
+  update that finished after it. Migration originals use the same reason until a
+  later update starts or a verified update finishes after their migration.
 - `protected` / `awaiting-later-verified-update`: an unsealed capture without
   a later successful update's recorded Gateway readiness verification.
 - `protected` / `unfinished-update-run` or `pending-update-recovery`: the update is
@@ -1343,6 +1364,6 @@ same parent-directory durability guarantee.
 Doctor restore reports intentionally disposed originals and pending cleanup
 explicitly. Neither update nor cleanup creates an automatic full-state backup;
 these recovery originals are **not a full pre-upgrade backup**. See
-[Before updating: create a verified backup](/install/updating#before-updating-create-a-verified-backup)
+[Before updating: create a verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup)
 for backup coverage and [Doctor recovery](/cli/doctor#session-sqlite-migration)
 for restoring retained originals.

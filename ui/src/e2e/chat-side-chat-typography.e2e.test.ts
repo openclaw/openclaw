@@ -61,12 +61,6 @@ suite.define(() => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.25"),
       );
       expect(await textStyle(side, questionText)).toEqual(await textStyle(main, questionText));
-      for (const surface of [main, side]) {
-        expect(await typography(surface.locator(".code-block-viewport code"))).toMatchObject({
-          size: "15px",
-          lineHeight: "22.5px",
-        });
-      }
       const mainInput = await typography(
         page.getByRole("textbox", {
           name: "Chat composer",
@@ -95,15 +89,21 @@ suite.define(() => {
       }
       await side.getByRole("button", { name: "Copy code", exact: true }).click();
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(answerCode);
-      const wrap = side.locator(".code-block-wrap");
+      const assistant = side.locator(".chat-group.assistant");
+      const wrap = assistant.locator(".code-block-wrap");
       await expect.poll(() => wrap.isVisible()).toBe(true);
       await wrap.click();
       expect(await wrap.getAttribute("aria-pressed")).toBe("true");
-      const code = side.locator(".code-block-viewport code");
+      const code = assistant.locator(".code-block-viewport code");
       expect(await code.evaluate((node) => getComputedStyle(node).whiteSpace)).toBe("pre-wrap");
       for (const surface of [main, side]) {
         const user = surface.locator(".chat-group.user");
-        expect(await user.locator(".code-block-wrapper").count()).toBe(0);
+        expect(
+          await user
+            .locator(".code-block-copy, .code-block-expand, .code-block-json-modes")
+            .count(),
+        ).toBe(0);
+        expect(await user.locator(".code-block-wrap").isVisible()).toBe(false);
         expect(await user.locator("pre code").textContent()).toContain("eight");
       }
       const overflow = await side

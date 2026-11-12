@@ -330,8 +330,13 @@ watcher keeps its usual `once` behavior; renaming it does not reset its conditio
 
 `fire: false` persists evaluation state and counters, then reschedules without creating run history. These quiet evaluations count as completed occurrences during restart catch-up. If a fired payload run fails, the returned `state` is **not** persisted — the next evaluation sees the previous state and can fire again, so write scripts as read-only checks and keep actions in the payload. Trigger schedules have a built-in minimum interval of 30 seconds, preserved through maintenance and Gateway restarts. Each evaluation has a 30-second wall-clock budget and up to 5 tool calls.
 
-If condition-evaluation capacity is busy, the unevaluated occurrence stays due
-through the scheduler's existing admission deferral rather than counting as a quiet check.
+Up to three conditions evaluate at once. Further checks stay queued, earliest due
+time first, and start as soon as a running check finishes or its condition fires.
+A queued check is not deferred or retried later, holds no run slot, spends none of
+its time budget, and keeps its occurrence across a Gateway restart.
+
+A check and the payload of a fired condition use one of the scheduler's eight run
+slots. When eight runs are active, the next check waits for one of them to finish.
 
 Cold runtime preparation can continue after an evaluation times out, so a later
 tick can reuse it. Preparation is limited to two minutes, or the script payload's

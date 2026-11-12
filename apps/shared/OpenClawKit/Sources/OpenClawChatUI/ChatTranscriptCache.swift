@@ -83,9 +83,9 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     private var sendOwnership: OpenClawChatSendOwnership?
     private var pendingEnqueues = 0
-    private let databases: OpenClawClientDatabases
+    let databases: OpenClawClientDatabases
     public nonisolated let gatewayID: String
-    private var isRetired = false
+    private(set) var isRetired = false
     private var hasRecoveredInterruptedSends = false
     private nonisolated var outboxChangeHub: OutboxChangeHub {
         self.databases.outboxChangeHub
@@ -470,6 +470,15 @@ extension OpenClawChatSQLiteTranscriptCache {
     }
 
     public func enqueueCommand(_ command: OpenClawChatOutboxCommand) async -> Bool {
+        await self.enqueueCommand(command, consumingComposerDraft: nil)
+    }
+
+    /// The consumed draft clears in the outbox insert's transaction, so a crash
+    /// cannot leave both a queued message and the draft that produced it.
+    func enqueueCommand(
+        _ command: OpenClawChatOutboxCommand,
+        consumingComposerDraft consumption: OpenClawChatComposerDraftConsumption?) async -> Bool
+    {
         let scope = OpenClawChatSendOwnership.Scope(
             sessionKey: command.deliverySessionKey, agentID: command.agentID, routingContract: command.routingContract)
         let ownership = self.sendOwnership
@@ -535,6 +544,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                     ])
                 try OpenClawClientDatabases.insertOutboxAttachments(
                     command.attachments, in: db, gatewayID: gatewayID, commandID: command.id)
+                if let consumption {
+                    try Self.consumeComposerDraft(consumption, in: db, gatewayID: gatewayID)
+                }
                 return true
             }
         } catch {

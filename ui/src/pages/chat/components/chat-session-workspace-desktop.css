@@ -123,7 +123,7 @@
   width: 100%;
   text-align: start;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   border-radius: var(--radius-sm);
 }
 
@@ -249,14 +249,14 @@
   overflow: hidden;
   white-space: nowrap;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   padding-block-start: 2px;
 }
 
 .workspace-desktop__notice {
   color: var(--muted);
   padding: 8px 12px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .workspace-breadcrumb {
@@ -323,4 +323,74 @@
   .workspace-desktop__row {
     --workspace-tree-step: 10px;
   }
+}
+
+.workspace-desktop__item--actions {
+  display: flex;
+  align-items: center;
+}
+
+.workspace-desktop__item--actions > .workspace-desktop__row {
+  flex: 1;
+  min-width: 0;
+  width: 0;
+}
+
+.workspace-desktop__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.workspace-desktop__item--actions:hover .workspace-desktop__actions,
+.workspace-desktop__item--actions:focus-within .workspace-desktop__actions {
+  opacity: 1;
+}
+
+.workspace-desktop__action,
+.workspace-desktop__actions :where(.chat-copy-btn) {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.workspace-desktop__action:hover,
+.workspace-desktop__action:focus-visible,
+.workspace-desktop__actions :where(.chat-copy-btn:is(:hover, :focus-visible)) {
+  border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--text);
+}
+
+.workspace-desktop__action svg,
+.workspace-desktop__actions :where(.chat-copy-btn svg) {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.workspace-desktop--default .workspace-desktop__heading,
+.workspace-desktop--default .workspace-desktop__location,
+.workspace-desktop--default .workspace-desktop__notice {
+  font-size: var(--control-ui-text-xs);
+}
+
+.workspace-desktop--default .workspace-desktop__notice {
+  overflow-wrap: anywhere;
+}
+
+.workspace-desktop__path {
+  flex-shrink: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }

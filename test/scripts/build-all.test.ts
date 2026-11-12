@@ -226,23 +226,17 @@ describe("resolveBuildAllStep", () => {
     );
   });
 
-  it.each([
-    { heapMb: "4352", concurrency: "1" },
-    { heapMb: "12288", concurrency: "2" },
-  ])(
-    "passes encoded import URLs literally to managed Node on Windows (heap $heapMb)",
-    ({ heapMb, concurrency }) => {
-      const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
-      expectWindowsStep(
-        {
-          ...getBuildAllStep(STEP.compile),
-          args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
-        },
-        { env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb } },
-        ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
-      );
-    },
-  );
+  it("passes encoded import URLs literally to managed Node on Windows", () => {
+    const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
+    expectWindowsStep(
+      {
+        ...getBuildAllStep(STEP.compile),
+        args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
+      },
+      { env: {} },
+      ["--import", importUrl, "scripts/tsdown-build.mts"],
+    );
+  });
 
   it.each([false, true])(
     "runs plugin builds through managed Node on Windows (defer isolated: %s)",
@@ -758,7 +752,6 @@ describe("resolveBuildAllSteps", () => {
       expect(compilers).toHaveLength(runtimeOnly ? 1 : 3);
       const runtimeCompiler = compilers.at(-1)!;
       expect(runtimeCompiler.args).not.toContain("--config");
-      expect(runtimeCompiler.args).toContain("--concurrency");
       for (const compiler of compilers) {
         expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(
           compiler === runtimeCompiler ? "1" : skipDts,

@@ -109,6 +109,14 @@ const preparation = new AsyncLocalStorage<{
   workers: AsyncDisposableStack;
 }>();
 
+/**
+ * Background work that a preparation started (such as model discovery) writes later as an
+ * ordinary caller: refused while admission is pending, admitted once the database is.
+ */
+export function runOutsideAgentDatabasePreparation<T>(run: () => T): T {
+  return preparation.exit(run);
+}
+
 /** Startup owns isolated native workers until preparation settles, including failed admission. */
 export function retainAgentDatabaseStartupWorker(
   agentId: string,

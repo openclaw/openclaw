@@ -1,2 +1,0 @@
-# Real production bundle keeps PostgreSQL behind a dynamic edge; private chunks remain packaged.
-93

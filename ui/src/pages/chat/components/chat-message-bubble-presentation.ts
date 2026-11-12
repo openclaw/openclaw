@@ -25,12 +25,8 @@ import {
   prepareMarkdownMediaSource,
   readMarkdownImageSlots,
 } from "./chat-message-media-markdown.ts";
-import {
-  type AttachmentItem,
-  type ImageBlock,
-  type ImageRenderOptions,
-  projectMessageMedia,
-} from "./chat-message-media.ts";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
+import type { AttachmentItem, ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import {
   type AssistantMessageDisclosure,
   resolveMessageMarkdownRender,
@@ -286,7 +282,8 @@ export function messageMarkdownRenderOptions(
   return {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
-    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
+    codeBlockInteraction:
+      role === "assistant" ? "interactive" : role === "user" ? "wrap" : "static",
     fileLinks: true,
     humanMentions: markdown === preparation.displayMarkdown ? preparation.humanMentions : undefined,
     interactiveImages: opts.onOpenImage !== undefined,
@@ -355,6 +352,9 @@ export function prepareGroupedMessage(
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
+  const templatePluginCards = normalizedMessage.content.filter(
+    (item) => item.type === "template_plugin_install",
+  );
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
   const reasoningMarkdown = extractedThinking ? `_Reasoning:_\n\n${extractedThinking}` : null;
@@ -416,6 +416,7 @@ export function prepareGroupedMessage(
     !hasToolCards &&
     !hasMediaContent &&
     clawHubCards.length === 0 &&
+    templatePluginCards.length === 0 &&
     !normalizedMessage.replyTarget;
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
@@ -483,6 +484,7 @@ export function prepareGroupedMessage(
     assistantViewBlocks,
     inlineViewBlocks,
     clawHubCards,
+    templatePluginCards,
     reasoningMarkdown,
     markdown,
     markdownRenderOptions,

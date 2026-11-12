@@ -138,7 +138,11 @@ while you scroll.
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display
 name, so repositories from different organizations are easier to distinguish.
-Selecting a repository also shows its identity in the workspace control.
+The **Local projects** section filters the Gateway’s saved project catalog immediately;
+it does not scan the filesystem. GitHub search results appear separately, without
+repeating repositories already shown as local matches. If no local project matches,
+the picker says so explicitly. Selecting a repository also shows its identity in
+the workspace control.
 Session-only connections receive the same read-safe repository identity for
 projects they can already discover, without repository URLs, credentials, or host
 checkout paths. This label does not grant access to private repository content.
@@ -164,6 +168,14 @@ Imported conversations can remain grouped under their original session source,
 such as Beam. After conversion, they use the normal session controls, including
 rename, pin, and archive. Their child-session disclosure opens the normal nested
 conversation tree; the source group does not require another import.
+
+## Rename a session
+
+On desktop, double-click a session name in the sidebar to edit it in place, or
+click its name in the session header. The name is prefilled and selected. Press
+**Enter** or move focus away to save, or **Escape** to cancel. Read-only sessions
+cannot be renamed. A rejected sidebar rename keeps your text in place for correction.
+The sidebar menu’s **Rename…** action still opens its dialog.
 
 ## Automatic session names
 
@@ -232,6 +244,8 @@ If the New Session page fails during its initial render, the UI attempts one aut
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The handoff waits for the session list and expanded child-session reads to finish or report an error; elapsed reconnect time alone does not replace saved rows. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
 On a warm chat reload, browsers that retain the previous page during navigation can reveal the cached sidebar and conversation together. If that cached page is slow to prepare, the usual loading layout appears instead. Missing cached content, sign-in, and route errors release the loading view immediately.
+
+When opened through OpenClaw ID, the Control UI waits for the Loader's live connection instead of restoring a previous sign-in's startup snapshot.
 
 After the connection and saved conversation are ready, chat fetches updates while the rest of the page loads. A slow or unavailable cache keeps the normal loading path.
 
@@ -319,7 +333,7 @@ The chat header’s **Details** panel groups session information into collapsibl
 
 Session details share concurrent reads across the sidebar, chat, and resource panels. Returning to a session reuses its details on the same connection, including updates received through complete session snapshots. Incomplete updates, explicit refreshes, and reconnects fetch current details; failed reads remain retryable.
 
-Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
+Sidebar pull-request indicators reuse the last known snapshot. Subscriptions acknowledge the requested sessions immediately; session preparation and fresh pull-request snapshots arrive through background updates. Recorded pull requests update when their receipts or session access and lineage change, without polling passive rows or rechecking them on metadata-only transcript updates. Opening a session, its progress card, or its Git activity requests current checkout facts; sidebar rows alone do not poll Git. Active panels detect branch and staged changes from Git metadata. Tool completion refreshes working-tree stats, with a five-minute fallback for edits made outside OpenClaw.
 
 Changes summaries share identical concurrent polls and reuse unchanged checkout results when file metadata can establish freshness. Summary reads have a separate worker queue from full patches and PR statistics, with priority inside the shared Git child limit. Running Git commands still finish normally, and background work keeps making progress.
 
@@ -734,9 +748,12 @@ Local onboarding generates a Gateway secret in token mode by default, without a 
 Use the agent selector to open an agent's chat or its settings gear to configure
 that agent. Per-agent settings remain at `/settings/agents/<id>`.
 
-The agent's **Automations** panel shows an empty state only after its jobs read
-succeeds. Failed reads show an error with **Refresh** available; previously loaded
-jobs remain visible while a refresh is pending or fails.
+The agent's **Automations** panel shows loading placeholders for its initial
+scheduler and jobs reads independently, and an empty state only after its jobs
+read succeeds. Failed summary reads show **Failed** instead of an unexplained
+`n/a`, with the cause available on the value. Failed jobs reads show an error
+with **Refresh** available; previously loaded jobs remain visible while a
+refresh is pending or fails.
 
 Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
 This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**

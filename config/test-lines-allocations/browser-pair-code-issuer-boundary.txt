@@ -1,2 +1,0 @@
-# Public SDK approval must not select token issuers; one real-worker regression preserves existing browser issuer binding coverage.
-13

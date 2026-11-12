@@ -115,7 +115,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   // scroll parent lazily or a stable ref can permanently capture null.
   get scrollElement(): HTMLDivElement | null {
     const parent = this.threadInnerElement?.parentElement;
-    return this.connected && parent instanceof HTMLDivElement && parent.isConnected ? parent : null;
+    const viewport = parent?.classList.contains("chat-thread-content")
+      ? parent.parentElement
+      : parent;
+    return this.connected && viewport instanceof HTMLDivElement && viewport.isConnected
+      ? viewport
+      : null;
   }
   get contentElement(): HTMLDivElement | null {
     return this.threadInnerElement;
@@ -665,12 +670,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       this.presentation.measureRowsWithoutScrollAdjustment();
     }
     const element = this.scrollElement;
-    // Completed end journeys still own pending row measurements. Keep a
-    // dynamic end target while their replay commits the final geometry.
-    if (element && preserveEnd) {
-      this.virtualizer.scrollToEnd({ behavior: "instant" });
-      this.endAnchor.capture(element);
-    } else if (element) {
+    // The end anchor owns later measurements. A completed dynamic destination
+    // would also follow new, unmeasured rows before end preparation admits them.
+    if (element) {
       this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
     }
   }

@@ -119,7 +119,7 @@ suite.define(() => {
       const alpha = { ...job("feedback-alpha", "Alpha synthetic automation"), agentId: "main" };
       const gateway = await installMockGateway(page, {
         // The agent panel gates its automation reads and Run now on the advertised methods.
-        featureMethods: [...defaultControlUiFeatureMethods, "cron.list", "cron.run"],
+        featureMethods: [...defaultControlUiFeatureMethods, "cron.list", "cron.status", "cron.run"],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "cron.list": cronResponses([alpha])["cron.list"],

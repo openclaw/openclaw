@@ -18,6 +18,10 @@ import type {
   UserModelAccountSelection,
 } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
+import {
+  currentOwnerDevicePrincipal,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
@@ -104,11 +108,14 @@ export async function prepareUserModelAccountAction(
     if (roles && !assignment) {
       throw new ModelAccountConnectAuthorityError();
     }
-    const role = resolveOperatorRolePolicyForAssignment(
-      actor,
-      assignment ? assignment.role : actorIdentity.role,
-      context.getRuntimeConfig(),
-      actorIdentity.githubLogin ?? null,
+    // An owner device attributed to its linked profile keeps owner authority (OCF-510).
+    const role = openclawIdSubjectRolePolicy(currentOwnerDevicePrincipal(client), () =>
+      resolveOperatorRolePolicyForAssignment(
+        actor,
+        assignment ? assignment.role : actorIdentity.role,
+        context.getRuntimeConfig(),
+        actorIdentity.githubLogin ?? null,
+      ),
     );
     const grants = [client?.connect.scopes ?? [], ...(role ? [role.scopes] : [])];
     if (

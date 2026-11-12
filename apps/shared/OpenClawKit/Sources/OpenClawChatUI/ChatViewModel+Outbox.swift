@@ -391,6 +391,7 @@ extension OpenClawChatViewModel {
         text: String,
         draftInput: String,
         draftRevision: UInt64,
+        draftComposerKey: String,
         draftAttachments: [OpenClawPendingAttachment] = [],
         queueMode: OpenClawChatQueueMode? = nil,
         session: SessionSnapshot) async -> Bool
@@ -453,7 +454,15 @@ extension OpenClawChatViewModel {
         // Recheck restored or stale drafts before durable admission; an oversized
         // row would otherwise retry the same connection-closing frame after reconnect.
         guard await self.validateAttachmentBudgetForSend(draftAttachments, session: session) else { return false }
-        let accepted = await outbox.enqueueCommand(command)
+        let draftConsumption = await self.composerDraftConsumption(
+            key: draftComposerKey,
+            revision: draftRevision,
+            attachments: draftAttachments)
+        let accepted = if let composerDraftStore {
+            await composerDraftStore.enqueueCommand(command, consumingComposerDraft: draftConsumption)
+        } else {
+            await outbox.enqueueCommand(command)
+        }
         guard accepted else {
             if self.isCurrentSession(session) {
                 self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
@@ -468,6 +477,9 @@ extension OpenClawChatViewModel {
         guard self.isCurrentSession(session) else { return true }
         if self.input == draftInput, self.composerRevision(for: session.key) == draftRevision {
             self.input = ""
+        }
+        if let draftConsumption {
+            self.noteComposerDraftConsumed(draftConsumption)
         }
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }

@@ -8,7 +8,12 @@ type ClaudeModelRef = {
  * `params.claudeCapabilities`. Each listed flag overrides the model-id rules
  * below; rows without the record (or without one flag) keep the id rules.
  */
-type ClaudeListedCapability = "adaptiveThinking" | "disabledThinking" | "xhighEffort" | "maxEffort";
+type ClaudeListedCapability =
+  | "adaptiveThinking"
+  | "disabledThinking"
+  | "xhighEffort"
+  | "maxEffort"
+  | "serverCompaction";
 
 function readListedClaudeCapability(
   ref: ClaudeModelRef,
@@ -167,6 +172,19 @@ const CLAUDE_ASSISTANT_PREFILL = releases(
   release("claude-mythos-5", "claude-mythos-5-1"),
 );
 
+/**
+ * Released generations without native fast mode (`speed: "fast"`), verified live on
+ * 2026-11-10: the API answers "does not support the `speed` parameter". Opus 4.6 accepts
+ * the field but serves standard speed. Later models are offered fast mode; a rejection
+ * falls back to standard speed and is remembered (see readUnsupportedClaudeFastModeModel).
+ */
+const CLAUDE_WITHOUT_FAST_MODE = releases(
+  String.raw`claude-(?:3|haiku-4|sonnet-4|opus-4(?!-8(?!\d)))`,
+  release("claude-sonnet-5", "claude-sonnet-5-5", "claude-haiku-5-5"),
+  release("claude-fable-5", "claude-fable-5-1"),
+  release("claude-mythos-5", "claude-mythos-5-1", "claude-mythos-preview"),
+);
+
 /** Generations that still accept caller-selected temperature, top_p, and top_k. */
 const CLAUDE_SAMPLING_PARAMETERS = releases(
   String.raw`claude-(?:3|haiku-4|sonnet-4|opus-4(?!-[78](?!\d)))`,
@@ -305,18 +323,17 @@ export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
 
 /** Return whether Anthropic documents threshold compaction (`compact_20260112`) for a Claude model. */
 export function supportsClaudeServerCompaction(ref: ClaudeModelRef): boolean {
-  // The documented compaction list currently coincides with these id families;
-  // listed thinking capabilities say nothing about compaction.
-  return isReleasedAdaptiveClaudeGeneration(ref);
+  // /v1/models lists context_management.compact_20260112 per model; unlisted
+  // rows fall back to the released families that document it.
+  return (
+    readListedClaudeCapability(ref, "serverCompaction") ?? isReleasedAdaptiveClaudeGeneration(ref)
+  );
 }
 
 /** Return whether a Claude model supports Anthropic's native fast mode. */
 export function supportsClaudeFastMode(ref: ClaudeModelRef): boolean {
-  const modelId = resolveClaudeModelIdentity(ref);
-  return (
-    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-opus-4-8(?=$|[^a-z0-9])/.test(modelId)
-  );
+  const id = resolveClaudeContractId(ref);
+  return id !== undefined && !CLAUDE_WITHOUT_FAST_MODE.test(id);
 }
 
 /** Return whether a Claude model supports native max effort. */

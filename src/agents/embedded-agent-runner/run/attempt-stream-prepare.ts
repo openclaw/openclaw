@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { MessageInjectionClosedError } from "../../../auto-reply/reply/message-injection-authority.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "../../run-termination.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
+import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -491,7 +493,7 @@ function prepareStream(
     toolAuthorityPreparation,
     assertCurrent: () => {
       if (!composeInjectionGuard(assertCurrent)()) {
-        throw new Error("active session is finalizing");
+        throw new MessageInjectionClosedError();
       }
     },
   });
@@ -506,7 +508,7 @@ function prepareStream(
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
-      throw new Error("active session is finalizing");
+      throw new MessageInjectionClosedError();
     }
     activeQueueAdmissions++;
     try {
@@ -625,18 +627,15 @@ function prepareStream(
       }
       return {
         model: attempt.model,
+        promptCacheKey: attempt.promptCacheKey,
         systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
-          name,
-          description,
-          parameters,
-          ...(async === false ? { async } : {}),
-        })),
+        tools: activeSession.agent.state.tools,
         messages: activeSession.messages,
         projectMessages: input.projectSessionForkMessages,
         sessionVersion: activeSession.sessionManager.getHeader()?.version,
         boundary: input.readSessionForkBoundary?.(),
         blockImages: activeSession.settingsManager.getBlockImages(),
+        preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },
     isAborted: () => input.getRunState().aborted,
