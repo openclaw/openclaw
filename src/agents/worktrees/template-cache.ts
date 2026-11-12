@@ -245,7 +245,8 @@ export async function prepareWorktreeTemplate(params: {
   backend: string;
   reuseOnly?: boolean;
   requireSpace: () => Promise<void>;
-  validate: (
+  /** Immutable generations consume producer validation; mutable templates revalidate on reuse. */
+  validate?: (
     record: WorktreeTemplateRecord,
     options: WorktreeFilesystemOptions,
   ) => Promise<boolean>;
@@ -256,6 +257,7 @@ export async function prepareWorktreeTemplate(params: {
   ) => Promise<boolean>;
   prepare: (record: WorktreeTemplateRecord, options: WorktreeAllocationGuard) => Promise<void>;
 }): Promise<PreparedWorktreeTemplate | undefined> {
+  const { validate } = params;
   const retainCommits = params.backend.startsWith("sandbox-");
   let built = false;
   let retained: PreparedWorktreeTemplate | undefined;
@@ -352,9 +354,10 @@ export async function prepareWorktreeTemplate(params: {
           try {
             valid ||=
               (await worktreePathExists(existing.path)) &&
-              (await timeWorktreePreparationPhase("templateValidate", () =>
-                params.validate(existing, options),
-              ));
+              (!validate ||
+                (await timeWorktreePreparationPhase("templateValidate", () =>
+                  validate(existing, options),
+                )));
           } catch (error) {
             if (hasWorktreeUnknownOutcome(error)) {
               retained = await retainWorktreeTemplate(
