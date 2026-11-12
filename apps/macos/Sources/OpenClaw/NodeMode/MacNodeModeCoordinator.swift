@@ -559,7 +559,8 @@ final class MacNodeModeCoordinator: NSObject {
         let (caps, commands) = self.advertisedSurface(
             provider: provider,
             workerManifest: workerManifest,
-            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled,
+            supportsHostedCanvas: self.usesOperatorEndpoint)
         // If Computer Control was turned off, release any button the
         // computer.act service is still holding rather than waiting for
         // the idle watchdog. Discoverability does not grant execution authority.
@@ -1189,12 +1190,14 @@ extension MacNodeModeCoordinator {
     nonisolated static func resolvedCaps(
         computerControlProvider: ComputerControlProvider = .peekaboo,
         connectionMode: AppState.ConnectionMode,
-        codexThreadCatalogEnabled: Bool = false) -> [String]
+        codexThreadCatalogEnabled: Bool = false,
+        supportsHostedCanvas: Bool = true) -> [String]
     {
-        var caps: [String] = [
-            OpenClawCapability.canvas.rawValue,
-            OpenClawCapability.screen.rawValue,
-        ]
+        var caps: [String] = []
+        if supportsHostedCanvas {
+            caps.append(OpenClawCapability.canvas.rawValue)
+        }
+        caps.append(OpenClawCapability.screen.rawValue)
         caps.append(OpenClawCapability.camera.rawValue)
         // Discoverability lets first use explain missing consent. Runtime gates
         // and the Gateway command allowlist still authorize every operation.
@@ -1212,11 +1215,13 @@ extension MacNodeModeCoordinator {
         caps: [String],
         computerControlProvider: ComputerControlProvider = .peekaboo) -> [String]
     {
-        var commands: [String] = [
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-        ]
+        let capsSet = Set(caps)
+        var commands: [String] = []
+        if capsSet.contains(OpenClawCapability.canvas.rawValue) {
+            commands.append(OpenClawCanvasCommand.present.rawValue)
+            commands.append(OpenClawCanvasCommand.hide.rawValue)
+            commands.append(OpenClawCanvasCommand.navigate.rawValue)
+        }
 
         if computerControlProvider == .peekaboo {
             commands.append(OpenClawScreenCommand.snapshot.rawValue)
@@ -1224,7 +1229,6 @@ extension MacNodeModeCoordinator {
         commands.append(OpenClawScreenCommand.record.rawValue)
         commands.append(OpenClawSystemCommand.notify.rawValue)
 
-        let capsSet = Set(caps)
         if capsSet.contains(OpenClawCapability.camera.rawValue) {
             commands.append(OpenClawCameraCommand.list.rawValue)
             commands.append(OpenClawCameraCommand.snap.rawValue)
@@ -1372,7 +1376,8 @@ extension MacNodeModeCoordinator {
         let surface = self.advertisedSurface(
             provider: provider,
             workerManifest: manifest,
-            codexThreadCatalogEnabled: MacNodeCodexThreadCatalog.shouldAdvertise())
+            codexThreadCatalogEnabled: MacNodeCodexThreadCatalog.shouldAdvertise(),
+            supportsHostedCanvas: false)
         return try OpenClawIDNodeEnrollmentDescription(
             displayName: InstanceIdentity.displayName,
             platform: "macos",
@@ -1383,12 +1388,15 @@ extension MacNodeModeCoordinator {
     private func advertisedSurface(
         provider: ComputerControlProvider,
         workerManifest: MacNodeHostManifest?,
-        codexThreadCatalogEnabled: Bool) -> (caps: [String], commands: [String])
+        codexThreadCatalogEnabled: Bool,
+        supportsHostedCanvas: Bool) -> (caps: [String], commands: [String])
     {
+        // Canvas loads Gateway-hosted documents in WebKit, which has no OpenClaw ID tunnel route.
         let nativeCaps = Self.resolvedCaps(
             computerControlProvider: provider,
             connectionMode: AppStateStore.shared.connectionMode,
-            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled,
+            supportsHostedCanvas: supportsHostedCanvas)
         return (
             Self.mergingUnique(nativeCaps, workerManifest?.caps ?? []),
             Self.mergingUnique(
