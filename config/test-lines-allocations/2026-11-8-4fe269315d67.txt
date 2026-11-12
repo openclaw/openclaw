@@ -1,0 +1,3 @@
+55
+# Source 4fe269315d67b2a06fd944bc2c5f1fff7e865b22; src/gateway/server-shutdown.ts mark only the two sidecar steps joinedByLateSidecarCleanup and leave their final outcome to existing required late join; preserve genuine failed stops/optional leftovers and dependency order.
+# Exact net LF growth of independently justified retained regressions against frozen LOCAL11.8 baseline; no removed assertions or scalar change.
