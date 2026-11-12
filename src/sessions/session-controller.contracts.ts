@@ -7,6 +7,7 @@ import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
+import type { MessageInjectionRuntimeReason } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
@@ -131,7 +132,12 @@ export type ReplyMessageInjectionOutcome =
   | { status: "accepted" }
   /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
   | { status: "failed"; error: Error }
-  | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
+  | {
+      status: "rejected";
+      reason: ReplyMessageInjectionRejectionReason;
+      runtimeReason?: MessageInjectionRuntimeReason;
+      errorMessage?: string;
+    };
 
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque execution owner. */

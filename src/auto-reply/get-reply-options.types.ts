@@ -14,6 +14,7 @@ import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import type { ReplyMessageInjectionOutcome } from "../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { FollowupQueueDisposition } from "./reply/queue-policy.js";
@@ -260,6 +261,8 @@ export type GetReplyOptions = {
     | "accepted"
     | "rejected"
     | "collaborative-steering-disabled";
+  /** Original owner refusal retained through Gateway followup dispatch. */
+  messageInjectionRejection?: Extract<ReplyMessageInjectionOutcome, { status: "rejected" }>;
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;

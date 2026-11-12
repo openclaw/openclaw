@@ -8,6 +8,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import type { MessageInjectionRuntimeReason } from "../auto-reply/reply/message-injection-authority.js";
 import type { OriginatingChannelType } from "../auto-reply/templating.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -310,6 +311,7 @@ export type ReplyBackendHandle = {
 export type ReplyMessageInjectionResolution =
   | {
       reason: ReplyMessageInjectionRejectionReason;
+      runtimeReason?: MessageInjectionRuntimeReason;
       errorMessage?: string;
       backend?: ReplyBackendHandle;
       cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];

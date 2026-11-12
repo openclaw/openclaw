@@ -119,18 +119,40 @@ export class MessageInjectionPolicyMismatchError extends Error {
   }
 }
 
+export type MessageInjectionRuntimeReason =
+  | "transcript_commit_timeout"
+  | "tool_boundary_timeout"
+  | "session_ended"
+  | "session_handoff"
+  | "steering_closed"
+  | "source_cancelled"
+  | "compaction_in_progress"
+  | "compaction_state_unavailable"
+  | "availability_check_failed"
+  | "turn_not_steerable"
+  | "injection_unsupported";
+
 /** The caller remains valid, but this target can no longer receive its input. */
 export class MessageInjectionTargetUnavailableError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly runtimeReason?: MessageInjectionRuntimeReason,
+  ) {
     super(message);
     this.name = "MessageInjectionTargetUnavailableError";
   }
 }
 
+export class MessageInjectionClosedError extends MessageInjectionTargetUnavailableError {
+  constructor() {
+    super("active session is finalizing", "steering_closed");
+  }
+}
+
 /** The delivery owner removed the exact queued input before provider submission. */
 export class MessageInjectionWithdrawnError extends MessageInjectionTargetUnavailableError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, runtimeReason?: MessageInjectionRuntimeReason) {
+    super(message, runtimeReason);
     this.name = "MessageInjectionWithdrawnError";
   }
 }
