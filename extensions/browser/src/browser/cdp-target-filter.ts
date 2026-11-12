@@ -15,9 +15,7 @@ const BROWSER_INTERNAL_TARGET_URL_PREFIXES = [
   "opera://",
 ];
 
-const OPERATOR_SELECTABLE_INTERNAL_PREFIXES = [
-  "chrome://settings",
-];
+const OPERATOR_SELECTABLE_INTERNAL_PREFIXES = ["chrome://settings"];
 
 export function isOperatorSelectableInternalUrl(url: string | null | undefined): boolean {
   const normalized = url?.trim().toLowerCase() ?? "";

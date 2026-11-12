@@ -241,13 +241,7 @@ function normalizeTab(value: unknown): BrowserPanelTab | null {
 }
 
 export async function listBrowserTabs(client: BrowserRequestClient) {
-  const result = asRecord(
-    await browserRequest(client, {
-      method: "GET",
-      path: "/tabs",
-      query: { operatorMode: true },
-    }),
-  );
+  const result = asRecord(await browserRequest(client, { method: "GET", path: "/tabs" }));
   const tabs = Array.isArray(result?.tabs)
     ? result.tabs.flatMap((tab) => normalizeTab(tab) ?? [])
     : [];
@@ -267,20 +261,12 @@ export async function openBrowserTab(
   url: string,
 ): Promise<BrowserPanelTab | null> {
   return normalizeTab(
-    await browserRequest(client, {
-      method: "POST",
-      path: "/tabs/open",
-      body: { url, operatorMode: true },
-    }),
+    await browserRequest(client, { method: "POST", path: "/tabs/open", body: { url } }),
   );
 }
 
 export async function focusBrowserTab(client: BrowserRequestClient, targetId: string) {
-  await browserRequest(client, {
-    method: "POST",
-    path: "/tabs/focus",
-    body: { targetId, operatorMode: true },
-  });
+  await browserRequest(client, { method: "POST", path: "/tabs/focus", body: { targetId } });
 }
 
 export async function closeBrowserTab(client: BrowserRequestClient, targetId: string) {
@@ -322,11 +308,7 @@ export async function navigateBrowser(
   client: BrowserRequestClient,
   params: { url: string; targetId?: string },
 ): Promise<void> {
-  await browserRequest(client, {
-    method: "POST",
-    path: "/navigate",
-    body: { ...params, operatorMode: true },
-  });
+  await browserRequest(client, { method: "POST", path: "/navigate", body: params });
 }
 
 export async function requestBrowserScreencast(

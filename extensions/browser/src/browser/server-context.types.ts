@@ -80,10 +80,8 @@ export type ProfileContext = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
-    opts?: {
+    opts?: BrowserOperationOptions & {
       label?: string;
-      signal?: AbortSignal;
-      timeoutMs?: number;
       requireDurableOwnership?: boolean;
     },
   ) => Promise<BrowserOpenResult>;

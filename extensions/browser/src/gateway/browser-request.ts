@@ -602,8 +602,8 @@ export async function handleBrowserGatewayRequest({
 
   // Invalidation precedes the socket's close event; retain live authority separately.
   const requesterSignal = connectionSignal;
-  const requester =
-    client && requesterSignal
+  const requester = {
+    ...(client && requesterSignal
       ? {
           connId: client.connId,
           signal: requesterSignal,
@@ -612,7 +612,12 @@ export async function handleBrowserGatewayRequest({
             !requesterSignal.aborted &&
             hasCurrentClientAuthority?.() !== false,
         }
-      : undefined;
+      : {
+          signal: requesterSignal ?? requestSignal ?? new AbortController().signal,
+          isCurrent: () => !requesterSignal?.aborted,
+        }),
+    isOperator: true,
+  };
   let resolvedProfile: string | undefined;
   const assertCurrent: NonNullable<BrowserRequest["assertCurrent"]> = async (profile) => {
     assertRequesterCurrent();

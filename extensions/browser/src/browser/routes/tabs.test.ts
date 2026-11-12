@@ -84,6 +84,7 @@ async function request(params: {
   ssrfPolicy?: unknown;
   query?: Record<string, unknown>;
   assertCurrent?: () => Promise<void>;
+  requester?: BrowserRequest["requester"];
 }) {
   const routes = createRouteFixture();
   registerBrowserTabRoutes(routes.app, makeContext(params.profileCtx, params) as never);
@@ -93,6 +94,7 @@ async function request(params: {
     body: params.body ?? {},
     signal: params.signal,
     assertCurrent: params.assertCurrent,
+    requester: params.requester,
   });
 }
 
@@ -559,5 +561,37 @@ describe("browser tab routes", () => {
 
     expect(profileCtx.closeTab).not.toHaveBeenCalled();
     expect(response.statusCode).toBe(500);
+  });
+
+  it("allows operator requests to open chrome://settings tabs", async () => {
+    const profileCtx = makeProfile();
+    const response = await open({
+      body: { url: "chrome://settings/payments" },
+      profileCtx,
+      requester: { signal: new AbortController().signal, isCurrent: () => true, isOperator: true },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(navigation.assertBrowserNavigationAllowed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "chrome://settings/payments",
+        allowOperatorInternalUrls: true,
+      }),
+    );
+    expect(profileCtx.openTab).toHaveBeenCalledWith(
+      "chrome://settings/payments",
+      expect.objectContaining({ operatorMode: true }),
+    );
+  });
+
+  it("passes operatorMode to listTabs when requester is operator", async () => {
+    const profileCtx = makeProfile();
+    const response = await list({
+      profileCtx,
+      requester: { signal: new AbortController().signal, isCurrent: () => true, isOperator: true },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(profileCtx.listTabs).toHaveBeenCalledWith(
+      expect.objectContaining({ operatorMode: true }),
+    );
   });
 });

@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
 import type { CdpDocumentIdentities } from "../cdp-page-session.js";
+import { isBrowserInternalTargetUrl } from "../cdp-target-filter.js";
 import {
   captureScreenshot,
   getDocumentIdentitiesViaCdp,
@@ -21,7 +22,6 @@ import {
 import { collectChromeMcpSnapshotUrls, withChromeMcpLabels } from "../chrome-mcp.snapshot-page.js";
 import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
 import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
-import { isBrowserInternalTargetUrl } from "../cdp-target-filter.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertChromeMcpNavigationAllowed,
