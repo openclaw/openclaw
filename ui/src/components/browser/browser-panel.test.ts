@@ -16,6 +16,7 @@ import {
   flushBrowserResponses as flush,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
+import { browserRequestActions } from "./browser-panel-stream.test-support.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
 
@@ -422,7 +423,12 @@ describe("Browser panel", () => {
           new DOMRect(0, 0, 100, 100),
         );
       }
-      return { panel, request, input, actions: () => request.mock.calls.map(([, p]) => p?.body) };
+      return {
+        panel,
+        request,
+        input,
+        actions: () => request.mock.calls.flatMap(([, p]) => browserRequestActions(p)),
+      };
     }
 
     it.each([
@@ -444,11 +450,11 @@ describe("Browser panel", () => {
       expect(bubbled).not.toHaveBeenCalled();
       expect(request).toHaveBeenCalledExactlyOnceWith("browser.request", {
         method: "POST",
-        path: "/act",
+        path: "/operator/input",
         target: "node",
         node: "browser-node",
         query: { profile: "work" },
-        body: { kind: "insertText", targetId: "form-tab", text },
+        body: { targetId: "form-tab", inputs: [{ kind: "insertText", text }] },
       });
       if (outcome === "failed") {
         await panel.updateComplete;
@@ -542,6 +548,38 @@ describe("Browser panel", () => {
         { kind: "press", key: "Backspace" },
       ]);
     });
+
+    it.each([false, true])(
+      "sends keys typed during an in-flight burst as one burst (navigated: %s)",
+      async (navigated) => {
+        const { panel, request, input } = await mountForm();
+        const first = createDeferred<unknown>();
+        request.mockImplementationOnce(async () => first.promise);
+        for (const value of ["a", "b", "c"]) {
+          key(input, { key: value, cancelable: true });
+        }
+        expect(request).toHaveBeenCalledTimes(1);
+        first.resolve({ ok: true, sent: 1, ...(navigated ? { navigated: true } : {}) });
+        await vi.advanceTimersByTimeAsync(0);
+        await panel.updateComplete;
+        const bursts = request.mock.calls.map(([, envelope]) => envelope?.body?.inputs);
+        if (navigated) {
+          // Keys typed before the user saw the new document never reach it.
+          expect(bursts).toEqual([[{ kind: "press", key: "a" }]]);
+          expect(panel.querySelector('[role="status"]')?.textContent).toContain(
+            "input typed before it loaded was not sent",
+          );
+        } else {
+          expect(bursts).toEqual([
+            [{ kind: "press", key: "a" }],
+            [
+              { kind: "press", key: "b" },
+              { kind: "press", key: "c" },
+            ],
+          ]);
+        }
+      },
+    );
 
     it.each(["failure", "route change", "new click"])(
       "paste waits for click: %s",

@@ -1,14 +1,20 @@
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
-import type { BrowserRequestClient, BrowserInspectedNode } from "./browser-client.ts";
+import type {
+  BrowserInspectedNode,
+  BrowserOperatorInput,
+  BrowserRequestClient,
+} from "./browser-client.ts";
 import {
   clickBrowserCoords,
   inspectBrowserElementAt,
   insertBrowserText,
   isBrowserEvaluateDisabledError,
+  isBrowserOperatorInputUnsupportedError,
   pressBrowserKey,
   scrollBrowserBy,
+  sendBrowserOperatorInput,
 } from "./browser-client.ts";
 import type { BrowserPanelOperations } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
@@ -28,6 +34,10 @@ registerBrowserEnglish();
 const INSPECT_THROTTLE_MS = 120;
 const STREAM_WHEEL_INTERVAL_MS = 50;
 const SNAPSHOT_WHEEL_INTERVAL_MS = 150;
+// Matches the browser route's per-request input bound.
+const MAX_INPUT_BURST = 100;
+
+type QueuedInput = { input: BrowserOperatorInput; targetId: string };
 
 interface BrowserPanelInputHost extends BrowserPanelStateWriter<
   | "mode"
@@ -76,10 +86,15 @@ export class BrowserPanelInputOwner {
   private drawingGesture: BrowserPanelDrawingGesture | null = null;
   private suppressStageClick = false;
   private inspectionError: string | null = null;
-  private pendingClick: Promise<boolean> | null = null;
   private clickSequence = 0;
   private inputGeneration = 0;
-  private pendingText: Promise<boolean | undefined> | null = null;
+  // Clicks, keys and text leave in input order. While one burst is in flight the
+  // next inputs queue, so a typing burst shares one navigation guard on the Gateway.
+  private queuedInputs: QueuedInput[] = [];
+  private inputFlight: Promise<void> | null = null;
+  private operatorInputUnsupported = false;
+  // After a failed click the previous field may still be focused; text waits for a new click.
+  private focusUncertain = false;
   private compositionCurrent: (() => boolean) | null = null;
   private scrollPoint: { x: number; y: number } | null = null;
   private touchScroll: {
@@ -96,8 +111,9 @@ export class BrowserPanelInputOwner {
   resetCaptureState(): void {
     this.host.pendingInput.clearInput();
     this.cancelOverlayPointerGesture();
-    this.pendingClick = null;
-    this.pendingText = null;
+    this.queuedInputs = [];
+    this.inputFlight = null;
+    this.focusUncertain = false;
     this.compositionCurrent = null;
     this.touchScroll = null;
     const input = this.elements.input;
@@ -129,32 +145,11 @@ export class BrowserPanelInputOwner {
     // The empty input gives WebKit native Paste commands for the remote page.
     this.elements.input?.focus({ preventScroll: true });
     const point = this.remotePoint(event);
-    const targetId = this.host.activeTargetId;
-    const client = this.host.operations.captureClient();
-    if (!point || !targetId || !client) {
+    if (!point) {
       return;
     }
-    const epoch = this.host.operations.epoch;
-    const generation = this.inputGeneration;
-    const click = () => {
-      if (
-        this.inputGeneration !== generation ||
-        !this.host.operations.isLive(epoch, client) ||
-        this.host.activeTargetId !== targetId ||
-        this.host.mode !== "interact"
-      ) {
-        return Promise.resolve(false);
-      }
-      return this.host.runAction((actionClient) =>
-        clickBrowserCoords(actionClient, { targetId, x: point.x, y: point.y }),
-      );
-    };
     this.clickSequence += 1;
-    // Preserve click order and failure: a failed click can leave the previous field focused.
-    const previous = this.pendingText
-      ? Promise.all([this.pendingClick, this.pendingText])
-      : this.pendingClick;
-    this.pendingClick = previous ? previous.then(click) : click();
+    this.queueInput({ kind: "clickCoords", x: point.x, y: point.y }, false);
   }
 
   handleWheel(event: WheelEvent): void {
@@ -294,9 +289,7 @@ export class BrowserPanelInputOwner {
     const current = this.compositionCurrent;
     this.compositionCurrent = null;
     if (current?.() && event.data) {
-      this.runAfterClick((client, targetId) =>
-        insertBrowserText(client, { targetId, text: event.data }),
-      );
+      this.queueInput({ kind: "insertText", text: event.data });
     }
     if (event.currentTarget instanceof HTMLTextAreaElement) {
       event.currentTarget.value = "";
@@ -319,7 +312,7 @@ export class BrowserPanelInputOwner {
       // The empty proxy cannot identify the remote range a local correction would replace.
       this.host.setState("noticeText", t("browser.manualTextCorrection"));
     } else if (["insertText", "insertFromPaste"].includes(event.inputType) && text) {
-      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+      this.queueInput({ kind: "insertText", text });
     } else {
       const key =
         event.inputType === "deleteContentBackward"
@@ -330,7 +323,7 @@ export class BrowserPanelInputOwner {
               ? "Enter"
               : null;
       if (key) {
-        this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+        this.queueInput({ kind: "press", key });
       }
     }
     // insertFromComposition follows compositionend on WebKit; the end event already sent it.
@@ -358,7 +351,7 @@ export class BrowserPanelInputOwner {
       return;
     }
     event.preventDefault();
-    this.runAfterClick((client, targetId) => pressBrowserKey(client, { targetId, key }));
+    this.queueInput({ kind: "press", key });
   }
 
   handleViewportPaste(event: ClipboardEvent): void {
@@ -370,44 +363,103 @@ export class BrowserPanelInputOwner {
     }
     const text = event.clipboardData.getData("text/plain");
     if (text) {
-      this.runAfterClick((client, targetId) => insertBrowserText(client, { targetId, text }));
+      this.queueInput({ kind: "insertText", text });
     }
   }
 
-  private runAfterClick(
-    action: (client: BrowserRequestClient, targetId: string) => Promise<void>,
-  ): void {
+  private queueInput(input: BrowserOperatorInput, requireView = true): void {
     const targetId = this.host.activeTargetId;
-    const client = this.host.operations.captureClient();
     if (
-      !client ||
+      !this.host.operations.captureClient() ||
       !targetId ||
-      this.host.view?.targetId !== targetId ||
+      (requireView && this.host.view?.targetId !== targetId) ||
       this.host.mode !== "interact"
     ) {
       return;
     }
-    const epoch = this.host.operations.epoch;
-    const generation = this.inputGeneration;
-    const run = (): Promise<boolean> | undefined => {
-      if (
-        !this.host.operations.isLive(epoch, client) ||
-        this.host.activeTargetId !== targetId ||
-        this.host.view?.targetId !== targetId ||
-        this.host.mode !== "interact" ||
-        this.inputGeneration !== generation
-      ) {
-        return undefined;
+    if (input.kind === "clickCoords") {
+      this.focusUncertain = false;
+    } else if (this.focusUncertain) {
+      return;
+    }
+    this.queuedInputs.push({ input, targetId });
+    if (!this.inputFlight) {
+      const flight = this.flushInputs(this.inputGeneration);
+      this.inputFlight = flight;
+      void flight.finally(() => {
+        if (this.inputFlight === flight) {
+          this.inputFlight = null;
+        }
+      });
+    }
+  }
+
+  private async flushInputs(generation: number): Promise<void> {
+    while (this.inputGeneration === generation && this.queuedInputs.length > 0) {
+      const client = this.host.operations.captureClient();
+      const targetId = this.host.activeTargetId;
+      if (!client || !targetId || this.host.mode !== "interact") {
+        this.queuedInputs = [];
+        return;
       }
-      return this.host.runAction((actionClient) => action(actionClient, targetId));
-    };
-    const click = this.pendingClick;
-    const afterClick = () =>
-      click ? click.then((succeeded) => (succeeded ? run() : undefined)) : run();
-    // Text, deletion and submit must reach the same focused field in input order.
-    this.pendingText = this.pendingText
-      ? this.pendingText.then(afterClick)
-      : Promise.resolve(afterClick());
+      // Input aimed at another tab never follows the selection to this one.
+      this.queuedInputs = this.queuedInputs.filter((entry) => entry.targetId === targetId);
+      const inputs = this.queuedInputs.splice(0, MAX_INPUT_BURST).map((entry) => entry.input);
+      if (inputs.length === 0) {
+        return;
+      }
+      const epoch = this.host.operations.epoch;
+      let navigated = false;
+      const delivered = await this.host.runAction(async (actionClient) => {
+        navigated = await this.sendInputs(actionClient, targetId, inputs);
+      });
+      if (this.inputGeneration !== generation || !this.host.operations.isLive(epoch, client)) {
+        return;
+      }
+      if (navigated) {
+        // Input queued meanwhile was aimed at the document the user saw before it changed.
+        if (this.queuedInputs.length > 0) {
+          this.queuedInputs = [];
+          this.host.setState("noticeText", t("browser.inputDroppedAfterNavigation"));
+        }
+      } else if (!delivered) {
+        // A failed click can leave the previous field focused; only a new click retargets.
+        this.focusUncertain ||= inputs.some((input) => input.kind === "clickCoords");
+        const nextClick = this.queuedInputs.findIndex(
+          (entry) => entry.input.kind === "clickCoords",
+        );
+        this.queuedInputs = nextClick < 0 ? [] : this.queuedInputs.slice(nextClick);
+      }
+    }
+  }
+
+  /** Returns true when a navigation withheld input from the next document. */
+  private async sendInputs(
+    client: BrowserRequestClient,
+    targetId: string,
+    inputs: BrowserOperatorInput[],
+  ): Promise<boolean> {
+    if (!this.operatorInputUnsupported) {
+      try {
+        return (await sendBrowserOperatorInput(client, { targetId, inputs })).navigated;
+      } catch (error) {
+        if (!isBrowserOperatorInputUnsupportedError(error)) {
+          throw error;
+        }
+        this.operatorInputUnsupported = true;
+      }
+    }
+    // Existing-session profiles: one guarded act per input.
+    for (const input of inputs) {
+      if (input.kind === "clickCoords") {
+        await clickBrowserCoords(client, { targetId, x: input.x, y: input.y });
+      } else if (input.kind === "press") {
+        await pressBrowserKey(client, { targetId, key: input.key });
+      } else {
+        await insertBrowserText(client, { targetId, text: input.text });
+      }
+    }
+    return false;
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {
