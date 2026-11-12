@@ -1,6 +1,9 @@
 # Deep Research
 
 A default-enabled, lazy bundled research tool. Existing plugin allowlists and tool policy still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
+The running Gateway must provide session-work authority. If the service reports
+missing session-work support, update OpenClaw and restart the Gateway; reloading
+the plugin alone cannot add the missing host capability.
 
 Ask in normal chat, such as “Do deep research comparing these documents, no web,
 with at most 8 model calls.” The agent can select `deep_research` directly using

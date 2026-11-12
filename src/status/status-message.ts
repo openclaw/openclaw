@@ -29,18 +29,15 @@ import {
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
-import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { formatCompactionStatus } from "../auto-reply/reply/compaction-notice.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
   ThinkLevel,
-  ThinkingCatalogEntry,
   VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
-  resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
   resolveSessionPluginStatusLines,
@@ -55,7 +52,6 @@ import {
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionTranscriptUsageSnapshot } from "../gateway/session-transcript-derived-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type {
@@ -67,17 +63,17 @@ import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import {
-  estimateAggregateUsageCost,
-  formatTokenCount,
-  formatUsd,
-  resolveModelCostConfig,
-} from "../utils/usage-format.js";
+import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
-import { formatTokensPairValue, formatCacheHitValue } from "./status-usage-format.js";
+import {
+  formatTokensPairValue,
+  formatCacheHitValue,
+  resolveStatusMessageUsage,
+  type StatusMessageUsageArgs,
+} from "./status-usage-format.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -93,19 +89,17 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
-type StatusArgs = {
-  config: OpenClawConfig;
+type StatusArgs = StatusMessageUsageArgs & {
+  preparedUsage?: ReturnType<typeof resolveStatusMessageUsage>;
+  estimatedCostUsd?: number;
   preparedTtsPreferences?: PreparedTtsPreferences;
-  modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
   agent: AgentConfig;
   agentId?: string;
   configuredDefaultModelLabel?: string;
   selectedContextWindow?: number;
   selectedContextTokens?: number;
-  thinkingCatalog?: ThinkingCatalogEntry[];
   runtimeContextProvider?: string;
   runtimeContextTokens?: number;
-  sessionEntry?: SessionEntry;
   preparedSandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
   sessionKey?: string;
   parentSessionKey?: string;
@@ -122,7 +116,6 @@ type StatusArgs = {
   modelAuth?: string;
   selectedEndpoint?: string;
   activeModelAuth?: string;
-  activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
   uptimeValue?: string;
   queue?: QueueStatus;
@@ -130,7 +123,6 @@ type StatusArgs = {
   subagentsLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
-  transcriptUsage?: SessionTranscriptUsageSnapshot | null;
 };
 
 function normalizeAuthMode(value?: string) {
@@ -239,35 +231,6 @@ const formatQueueDetails = (queue?: QueueStatus) => {
     detailParts.push(`drop ${queue.dropPolicy}`);
   }
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
-};
-
-const formatTranscriptUsage = (snapshot: SessionTranscriptUsageSnapshot) => {
-  const input = snapshot.inputTokens ?? 0;
-  const output = snapshot.outputTokens ?? 0;
-  const cacheRead = snapshot.cacheRead;
-  const cacheWrite = snapshot.cacheWrite;
-  const promptTokens = snapshot.totalTokens ?? input + (cacheRead ?? 0) + (cacheWrite ?? 0);
-  const total = promptTokens + output;
-  if (promptTokens === 0 && total === 0 && !snapshot.usageReport) {
-    return undefined;
-  }
-  const model = snapshot.modelProvider
-    ? snapshot.model
-      ? `${snapshot.modelProvider}/${snapshot.model}`
-      : snapshot.modelProvider
-    : snapshot.model;
-
-  return {
-    usageReport: snapshot.usageReport,
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    promptTokens,
-    total,
-    totalTokensFresh: snapshot.totalTokensFresh === true,
-    model,
-  };
 };
 
 const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandingDecision>) => {
@@ -384,117 +347,22 @@ export function buildStatusMessageParts(args: StatusArgs) {
     },
   };
   const { modelRefs } = args;
-  const selectedLookupProvider = modelRefs.selected.provider;
-  const selectedLookupModel = modelRefs.selected.model;
-  const initialFallbackState = resolveActiveFallbackState({
-    selectedModelRef: modelRefs.selected.label || "unknown",
-    activeModelRef: modelRefs.active.label || "unknown",
-    config: args.config,
-    state: entry,
-  });
-  let activeProvider = modelRefs.active.provider;
-  let activeModel = modelRefs.active.model;
-  let contextLookupProvider: string | undefined = activeProvider;
-  let contextLookupModel = activeModel;
-  const runtimeModelRaw = normalizeOptionalString(args.activeModel?.model ?? entry?.model) ?? "";
-  const runtimeProviderRaw =
-    normalizeOptionalString(args.activeModel?.modelProvider ?? entry?.modelProvider) ?? "";
-
-  if (runtimeModelRaw && !runtimeProviderRaw && runtimeModelRaw.includes("/")) {
-    const slashIndex = runtimeModelRaw.indexOf("/");
-    const embeddedProvider =
-      normalizeOptionalLowercaseString(runtimeModelRaw.slice(0, slashIndex)) ?? "";
-    const fallbackMatchesRuntimeModel =
-      initialFallbackState.active &&
-      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(entry?.fallbackNotice?.activeModel);
-    const runtimeMatchesSelectedModel =
-      normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-      normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
-    // A slash can be part of a provider-local model ID. Prefer its current
-    // catalog identity before interpreting a legacy provider-qualified ID.
-    if (findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, runtimeModelRaw)) {
-      contextLookupModel = runtimeModelRaw;
-    } else if (
-      (!fallbackMatchesRuntimeModel && !runtimeMatchesSelectedModel) ||
-      embeddedProvider !== normalizeLowercaseStringOrEmpty(activeProvider)
-    ) {
-      contextLookupProvider = undefined;
-      contextLookupModel = runtimeModelRaw;
-    }
-  }
-
-  let inputTokens = entry?.inputTokens;
-  let outputTokens = entry?.outputTokens;
-  let cacheRead = entry?.cacheRead;
-  let cacheWrite = entry?.cacheWrite;
-  let usageReport = entry?.usageReport;
-  const freshTotalTokens = resolveFreshSessionTotalTokens(entry);
-  const allowTranscriptContextUsage =
-    entry?.totalTokensFresh !== false && freshTotalTokens === undefined;
-  let totalTokens = freshTotalTokens;
-
-  // Explicitly stale session/cache usage can still hydrate Tokens/Cache lines
-  // but must not become Context.
-  if (args.transcriptUsage) {
-    const logUsage = formatTranscriptUsage(args.transcriptUsage);
-    if (logUsage) {
-      usageReport ??= logUsage.usageReport;
-      const candidate =
-        logUsage.totalTokensFresh && logUsage.usageReport?.state !== "unavailable"
-          ? logUsage.promptTokens || logUsage.total
-          : undefined;
-      if (
-        allowTranscriptContextUsage &&
-        candidate !== undefined &&
-        candidate >= 0 &&
-        (!totalTokens || candidate > totalTokens)
-      ) {
-        totalTokens = candidate;
-      }
-      if (!entry?.model && !args.activeModel && logUsage.model) {
-        const slashIndex = logUsage.model.indexOf("/");
-        if (
-          slashIndex > 0 &&
-          !findModelInCatalog(args.thinkingCatalog ?? [], activeProvider, logUsage.model)
-        ) {
-          const provider = logUsage.model.slice(0, slashIndex).trim();
-          const model = logUsage.model.slice(slashIndex + 1).trim();
-          if (provider && model) {
-            const catalogEntry = findModelInCatalog(args.thinkingCatalog ?? [], provider, model);
-            activeProvider = provider;
-            activeModel = model;
-            // Bind exact catalog identities; keep cross-route namespaced ids raw.
-            contextLookupProvider = catalogEntry ? provider : undefined;
-            contextLookupModel = catalogEntry ? model : logUsage.model;
-          }
-        } else {
-          activeModel = logUsage.model;
-          // Bare IDs and catalog-owned slash IDs retain the known provider.
-          contextLookupProvider = activeProvider;
-          contextLookupModel = logUsage.model;
-        }
-      }
-      if (entry?.usageReport?.state !== "available") {
-        if (!inputTokens) {
-          inputTokens = logUsage.input;
-        }
-        if (!outputTokens) {
-          outputTokens = logUsage.output;
-        }
-        if (cacheRead === undefined || cacheRead <= 0) {
-          cacheRead = logUsage.cacheRead ?? cacheRead;
-        }
-        if (cacheWrite === undefined || cacheWrite <= 0) {
-          cacheWrite = logUsage.cacheWrite ?? cacheWrite;
-        }
-      }
-    }
-  }
-
-  if (usageReport?.state === "unavailable") {
-    inputTokens = outputTokens = cacheRead = cacheWrite = undefined;
-  }
+  const {
+    selectedLookupProvider,
+    selectedLookupModel,
+    initialFallbackState,
+    activeProvider,
+    activeModel,
+    contextLookupProvider,
+    contextLookupModel,
+    inputTokens,
+    outputTokens,
+    cacheRead,
+    cacheWrite,
+    usageReport,
+    totalTokens,
+    estimatedCostUsd,
+  } = args.preparedUsage ?? resolveStatusMessageUsage(args);
 
   const activeModelLabel = buildModelCatalogRef(activeProvider, activeModel) || "unknown";
   const runtimeDiffersFromSelected = activeModelLabel !== (modelRefs.selected.label || "unknown");
@@ -778,34 +646,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
     config: args.config,
     state: entry,
   });
-  const hasUsage =
-    inputTokens !== undefined ||
-    outputTokens !== undefined ||
-    cacheRead !== undefined ||
-    cacheWrite !== undefined;
-  const costConfig = hasUsage
-    ? resolveModelCostConfig({
-        provider: activeProvider,
-        model: activeModel,
-        config: args.config,
-        allowPluginNormalization: false,
-      })
-    : undefined;
   const cost =
-    usageReport?.state === "unavailable"
-      ? undefined
-      : (asNonNegativeFiniteNumber(entry?.estimatedCostUsd) ??
-        (hasUsage
-          ? estimateAggregateUsageCost({
-              usage: {
-                input: inputTokens,
-                output: outputTokens,
-                cacheRead,
-                cacheWrite,
-              },
-              cost: costConfig,
-            })
-          : undefined));
+    usageReport?.state === "unavailable" ? undefined : (estimatedCostUsd ?? args.estimatedCostUsd);
   const costLabel = formatUsd(cost);
 
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";

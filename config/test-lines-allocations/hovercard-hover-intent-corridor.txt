@@ -1,2 +1,0 @@
-# People and session hovercard e2e regressions for crossing rows toward an open card.
-102
