@@ -139,24 +139,6 @@ it("shows the verified public GitHub credit rather than a linked sign-in email",
   expect(page.textContent).not.toContain("Credit source");
 });
 
-it("requires explicit consent for organization details even with a verified GitHub account", async () => {
-  const profile = {
-    ...modelAccountProfile,
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const { page } = mount({ [organizationKey]: organization }, profile);
-  await waitForSolid(() =>
-    expect(
-      page.querySelector<HTMLInputElement>('#settings-profile-attribution [role="switch"]'),
-    ).toMatchObject({ checked: false, disabled: false }),
-  );
-  expect(page.textContent).toContain(organization.email);
-});
-
 it("keeps verified publishing-host credit available without a displayed primary GitHub account", async () => {
   const profile = {
     ...modelAccountProfile,
@@ -174,33 +156,46 @@ it("keeps verified publishing-host credit available without a displayed primary 
   expect(page.textContent).not.toContain("Ask your administrator to supply co-author details");
 });
 
-it("shows organization credit as read-only and requires explicit consent", async () => {
-  const { page, request } = mount({ [organizationKey]: organization });
-  await waitForSolid(() => expect(page.textContent).toContain(organization.email));
-  expect(page.textContent).not.toContain("Credit source");
-  const creditRow = page.querySelector("#settings-profile-attribution .settings-row--toggle")!;
-  expect(creditRow.querySelector("code")?.textContent).toBe(
-    `${organization.name} <${organization.email}>`,
-  );
-  expect(creditRow.textContent).toContain("public commit history");
-  expect(creditRow.textContent).not.toContain("Enabling this makes");
-  expect(creditRow.querySelector("code")?.nextElementSibling).toBeNull();
-  expect(page.textContent).toContain(organization.name);
-  expect(page.textContent).toContain(organization.email);
-  expect(page.querySelector("#git-coauthor-name")).toBeNull();
-  expect(page.querySelector("#git-coauthor-email")).toBeNull();
-  const toggle = page.querySelector<HTMLInputElement>(
-    '#settings-profile-attribution [role="switch"]',
-  )!;
-  await waitForSolid(() => expect(toggle).toMatchObject({ checked: false, disabled: false }));
-  toggle.click();
-  await waitForSolid(() => expect(toggle.checked).toBe(true));
-  expect(request).toHaveBeenCalledWith("users.prefs.set", {
-    entries: { [consentKey]: true },
-    expectedEntries: { [organizationKey]: organization },
-  });
-  expect(creditRow.textContent).toContain("public commit history");
-});
+it.each([
+  null,
+  {
+    login: "octocat",
+    profileUrl: "https://github.com/octocat",
+    avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+  },
+])(
+  "shows organization credit as read-only and requires explicit consent (GitHub=%j)",
+  async (githubIdentity) => {
+    const { page, request } = mount(
+      { [organizationKey]: organization },
+      { ...modelAccountProfile, githubIdentity, gitCoauthorAvailable: githubIdentity !== null },
+    );
+    await waitForSolid(() => expect(page.textContent).toContain(organization.email));
+    expect(page.textContent).not.toContain("Credit source");
+    const creditRow = page.querySelector("#settings-profile-attribution .settings-row--toggle")!;
+    expect(creditRow.querySelector("code")?.textContent).toBe(
+      `${organization.name} <${organization.email}>`,
+    );
+    expect(creditRow.textContent).toContain("public commit history");
+    expect(creditRow.textContent).not.toContain("Enabling this makes");
+    expect(creditRow.querySelector("code")?.nextElementSibling).toBeNull();
+    expect(page.textContent).toContain(organization.name);
+    expect(page.textContent).toContain(organization.email);
+    expect(page.querySelector("#git-coauthor-name")).toBeNull();
+    expect(page.querySelector("#git-coauthor-email")).toBeNull();
+    const toggle = page.querySelector<HTMLInputElement>(
+      '#settings-profile-attribution [role="switch"]',
+    )!;
+    await waitForSolid(() => expect(toggle).toMatchObject({ checked: false, disabled: false }));
+    toggle.click();
+    await waitForSolid(() => expect(toggle.checked).toBe(true));
+    expect(request).toHaveBeenCalledWith("users.prefs.set", {
+      entries: { [consentKey]: true },
+      expectedEntries: { [organizationKey]: organization },
+    });
+    expect(creditRow.textContent).toContain("public commit history");
+  },
+);
 
 it.each([null, organization])("rejects consent from a stale credit view (%j)", async (observed) => {
   const entries: Record<string, unknown> = {

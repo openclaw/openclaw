@@ -165,10 +165,12 @@ describe("multi-account people", () => {
       email: "work@example.test",
       policy: "test-policy",
     };
-    expect(await setPreferences(profile.id, { [organizationKey]: imported }, options)).toEqual({
-      ok: false,
-      error: { code: "invalid-key", key: organizationKey },
-    });
+    for (const value of [imported, null]) {
+      expect(await setPreferences(profile.id, { [organizationKey]: value }, options)).toEqual({
+        ok: false,
+        error: { code: "invalid-key", key: organizationKey },
+      });
+    }
     expect(
       await setPreferences(
         profile.id,

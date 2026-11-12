@@ -60,7 +60,6 @@ export class ProfileState {
   displayName = "";
   gitCoauthorEnabled = true;
   gitCoauthorOrganization: GitCoauthorOrganizationIdentity | undefined;
-  private gitCoauthorConsent: unknown;
   prAttributionEnabled = false;
   identityLoading = false;
   private identityRefreshPending = false;
@@ -151,7 +150,6 @@ export class ProfileState {
       this.displayName = "";
       this.gitCoauthorEnabled = true;
       this.gitCoauthorOrganization = undefined;
-      this.gitCoauthorConsent = undefined;
       this.prAttributionEnabled = false;
     }
     this.publish();
@@ -243,11 +241,12 @@ export class ProfileState {
       this.gitCoauthorOrganization = normalizeGitCoauthorOrganizationIdentity(
         entries[GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY],
       );
-      this.gitCoauthorConsent = entries[GIT_COAUTHOR_PREFERENCE_KEY];
+      const consent = entries[GIT_COAUTHOR_PREFERENCE_KEY];
       this.gitCoauthorEnabled =
         profile.id !== GATEWAY_OWNER_PROFILE_ID &&
         preferences.status === "ok" &&
-        this.coauthorConsentEnabled();
+        this.gitCoauthorAvailable &&
+        (this.gitCoauthorOrganization ? consent === true : isGitCoauthorCreditEnabled(consent));
       this.prAttributionEnabled =
         preferences.status === "ok" && preferences.entries[PR_ATTRIBUTION_PREFERENCE_KEY] === true;
     } catch (error) {
@@ -266,15 +265,6 @@ export class ProfileState {
         this.publish();
       }
     }
-  }
-
-  private coauthorConsentEnabled() {
-    if (!this.gitCoauthorAvailable) {
-      return false;
-    }
-    return this.gitCoauthorOrganization
-      ? this.gitCoauthorConsent === true
-      : isGitCoauthorCreditEnabled(this.gitCoauthorConsent);
   }
 
   get gitCoauthorIdentity() {
@@ -406,7 +396,6 @@ export class ProfileState {
             throw new Error(t("profilePage.identity.profileUnavailable"));
           }
           if (change.kind === "git-coauthor") {
-            this.gitCoauthorConsent = change.enabled;
             this.gitCoauthorEnabled = change.enabled;
           } else {
             this.prAttributionEnabled = change.enabled;

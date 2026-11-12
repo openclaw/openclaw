@@ -49,9 +49,12 @@ describe("organization credit through authenticated profile admission", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot(cfg);
         const profile = await ensureCanonicalUserProfileForEmail(authResult.user);
-        const saved = Object.fromEntries(
-          Array.from({ length: 128 }, (_, index) => [`saved-${index}`, index]),
-        );
+        const saved = {
+          ...Object.fromEntries(
+            Array.from({ length: 127 }, (_, index) => [`saved-${index}`, index]),
+          ),
+          "git.coauthor.enabled": false,
+        };
         for (let start = 0; start < 128; start += 32) {
           expect(
             await setCanonicalUserPreferences(
@@ -62,8 +65,8 @@ describe("organization credit through authenticated profile admission", () => {
         }
         const req = new IncomingMessage(new Socket());
         req.headers = { "x-credit-name": "Alice Example", "x-credit-email": "alice@example.test" };
-        const admit = async () => {
-          if (transport === "http") {
+        const admit = async (nextTransport: typeof transport = transport) => {
+          if (nextTransport === "http") {
             const admitted = await resolveAuthenticatedHttpUserProfile({ req, authResult, cfg });
             return admitted.authenticatedUserProfile?.profileId;
           }
@@ -104,13 +107,17 @@ describe("organization credit through authenticated profile admission", () => {
             ok: false,
             error: { code: "profile-key-limit", limit: 128, currentCount: 128 },
           });
+          expect(
+            await setCanonicalUserPreferences(profile.id, { "git.coauthor.enabled": true }),
+          ).toMatchObject({ ok: true });
+          const consented = { ...saved, "git.coauthor.enabled": true };
           req.headers = {
             "x-credit-name": "Alice Updated",
             "x-credit-email": "updated@example.test",
           };
-          expect(await admit()).toBe(profile.id);
+          expect(await admit(transport === "http" ? "websocket" : "http")).toBe(profile.id);
           expect(await read()).toEqual({
-            ...saved,
+            ...consented,
             [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
               name: "Alice Updated",
               email: "updated@example.test",
@@ -119,7 +126,7 @@ describe("organization credit through authenticated profile admission", () => {
           });
           req.headers = {};
           expect(await admit()).toBe(profile.id);
-          expect(await read()).toEqual(saved);
+          expect(await read()).toEqual(consented);
         } finally {
           req.destroy();
         }
@@ -163,61 +170,6 @@ describe("organization credit through authenticated profile admission", () => {
           email: "alice@example.test",
         },
       });
-    });
-  });
-  it("refreshes and clears defaults across HTTP and WebSocket sign-ins", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot(cfg);
-      const req = new IncomingMessage(new Socket());
-      req.headers = { "x-credit-name": "Alice Example", "x-credit-email": "alice@example.test" };
-      try {
-        const first = await resolveAuthenticatedHttpUserProfile({ req, authResult, cfg });
-        const profileId = first.authenticatedUserProfile!.profileId;
-        const read = async () => (await getCanonicalUserPreferences(profileId))!.entries;
-        expect(await read()).toMatchObject({
-          [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
-            name: "Alice Example",
-            email: "alice@example.test",
-          },
-        });
-        expect(
-          await setCanonicalUserPreferences(profileId, {
-            "git.coauthor.enabled": true,
-          }),
-        ).toMatchObject({ ok: true });
-        req.headers = { "x-credit-name": "Alice Updated", "x-credit-email": "new@example.test" };
-        const connected = await resolveGatewayConnectProfileAdmission({
-          context: {
-            configSnapshot: cfg,
-            handler: {
-              connId: "credit-admission",
-              logWsControl: createSubsystemLogger("test/credit-admission"),
-              close: vi.fn(),
-            },
-            markHandshakeFailure: vi.fn(),
-            sendHandshakeErrorResponse: vi.fn(),
-            releasePendingNodePairingCleanup: async () => {},
-          },
-          state: { authResult, authMethod: "trusted-proxy", role: "operator" },
-          ownerProfileExpected: false,
-          authenticatedUserId: authResult.user,
-          requestHeaders: req.headers,
-          resolveAuthenticatedGitHubIdentity: undefined,
-        });
-        expect(connected.ok && connected.prepared?.profile.profileId).toBe(profileId);
-        expect(await read()).toMatchObject({
-          [GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY]: {
-            name: "Alice Updated",
-            email: "new@example.test",
-          },
-        });
-        req.headers = {};
-        await resolveAuthenticatedHttpUserProfile({ req, authResult, cfg });
-        expect(await read()).not.toHaveProperty(GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY);
-        expect(await read()).toHaveProperty("git.coauthor.enabled", true);
-      } finally {
-        req.destroy();
-      }
     });
   });
 });
