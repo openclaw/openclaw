@@ -63,8 +63,7 @@ function copySchemaMeta(
   return to;
 }
 
-// Google requires enum entries as strings even when the declared schema type is numeric or
-// boolean. Keep the type intact so tool argument generation and runtime validation still agree.
+// Google accepts enum entries as strings, on string schemas only.
 function cleanGeminiEnumValues(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -301,7 +300,15 @@ function* cleanSchemaForGeminiWithDefs(
       }
 
       if (key === "const" || key === "enum") {
-        const enumValues = cleanGeminiEnumValues(key === "const" ? [value] : value);
+        // Preserve declared non-string types for local validation; Google rejects their enums.
+        const type =
+          Array.isArray(obj.type) && obj.type.every((entry) => typeof entry === "string")
+            ? obj.type.find((entry) => entry !== "null")
+            : obj.type;
+        const enumValues =
+          type === undefined || type === "string"
+            ? cleanGeminiEnumValues(key === "const" ? [value] : value)
+            : undefined;
         if (enumValues) {
           cleaned.enum = enumValues;
         }

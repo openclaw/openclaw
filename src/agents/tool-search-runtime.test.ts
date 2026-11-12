@@ -20,6 +20,9 @@ import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -300,6 +303,28 @@ describe("Tool Search terminal results", () => {
 });
 
 describe("Tool Search input schemas", () => {
+  it("keeps canonical Gemini read arguments through deferred publication and wrappers", async () => {
+    const readTool = fakeTool("read", readToolInputSchema);
+    const finalized = finalizeAgentTools({
+      tools: [readTool],
+      hookContext: { sessionId: "gemini-read" },
+      modelProvider: "google",
+      modelId: "gemini-2.5-pro",
+      wrapBeforeToolCallHook: false,
+      registerRunCleanup: vi.fn(),
+    });
+    const wrapped = finalized.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
+    const { catalogRef, runtime } = createRuntime(wrapped);
+    const advertised = catalogRef.current?.entries[0]?.parameters;
+    expect(advertised).toHaveProperty("properties.optional.type", "boolean");
+    expect(advertised).not.toHaveProperty("properties.optional.enum");
+
+    const input = { path: "nonexistent.txt", optional: true };
+    await expect(runtime.call("read", input)).resolves.toBeDefined();
+    await expect(runtime.call("read", { path: "nonexistent.txt", optional: false })).rejects.toThrow();
+    expect(readTool.execute).toHaveBeenCalledOnce();
+  });
+
   it("validates arguments after a policy hook repairs them", async () => {
     const hook = vi.fn(async () => ({ params: { instruction: "repaired" } }));
     initializeGlobalHookRunner(

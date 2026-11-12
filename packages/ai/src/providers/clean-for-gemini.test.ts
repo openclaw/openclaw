@@ -79,14 +79,23 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.description).toBe("nullable field");
   });
 
-  it("stringifies an integer const before type without changing the schema type", () => {
-    expect(cleanSchemaForGemini({ const: 42, type: "integer" })).toStrictEqual({
-      enum: ["42"],
-      type: "integer",
-    });
+  it.each([
+    [{ const: 42, type: "integer" }, "integer"],
+    [{ const: true, type: "boolean" }, "boolean"],
+    [{ enum: [true, false], type: ["null", "boolean"] }, "boolean"],
+  ])("drops non-string enums without changing the declared type: %j", (schema, type) => {
+    expect(cleanSchemaForGemini(schema)).toStrictEqual({ type });
   });
 
-  it("stringifies nested numeric enums while preserving their number type", () => {
+  it.each([
+    { type: "string", enum: ["a", "b"] },
+    { type: ["null", "string"], enum: ["a", "b"] },
+    { enum: ["a", "b"] },
+  ])("preserves permitted string enum values: %j", (schema) => {
+    expect(cleanSchemaForGemini(schema)).toHaveProperty("enum", ["a", "b"]);
+  });
+
+  it("drops nested numeric enums while preserving their number type", () => {
     const cleaned = cleanSchemaForGemini({
       type: "object",
       properties: {
@@ -108,7 +117,7 @@ describe("cleanSchemaForGemini", () => {
 
     const score = cleaned.properties?.outer?.items?.properties?.score;
     expect(score?.type).toBe("number");
-    expect(score?.enum).toStrictEqual(["1", "2", "3", "4", "5"]);
+    expect(score).not.toHaveProperty("enum");
   });
 
   it("returns no enum key when array becomes empty after coercion", () => {
