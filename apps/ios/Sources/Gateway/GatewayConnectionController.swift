@@ -933,7 +933,7 @@ extension GatewayConnectionController {
             return
         }
         let lease = self.cancelPendingConnectionAttempts()
-        self.appModel?.gatewayStatusText = "Offline"
+        self.appModel?.setGatewayConnectionProgress(nil)
         if lease.restoresAutoReconnect {
             self.resumeAutoConnect(after: lease)
         } else {
@@ -963,7 +963,7 @@ extension GatewayConnectionController {
         GatewayDiagnostics.log(
             "gateway tls pin replaced stableID=\(stableID) "
                 + "old=\(problem.tlsExpectedFingerprint ?? "unknown") new=\(fingerprint)")
-        appModel?.gatewayStatusText = "Gateway certificate updated. Reconnecting…"
+        appModel?.gatewayStatusText = "Gateway certificate updated."
         if let retry = self.currentPreconnectRetry,
            GatewayStableIdentifier.matches(retry.stableID, stableID)
         {
@@ -1234,7 +1234,7 @@ extension GatewayConnectionController {
         // An explicit target owns suppression until its queued handoff exits. Otherwise a
         // foreground reconnect can replace it while reset or permission work is suspended.
         self.pendingAutoConnectSuppressionGeneration = suppressionGeneration
-        appModel.setGatewayConnectionProgress(reconnecting: false)
+        appModel.setGatewayConnectionProgress(.connecting)
         let task = Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
             @MainActor func isCurrent() -> Bool {
@@ -1366,9 +1366,7 @@ extension GatewayConnectionController {
         isSetupCodeOrigin: Bool = false) async
         -> ConnectionAttemptResult?
     {
-        self.appModel?.beginGatewayPreconnectVerification(
-            stableID: pendingConnect.stableID,
-            statusText: "Verifying gateway TLS fingerprint…")
+        self.appModel?.beginGatewayPreconnectVerification(stableID: pendingConnect.stableID)
         guard let probeResult = await self.probeTLSFingerprint(
             host: host,
             port: port,
@@ -1394,7 +1392,7 @@ extension GatewayConnectionController {
                 fingerprintSha256: fp,
                 isManual: pendingConnect.isManual,
                 attemptGeneration: pendingConnect.suppressionLease.generation)
-            self.appModel?.awaitGatewayTrustDecision()
+            self.appModel?.setGatewayConnectionProgress(.awaitingTrust)
             return .accepted
         case let .failure(failure):
             let problem = self.tlsProbeFailureProblem(failure, host: host, port: port)
@@ -1532,9 +1530,7 @@ extension GatewayConnectionController {
             useTLS: true,
             contextPath: contextPath)
         else { return .failed(String(localized: "Failed to build the gateway URL.")) }
-        self.appModel?.beginGatewayPreconnectVerification(
-            stableID: stableID,
-            statusText: "Verifying gateway TLS fingerprint…")
+        self.appModel?.beginGatewayPreconnectVerification(stableID: stableID)
         guard let probeResult = await self.probeTLSFingerprint(
             host: host,
             port: port,

@@ -64,6 +64,7 @@ function invalidateLoggerSettings(): void {
 
 /** Publishes authoritative config-derived logging state for the active runtime. */
 export function applyLoggingConfig(config: OpenClawConfig["logging"] | undefined): void {
+  initializeLoggerSourceMapPolicy();
   loggingState.appliedConfig = config;
   invalidateLoggingConfigCache();
   invalidateLoggerSettings();
@@ -491,11 +492,15 @@ class RuntimeLogger extends TsLogger<LogObj> {
   }
 }
 
-function buildLogger(): TsLogger<LogObj> {
-  // Keep raw callsites without tslog's synchronous source-map probes; explicit diagnostics opt in.
+function initializeLoggerSourceMapPolicy(): void {
+  // Publish the default with logging config before runtime workers capture the environment.
   if (typeof process !== "undefined" && process.env) {
     process.env.TSLOG_SOURCE_MAPS ??= "off";
   }
+}
+
+function buildLogger(): TsLogger<LogObj> {
+  initializeLoggerSourceMapPolicy();
   const logger = new RuntimeLogger({
     name: "openclaw",
     mask: { keys: [] },
