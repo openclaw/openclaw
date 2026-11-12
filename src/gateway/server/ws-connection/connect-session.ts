@@ -35,6 +35,7 @@ import {
 } from "../../local-user-ingress.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
+import { resolveOpenClawIdOwnerProfile } from "../../openclaw-id/owner-account.js";
 import { openclawIdTunnelRolePolicy } from "../../openclaw-id/tunnel-principal.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
@@ -223,6 +224,17 @@ export async function attachAuthenticatedGatewayConnect(
       authMethod === "password" ||
       remoteIngressPrincipal?.operatorRoleActor.kind === "system" ||
       openclawIdPrincipal?.kind === "owner");
+  // An owner device whose OpenClaw ID account is linked to a profile arrives as that person;
+  // it keeps operatorOwner (from its certificate) and skips role policy like any owner device.
+  const linkedOwnerProfile =
+    role === "operator" && !remoteIngressPrincipal && openclawIdPrincipal?.kind === "owner"
+      ? await resolveOpenClawIdOwnerProfile().catch((error: unknown) => {
+          logWsControl.warn(
+            `OpenClaw ID owner profile lookup failed conn=${connId}; using the shared owner: ${formatForLog(error)}`,
+          );
+          return null;
+        })
+      : null;
   // Authenticated inputs need durable identity even when their presence is omitted.
   const ownerProfileExpected =
     (shouldTrackPresence || (authMethod !== undefined && authMethod !== "none")) &&
@@ -231,7 +243,7 @@ export async function attachAuthenticatedGatewayConnect(
       authenticatedUserId,
       authMethod,
       rolesConfigured,
-      openclawIdOwner: openclawIdPrincipal?.kind === "owner",
+      openclawIdOwner: openclawIdPrincipal?.kind === "owner" && !linkedOwnerProfile,
     });
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
@@ -240,6 +252,7 @@ export async function attachAuthenticatedGatewayConnect(
         context,
         state,
         ownerProfileExpected,
+        linkedOwnerProfile,
         authenticatedUserId,
         resolveAuthenticatedGitHubIdentity,
         assertCurrent: profileLifecycle.assertCurrent,
@@ -413,7 +426,8 @@ export async function attachAuthenticatedGatewayConnect(
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
     prepareGatewayLocalUserIngress({
       authMethod,
-      authenticatedUserExpected: Boolean(authenticatedUserId) || ownerProfileExpected,
+      authenticatedUserExpected:
+        Boolean(authenticatedUserId) || ownerProfileExpected || Boolean(linkedOwnerProfile),
       ...(profile
         ? {
             profile: {

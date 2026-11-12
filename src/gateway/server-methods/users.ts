@@ -636,8 +636,8 @@ export const usersHandlers: GatewayRequestHandlers = {
           }
         },
         onCommitted: (canonicalProfileId) => {
-          invalidateOperatorRolePolicy(canonicalProfileId);
-          context.disconnectClientsForUserProfile?.(canonicalProfileId);
+          invalidateOperatorRolePolicy(canonicalProfileId, { roleOnly: true });
+          context.disconnectClientsForUserProfile?.(canonicalProfileId, { roleOnly: true });
         },
       });
       respond(true, { profile });
