@@ -52,7 +52,8 @@ const postAttachMocks = vi.hoisted(() => {
     refreshPreparedModelRuntimeSnapshots: vi.fn<
       typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots
     >(async () => {}),
-    prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
+    loadEmbeddedAgentRuntime: vi.fn(async () => {}),
+    loadSessionUpdatesRuntime: vi.fn(async () => {}),
     scheduleGatewayHandlerPrewarm: vi.fn(() => ({ stop: vi.fn() })),
   };
 });
@@ -177,10 +178,14 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
 
 // mock-isolation: Observe reply prewarming without dispatching turns or loading a native agent runtime.
 vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
-  prewarmReplyRunRuntimes: postAttachMocks.prewarmConfigDrivenReplyRuntime,
+  loadEmbeddedAgentRuntime: postAttachMocks.loadEmbeddedAgentRuntime,
+  loadSessionUpdatesRuntime: postAttachMocks.loadSessionUpdatesRuntime,
+  prewarmReplyRunRuntimes: () => {
+    throw new Error("channel reply runner prewarmed during Gateway startup");
+  },
 }));
 
-// Agent RPC startup must not load the channel reply resolver just to prewarm shared runtimes.
+// mock-isolation: Agent RPC startup must not load the channel reply resolver to prewarm shared runtimes.
 vi.mock("../auto-reply/reply/get-reply-from-config.runtime.js", () => {
   throw new Error("channel reply resolver loaded during Gateway startup");
 });

@@ -167,12 +167,12 @@ export async function startGatewaySidecars(params: {
         ),
       );
     })(),
-    // Readiness owns process-stable request imports so the first turn and connection do not.
+    // Prepare common agent imports and connection handling before readiness.
     measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-      // The dispatch facade also loads channel reply resolution, which agent RPCs do not need.
-      const { prewarmReplyRunRuntimes } =
+      // Keep channel reply resolution and its runner demand-loaded; agent RPCs do not need them.
+      const { loadEmbeddedAgentRuntime, loadSessionUpdatesRuntime } =
         await import("../auto-reply/reply/get-reply-run-helpers.js");
-      await prewarmReplyRunRuntimes();
+      await Promise.all([loadEmbeddedAgentRuntime(), loadSessionUpdatesRuntime()]);
     }),
     measureStartup(
       params.startupTrace,

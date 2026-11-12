@@ -120,7 +120,8 @@ vi.mock("./server-startup-model-runtime.js", async (importOriginal) => ({
 }));
 // mock-isolation: Transcript reload startup does not execute the agent-runtime graph.
 vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
-  prewarmReplyRunRuntimes: async () => {},
+  loadEmbeddedAgentRuntime: async () => {},
+  loadSessionUpdatesRuntime: async () => {},
 }));
 // mock-isolation: Transcript reload startup owns this import, not authenticated WebSocket connection dispatch.
 vi.mock("./server/ws-connection/message-handler.js", () => ({

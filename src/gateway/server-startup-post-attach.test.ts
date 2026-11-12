@@ -298,20 +298,16 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveHooksGmailModel.mockReset();
     hoisted.resolveHooksGmailModel.mockReturnValue(null);
     hoisted.loadFullModelCatalog.mockClear();
-    hoisted.loadModelCatalog.mockReset();
-    hoisted.loadModelCatalog.mockResolvedValue({});
-    hoisted.getModelRefStatus.mockReset();
-    hoisted.getModelRefStatus.mockReturnValue({
+    hoisted.loadModelCatalog.mockReset().mockResolvedValue({});
+    hoisted.getModelRefStatus.mockReset().mockReturnValue({
       key: "openai/gpt-5.4",
       allowed: true,
       inCatalog: true,
     });
-    hoisted.prepareModelRuntimeSnapshot.mockReset();
-    hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
-    hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
-    hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
-    hoisted.prewarmConfigDrivenReplyRuntime.mockReset();
-    hoisted.prewarmConfigDrivenReplyRuntime.mockResolvedValue(undefined);
+    hoisted.prepareModelRuntimeSnapshot.mockReset().mockResolvedValue({});
+    hoisted.refreshPreparedModelRuntimeSnapshots.mockReset().mockResolvedValue(undefined);
+    hoisted.loadEmbeddedAgentRuntime.mockReset().mockResolvedValue(undefined);
+    hoisted.loadSessionUpdatesRuntime.mockReset().mockResolvedValue(undefined);
     hoisted.scheduleGatewayHandlerPrewarm.mockClear();
   });
 
@@ -411,7 +407,7 @@ describe("startGatewayPostAttachRuntime", () => {
     let closing = false;
     const hooksStarted = createDeferred();
     const requestsPrepared = createDeferred();
-    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(async () => {
+    hoisted.loadEmbeddedAgentRuntime.mockImplementationOnce(async () => {
       requestsPrepared.resolve();
     });
     hoisted.prepareInternalHooks.mockImplementationOnce(() => {
@@ -1500,22 +1496,25 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
-  it.each(["model", "reply", "connection"] as const)(
+  it.each(["model", "reply", "session", "connection"] as const)(
     "prepares request runtimes concurrently and keeps readiness blocked on %s",
     async (lastRuntime) => {
       const gates = {
         model: createDeferred(),
         reply: createDeferred(),
+        session: createDeferred(),
         connection: createDeferred(),
       };
       const started = {
         model: createDeferred(),
         reply: createDeferred(),
+        session: createDeferred(),
         connection: createDeferred(),
       };
       const completed = {
         model: createDeferred(),
         reply: createDeferred(),
+        session: createDeferred(),
         connection: createDeferred(),
       };
       const prepare = async (name: keyof typeof gates) => {
@@ -1524,7 +1523,8 @@ describe("startGatewayPostAttachRuntime", () => {
         completed[name].resolve();
       };
       hoisted.refreshPreparedModelRuntimeSnapshots.mockImplementationOnce(() => prepare("model"));
-      hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(() => prepare("reply"));
+      hoisted.loadEmbeddedAgentRuntime.mockImplementationOnce(() => prepare("reply"));
+      hoisted.loadSessionUpdatesRuntime.mockImplementationOnce(() => prepare("session"));
       const trace = createStartupTraceRecorder();
       const startChannels = vi.fn(async () => {});
       const onSidecarsReady = vi.fn();
@@ -1551,7 +1551,7 @@ describe("startGatewayPostAttachRuntime", () => {
         );
         expect(startChannels).not.toHaveBeenCalled();
         expect(onSidecarsReady).not.toHaveBeenCalled();
-        for (const name of ["model", "reply", "connection"] as const) {
+        for (const name of ["model", "reply", "session", "connection"] as const) {
           if (name !== lastRuntime) {
             gates[name].resolve();
             await completed[name].promise;
@@ -1588,7 +1588,7 @@ describe("startGatewayPostAttachRuntime", () => {
       modelStarted.resolve();
       return model.promise;
     });
-    hoisted.prewarmConfigDrivenReplyRuntime.mockImplementationOnce(() => {
+    hoisted.loadEmbeddedAgentRuntime.mockImplementationOnce(() => {
       replyStarted.resolve();
       return reply.promise;
     });
@@ -1647,13 +1647,13 @@ describe("startGatewayPostAttachRuntime", () => {
   it("does not start channels when close begins during deferred sidecar preparation", async () => {
     const replyRuntime = createDeferred();
     let closing = false;
-    hoisted.prewarmConfigDrivenReplyRuntime.mockReturnValueOnce(replyRuntime.promise);
+    hoisted.loadEmbeddedAgentRuntime.mockReturnValueOnce(replyRuntime.promise);
     const params = createPostAttachParams({ sidecarStartup: "defer", isClosing: () => closing });
     const onChannelsStarted = vi.fn();
     const runtime = await startGatewayPostAttachRuntime({ ...params, onChannelsStarted });
     try {
       await waitForGatewayTestState(() =>
-        expect(hoisted.prewarmConfigDrivenReplyRuntime).toHaveBeenCalledOnce(),
+        expect(hoisted.loadEmbeddedAgentRuntime).toHaveBeenCalledOnce(),
       );
       closing = true;
       replyRuntime.resolve();
