@@ -53,6 +53,10 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "localWorkspace.manifest"
         ? await import("../gateway/worker-environments/local-workspace-manifest-scan.js")
         : undefined;
+    const sessionListReader =
+      input.command.type === "subagents.sessionList"
+        ? await import("../agents/subagents/registry/subagent-registry.store.sqlite.js")
+        : undefined;
     // Finish the selected owner's import before fresh admission, not during stream execution.
     const readStream =
       input.command.type === "subagents.restore" ||
@@ -67,7 +71,8 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       input.command.type === "plugins.metadata.read" ||
       input.command.type === "gatewayOwnerLease.read" ||
       input.command.type === "localWorkspace.manifest" ||
-      input.command.type === "agentDatabaseRegistry.read";
+      input.command.type === "agentDatabaseRegistry.read" ||
+      input.command.type === "subagents.sessionList";
     const prepared = dedicatedRead ? undefined : stateReadRegistry.prepare(input.command.type);
     if (prepared) {
       return prepared.then(() => read(input, channel, control));
@@ -76,6 +81,15 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       dedicatedRead || stateReadRegistry.has(input.command)
         ? undefined
         : await import("./openclaw-state-read-handlers.js");
+    const metadataRead =
+      input.command.type === "acpSessions.metadata"
+        ? (
+            await import("../acp/runtime/session-meta-read.worker.js")
+          ).prepareAcpSessionMetadataRead(input.command)
+        : undefined;
+    const preparedRead = handlers
+      ? await handlers.prepareOpenClawStateRead(input, input.command, metadataRead)
+      : undefined;
     const executeRead = async (): Promise<OpenClawStateReadReply> => {
       if (input.checkFreshAdmission) {
         openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
@@ -213,14 +227,14 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
         }
         return await control.runNativeSection(readStream);
       }
-      if (!handlers) {
-        throw new Error("State read command handlers are unavailable");
-      }
       if (command.type === "subagents.sessionList") {
+        if (!sessionListReader) {
+          throw new Error("Subagent session list reader is unavailable");
+        }
         const result = readOpenClawStateReadOnlyLocation(
           ({ db }) => {
             sourceAdmitted = true;
-            return handlers.loadSubagentSessionListRunsFromSqlite(undefined, { db });
+            return sessionListReader.loadSubagentSessionListRunsFromSqlite(undefined, { db });
           },
           ...locationArgs,
         );
@@ -241,14 +255,13 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
               },
             };
       }
-      const metadataRead =
-        command.type === "acpSessions.metadata"
-          ? handlers.prepareAcpSessionMetadataRead(command)
-          : undefined;
+      if (!preparedRead) {
+        throw new Error("State read command handlers are unavailable");
+      }
       const result = withOpenClawStateReadOnlyLocation(
         ({ db }): OpenClawStateReadResult => {
           sourceAdmitted = true;
-          return handlers.readOpenClawStateDatabaseCommand(db, input, command, metadataRead);
+          return preparedRead(db);
         },
         ...locationArgs,
         metadataRead?.readContentVersionRow,

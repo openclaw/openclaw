@@ -17,7 +17,7 @@ import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.li
 import { SessionManager } from "../sessions/session-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { compactEmbeddedAgentSessionDirect } from "./compact.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
 
 // Real queued compaction, native delegate, AgentSession, and SQLite transcript; only the
 // provider is a local OpenAI-compatible endpoint whose summary requests stall, fail, or answer.
@@ -237,7 +237,7 @@ it("commits a deterministic reduction after a bodyless 408 summary timeout", asy
   summaryMode = "bare-408";
   const result = await compactSession(fixture);
 
-  expect(result).toMatchObject({ ok: true, compacted: true });
+  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
   expect(summaryRequests.length).toBeGreaterThan(0);
   const branch = openSession(fixture).getBranch();
   const compactions = branch.filter((entry) => entry.type === "compaction");

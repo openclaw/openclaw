@@ -7,7 +7,7 @@ import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { monotonicNow, remainingMonotonicMs as left } from "../../shared/monotonic-time.js";
-import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
+import { spawnWithInheritedOomScore } from "../linux-oom-score-spawn.js";
 import { serializeBrokerError } from "../spawn-broker/protocol.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";

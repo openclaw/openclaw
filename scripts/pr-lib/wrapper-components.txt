@@ -1749,6 +1749,7 @@ src/process/exec.ts
 src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
 src/process/kill-tree.ts
+src/process/linux-oom-score-spawn.ts
 src/process/linux-oom-score.ts
 src/process/output-drain.ts
 src/process/process-deadline.ts
@@ -2771,6 +2772,7 @@ src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts
 src/shared/owned-buffer.ts
 src/shared/state-lease-loss.ts
+src/shared/state-lease-loss-format.ts
 src/status/utility-model-warnings.ts
 src/infra/sqlite-integrity.worker.ts
 src/infra/sqlite-readonly-inspection.ts

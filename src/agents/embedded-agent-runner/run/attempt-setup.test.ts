@@ -17,12 +17,9 @@ import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-const { resolveSandboxContext: resolveRealSandboxContext } = await vi.importActual<
-  typeof import("../../sandbox/context.js")
->("../../sandbox/context.js");
 const resolveProviderRuntimePluginHandle = vi.hoisted(() => vi.fn());
 const resolveSandboxContext = vi.hoisted(() =>
-  vi.fn<typeof resolveRealSandboxContext>(async () => null),
+  vi.fn<typeof import("../../sandbox/context.js").resolveSandboxContext>(async () => null),
 );
 
 vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
@@ -65,7 +62,7 @@ const attemptDefaults = {
 describe("prepareEmbeddedAttemptSetup", () => {
   beforeEach(() => {
     resolveProviderRuntimePluginHandle.mockReset();
-    resolveSandboxContext.mockClear();
+    resolveSandboxContext.mockReset().mockResolvedValue(null);
   });
 
   it.each([false, true])(
@@ -121,7 +118,6 @@ describe("prepareEmbeddedAttemptSetup", () => {
   it.each([undefined, "agent:main:policy"])(
     "prepares a detached global workspace with policy %s",
     async (sandboxSessionKey) => {
-      resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
       const workspaceDir = tempDirs.make("openclaw-global-attempt-");
       const foreground = {
         agentId: "marketing",
@@ -150,7 +146,6 @@ describe("prepareEmbeddedAttemptSetup", () => {
   );
 
   it("does not apply an execution owner to an independent unscoped sandbox policy", async () => {
-    resolveSandboxContext.mockImplementationOnce(resolveRealSandboxContext);
     const workspaceDir = tempDirs.make("openclaw-policy-attempt-");
     await expect(
       resolveAttemptWorkspaceSandbox({

@@ -41,7 +41,6 @@ import {
 } from "../runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { prepareAgentHarnessNativeToolPolicyRestricted } from "./execution-environment.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import {
   assertCompactionSource,
   type AgentHarnessCompactionSourceAuthority,
@@ -603,6 +602,7 @@ async function maybeCompactAgentHarnessSessionInGeneration(
               : {}),
           }
         : handoffCompactParams;
+    const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
     const admittedRunContext = await admission.admit("plugin-harness", harness.id);
     assertSourceCurrent();
     // Compaction reasons are not agent-run triggers.

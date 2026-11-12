@@ -1,6 +1,6 @@
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
-import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.async.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRuntimeSkillsPrompt } from "../../agents/embedded-agent-runner/skills-prompt.js";

@@ -17,6 +17,7 @@ import {
   publishSqliteDatabaseAdmission,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -168,32 +169,88 @@ it.each([
   expect(mock.unrelatedHandlerLoaded).toBe(false);
 });
 
-it("reads an absent publication receipt without loading unrelated handlers", async () => {
-  const db = openNodeSqliteDatabase(":memory:");
-  mock.database = db;
-  try {
-    const reply = await mock.handler({
-      ...request,
-      command: {
-        type: "githubPublications.sharedObservation",
-        input: {
-          session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
-          selector: {},
-          entry: {},
-        },
-      },
-    });
-    expect(reply).toEqual({
-      ok: true,
+it.each([
+  {
+    command: {
       type: "githubPublications.sharedObservation",
-      sourceAdmitted: true,
-      row: undefined,
-    });
-    expect(mock.unrelatedHandlerLoaded).toBe(false);
-  } finally {
-    db.close();
-  }
-});
+      input: {
+        session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
+        selector: {},
+        entry: {},
+      },
+    },
+    tables: [],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "cron.store" },
+    tables: ["config_machine_state"],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "hooks.internal.installs" },
+    tables: ["config_machine_state"],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "devicePairing.list", nowMs: 1 },
+    tables: ["config_machine_state", "device_pairing_paired", "device_pairing_pending"],
+    result: {
+      revision: "0",
+      bindings: [],
+      list: { pending: [], paired: [] },
+    },
+  },
+  {
+    command: { type: "workerEnvironments.snapshot", ids: undefined },
+    tables: [
+      "worker_environments",
+      "worker_environment_credentials",
+      "worker_environment_ssh_fallback_ports",
+      "worker_environment_session_attachments",
+    ],
+    result: { facts: { ids: [], environments: [], credentials: [], attachments: [] } },
+  },
+  {
+    command: { type: "workers.placementRecoveryCandidates" },
+    tables: [
+      "worker_session_placements",
+      "worker_workspace_pending_results",
+      "worker_workspace_reconciliations",
+    ],
+    result: { candidates: [] },
+  },
+  {
+    command: { type: "preparedPoolPresence.read" },
+    tables: ["config_machine_state"],
+    result: { demand: undefined },
+  },
+  {
+    command: { type: "sandboxRegistry.list", workspaceDir: undefined },
+    tables: ["sandbox_registry_entries"],
+    result: { entries: [] },
+  },
+] as const)(
+  "reads startup $command.type without loading unrelated handlers",
+  async ({ command, tables, result }) => {
+    const db = openNodeSqliteDatabase(":memory:");
+    mock.database = db;
+    try {
+      for (const table of tables) {
+        db.exec(getOpenClawStateFeatureSchemaSql(table));
+      }
+      expect(await mock.handler({ ...request, command })).toEqual({
+        ok: true,
+        type: command.type,
+        sourceAdmitted: true,
+        ...result,
+      });
+      expect(mock.unrelatedHandlerLoaded).toBe(false);
+    } finally {
+      db.close();
+    }
+  },
+);
 
 it("starts its PG bridge while the first command module is still loading", async () => {
   const databasePath = path.join(tempDirs.make("state-reader-bridge-prestart-"), "state.sqlite");

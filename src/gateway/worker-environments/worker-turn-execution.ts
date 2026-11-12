@@ -7,7 +7,7 @@ import {
   copyAgentToolMetadata,
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
-import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.async.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";

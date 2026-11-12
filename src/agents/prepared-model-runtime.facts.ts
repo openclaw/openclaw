@@ -75,7 +75,7 @@ import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import type { AuthStorage } from "./sessions/auth-storage.core.js";
 
 type PreparedConfiguredModelRegistry = {
   oauthProviders: ReturnType<AuthStorage["getOAuthProviders"]>;

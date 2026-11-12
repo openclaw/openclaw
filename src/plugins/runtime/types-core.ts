@@ -435,7 +435,9 @@ export type PluginRuntimeCore = {
   };
   system: {
     captureSessionEventTarget: typeof import("./runtime-session-events.js").captureSessionEventTarget;
-    enqueueSessionEvent: typeof import("./runtime-session-events.js").enqueueSessionEvent;
+    enqueueSessionEvent: ReturnType<
+      typeof import("./runtime-session-events.js").createSessionEventEnqueuer
+    >;
     enqueueSystemEvent: typeof import("./system-events.js").enqueueSystemEventFromSdk;
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;

@@ -11,14 +11,11 @@ import {
 } from "../agents/agent-scope.js";
 import { bindAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import { wrapToolWithAbortSignal } from "../agents/agent-tools.abort.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.async.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   type HookContext,
 } from "../agents/agent-tools.before-tool-call.js";
-import {
-  createOpenClawCodingToolsInternalAsync,
-  resolveToolLoopDetectionConfig,
-} from "../agents/agent-tools.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "../agents/auth-profiles/source-check.js";
 import { createHeadlessDeadlineScope } from "../agents/code-mode-headless.js";
 import type {
@@ -47,6 +44,7 @@ import {
   resolveScheduledToolPolicyContext,
   type ScheduledToolPolicyContext,
 } from "../agents/scheduled-tool-policy.js";
+import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
