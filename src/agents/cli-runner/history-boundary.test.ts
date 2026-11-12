@@ -525,6 +525,26 @@ describe("CLI transcript account boundary", () => {
     });
   });
 
+  it("an empty reset after more history than the bounded read still starts fresh", async () => {
+    const f = await seededFixture();
+    for (let index = 0; index < 120; index += 1) {
+      append(f, `A long history ${index}`);
+    }
+    const kept = f.manager().getLeafId() ?? undefined;
+    f.manager().appendResetBoundary("reset", kept);
+    await f.run("epoch-b", async (allowed) => expect(allowed).toBe(false));
+    f.manager().appendResetBoundary("reset");
+    await f.run("epoch-b", async (allowed) => {
+      expect(allowed).toBe(true);
+      append(f, "B fresh canary");
+    });
+    await f.run("epoch-b", async (allowed, params) => {
+      const prompt = await history(allowed, params);
+      expect(prompt).toContain("B fresh canary");
+      expect(prompt).not.toContain("A long history");
+    });
+  });
+
   it("admits a finished writer's successor while refusing the live writer", async () => {
     const f = await seededFixture();
     await f.withRun("orchestrator-prior", async (params) => {
