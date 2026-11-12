@@ -1,5 +1,8 @@
 import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { pathForRoute } from "../app-route-paths.ts";
+import { registerSessionFoldersEnglish } from "../i18n/locales/en-session-folders.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
@@ -18,6 +21,8 @@ import {
 import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+registerSessionFoldersEnglish();
+
 export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -332,6 +337,27 @@ export function renderSessionSection(params: {
                   {labelText()}
                 </button>
               )}
+              <Show when={group()}>
+                {(name) => (
+                  <a
+                    class="sidebar-session-group-actions"
+                    aria-label={t("sessionFolders.openFolder", { name: name() })}
+                    title={t("sessionFolders.openFolder", { name: name() })}
+                    href={`${pathForRoute("sessions", host().basePath)}?folder=${encodeURIComponent(name())}`}
+                    onClick={(event) => {
+                      if (host().onNavigate) {
+                        handleNavigationClick(event, () =>
+                          host().onNavigate?.("sessions", {
+                            search: `?folder=${encodeURIComponent(name())}`,
+                          }),
+                        );
+                      }
+                    }}
+                  >
+                    <Icon name="folder" />
+                  </a>
+                )}
+              </Show>
               {group() || section().id === "ungrouped" ? (
                 <NewSessionLink
                   basePath={host().basePath}

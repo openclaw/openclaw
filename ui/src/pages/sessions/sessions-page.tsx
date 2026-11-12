@@ -10,16 +10,19 @@ import {
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerSessionFoldersEnglish } from "../../i18n/locales/en-session-folders.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { i18nRevision } from "../../lib/reactive/i18n.ts";
 import "../../styles/settings.css";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { SessionFolderView } from "./folder-view.tsx";
 import type { SessionsRouteData } from "./route.ts";
 import { sessionHubTabs } from "./session-hub-tabs.ts";
 import { SessionManagementMenu } from "./session-menu.tsx";
 import { createSessionsPage, type SessionsPageOwner } from "./sessions-page-state.ts";
 import { SessionsView } from "./view.tsx";
+registerSessionFoldersEnglish();
 
-export function SessionsPageContent(props: { page: SessionsPageOwner }) {
+export function SessionsPageContent(props: { page: SessionsPageOwner; folder?: string | null }) {
   const context = useApplication();
   const view = createMemo(() => {
     i18nRevision();
@@ -51,32 +54,61 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
     <>
       <HubPageHeader<"sessions" | "worktrees">
         active="sessions"
+        title={props.folder != null ? props.folder || t("sessionFolders.title") : undefined}
         tabs={sessionHubTabs("sessions", (tab) => context.navigate(tab))}
         docsUrl="https://docs.openclaw.ai/concepts/session"
         class="sessions-hub-header"
         actions={
-          <AgentScopeControl
-            agents={(() => {
-              props.page.revision();
-              return context.agents.state.agentsList?.agents ?? [];
-            })()}
-            selection={context.agentSelection}
-            selectedId={(() => {
-              props.page.revision();
-              return context.agentSelection.state.scopeId;
-            })()}
-          />
+          <>
+            <button
+              class="btn btn--sm"
+              onClick={() =>
+                context.navigate("sessions", { search: props.folder != null ? "" : "?folder=" })
+              }
+            >
+              {t(props.folder != null ? "sessionFolders.allThreads" : "sessionFolders.title")}
+            </button>
+            <AgentScopeControl
+              agents={(() => {
+                props.page.revision();
+                return context.agents.state.agentsList?.agents ?? [];
+              })()}
+              selection={context.agentSelection}
+              selectedId={(() => {
+                props.page.revision();
+                return context.agentSelection.state.scopeId;
+              })()}
+            />
+          </>
         }
       />
       <SettingsWorkspace id="sessions-hub-panel">
-        <SessionsView
-          {...view()}
-          commandPending={commandPending()}
-          onDeleteSelected={() => presentCommand(view().onDeleteSelected())}
-          onDeleteAllArchived={() => presentCommand(view().onDeleteAllArchived())}
-          onPatch={(...args) => presentCommand(view().onPatch(...args))}
-          onAssignCategory={(...args) => presentCommand(view().onAssignCategory(...args))}
-        />
+        <Show
+          when={props.folder != null}
+          fallback={
+            <SessionsView
+              {...view()}
+              commandPending={commandPending()}
+              onDeleteSelected={() => presentCommand(view().onDeleteSelected())}
+              onDeleteAllArchived={() => presentCommand(view().onDeleteAllArchived())}
+              onPatch={(...args) => presentCommand(view().onPatch(...args))}
+              onAssignCategory={(...args) => presentCommand(view().onAssignCategory(...args))}
+            />
+          }
+        >
+          <SessionFolderView
+            folder={props.folder ?? ""}
+            onOpen={(folder) =>
+              context.navigate("sessions", { search: `?folder=${encodeURIComponent(folder)}` })
+            }
+            view={{
+              ...view(),
+              commandPending: commandPending(),
+              onPatch: (...args) => presentCommand(view().onPatch(...args)),
+              onAssignCategory: (...args) => presentCommand(view().onAssignCategory(...args)),
+            }}
+          />
+        </Show>
       </SettingsWorkspace>
       <Show when={menu()}>
         {(current) => (
@@ -106,7 +138,7 @@ export function SessionsPage(props: { routeData?: SessionsRouteData }) {
   );
   return (
     <openclaw-sessions-page>
-      <SessionsPageContent page={page} />
+      <SessionsPageContent page={page} folder={props.routeData?.folder} />
     </openclaw-sessions-page>
   );
 }
