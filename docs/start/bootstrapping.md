@@ -51,6 +51,41 @@ file keeps onboarding pending even if an update changes the bundled template.
 [BOOTSTRAP.md template](/reference/templates/BOOTSTRAP).
 </Note>
 
+## Conversation starters
+
+Add optional YAML frontmatter to a workspace's `BOOTSTRAP.md` to offer
+setup-specific prompts on the Control UI's new-chat screen:
+
+```markdown
+---
+conversationStarters:
+  - Connect my calendar
+  - Set up a repository
+  - Walk me through setup
+---
+
+# First-run setup
+
+Help the user connect their tools and choose their preferences.
+```
+
+The existing agent `description` setting supplies the welcome description.
+Starters are plain-text prompts in author order. Opening the screen sends
+nothing; clicking a starter submits that text as a normal user message.
+Custom starters remain available beside recent chats and on phones. Incognito
+keeps authored starters without showing recent chats; model setup and terminal
+targets keep their own guidance.
+
+Missing, empty, malformed, or unreadable starter metadata keeps the default
+suggestions. Entries must be nonempty strings; surrounding whitespace is trimmed.
+The Markdown instructions and native seed-once lifecycle are unchanged.
+When setup removes `BOOTSTRAP.md`, its starters disappear on the next refreshed
+agent list. Starters are not copied into agent configuration or retained after
+bootstrap completion.
+
+[Templates](/cli/templates) can ship the same frontmatter in their package-root
+`BOOTSTRAP.md`; Add preserves it with the first-run instructions.
+
 ## Embedded and local model runs
 
 For embedded or local-model runs, OpenClaw keeps `BOOTSTRAP.md` out of the
