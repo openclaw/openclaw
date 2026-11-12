@@ -1,4 +1,4 @@
-name: Release unresolved memory retirement proof
+name: Release memory retirement formatted candidate proof
 'on':
   workflow_dispatch:
     inputs:
@@ -6,11 +6,11 @@ name: Release unresolved memory retirement proof
         required: true
         type: string
         description: Exact frozen candidate SHA; prerequisite diagnostic, not final FRV
-        default: ac02d3131a9df6bccd9ed9373e96a5ac57110d7f
+        default: a233af0b84e093845c62e88c2702cbd9b297f22c
 permissions:
   contents: read
 concurrency:
-  group: release-memory-retirement-ac02d3131a9df6bccd9ed9373e96a5ac57110d7f
+  group: release-memory-retirement-a233af0b84e093845c62e88c2702cbd9b297f22c
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -21,8 +21,8 @@ env:
   PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
   CAPACITY_PROOF_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
   PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
-  CANDIDATE_SHA: ac02d3131a9df6bccd9ed9373e96a5ac57110d7f
-  SOURCE_TREE: 95a78e4c72bae0deb281cf6772dd3731a9a2d0b0
+  CANDIDATE_SHA: a233af0b84e093845c62e88c2702cbd9b297f22c
+  SOURCE_TREE: fefba51180be86548a58cc0438ba340716110bd7
   PATHS_SHA256: 56a1d5118580b0ea7c50e12d42dac3d95dfabcee58ecf5561b6797c92ae0ef93
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
@@ -232,192 +232,3 @@ jobs:
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 14
-  negative-regression:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        ref: 63432e1f987b84c6ac022ca3def0ab0394e3ee01
-        fetch-depth: 0
-        persist-credentials: false
-    - name: Bind exact candidate
-      shell: bash
-      run: 'set -euo pipefail
-
-        test "${{ inputs.target_ref }}" = "ac02d3131a9df6bccd9ed9373e96a5ac57110d7f"
-
-        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-
-        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
-
-        test -z "$(git status --porcelain)"
-
-        git merge-base --is-ancestor "$BASE_SHA" HEAD
-
-        mkdir -p .artifacts/final-ci
-
-        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
-
-        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
-
-        printf ''C=%s
-
-        Q=%s
-
-        P=%s
-
-        workflow=%s
-
-        run=%s
-
-        attempt=%s
-
-        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
-        > .artifacts/final-ci/identity.txt
-
-        '
-    - uses: ./.github/actions/setup-node-env
-      with:
-        semantic-checks: 'true'
-        install-bun: 'false'
-        cache-mode: restore
-    - uses: ./.github/actions/setup-test-bun
-    - uses: ./.github/actions/setup-ripgrep
-    - name: Apply test-only negative regression overlay
-      shell: bash
-      run: 'set -euo pipefail
-
-        python3 <<''PY''
-
-        import json,pathlib,hashlib,subprocess
-
-        r={''path'': ''extensions/memory-core/src/memory/manager-registry.reload.test.ts'', ''beforeSha256'': ''c24e920b29afa800cf968b70999938d02943030a46d61b26a4d22cd1ecc55056'',
-        ''afterSha256'': ''4e6c92094526dff307e0180b758f9a30290f080c282e442818b8860a82808ff0'', ''content'': ''import { createDeferred
-        } from "openclaw/plugin-sdk/extension-shared";\nimport type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";\nimport
-        { describe, expect, it, vi } from "vitest";\nimport { prepareMemoryManagerReload, type MemoryManagerLifecycle } from
-        "./lifecycle.js";\nimport { MemoryManagerRegistry } from "./manager-registry.js";\n\ndescribe("memory manager adapter
-        retirement", () => {\n  it.each(["reject", "unavailable"])(\n    "retires a fallback-backed manager when its %s primary
-        adapter is replaced",\n    async (failure) => {\n      const lifecycle: MemoryManagerLifecycle = {};\n      const
-        registry = new MemoryManagerRegistry(lifecycle);\n      const manager = { close: vi.fn(async () => {}) };\n      const
-        unaffected = { close: vi.fn(async () => {}) };\n      registry.track(manager, "fallback-backed");\n      registry.track(unaffected,
-        "fallback-only");\n      const primary: MemoryEmbeddingProviderAdapter = {\n        id: "primary",\n        create:
-        async () => ({ provider: null }),\n      };\n      const fallback: MemoryEmbeddingProviderAdapter = {\n        id:
-        "fallback",\n        create: async () => ({\n          provider: {\n            id: "fallback",\n            model:
-        "test-embedding",\n            embed: async () => [1],\n            embedBatch: async () => [[1]],\n          },\n        }),\n      };\n      const
-        creation = registry.createProvider(manager, primary, async () => {\n        if (failure === "reject") {\n          throw
-        new Error("Primary adapter unavailable");\n        }\n        return { provider: null };\n      });\n      if (failure
-        === "reject") {\n        await expect(creation).rejects.toThrow("Primary adapter unavailable");\n      } else {\n        await
-        expect(creation).resolves.toEqual({ provider: null });\n      }\n      for (const owner of [manager, unaffected])
-        {\n        await registry.createProvider(owner, fallback, () =>\n          fallback.create({ config: {}, model: "test-embedding"
-        }),\n        );\n      }\n\n      const retirement = prepareMemoryManagerReload(\n        { retireRuntime: false,
-        retiringEmbeddingProviders: [primary] },\n        lifecycle,\n      );\n      try {\n        await expect(retirement.drain()).resolves.toEqual({
-        errors: [] });\n        expect(manager.close).toHaveBeenCalledOnce();\n        expect(unaffected.close).not.toHaveBeenCalled();\n      }
-        finally {\n        retirement.resume();\n      }\n    },\n  );\n});\n\nit("drains unresolved managers only when adapters
-        retire and fences their late provider work", async () => {\n  const lifecycle: MemoryManagerLifecycle = {};\n  const
-        registry = new MemoryManagerRegistry(lifecycle);\n  const closing = createDeferred<void>();\n  const pending = {\n    close:
-        vi.fn(async () => {\n      await closing.promise;\n    }),\n  };\n  const affected = { close: vi.fn(async () => {})
-        };\n  const unaffected = { close: vi.fn(async () => {}) };\n  const primary: MemoryEmbeddingProviderAdapter = {\n    id:
-        "primary",\n    create: async () => ({ provider: null }),\n  };\n  const other: MemoryEmbeddingProviderAdapter = {\n    id:
-        "other",\n    create: async () => ({ provider: null }),\n  };\n  registry.track(pending, "pending");\n  registry.track(affected,
-        "affected");\n  registry.track(unaffected, "unaffected");\n  await registry.createProvider(affected, primary, () =>\n    primary.create({
-        config: {}, model: "test" }),\n  );\n  await registry.createProvider(unaffected, other, () =>\n    other.create({
-        config: {}, model: "test" }),\n  );\n  const unchanged = prepareMemoryManagerReload(\n    { retireRuntime: false,
-        retiringEmbeddingProviders: [] },\n    lifecycle,\n  );\n  await unchanged.drain();\n  unchanged.resume();\n  expect(pending.close).not.toHaveBeenCalled();\n  const
-        retirement = prepareMemoryManagerReload(\n    { retireRuntime: false, retiringEmbeddingProviders: [primary] },\n    lifecycle,\n  );\n  const
-        drain = retirement.drain();\n  try {\n    expect(pending.close).toHaveBeenCalledOnce();\n    const create = vi.fn(async
-        () => ({ provider: null }));\n    await expect(registry.createProvider(pending, other, create)).rejects.toThrow("reloading");\n    expect(create).not.toHaveBeenCalled();\n    expect(affected.close).toHaveBeenCalledOnce();\n    expect(unaffected.close).not.toHaveBeenCalled();\n  }
-        finally {\n    closing.resolve();\n    await drain;\n    retirement.resume();\n  }\n  expect(pending.close).toHaveBeenCalledOnce();\n});\n\nit("joins
-        pending manager cleanup across overlapping reload drains", async () => {\n  const lifecycle: MemoryManagerLifecycle
-        = {};\n  const registry = new MemoryManagerRegistry(lifecycle);\n  const closing = createDeferred<void>();\n  const
-        manager = { close: () => closing.promise };\n  const failure = new Error("manager cleanup failed");\n  registry.track(manager,
-        "shared-manager");\n  const first = prepareMemoryManagerReload(\n    { retireRuntime: true, retiringEmbeddingProviders:
-        [] },\n    lifecycle,\n  );\n  const firstDrain = first.drain();\n  const second = prepareMemoryManagerReload(\n    {
-        retireRuntime: true, retiringEmbeddingProviders: [] },\n    lifecycle,\n  );\n  const secondDrain = second.drain();\n  try
-        {\n    closing.reject(failure);\n    await expect(Promise.all([firstDrain, secondDrain])).resolves.toEqual([\n      {
-        errors: [failure] },\n      { errors: [failure] },\n    ]);\n  } finally {\n    closing.resolve();\n    await Promise.allSettled([firstDrain,
-        secondDrain]);\n    first.resume();\n    second.resume();\n  }\n});\n\nit("fences acquisition when reload starts before
-        the manager owner initializes", async () => {\n  const lifecycle: MemoryManagerLifecycle = {};\n  const reload = prepareMemoryManagerReload(\n    {
-        retireRuntime: true, retiringEmbeddingProviders: [] },\n    lifecycle,\n  );\n  const registry = new MemoryManagerRegistry(lifecycle);\n  const
-        manager = { close: vi.fn(async () => {}) };\n  const create = vi.fn(() => manager);\n  const acquire = () =>\n    registry.acquire(\n      {
-        agentId: "main", purpose: "default" },\n      {\n        prepare: () => ({ key: "main:default", create, reuse: ()
-        => true }),\n      },\n    );\n  try {\n    await expect(acquire()).rejects.toThrow("reloading");\n    expect(create).not.toHaveBeenCalled();\n    await
-        expect(reload.drain()).resolves.toEqual({ errors: [] });\n  } finally {\n    reload.resume();\n  }\n  expect(await
-        acquire()).toBe(manager);\n  await registry.closeAll();\n  expect(manager.close).toHaveBeenCalledOnce();\n});\n''}
-
-        p=pathlib.Path(r[''path'']);assert hashlib.sha256(p.read_bytes()).hexdigest()==r[''beforeSha256''];p.write_text(r[''content'']);assert
-        hashlib.sha256(p.read_bytes()).hexdigest()==r[''afterSha256'']
-
-        pathlib.Path(''.artifacts/final-ci/negative-overlay.json'').write_text(json.dumps({''qualification'':False,''record'':r},indent=2))
-
-        with open(''.artifacts/final-ci/negative-overlay.patch'',''w'') as f:subprocess.run([''git'',''diff'',''--'',r[''path'']],stdout=f,check=True)
-
-        PY
-
-        '
-    - name: Canonical test project router
-      shell: bash
-      run: 'set +e
-
-        set -uo pipefail
-
-        mapfile -t suites < <(node -e ''for(const p of JSON.parse(process.env.TESTS_JSON)) console.log(p)'')
-
-        node scripts/test-projects.mts "${suites[@]}" -- --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/final-ci/tests.json"
-        2>&1 | tee .artifacts/final-ci/tests.log
-
-        status=$?
-
-        printf "%s\n" "$status" > .artifacts/final-ci/exit-code.txt
-
-        exit 0
-
-        '
-    - name: Require original selection defect in baseline
-      shell: bash
-      run: 'set -euo pipefail
-
-        python3 <<''PY''
-
-        import json,pathlib
-
-        p=pathlib.Path(''.artifacts/final-ci'');r=json.loads((p/''tests.json'').read_text());assert int((p/''exit-code.txt'').read_text())!=0
-
-        assert r[''numPassedTests'']==4 and r[''numFailedTests'']==1 and r[''numPendingTests'']==0
-
-        cases=[a for s in r[''testResults''] for a in s[''assertionResults'']];assert len(cases)==5
-
-        hit=[a for a in cases if a[''title'']==''drains unresolved managers only when adapters retire and fences their late
-        provider work''];assert len(hit)==1 and hit[0][''status'']==''failed''
-
-        assert all(a[''status'']==''passed'' for a in cases if a is not hit[0])
-
-        msg='' ''.join(hit[0][''failureMessages'']);assert ''called once'' in msg and ''0'' in msg,msg
-
-        print(json.dumps({''qualification'':False,''expectedRegressionFailure'':True,''passed'':4,''failed'':1}))
-
-        PY
-
-        '
-    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-      if: always()
-      with:
-        name: tests-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: .artifacts/
-        include-hidden-files: true
-        if-no-files-found: error
-        retention-days: 14
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-        - lane: registry-before
-          tests_json: '["extensions/memory-core/src/memory/manager-registry.reload.test.ts"]'
-    env:
-      TESTS_JSON: ${{ matrix.tests_json }}
-      OPENCLAW_SESSION_EXPORT_STRESS: '1'
-      REQUIRE_STRESS: ${{ matrix.lane == 'memory-replay' && '1' || '0' }}
-      PROOF_LANE: ${{ matrix.lane }}
-      CANDIDATE_SHA: 63432e1f987b84c6ac022ca3def0ab0394e3ee01
-      SOURCE_TREE: 141a1a3df9d5909e7f2c6365714750318c1bcc93
-      PATHS_SHA256: c6b9bda9fd4108f93953a5a3ae37a223edaba11f0888c4a03eb05206dca710cc
