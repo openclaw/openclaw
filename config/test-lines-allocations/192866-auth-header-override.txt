@@ -1,0 +1,2 @@
+# Net test-line growth for the simple-completion authHeader override fix (PR #192880).
+25
