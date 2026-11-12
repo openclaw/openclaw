@@ -448,6 +448,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     sessionId: requestContext.sessionId,
                     runId: requestContext.runId,
                     ...(requestContext.requester ? { requester: requestContext.requester } : {}),
+                    ...(requestContext.trigger ? { trigger: requestContext.trigger } : {}),
                     approvalReviewerDeviceId: requestContext.approvalReviewerDeviceId,
                     channelId: requestContext.currentChannelId,
                     turnSourceChannel: requestContext.messageProvider,

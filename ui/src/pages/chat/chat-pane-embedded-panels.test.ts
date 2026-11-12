@@ -342,6 +342,7 @@ it.each(["ready", "unavailable", "error"] as const)(
     const attachment = videoAttachment(source, {
       sizeBytes: 574_000,
       artifactId: `artifact_${attachmentId}`,
+      playback: "native",
     });
     let rerender = () => {};
     mountSolid(
