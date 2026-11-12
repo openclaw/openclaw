@@ -160,7 +160,11 @@ function gitBackupRepositoryPrivacyRemediation(repositoryPath: string, cause: un
 }
 
 async function assertGitRepository(repositoryPath: string): Promise<void> {
-  const topLevel = await requireGit(repositoryPath, ["rev-parse", "--show-toplevel"]);
+  // Git appends one LF; other trailing characters can belong to the repository path.
+  const topLevel = requireGitCommandOutput(
+    "git rev-parse --show-toplevel",
+    await runGit(repositoryPath, ["rev-parse", "--show-toplevel"]),
+  ).replace(/\n$/, "");
   const [canonicalTopLevel, canonicalRepository] = await Promise.all([
     fs.realpath(normalizeGitPathForFilesystem(topLevel)),
     fs.realpath(repositoryPath),

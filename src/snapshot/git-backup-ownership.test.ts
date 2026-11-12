@@ -297,3 +297,16 @@ it("still refuses missing, non-regular, and corrupted declared payloads", async 
     await expectMissing(path.join(root, `${condition}.sqlite`));
   }
 });
+
+it("initializes and commits in a repository path that ends in whitespace", async () => {
+  const root = roots.make("git-backup-trailing-space-");
+  const repository = gitBackupRepository(root, "repository ");
+  // Pre-create the private root so initialization adopts it instead of creating it;
+  // creation of whitespace-suffixed directories is owned by @openclaw/fs-safe.
+  await fs.mkdir(repository.repositoryPath, { mode: 0o700 });
+  await repository.init();
+  await repository.configureIdentity();
+  await repository.write("note.txt", "kept");
+  await repository.commit("add note", "note.txt");
+  await expectContents(repository.file("note.txt"), "kept");
+});
