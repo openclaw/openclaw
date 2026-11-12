@@ -8,8 +8,8 @@ export type CronRunRecoveryInput = {
   cronConfig?: CronConfig;
   /** Owner for agent-less jobs when selecting agent-scoped failure routes. */
   defaultAgentId?: string;
-  /** Jobs still running in this process; their receipts stay with that live owner. */
-  protectedJobIds?: string[];
+  /** Receipts a cron owner in this process still holds; that owner settles them. */
+  liveReceiptIds?: string[];
   failureRepairTimeoutMs?: number;
 };
 

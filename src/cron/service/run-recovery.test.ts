@@ -3,7 +3,6 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
@@ -52,10 +51,10 @@ async function recoveryStore(jobs: CronJob[]) {
     storePath,
     storeKey,
     context,
-    recover: () =>
+    recover: (liveReceiptIds?: string[]) =>
       executeOpenClawStateWorker(context, {
         type: "cron.recoverRuns",
-        input: { storeKey, nowMs: now + 1_000 },
+        input: { storeKey, nowMs: now + 1_000, liveReceiptIds },
       }),
     request: (
       entry: CronJob,
@@ -168,14 +167,11 @@ describe("worker-owned startup recovery", () => {
   it("keeps recovered rows resident and observes a later in-process write", async () => {
     const entry = job("resident-recovery");
     const store = await recoveryStore([entry]);
-    await activateManual(store, entry);
+    const receipt = await activateManual(store, entry);
+    // A cron reload's replacement leaves a run its predecessor still holds alone.
+    expect((await store.recover([receipt.receiptId])).interruptedRuns).toEqual([]);
     const state = makeCronRecoveryState(logger, store.storePath, now + 1_000);
     await ensureLoaded(state);
-    // A run still live in this process keeps its receipt, as when a cron reload's replacement starts.
-    const marker = markCronJobActive(entry.id);
-    expect(await recoverCronRuns(state)).toEqual(new Set([entry.id]));
-    expect(state.store?.jobs[0]?.state.runningAtMs).toBe(now);
-    clearCronJobActive(entry.id, marker);
     await recoverCronRuns(state);
 
     const resident = state.store;
@@ -378,6 +374,9 @@ describe("worker-owned startup recovery", () => {
     const beforeJob = (await loadCronStore(store.storePath)).jobs[0];
     const beforeHistory = await store.history();
     expect(beforeHistory).toHaveLength(1);
+    // The owner keeps the receipt until its timed-out execution settles.
+    await store.recover([receipt.receiptId]);
+    expect(store.receiptStatus(receipt.receiptId)).toMatchObject({ status: "running" });
     const result = await store.recover();
     expect(result.interruptedRuns).toEqual([]);
     expect((await loadCronStore(store.storePath)).jobs[0]).toEqual(beforeJob);

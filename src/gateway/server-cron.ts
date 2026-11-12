@@ -841,7 +841,7 @@ export function buildGatewayCronService(params: {
   let startPromise: Promise<void> | undefined;
   let schedulingPaused = false;
   let schedulingResume: Deferred | undefined;
-  const stopCronLifecycle = (preserveExitWatchers = false) => {
+  const stopCronLifecycle = (handover = false) => {
     stopped = true;
     heartbeatSummary.clear();
     started = false;
@@ -851,8 +851,8 @@ export function buildGatewayCronService(params: {
     schedulingResume = undefined;
     settleExitWatcherHandoff(false);
     try {
-      stopCron();
-      if (preserveExitWatchers) {
+      stopCron(handover);
+      if (handover) {
         // A committed replacement owns these children; fence this scheduler
         // without terminating the adopted manager.
         exitWatchersStopped = true;

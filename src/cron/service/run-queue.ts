@@ -584,3 +584,8 @@ export async function waitForCronJobRun(state: CronServiceState, jobId: string):
   await Promise.allSettled(runs);
   return runs.length > 0;
 }
+
+/** Receipts same-store owners still hold, through any execution settlement after their result. */
+export function listLiveCronRunReceiptIds(state: CronServiceState): string[] {
+  return listCronRunQueueOwners(state).flatMap((owner) => [...launchState(owner).contexts.keys()]);
+}
