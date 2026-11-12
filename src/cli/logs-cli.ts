@@ -576,7 +576,7 @@ export function registerLogsCli(program: Command) {
             );
           } else if (
             errorLine(colorize(rich, theme.error, errorText)) &&
-            errorLine(details.message)
+            (errorText.includes(details.message) || errorLine(details.message))
           ) {
             errorLine(colorize(rich, theme.muted, hint));
           }
