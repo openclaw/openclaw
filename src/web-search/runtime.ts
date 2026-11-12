@@ -352,9 +352,23 @@ function selectWebSearchCandidates(
     return provider.id;
   }
 
+  // Explicit provider ids are matched case-insensitively, like config selection,
+  // while an exact registered id always wins: a plugin may register a mixed-case
+  // provider id and selecting it verbatim must keep working.
+  const explicitProviderId = options?.providerId?.trim();
+  const storedExplicitProviderId = explicitProviderId
+    ? (
+        providers.find((entry) => entry.id === explicitProviderId) ??
+        providers.find((entry) => entry.id.toLowerCase() === explicitProviderId.toLowerCase())
+      )?.id
+    : undefined;
+  if (explicitProviderId && !storedExplicitProviderId) {
+    throw new Error(`Unknown web_search provider "${explicitProviderId}".`);
+  }
+
   const preferredIds = uniqueStrings(
     [
-      options?.providerId,
+      storedExplicitProviderId,
       resolveRuntimePreferredWebSearchProviderId(),
       resolveWebSearchProviderId({
         config,
@@ -367,10 +381,6 @@ function selectWebSearchCandidates(
     ].filter((value): value is string => Boolean(value)),
   );
 
-  const explicitProviderId = options?.providerId?.trim();
-  if (explicitProviderId && !providers.some((entry) => entry.id === explicitProviderId)) {
-    throw new Error(`Unknown web_search provider "${explicitProviderId}".`);
-  }
   const explicitSelection = hasExplicitWebSearchSelection({
     search,
     runtimeWebSearch,
