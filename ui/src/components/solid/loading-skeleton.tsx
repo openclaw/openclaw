@@ -131,13 +131,13 @@ export function ConnectingSplash(props: {
         </aside>
         <div class="connect-splash__main">
           <LoadingSkeleton composer={route === "chat"} renderContent={props.renderContent} />
-          {!props.renderContent ? (
+          {props.status && !props.renderContent ? (
             <span
               class="connect-splash__status"
               aria-hidden="true"
               onMouseDown={(event) => event.stopPropagation()}
             >
-              {props.status ?? t("common.loading")}
+              {props.status}
             </span>
           ) : null}
         </div>

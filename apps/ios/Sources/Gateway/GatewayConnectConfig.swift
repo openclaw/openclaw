@@ -18,6 +18,9 @@ struct GatewayConnectConfig: Sendable {
     let password: String?
     var nodeOptions: GatewayConnectOptions
     var ingressAuthorization: GatewayIngressAuthorization?
+    /// Control UI mount advertised by the connected operator session's hello-ok.
+    /// Learned after connect, so it stays out of the connection and WebView identity inputs.
+    var controlUiBasePath: String?
 
     /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.

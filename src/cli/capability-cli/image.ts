@@ -248,12 +248,15 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
               const resolvedPath = /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
               const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
               const preparedImage = activeModel
-                ? await prepareImageDescriptionInput({
-                    filePath: resolvedPath,
-                    ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-                    cfg,
-                    timeoutMs,
-                  })
+                ? await prepareImageDescriptionInput(
+                    {
+                      filePath: resolvedPath,
+                      ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+                      cfg,
+                      timeoutMs,
+                    },
+                    execution,
+                  )
                 : undefined;
               const result =
                 activeModel && preparedImage

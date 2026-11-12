@@ -10,14 +10,16 @@ import {
 } from "../memory-host-sdk/host/types.js";
 import { assertMemoryCallerCurrent, prepareMemoryCallerRead } from "./memory-audience.js";
 import type {
-  MemoryCallerContext,
   MemoryProviderHandle,
-  MemoryProviderOpenParams,
-  MemoryProviderOpenResult,
   MemorySearchHit,
   MemorySearchPage,
   MemoryCitation,
   MemoryReference,
+} from "./memory-provider-runtime-types.js";
+import type {
+  MemoryCallerContext,
+  MemoryProviderOpenParams,
+  MemoryProviderOpenResult,
 } from "./memory-provider-types.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";

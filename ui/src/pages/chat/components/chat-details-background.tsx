@@ -4,7 +4,11 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { projectDetailsSubagents } from "../chat-details-snapshot.ts";
+import {
+  DETAILS_SUBAGENT_ACTIVITY_PREVIEW_ROWS as PREVIEW_ROWS,
+  detailsSubagentCollection,
+  projectDetailsSubagents,
+} from "../chat-details-snapshot.ts";
 import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import {
   listSubagents,
@@ -39,7 +43,6 @@ type Props = {
 };
 type State = "running" | "queued" | "failed" | "stopped" | "done";
 type Tally = Record<State, number>;
-const PREVIEW_ROWS = 3;
 
 // The bar fills settled work from the start; the text leads with what is still going.
 const SEGMENTS = ["done", "failed", "stopped", "running", "queued"] as const;
@@ -49,6 +52,29 @@ const ORDER: Record<State, number> = { running: 0, queued: 1, failed: 2, stopped
 
 const subagentState = (row: ChatSubagentActivityRow): State =>
   row.status === "waiting" ? "running" : row.status;
+
+function BackgroundMore(props: {
+  hidden: number;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Show when={props.hidden > 0}>
+      <button
+        type="button"
+        class="chat-details__more"
+        disabled={props.disabled}
+        aria-expanded={props.expanded ? "true" : "false"}
+        onClick={() => props.onExpandedChange(!props.expanded)}
+      >
+        {props.expanded
+          ? t("chat.sessionDetails.showLess")
+          : t("chat.sessionDetails.showMore", { count: String(props.hidden) })}
+      </button>
+    </Show>
+  );
+}
 
 /**
  * One collapsible kind of background work. The heading keeps the observed counts
@@ -74,7 +100,6 @@ function BackgroundGroup(props: {
         t(`chat.sessionDetails.tally.${state}`, { count: String(props.tally[state]) }),
       )
       .join(" · ");
-  const hidden = () => props.total - PREVIEW_ROWS;
   const heading = () => (
     <>
       <span class="chat-details__caption-title">{props.title}</span>
@@ -98,18 +123,11 @@ function BackgroundGroup(props: {
   const content = () => (
     <>
       {props.children}
-      <Show when={hidden() > 0}>
-        <button
-          type="button"
-          class="chat-details__more"
-          aria-expanded={props.expanded ? "true" : "false"}
-          onClick={() => props.onExpandedChange(!props.expanded)}
-        >
-          {props.expanded
-            ? t("chat.sessionDetails.showLess")
-            : t("chat.sessionDetails.showMore", { count: String(hidden()) })}
-        </button>
-      </Show>
+      <BackgroundMore
+        hidden={props.total - PREVIEW_ROWS}
+        expanded={props.expanded}
+        onExpandedChange={props.onExpandedChange}
+      />
       <Show when={props.onOpenAll}>
         <button
           type="button"
@@ -192,35 +210,20 @@ export function ChatDetailsBackground(
   const activityReady = createMemo(() =>
     Boolean(hasLoadedDetailsSubagents(props.details) || props.details.subagentSessionsUnavailable),
   );
-  const roster = createMemo(() => listSubagents(props.details));
+  const roster = createMemo(() => listSubagents(props.details).filter((row) => row.listed));
   const subagents = createMemo(() =>
     roster().toSorted((a, b) => ORDER[subagentState(a)] - ORDER[subagentState(b)]),
   );
-  const unlisted = createMemo(() => subagents().filter((row) => !row.listed));
-  const collection = createMemo(() => roster().filter((row) => row.listed));
   const liveSummary = createMemo(() =>
-    props.desktopSubagents && activityReady()
-      ? projectDetailsSubagents([...collection(), ...unlisted()])
-      : undefined,
+    props.desktopSubagents && activityReady() ? projectDetailsSubagents(roster()) : undefined,
   );
-  const summary = () =>
-    liveSummary() ?? (props.desktopSubagents ? props.details.cachedDetails?.subagents : undefined);
+  const summary = createMemo(() => {
+    const cached = props.desktopSubagents ? props.details.cachedDetails?.subagents : undefined;
+    return liveSummary() ?? (cached && detailsSubagentCollection(cached));
+  });
   const cachedActivity = createMemo(() =>
-    !activityReady() && props.desktopSubagents
-      ? summary()?.rows.filter((row) => row.listed === false)
-      : undefined,
+    !activityReady() && props.desktopSubagents ? summary()?.rows : undefined,
   );
-  const recordSubagents = (rows: readonly ChatSubagentActivityRow[]) => {
-    if (!props.desktopSubagents || !activityReady()) {
-      return;
-    }
-    const ordinary = rows.filter((row) => !row.listed);
-    props.details.onDetailsSnapshot?.({
-      subagents: projectDetailsSubagents(
-        props.details.subagentSessionsUnavailable ? [] : collection().concat(ordinary),
-      ),
-    });
-  };
   const desktopSubagents = createMemo<ChatDetailsSubagentsProps | undefined>(() => {
     const presentation = props.desktopSubagents;
     const snapshot = props.details;
@@ -231,7 +234,7 @@ export function ChatDetailsBackground(
     }
     const current = () => props.presented && props.details === snapshot && activityReady();
     return {
-      rows: collection(),
+      rows: roster(),
       presentation: summary(),
       mobile: false,
       workingLabel: presentation.workingLabel,
@@ -267,9 +270,9 @@ export function ChatDetailsBackground(
   };
   return (
     <>
-      <Show when={liveSummary() && unlisted()} keyed>
+      <Show when={liveSummary()} keyed>
         {(value) => {
-          onSettled(() => recordSubagents(value));
+          onSettled(() => props.details.onDetailsSnapshot?.({ subagents: value }));
           return null;
         }}
       </Show>
@@ -294,7 +297,6 @@ export function ChatDetailsBackground(
                 <ChatSubagentActivity
                   rows={subagents()}
                   presentation={cachedActivity()}
-                  onPresentation={recordSubagents}
                   limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
                   onOpenSubagent={props.details.onOpenSubagent}
                   onOpenSession={props.details.onSessionSelect}
@@ -317,21 +319,6 @@ export function ChatDetailsBackground(
               }
             >
               <ChatDetailsSubagents {...data()} />
-              {/* Children outside the collection keep their native session destination/activity. */}
-              <Show
-                when={
-                  props.presented &&
-                  props.desktopSubagents!.expanded &&
-                  (unlisted().length > 0 || (cachedActivity()?.length ?? 0) > 0)
-                }
-              >
-                <ChatSubagentActivity
-                  rows={unlisted()}
-                  presentation={cachedActivity()}
-                  onPresentation={recordSubagents}
-                  onOpenSession={props.details.onSessionSelect}
-                />
-              </Show>
             </ChatDetailsDesktopSection>
           )}
         </Show>

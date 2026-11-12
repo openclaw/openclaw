@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import "../pages/chat/components/browser-tab-card.css";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
@@ -433,6 +434,11 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         // This matrix checks final colors; animation behavior has its own cases.
         host.style.setProperty("--control-ui-transition-fast", "0s");
         const { page, userEvent } = await import("vitest/browser");
+        const hover = async (element: HTMLElement) => {
+          // These fixtures are static: skip stability frames, but prove the pointer hit.
+          await page.elementLocator(element).hover({ force: true });
+          expect(element.matches(":hover"), element.textContent ?? "hover target").toBe(true);
+        };
         const style = document.head.appendChild(document.createElement("style"));
         onTestFinished(() => style.remove());
         style.textContent =
@@ -507,7 +513,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         ]) {
           const canonical = className.includes("oc-menu-item");
           for (const { name: state, menu, plain } of states) {
-            await page.elementLocator(park).hover();
+            await hover(park);
             park.focus();
             const item = host.appendChild(document.createElement("button"));
             item.className = className;
@@ -537,14 +543,14 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
             const label = `${className}: ${state}`;
             expect(getComputedStyle(item).backgroundColor, `${label} resting`).toBe(color(resting));
             expect(getComputedStyle(item).opacity, `${label} opacity`).toBe(opacity);
-            await page.elementLocator(item).hover();
+            await hover(item);
             await expect
               .poll(() => getComputedStyle(item).backgroundColor, {
                 message: `${label} hover`,
               })
               .toBe(color(interactive));
             if (!item.disabled) {
-              await page.elementLocator(park).hover();
+              await hover(park);
               await userEvent.keyboard("{Tab}");
               item.focus();
               expect(item.matches(":focus-visible"), `${label} keyboard focus`).toBe(true);
@@ -751,7 +757,9 @@ describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
       await userEvent.keyboard("{ArrowUp}");
       if (key === "disabled") {
         expect(button.disabled).toBe(true);
-        expect(button.title).not.toBe("");
+        await expect
+          .element(page.elementLocator(button))
+          .toHaveAccessibleDescription(t("openclawId.signInUnconfigured"));
         expect(document.activeElement).not.toBe(button);
         button.click();
         expect(selected).not.toHaveBeenCalled();

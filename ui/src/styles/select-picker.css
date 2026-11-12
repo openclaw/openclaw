@@ -579,21 +579,6 @@ openclaw-select-picker {
   overscroll-behavior: contain;
 }
 
-.picker-select__menu--phone-sheet:has(.agent-select__menu-title) > .picker-select__page-header {
-  display: none;
-}
-
-.picker-select__menu--phone-sheet .agent-select__menu-title {
-  display: flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 0 36px 0 0;
-  color: var(--text);
-  font-size: inherit;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
 @keyframes picker-sheet-in {
   from {
     transform: translateY(100%);

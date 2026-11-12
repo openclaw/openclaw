@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
@@ -25,7 +25,6 @@ import {
 } from "../../lib/reactive/provider-presentation.tsx";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-providers.css";
-import "../../styles/usage.css";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { DefaultModels } from "./default-models-view.tsx";
@@ -71,15 +70,15 @@ function AddProvider(props: ModelProvidersViewProps) {
               <ModelProviderIcon provider={props.addProviderId} class="model-providers__icon" />{" "}
               {provider()?.displayName ?? displayLabel(props.addProviderId)}
             </h2>
-            <button
+            <IconButton
+              size={28}
               class="oc-dialog__close"
-              type="button"
-              aria-label={t("common.close")}
+              icon="x"
+              label={t("common.close")}
+              tooltip={false}
               disabled={busy()}
               onClick={() => props.onAddProviderToggle()}
-            >
-              <Icon name="x" />
-            </button>
+            />
             <div class="oc-dialog__description">
               <p>{t("modelProviders.credentials.label", { agent: props.credentialAgentLabel })}</p>
             </div>

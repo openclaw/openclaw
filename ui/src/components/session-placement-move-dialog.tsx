@@ -21,7 +21,8 @@ import { observeScrollState } from "./scroll-state-observer.ts";
 import { CloudProfileIcon } from "./solid/cloud-profile-icon.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Menu } from "./solid/menu.tsx";
-import { nextRadio, RadioMark } from "./solid/radio.tsx";
+import { nextRadio } from "./solid/radio-navigation.ts";
+import { RadioMark } from "./solid/radio.tsx";
 
 registerSessionOrganizationEnglish();
 

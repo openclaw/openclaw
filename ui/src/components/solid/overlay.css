@@ -85,7 +85,7 @@
   );
   max-height: min(
     var(--oc-overlay-max-height, 420px),
-    var(--oc-overlay-available-height, calc(100% - 16px)),
+    var(--oc-overlay-available-height, calc(100dvh - 16px)),
     calc(100dvh - 16px)
   );
   margin: var(--oc-overlay-distance, 4px) 0 0;
@@ -95,7 +95,9 @@
   position-try-fallbacks:
     flip-block,
     flip-inline,
-    flip-block flip-inline;
+    flip-block flip-inline,
+    --oc-overlay-fit,
+    --oc-overlay-fit flip-inline;
   transform-origin: top left;
 }
 
@@ -130,20 +132,12 @@
   transform-origin: right top;
 }
 
-/* Use the viewport to detect flips; consumer size budgets must win even when loaded first. */
-.oc-overlay:where(
-  [data-placement="left"],
-  [data-placement="left-start"],
-  [data-placement="left-end"],
-  [data-placement="right"],
-  [data-placement="right-start"],
-  [data-placement="right-end"]
-) {
-  max-height: min(
-    var(--oc-overlay-max-height, 420px),
-    var(--oc-overlay-available-height, calc(100dvh - 16px)),
-    calc(100dvh - 16px)
-  );
+/* When neither vertical side fits, span the viewport height and keep the inline
+   anchor alignment. This also keeps native keyboard scrolling tied to the visible box. */
+@position-try --oc-overlay-fit {
+  position-area: span-all span-right;
+  align-self: anchor-center;
+  margin: 8px 0;
 }
 
 .oc-overlay[data-placement="left"],

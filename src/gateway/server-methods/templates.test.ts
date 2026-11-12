@@ -79,6 +79,7 @@ describe("ClawHub Template catalog Gateway methods", () => {
   it.each([
     ["templates.catalog.search", listClawHubTemplates, {}, "entries", [entry]],
     ["templates.catalog.detail", readClawHubTemplateDetail, release, "detail", release],
+    ["templates.catalog.detail", readClawHubTemplateDetail, entry, "detail", release],
     ["templates.catalog.preview", readClawHubTemplatePreview, previewParams, "preview", preview],
   ] as const)(
     "%s returns the requested result only while Labs remains enabled",

@@ -116,7 +116,11 @@ export function modelOptionSearchRow(
   return {
     key: modelPickerOptionKey(options.entry),
     name: formatModelLabel(options.entry).toLocaleLowerCase(),
-    keywords: [options.entry.isDefault ? defaultLabel : "", runtimeLabel]
+    keywords: [
+      options.entry.isDefault ? defaultLabel : "",
+      runtimeLabel,
+      options.entry.agentRuntimeId,
+    ]
       .join(" ")
       .toLocaleLowerCase(),
     providerLabel: defaultProviderLabel(
@@ -164,7 +168,11 @@ function ModelOptionButton(
       data-chat-model-runtime={props.entry.agentRuntime ?? undefined}
       data-chat-model-default={props.entry.isDefault ? "true" : undefined}
       data-chat-model-index={props.index}
-      data-chat-model-keywords={[defaultLabel(), props.presentation.runtimeLabel]
+      data-chat-model-keywords={[
+        defaultLabel(),
+        props.presentation.runtimeLabel,
+        props.entry.agentRuntimeId,
+      ]
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}

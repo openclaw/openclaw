@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -553,7 +553,6 @@ describe("CI changed Node test plan", () => {
     const sourceInventories = [
       "test/scripts/pr-wrapper-source-closure.test.ts",
       "test/scripts/eager-import-closure.test.ts",
-      "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
       lintSuppressionInventory,
@@ -568,6 +567,36 @@ describe("CI changed Node test plan", () => {
       ...sourceInventories,
       gatewayCallsitesGuard,
     ]);
+
+    const restartRegression = "test/scripts/update-restart-module-outcome.test.ts";
+    const fixtureInputs = [
+      ["scripts/tests/update-restart-module-outcome.mjs", "realNames", "src/cli/update-cli"],
+      ["scripts/tests/update-restart-swap-fixture.mjs", "files", "src"],
+    ].flatMap(([file, list, root]) => {
+      const fixtureSource = readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
+      const names = expectDefined(
+        fixtureSource.match(new RegExp(`const ${list} = \\[([\\s\\S]*?)\\];`)),
+        `fixture input inventory: ${file}`,
+      )[1]!;
+      return [...names.matchAll(/"([^"]+)"/g)].map(([, name]) =>
+        path.posix.normalize(`${root}/${name}.ts`),
+      );
+    });
+    for (const input of [
+      ...fixtureInputs,
+      "src/infra/package-update-integrity-hasher.worker.ts",
+      "src/infra/runtime-process-url.ts",
+      "runtime-process-bootstrap.generated.mjs",
+      "package.json",
+    ]) {
+      expect(resolvePolicyTestTargets([input], { cwd }), input).toContain(restartRegression);
+    }
+    for (const input of [
+      "src/agents/example.ts",
+      "src/gateway/server-methods/chat-send-request.ts",
+    ]) {
+      expect(resolvePolicyTestTargets([input], { cwd }), input).not.toContain(restartRegression);
+    }
   });
 
   it.each([

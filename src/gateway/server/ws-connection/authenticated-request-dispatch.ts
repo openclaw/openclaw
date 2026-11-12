@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   ConnectParams,
   ErrorShape,
@@ -33,11 +34,11 @@ import { captureGatewayDeviceRevocation } from "../../device-revocation.js";
 import { errorShapeFromError } from "../../error-shape.js";
 import { createExpectedProfileBinding } from "../../expected-profile.js";
 import { hasCurrentRemoteControlUiIngress } from "../../ingress-attribution.js";
-import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
 import {
-  GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-  hasCurrentGatewayOperatorAccess,
-} from "../../operator-access-policy.js";
+  isOpenClawIdTunnelPrincipalCurrent,
+  recordOpenClawIdTunnelActivity,
+} from "../../openclaw-id/tunnel-principal.js";
+import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
@@ -152,6 +153,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
     if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
       return;
     }
+    if (sendResponse === send && client.internal?.openclawIdPrincipal) {
+      recordOpenClawIdTunnelActivity(client.internal.openclawIdPrincipal);
+    }
     const diagnostics = createGatewayRpcDiagnostics(req.method, getMethodRegistry, extraHandlers, {
       clientKind: client.connect.client.id,
       source: sendResponse === send ? "wire" : "internal",
@@ -197,12 +201,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           return false;
         }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
+          const denial = gatewayOperatorAccessError(
+            client.internal?.operatorAccessAuthority?.failureCause ?? "policy-check-failed",
+          );
+          setCloseCause("operator-access-closed", { accessCause: denial.details.accessCause });
           invalidateGatewayPolicyClient(client, {
             reason: "operator-access-closed",
             code: 4001,
-            message: GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-            close: () => close(4001, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE),
+            message: denial.message,
+            close: () => close(4001, denial.message),
           });
+          return false;
         }
         if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
           return false;
@@ -405,6 +414,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         } finally {
           // ws queues frames in order: send the result before starting its close handshake.
           policyResponse?.finish();
+          if (
+            client.connect.role === "node" &&
+            asOptionalRecord(error?.details)?.code === "PAIRING_CHANGED" &&
+            context.nodeRegistry.get(client.connect.device?.id ?? client.connect.client.id)
+              ?.connId !== client.connId
+          ) {
+            // A failed lookup or same-connection promotion can also reject an RPC.
+            // Retire only a connection that no longer owns the registered node.
+            setCloseCause("node-pairing-changed", { method: req.method });
+            close(4001, "node pairing changed; reconnect");
+          }
         }
       };
 

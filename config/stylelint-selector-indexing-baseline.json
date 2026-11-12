@@ -42,9 +42,6 @@
     "2193772fe0a324606a3cd0b3f3b84ee86ef0d8e0b0108e760656d71eec946fba": 1,
     "e2312a5e195a2462144cbe728cbd9e7b554a308c05a825137732c7c91ffd9ddb": 1
   },
-  "ui/src/styles/chat/composer-surface.css": {
-    "57c38ff92dd1040b5bb84658a88cf302e9dae47a39f01f7d4f886e0466219ca8": 1
-  },
   "ui/src/styles/chat/composer.css": {
     "0da9b78dce1349a675f646450040d0803c156cd13146ecc44a45c60e9bac147f": 1,
     "133a83c356b0e52efbe923a7f512bb044b2aa090247eb7552af0a9e3ebfc1458": 1,
@@ -145,9 +142,6 @@
   },
   "ui/src/styles/cron.css": {
     "64eb29a32035f0c1c59c07fa5554eeabc5ffb56a7d107d338dcefc60e15d3694": 1
-  },
-  "ui/src/styles/layout.css": {
-    "2c4dc8e39b4c4a6ac0de8105eb04aa50aa035f58e91fd6fd633909ded6b7d123": 1
   },
   "ui/src/styles/model-providers.css": {
     "6795515297fbc5325b38294a98d57d1ccbbd974f6fc75ab9956d432ccb6afd39": 1

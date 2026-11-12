@@ -164,13 +164,14 @@ async function toSessionFileEntry(
   opts: {
     includeContent?: boolean;
     workspaceRoot?: WorkspaceRoot;
+    readRoot?: string;
     assertCurrent?: () => void;
     authorizeHostRead?: () => Promise<boolean>;
     onOutsideBoundary?: () => void;
   } = {},
 ): Promise<SessionFileEntry | undefined> {
   const target = await resolveSessionFileReadTarget(
-    { root, fileRoot, authorizeHostRead: opts.authorizeHostRead },
+    { root, fileRoot, readRoot: opts.readRoot, authorizeHostRead: opts.authorizeHostRead },
     touched.path,
   );
   const base = {
@@ -264,7 +265,7 @@ export async function listSessionWorkspaceFiles(
   },
 ) {
   const root = params.root;
-  const workspaceRoot = root ? await openWorkspaceRoot(root) : undefined;
+  const workspaceRoot = root ? await openWorkspaceRoot(params.readRoot ?? root) : undefined;
   const gitCheckout =
     workspaceRoot && "access" in workspaceRoot
       ? undefined
@@ -401,6 +402,7 @@ export async function getSessionWorkspaceFile(
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
+    readRoot: params.readRoot,
     includeContent: params.includeContent !== false,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
