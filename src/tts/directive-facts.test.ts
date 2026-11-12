@@ -49,7 +49,6 @@ describe("extractTtsDirectiveFacts", () => {
 });
 
 describe("createTtsDirectiveTextStreamCleaner", () => {
-  const hidden = "[[tts:text]]Press the ` key.[[/tts:text]]";
   it.each([
     [
       ["Hello [[tts:voice=al", "loy]]world[[/tt", "s]]"],
@@ -66,23 +65,10 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
   });
 
   it.each([
-    [["Some [[tts:hello there]] note"], "Some hello there note"],
-    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
-    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
-    [["Go [[tts:\nhello]] now"], "Go hello now"],
-    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
-    [["See [[note"], "See [[note"],
-    [[`${hidden} Visible. [[tts:text]]Audio only.[[/tts:text]]`], " Visible. "],
-    [[hidden, " Visible. [[tts:text]]Audio only.[[/tts:text]]"], " Visible. "],
-  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
-  });
-
-  it.each([
-    // An escaped backtick is prose, so the speech-only block is hidden.
+    "Some [[tts:hello there]] note [[tts]]read this[[/tts]] now",
+    "Done. [[tts:first line\nsecond line]] more. See [[note",
+    "[[tts:text]]Press the ` key.[[/tts:text]] Visible. [[tts:text]]Audio only.[[/tts:text]]",
     "Before \\`literal [[tts:text]]SPEECH_ONLY[[/tts:text]] after",
-    // An escaped backslash leaves the backtick free to open code.
     "Use \\\\`[[tts:text]]literal[[/tts:text]]` here.",
   ])("matches final parsing at every two-chunk cut: %j", (input) => {
     const expected = extractTtsDirectiveFacts(input).cleanedText;

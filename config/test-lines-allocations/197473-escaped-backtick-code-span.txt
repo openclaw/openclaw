@@ -1,2 +1,0 @@
-14
-# Regression for #197473: the streamed TTS cleaner matches final parsing at every two-chunk cut for escaped backticks and escaped backslashes.
