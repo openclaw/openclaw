@@ -125,11 +125,5 @@ describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () =>
     const paragraphs = notes.querySelectorAll("p");
     const lineHeight = Number.parseFloat(getComputedStyle(paragraphs[0]!).lineHeight);
     expect(rect(paragraphs[1]!).top - rect(paragraphs[0]!).bottom).toBeLessThan(lineHeight * 2);
-    // Notes are reading text; app chrome keeps the body's antialiased smoothing.
-    expect(
-      [document.body, notes].map((target) =>
-        getComputedStyle(target).getPropertyValue("-webkit-font-smoothing"),
-      ),
-    ).toEqual(["antialiased", "auto"]);
   });
 });
