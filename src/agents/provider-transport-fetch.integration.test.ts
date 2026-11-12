@@ -12,10 +12,12 @@ describe("guarded model fetch secret sentinel integration", () => {
     resetSecretRedactionRegistryForTest();
   });
 
-  it("injects the real header only at local HTTP egress and redacts the resolved value", async () => {
+  it("injects URL and header credentials only at local HTTP egress and redacts the resolved value", async () => {
     let receivedAuthorization: string | undefined;
+    let receivedUrl: string | undefined;
     const server = createServer((request, response) => {
       receivedAuthorization = request.headers.authorization;
+      receivedUrl = request.url;
       response.writeHead(200, { "content-type": "application/json" });
       response.end('{"ok":true}');
     });
@@ -31,15 +33,22 @@ describe("guarded model fetch secret sentinel integration", () => {
       } as unknown as Model<"openai-responses">;
       const secret = "integration-provider-secret";
       const sentinel = mintSecretSentinel(secret, { label: "model-auth:integration" });
-
-      const response = await buildGuardedModelFetch(model)(`${baseUrl}/responses`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${sentinel}` },
-        body: "{}",
+      const querySentinel = mintSecretSentinel("query&scope=two+#%", {
+        label: "model-auth:integration-query",
       });
+
+      const response = await buildGuardedModelFetch(model)(
+        `${baseUrl}/responses?key=${querySentinel}`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${sentinel}` },
+          body: "{}",
+        },
+      );
       await response.text();
 
       expect(receivedAuthorization).toBe(`Bearer ${secret}`);
+      expect(receivedUrl).toBe("/v1/responses?key=query%26scope%3Dtwo%2B%23%25");
       expect(redactSensitiveText(`upstream used ${secret}`, { mode: "off" })).toBe(
         "upstream used integr…cret",
       );

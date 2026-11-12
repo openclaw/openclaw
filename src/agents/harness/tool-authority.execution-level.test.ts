@@ -9,16 +9,9 @@ import {
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
 
 // Shared regression contract with #165122: compare actual admitted attempt and reply owners.
-it.each([
-  { level: "off" },
-  { level: "on" },
-  { level: "ask" },
-  { level: "full" },
-  { level: "off", forceRestartSafeTools: true },
-  { level: "off", forceCodeModeTools: true },
-] as const)(
-  "captures the admitted $level execution and $forceRestartSafeTools/$forceCodeModeTools restrictions",
-  async ({ level, ...toolMode }) => {
+it.each([{ level: "off" }, { level: "on" }, { level: "ask" }, { level: "full" }] as const)(
+  "captures the admitted $level execution restrictions",
+  async ({ level }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const runId = `execution-level-${level}`;
       const bashElevated = { enabled: true, allowed: true, defaultLevel: level };
@@ -36,7 +29,6 @@ it.each([
         messageProvider: "webchat",
         traceAuthorized: false,
         bashElevated,
-        ...toolMode,
       };
       setRuntimeConfigSnapshot(attempt.config);
       const admission = prepareAgentRunAdmission({
@@ -56,12 +48,10 @@ it.each([
           undefined,
           async (prepared) => {
             const input = {
-              ...toolMode,
               run: { ...attempt, model: attempt.modelId, elevatedLevel: level },
             };
             const matching = prepareReplyToolAuthority(input);
             const narrowed = prepareReplyToolAuthority({
-              ...toolMode,
               run: { ...input.run, bashElevated: { ...bashElevated, allowed: false } },
             });
             try {

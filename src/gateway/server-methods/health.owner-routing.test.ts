@@ -1,13 +1,11 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { recordStartupRecoveryStoreResult } from "../../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
@@ -76,6 +74,7 @@ function createHealthReader(
   snapshot: HealthSummary,
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
   getReadiness?: import("../server/readiness.js").ReadinessChecker,
+  scopes: string[] | null = ["operator.read"],
 ) {
   const context = {
     getHealthCache: () => snapshot,
@@ -92,7 +91,7 @@ function createHealthReader(
       params: { probe },
       respond: respond as never,
       context: context as never,
-      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      client: scopes ? ({ connect: { role: "operator", scopes } } as never) : null,
       isWebchatConnect: () => false,
     });
     return respond;
@@ -109,7 +108,7 @@ describe("Gateway status owner routing", () => {
         () => ({
           ready: coreReady,
           coreReady,
-          failing: coreReady ? [] : ["chat-recovery"],
+          failing: coreReady ? [] : ["core-startup"],
           uptimeMs: 1,
         }),
       );
@@ -235,6 +234,42 @@ describe("Gateway status owner routing", () => {
     },
   );
 
+  it.each(["status", "cached health", "refreshed health"] as const)(
+    "keeps the runtime path private while reporting availability on %s",
+    async (surface) => {
+      await withStateDirEnv("openclaw-gateway-runtime-visibility-", async ({ stateDir }) => {
+        const removed = { execPath: "/fixture/private-runtime/node", available: false };
+        vi.spyOn(childRuntime, "readChildRuntimeViability").mockReturnValue(removed);
+        const config = statusConfig(stateDir, { entries: { main: {} } });
+        const snapshot = healthSnapshot(stateDir);
+        const read = async (scopes: string[] | null) => {
+          if (surface === "status") {
+            return await callStatus(config, scopes ?? ["operator.read"]);
+          }
+          const respond = await createHealthReader(
+            snapshot,
+            undefined,
+            undefined,
+            scopes,
+          )(surface === "refreshed health");
+          return respond.mock.calls[0]?.[1];
+        };
+
+        const reader = await read(["operator.read"]);
+        expect(reader.childRuntime).toEqual({ execPath: "[redacted]", available: false });
+        expect(JSON.stringify(reader)).not.toContain(removed.execPath);
+        const admin = await read(["operator.admin"]);
+        expect(admin.childRuntime).toEqual(removed);
+        if (surface !== "status") {
+          expect((await read(null)).childRuntime).toEqual({
+            execPath: "[redacted]",
+            available: false,
+          });
+        }
+      });
+    },
+  );
+
   it.each([false, true])(
     "keeps live diagnostics out of cached health (reset=%s)",
     async (reset) => {
@@ -264,7 +299,10 @@ describe("Gateway status owner routing", () => {
         expect(respond.mock.calls[0]?.[1].eventLoop).toBe(next);
         expect(respond.mock.calls[0]?.[3]).toEqual({ cached: true });
         expect(cached.eventLoop).toBe(initial);
-        expect(respond.mock.calls[0]?.[1].childRuntime).toEqual(removed);
+        expect(respond.mock.calls[0]?.[1].childRuntime).toEqual({
+          execPath: "[redacted]",
+          available: false,
+        });
         expect(cached).not.toHaveProperty("childRuntime");
       });
     },
@@ -312,50 +350,22 @@ describe("Gateway status owner routing", () => {
     });
   });
 
-  it.each(["startupRecoveryWarning", "startupMigrationWarning"] as const)(
-    "restricts %s details to admins while retaining the reader's repair hint",
-    async (field) => {
-      await withStateDirEnv("openclaw-gateway-startup-warning-", async ({ stateDir }) => {
-        const target = { agentId: "main", storePath: path.join(stateDir, "sessions.json") };
-        const config = { agents: { entries: { main: {} } }, session: { store: target.storePath } };
-        const recovery = field === "startupRecoveryWarning";
-        const warning = recovery
-          ? "private store temporarily locked"
-          : `EACCES: permission denied, open '${path.join(stateDir, "private-bindings.json")}'`;
-        const hint = recovery
-          ? "1 session store"
-          : 'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
-        const outcome = { ok: false, error: new Error(warning) } as const;
-        try {
-          if (recovery) {
-            recordStartupRecoveryStoreResult({ target, outcome });
-          } else {
-            recordStartupMigrationWarnings([warning]);
-          }
-          const reader = await callStatus(config);
-          expect(reader[field]).toContain(hint);
-          expect(reader[field]).not.toContain(stateDir);
-          expect(reader[field]).not.toContain(recovery ? "private store" : "EACCES");
-          const admin = await callStatus(config, ["operator.admin"]);
-          expect(admin[field]).toContain(warning);
-          if (!recovery) {
-            expect(admin[field]).toContain(hint);
-            return;
-          }
-
-          recordStartupRecoveryStoreResult({ target, outcome: { ok: true } });
-          const healed = await callStatus(config, ["operator.admin"]);
-          expect(healed.startupRecoveryWarning).toBeUndefined();
-
-          rotateAgentEventLifecycleGeneration();
-          const restarted = await callStatus(config, ["operator.admin"]);
-          expect(restarted.startupRecoveryWarning).toBeUndefined();
-        } finally {
-          rotateAgentEventLifecycleGeneration();
-        }
-      });
-    },
-  );
+  it("restricts startup migration details to admins while retaining the reader's repair hint", async () => {
+    await withStateDirEnv("openclaw-gateway-startup-warning-", async ({ stateDir }) => {
+      const config = statusConfig(stateDir, { entries: { main: {} } });
+      const warning = `EACCES: permission denied, open '${path.join(stateDir, "private-bindings.json")}'`;
+      const hint =
+        'Run "openclaw doctor --fix" against the same state/config, then restart the gateway.';
+      recordStartupMigrationWarnings([warning]);
+      const reader = await callStatus(config);
+      expect(reader.startupMigrationWarning).toContain(hint);
+      expect(reader.startupMigrationWarning).not.toContain(stateDir);
+      expect(reader.startupMigrationWarning).not.toContain("EACCES");
+      const admin = await callStatus(config, ["operator.admin"]);
+      expect(admin.startupMigrationWarning).toContain(warning);
+      expect(admin.startupMigrationWarning).toContain(hint);
+    });
+  });
 
   it("reports process memory and worker pools", async () => {
     await withStateDirEnv("openclaw-gateway-status-vitals-", async ({ stateDir }) => {

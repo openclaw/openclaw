@@ -2,7 +2,10 @@ import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshotRuntime } from "../../plugins/plugin-metadata-snapshot.runtime.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { capturePluginSkillContributions } from "../loading/plugin-skills.js";
+import {
+  capturePluginAgentSkillsDirs,
+  capturePluginSkillContributions,
+} from "../loading/plugin-skills.js";
 import type { WorkspaceSkillSourcePlanOptions } from "../loading/workspace-skill-sources.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.types.js";
 import {
@@ -42,6 +45,10 @@ export function captureSkillsSourcePlanInput(
             metadataSnapshot: pluginMetadataSnapshot,
             config: options.config,
             acpRuntimeAvailable,
+          }),
+          agentSkillsDirs: capturePluginAgentSkillsDirs({
+            metadataSnapshot: pluginMetadataSnapshot,
+            config: options.config,
           }),
         }
       : {}),

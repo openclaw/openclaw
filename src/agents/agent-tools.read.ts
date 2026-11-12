@@ -31,6 +31,11 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  type ApplyPatchContainmentSource,
+  isSandboxRootEscapeError,
+  withWorkspaceRecoveryHint,
+} from "./apply-patch-containment-hint.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -44,6 +49,7 @@ import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath, normalizeFileReferencePrefix } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { withFileMutationQueueKeyResolution } from "./sessions/tools/file-mutation-queue.js";
 import {
   createEditTool,
   createReadTool,
@@ -122,7 +128,7 @@ function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
-  totalLines: number;
+  totalLines?: number;
   continuation?: ReadToolContinuation;
 };
 
@@ -270,7 +276,9 @@ async function executeReadWithAdaptivePaging(params: {
     const truncation = extractReadTruncationDetails(pageResult);
     const pageEndLine = next.offset - 1 + (truncation?.outputLines ?? 0);
     const reachedEof =
-      Boolean(truncation?.truncated) && pageEndLine >= (truncation?.totalLines ?? 0);
+      truncation !== null &&
+      truncation.totalLines !== undefined &&
+      pageEndLine >= truncation.totalLines;
     const pageContinuation = truncation?.continuation;
     const pageText =
       pageContinuation || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
@@ -311,7 +319,7 @@ async function executeReadWithAdaptivePaging(params: {
         content: pageContent,
         startLine: next.offset,
         endLine: next.offset + lineCount - 1,
-        totalLines: truncation?.totalLines ?? next.offset + lineCount - 1,
+        totalLines: truncation ? truncation.totalLines : next.offset + lineCount - 1,
         continuation: pageContinuation,
         ...(next.kind === "cursor" ? { cursor: next.cursor } : {}),
         limit: next.limit,
@@ -552,41 +560,39 @@ async function appendMemoryFlushContent(params: {
   signal?: AbortSignal;
   assertCurrent: ReturnType<typeof captureAgentToolSourceExecutionGuard>;
 }) {
-  if (!params.sandbox) {
-    const root = await fsRoot(params.root);
-    await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
+    const sandbox = params.sandbox;
+    if (!sandbox) {
+      const root = await fsRoot(params.root);
       params.assertCurrent();
       await root.append(params.relativePath, params.content, {
         mkdir: true,
         prependNewlineIfNeeded: true,
         assertBeforeMutation: params.assertCurrent,
       });
-    });
-    return;
-  }
-
-  const existing = await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    const content = await readOptionalUtf8File({
-      absolutePath: params.absolutePath,
-      relativePath: params.relativePath,
-      sandbox: params.sandbox,
-      signal: params.signal,
-    });
-    params.assertCurrent();
-    return content;
-  });
-  const separator =
-    existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
-  const next = `${existing}${separator}${params.content}`;
-  const sandbox = params.sandbox;
-  await runWithAgentToolSourceExecutionScope(params.assertCurrent, async () => {
-    params.assertCurrent();
-    await sandbox.bridge.writeFile({
-      filePath: params.relativePath,
+      return;
+    }
+    // Share write/edit ordering; the bridge has no cross-process append primitive.
+    const queueKey = resolveSandboxFileMutationQueueKey({
+      ...sandbox,
+      filePath: params.absolutePath,
       cwd: sandbox.root,
-      data: next,
-      mkdir: true,
       signal: params.signal,
+    });
+    await withFileMutationQueueKeyResolution(queueKey, async () => {
+      const existing = await readOptionalUtf8File(params);
+      const separator =
+        existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n")
+          ? "\n"
+          : "";
+      params.assertCurrent();
+      await sandbox.bridge.writeFile({
+        filePath: params.relativePath,
+        cwd: sandbox.root,
+        data: `${existing}${separator}${params.content}`,
+        mkdir: true,
+        signal: params.signal,
+      });
     });
   });
 }
@@ -678,20 +684,6 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
-function isSandboxRootEscapeError(error: unknown): error is Error {
-  return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
-}
-
-function withWorkspaceSafeTempHint(error: unknown): unknown {
-  if (!isSandboxRootEscapeError(error)) {
-    return error;
-  }
-  const message = error.message.includes(".openclaw/tmp/")
-    ? error.message
-    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
-  return new Error(message, { cause: error });
-}
-
 async function assertSandboxPathWithinAnyRoot(params: {
   cwd?: string;
   filePath: string;
@@ -744,6 +736,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
     pathParamKeys?: readonly string[];
     normalizeGuardedPathParams?: boolean;
     resolutionCwd?: string;
+    containmentSource?: ApplyPatchContainmentSource;
     bridge?: SandboxFsBridge;
     readPathValidation?: "bridge";
   },
@@ -814,7 +807,11 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
             });
           }
         } catch (error) {
-          throw withWorkspaceSafeTempHint(error);
+          throw withWorkspaceRecoveryHint(
+            error,
+            !options?.bridge && mounts.length === 0,
+            options?.containmentSource,
+          );
         }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
@@ -1086,24 +1083,18 @@ export function wrapReadToolWithSkillContent(
               options,
             ))
           : tool;
-      // Skill instructions are served whole. Some models still send paging arguments,
-      // so windows are dropped rather than rejected.
-      const instructionArgs: Record<string, unknown> = { ...record, path: normalizedPath };
-      for (const key of ["offset", "limit", "cursor"]) {
-        delete instructionArgs[key];
-      }
+      // Instructions that fit are served whole, ignoring stray paging arguments. Larger
+      // ones page through the normal read continuation, whose notice fits the budget.
+      const readArgs: Record<string, unknown> = { ...record, path: normalizedPath };
+      const { offset, limit, cursor, ...instructionArgs } = readArgs;
       try {
         const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
         const details = result.details;
         const detailsKind = details.kind;
         if (detailsKind === "truncated") {
           resetDelivery();
-          const text =
-            "Skill instructions cannot be partially served: the whole document exceeds this call's read or model-context budget. Ask the operator to reduce the document or increase the model context.";
-          return {
-            content: [{ type: "text", text }],
-            details: { kind: "text", content: text },
-          };
+          const windowed = offset !== undefined || limit !== undefined || cursor !== undefined;
+          return windowed ? await instructionTool.execute(toolCallId, readArgs, signal) : result;
         }
         if (detailsKind !== "text") {
           resetDelivery();

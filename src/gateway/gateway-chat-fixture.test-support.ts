@@ -33,6 +33,7 @@ export function createChatFixture(
       response: ServerResponse,
     ) => Promise<string | undefined>;
     reset?: () => void;
+    onEvent?: Parameters<typeof startGatewayWithClient>[0]["onEvent"];
   } = {},
 ) {
   const requests: string[] = [];
@@ -70,6 +71,7 @@ export function createChatFixture(
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     gateway = await startGatewayWithClient({
       ...startup,
+      onEvent: options.onEvent,
       portClaim,
       clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,

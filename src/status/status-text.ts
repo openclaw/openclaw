@@ -415,10 +415,7 @@ export async function buildStatusReplyParts(
           summary.missingCostEntries > 0
             ? `missing cost: ${formatMissingCostEntries(summary)}`
             : formatUsd(summary.totalCost);
-        const tokens =
-          summary.usageReport?.state === "unavailable"
-            ? `usage incomplete · ${formatTokenCount(summary.totalTokens)} known tokens`
-            : `${formatTokenCount(summary.totalTokens)} tok`;
+        const tokens = `${formatTokenCount(summary.totalTokens)} tok`;
         const line = `💵 ${cost ? `${cost} · ` : ""}${tokens} (today)`;
         usageLine = [usageLine, line].filter(Boolean).join("\n");
       }
@@ -500,6 +497,11 @@ export async function buildStatusReplyParts(
         : accountConfig?.richMessages === false
           ? "Telegram rich messages: off · enable richMessages for this Telegram account"
           : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
+    const widgetsSetting = accountConfig?.widgets ?? telegramConfig?.widgets;
+    channelFeatureLine +=
+      widgetsSetting === true
+        ? "\nTelegram widgets: on · Bot API 10.4 message widgets in private chats"
+        : "\nTelegram widgets: off · set channels.telegram.widgets=true for interactive widgets";
   }
   const { buildStatusMessageParts } = await loadStatusMessageRuntime();
   const configuredThinkingDefault = resolveConfiguredThinkingDefault({

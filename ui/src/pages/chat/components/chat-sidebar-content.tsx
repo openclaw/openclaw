@@ -100,6 +100,7 @@ export type SidebarPanelProps = {
   fileView?: FileViewControls;
   onClose: () => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
+  onBrowseFiles?: () => void;
   onViewRawText: () => void;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -202,7 +203,9 @@ export function SidebarPanel(props: SidebarPanelProps) {
   const mobileReader = () =>
     mobileMedia() || (props.filePresentation === "mobile" && props.content?.kind === "file");
   const fillHost = () =>
-    ["file", "markdown", "attachment", "session-diff", "image"].includes(props.content?.kind ?? "");
+    ["file", "markdown", "attachment", "session-diff", "image", "canvas"].includes(
+      props.content?.kind ?? "",
+    );
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
   return (
@@ -284,8 +287,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView?.imagePreview &&
-                  props.content?.kind === "file" &&
-                  props.content.mimeType === "image/svg+xml"
+                  props.content?.kind === "file"
                     ? props.content
                     : undefined
                 }
@@ -456,6 +458,7 @@ export function SidebarPanel(props: SidebarPanelProps) {
                       mobile={props.filePresentation === "mobile"}
                       back={props.fileBack}
                       onOpenImage={props.onOpenImage}
+                      onBrowseFiles={props.onBrowseFiles}
                     />
                   </div>
                 )}

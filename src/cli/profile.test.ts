@@ -126,6 +126,12 @@ describe("formatCliCommand", () => {
       "openclaw --profile jbopenclaw doctor --fix",
     ],
     ["openclaw gateway status --deep", { OPENCLAW_CONTAINER_HINT: "demo; rm -rf /" }],
+    ["npx openclaw@2026.10.1 gateway status", { OPENCLAW_CONTAINER_HINT: "demo" }],
+    ["openclaw@2026.10.1 doctor --fix", { OPENCLAW_PROFILE: "work" }],
+    ["openclaw-2026.10.1 status", { OPENCLAW_CONTAINER_HINT: "demo" }],
+    ["openclaw-update --help", { OPENCLAW_PROFILE: "work" }],
+    ["bunx openclaw@latest doctor", { OPENCLAW_CONTAINER_HINT: "demo" }],
+    ["pnpm openclaw@latest doctor", { OPENCLAW_PROFILE: "work" }],
     [
       "pnpm openclaw plugins update telegram",
       { OPENCLAW_CONTAINER_HINT: "demo", OPENCLAW_PROFILE: "work" },

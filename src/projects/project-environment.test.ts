@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => {
     resolveCheckout: vi.fn(),
     clone: vi.fn(),
     refresh: vi.fn(),
+    history: vi.fn(),
     listWorktrees: vi.fn(),
     readAgent: vi.fn(),
     patch: vi.fn(),
@@ -91,7 +92,9 @@ vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
     return result;
   },
 }));
+// mock-isolation: Synthetic checkout admission must not enter the real shared-state lifecycle.
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: { getKnownOpenClawStateDatabaseIdentity: () => undefined },
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
     assertCurrent() {},
@@ -105,6 +108,11 @@ vi.mock("./project-checkout.js", () => ({
   withProjectCheckoutLifecycle: mocks.checkout,
   resolveProjectCheckout: mocks.resolveCheckout,
   resolveProjectDirectory: async (directory: string) => directory,
+}));
+// mock-isolation: history preparation uses synthetic checkout paths in environment-only proof.
+vi.mock("./project-clone-preparation.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./project-clone-preparation.runtime.js")>()),
+  warnIfProjectCloneShallow: mocks.history,
 }));
 // mock-isolation: registration reads only the synthetic checkout's origin.
 vi.mock("../agents/worktrees/git.js", async (importOriginal) => ({
@@ -326,7 +334,11 @@ it.each(["remove", "register", "materialize", "refresh", "selector", "migration"
           expect(captured).toMatchObject({ path: databasePath, env: environmentSnapshot });
           expect(captured.env).not.toBe(caller);
         }
-        for (const [, captured] of [...mocks.clone.mock.calls, ...mocks.refresh.mock.calls]) {
+        for (const [, captured] of [
+          ...mocks.clone.mock.calls,
+          ...mocks.refresh.mock.calls,
+          ...mocks.history.mock.calls,
+        ]) {
           expect(captured.env).toMatchObject({ OPENCLAW_STATE_DIR: root });
         }
         if (source) {

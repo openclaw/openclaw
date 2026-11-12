@@ -7,7 +7,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import type { SessionActor } from "../config/sessions/session-actor-contract.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
-import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as Entry } from "../config/sessions/types.js";
 import { patchSessionEntry as patchSdkSessionEntry } from "../plugin-sdk/session-store-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -107,7 +107,7 @@ it("publishes terminal actor recency before another run begins", async () => {
           sessionId: entry.sessionId,
           lifecycleRevision: entry.lifecycleRevision ?? null,
           writerRunId: undefined,
-          expectedState: buildRestartRecoveryExpectedState(entry),
+          expectedState: buildSessionTranscriptTurnExpectedState(entry),
           lifecycle: { updatedAt: 2 },
         },
       },
@@ -139,7 +139,7 @@ it("publishes user and assistant actor previews without background reads or losi
       {
         commandId: "accepted-input",
         phaseId: "turn",
-        expectedState: buildRestartRecoveryExpectedState(entry),
+        expectedState: buildSessionTranscriptTurnExpectedState(entry),
         lifecycle: {},
         turn: {
           ...scope,

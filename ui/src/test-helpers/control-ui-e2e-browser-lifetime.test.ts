@@ -31,6 +31,7 @@ it.skipIf(!canRunPlaywrightChromium(chromiumExecutablePath))(
         "junction",
       );
       const endpointFile = path.join(root, "endpoint.txt");
+      const diagnosticDir = path.join(root, "diagnostics");
       const imports = `
 import fs from "node:fs";
 import { chromium } from "playwright";
@@ -54,6 +55,31 @@ suite.define(() => {
       await ownContext.addCookies([{ name: "own", value: "one", url: "http://fixture.invalid/" }]);
       expect(await siblingContext.cookies()).toEqual([]);
       await siblingContext.addCookies([{ name: "sibling", value: "two", url: "http://fixture.invalid/" }]);
+      const crashed = await ownContext.newPage();
+      await crashed.goto("data:text/html,<title>synthetic-private-page</title>");
+      const cdp = await ownContext.newCDPSession(crashed);
+      const { targetInfo } = await cdp.send("Target.getTargetInfo");
+      const crashEvent = crashed.waitForEvent("crash");
+      const crashCommand = cdp.send("Page.crash").catch(() => {});
+      await crashEvent;
+      // The raw CDP command can stay pending until its crashed target closes.
+      await crashed.close();
+      await crashCommand;
+      const readCrash = () => {
+        const directory = process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR;
+        const entry = fs.existsSync(directory) && fs.readdirSync(directory).find(name => name.startsWith("failure-chromium-"));
+        return entry ? fs.readFileSync(directory + "/" + entry + "/failure.public.json", "utf8") : "";
+      };
+      await expect.poll(readCrash).not.toBe("");
+      const publicCrash = readCrash();
+      expect(JSON.parse(publicCrash)).toMatchObject({
+        kind: "chromium-target-crashes", dropped: 0,
+        crashes: [{ targetId: targetInfo.targetId, status: "crashed", errorCode: expect.any(Number), at: expect.any(String) }],
+      });
+      expect(publicCrash).not.toContain("synthetic-private-page");
+      expect(publicCrash).not.toContain("data:text/html");
+      expect(publicCrash).not.toContain(endpoint);
+      expect(await (await siblingContext.newPage()).evaluate(() => 2 + 2)).toBe(4);
       await suite.browser.close();
       expect(ownPage.isClosed()).toBe(true);
       expect(sibling.isConnected()).toBe(true);
@@ -123,6 +149,7 @@ export default defineConfig({
             config,
             "--configLoader",
             "runner",
+            "--fsModuleCache",
           ],
           cwd: repoRoot,
           signal: context.signal,
@@ -130,6 +157,7 @@ export default defineConfig({
           env: {
             PATH: process.env.PATH,
             PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: chromiumExecutablePath,
+            OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: diagnosticDir,
             NODE_DISABLE_COMPILE_CACHE: "1",
             CI: "1",
             NO_COLOR: "1",

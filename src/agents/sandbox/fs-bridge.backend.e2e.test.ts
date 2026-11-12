@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createSandboxedWriteTool,
+  wrapToolMemoryFlushAppendOnlyWrite,
+} from "../agent-tools.read.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
@@ -59,6 +63,32 @@ async function expectMissing(relativePath: string) {
 }
 
 describe.runIf(process.platform !== "win32")("sandbox fs bridge local backend e2e", () => {
+  it("preserves concurrent memory-flush appends from separate tools", async () => {
+    const relativePath = "memory/2026-10-31.md";
+    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.writeFile(path.join(workspaceDir, relativePath), "seed\n");
+    const notes = ["note-A\n", "note-B\n", "note-C\n", "note-D\n"];
+    await Promise.all(
+      notes.map(async (content) => {
+        const bridge = createBridge();
+        const tool = wrapToolMemoryFlushAppendOnlyWrite(
+          createSandboxedWriteTool({ root: workspaceDir, bridge }),
+          { root: workspaceDir, relativePath, sandbox: { root: workspaceDir, bridge } },
+        );
+        const result = await tool.execute(content, { path: relativePath, content });
+        expect(result.details).toEqual({ changed: true });
+      }),
+    );
+    const saved = await fs.readFile(path.join(workspaceDir, relativePath), "utf8");
+    expect(saved.trimEnd().split("\n").toSorted()).toEqual([
+      "note-A",
+      "note-B",
+      "note-C",
+      "note-D",
+      "seed",
+    ]);
+  });
+
   it.each([
     { workspaceAccess: "rw", mutation: "write" },
     { workspaceAccess: "none", mutation: "write" },

@@ -4,6 +4,7 @@ import * as normalization from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import * as promptPool from "../sessions/system-prompt-pool.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { createComputerTool } from "../tools/computer-tool.js";
 import {
@@ -191,6 +192,10 @@ describe("system prompt series", () => {
     const updated = project(second);
     expect(updated.systemPrompt).toBe(first);
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
+    const pool = vi.spyOn(promptPool, "shareSystemPromptPrefix");
+    expect(project(second).update).toBeUndefined();
+    expect(pool).not.toHaveBeenCalled();
+    pool.mockRestore();
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
 
@@ -487,7 +492,11 @@ describe("session tool surface", () => {
 
   it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
     const entries: SessionEntry[] = [];
-    surface([tool("read"), tool("exec")]);
+    const parameters = publishRuntimeToolInputSchema({
+      type: "object",
+      properties: { path: { type: "string", description: "Path to read 🦞\ud800" } },
+    }).schema;
+    surface([tool("read", "Read a file", parameters), tool("exec")]);
     const write = (customType: string, data: unknown) => {
       const entry = {
         ...entryMetadata,
@@ -499,6 +508,8 @@ describe("session tool surface", () => {
       const expected = JSON.stringify(entry);
       const canonical = canonicalizeSessionEntry(entry);
       expect(JSON.stringify(canonical)).toBe(expected);
+      const saved = canonical.data as { tools: { name: string; parameters: unknown }[] };
+      expect(saved.tools.find((pin) => pin.name === "read")?.parameters).toBe(parameters);
       entries.push(canonical);
     };
     fixture.prepare("Base.", entries).commit();
@@ -635,20 +646,17 @@ describe("session tool surface", () => {
       if (restored) {
         fixture.reload();
       }
-      const stringify = vi.spyOn(normalization, "stableStringify");
-      try {
-        const unchanged = surface([tool("read", "New guidance", reordered)], entries);
-        expect(unchanged[0]?.description).toBe("Pinned description");
-        expect(fixture.state.pendingToolSurface).toBeUndefined();
-        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
-        stringify.mockClear();
-        const replacement = surface([tool("read", "Changed schema", changed)], entries);
-        expect(replacement[0]?.description).toBe("Changed schema");
-        expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
-        expect(stringify).toHaveBeenCalledTimes(restored ? 1 : 0);
-      } finally {
-        stringify.mockRestore();
-      }
+      using stringify = vi.spyOn(normalization, "stableStringify");
+      const unchanged = surface([tool("read", "New guidance", reordered)], entries);
+      expect(unchanged[0]?.description).toBe("Pinned description");
+      expect(fixture.state.pendingToolSurface).toBeUndefined();
+      surface([tool("read", "New guidance", reordered)], entries);
+      expect(stringify).toHaveBeenCalledTimes(restored ? 3 : 2);
+      stringify.mockClear();
+      const replacement = surface([tool("read", "Changed schema", changed)], entries);
+      expect(replacement[0]?.description).toBe("Changed schema");
+      expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
+      expect(stringify).toHaveBeenCalledTimes(restored ? 2 : 1);
     },
   );
 });

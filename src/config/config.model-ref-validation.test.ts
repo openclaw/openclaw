@@ -88,6 +88,9 @@ it.each<[string, string[], Models?, string?]>([
   ],
   ["defaults", ["openai/gpt 5.5"], undefined, "agents.defaults.modelPolicy.allow.0"],
   ["runner", ["not-a-model-ref"], undefined, "agents.entries.runner.modelPolicy.allow.0"],
+  ["runner", ["openai/gpt-*", "clawrouter/anthropic/claude-*"]],
+  ["runner", ["openai/gpt *"], undefined, "agents.entries.runner.modelPolicy.allow.0"],
+  ["runner", ["*"], undefined, "agents.entries.runner.modelPolicy.allow.0"],
 ])("validates %s model policy %j", (scope, allow, models, path) => {
   const policy = { modelPolicy: { allow }, ...(models ? { models } : {}) };
   const agents =

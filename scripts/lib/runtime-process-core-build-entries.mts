@@ -38,14 +38,17 @@ export const runtimeProcessCoreEntrypoints = [
 ];
 
 const privateChunkRuntimeProcessEntrypoints = [
+  runtimeProcessEntrypoints.stateLeaseHeartbeat,
   runtimeProcessEntrypoints.sessionDiskBudget,
   runtimeProcessEntrypoints.pluginModelCatalogRead,
   runtimeProcessEntrypoints.attachmentProcessor,
+  runtimeProcessEntrypoints.widgetScriptSyntax,
   runtimeProcessEntrypoints.codeModeNode,
   runtimeProcessEntrypoints.imageProcessor,
   runtimeProcessEntrypoints.identityFile,
   runtimeProcessEntrypoints.localAgentAvatar,
   runtimeProcessEntrypoints.fsSafeCopy,
+  runtimeProcessEntrypoints.secretFileRead,
   runtimeProcessEntrypoints.controlUiFile,
   runtimeProcessEntrypoints.publicSessionCard,
   runtimeProcessEntrypoints.sessionTranscriptReconcile,
@@ -76,7 +79,6 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
-  runtimeProcessEntrypoints.stateLeaseHeartbeat,
   runtimeProcessEntrypoints.gatewayStateOwnerHeartbeat,
   runtimeProcessEntrypoints.serviceChildRelay,
   runtimeProcessEntrypoints.serviceChildGroupAnchor,

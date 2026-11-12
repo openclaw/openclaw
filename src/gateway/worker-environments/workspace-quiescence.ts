@@ -24,8 +24,8 @@ export function createWorkerWorkspaceQuiescence(params: {
   sharedHost: boolean;
   nativeWatchdog?: () => Promise<boolean>;
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
-}): (remoteWorkspaceDir: string) => Promise<WorkerWorkspaceQuiescence> {
-  return async (remoteWorkspaceDir) => {
+}): (remoteWorkspaceDir: string, authorize?: () => void) => Promise<WorkerWorkspaceQuiescence> {
+  return async (remoteWorkspaceDir, authorize) => {
     const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
     const windowsAbsolute = path.win32.isAbsolute(remoteWorkspaceDir);
     const windowsOnlyAbsolute = !posixAbsolute && windowsAbsolute;
@@ -39,10 +39,13 @@ export function createWorkerWorkspaceQuiescence(params: {
     // Pin one dialect for the lease; a reconnect must not reinterpret its nonce/custody.
     const nativeWatchdog = (await params.nativeWatchdog?.()) ?? false;
     params.ownerSignal.throwIfAborted();
+    authorize?.();
     const nativeNonce = randomBytes(16).toString("hex");
     const run = async (operation: NodeWorkerWorkspaceQuiescenceInput) => {
       const result = await params.runWorkspaceCommand({
         transportRetry: "never",
+        // Releasing acquired cleanup custody remains necessary after caller revocation.
+        assertCurrent: operation.action === "release" ? undefined : authorize,
         argv: nativeWatchdog
           ? [NODE_WORKSPACE_QUIESCENCE_COMMAND, remoteWorkspaceDir]
           : windowsOnlyAbsolute && operation.action === "acquire"

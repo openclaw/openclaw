@@ -1,5 +1,6 @@
 import { createMemo, Errored, isPending, latest, Loading, type Accessor } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   RetryAction,
   SettingsLoadingSkeleton,
@@ -17,7 +18,7 @@ export function DeviceInventory(props: DevicesProps) {
     <Errored
       fallback={(error, reset) => (
         <>
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}{" "}
             <RetryAction
               onRetry={() => {
@@ -25,7 +26,7 @@ export function DeviceInventory(props: DevicesProps) {
                 reset();
               }}
             />
-          </div>
+          </InlineAlert>
           <DeviceInventoryContent {...props} pending={false} />
         </>
       )}

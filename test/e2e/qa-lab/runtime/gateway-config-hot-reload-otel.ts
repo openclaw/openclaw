@@ -3,10 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { GatewayClientRequestError } from "../../../../src/gateway/client.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   connectHotReloadClient,
+  createHotReloadConfigPatcher,
   waitForHotReloadFact,
   type HotReloadConnection,
 } from "./gateway-config-hot-reload-fixtures.js";
@@ -83,27 +83,7 @@ export async function proveHotReloadOtel({
       assert(pid && bootId);
       const rpc = <T>(method: string, params: unknown = {}) =>
         primary.client.request<T>(method, params, { timeoutMs: 40_000 });
-      const patch = async (change: unknown) => {
-        const { hash } = await rpc<{ hash: string }>("config.get");
-        const apply = () =>
-          rpc<{ sentinel: { payload: { stats: { requiresRestart: boolean } } } }>("config.patch", {
-            baseHash: hash,
-            raw: JSON.stringify(change),
-          });
-        const result = await apply().catch(async (error: unknown) => {
-          if (
-            !(error instanceof GatewayClientRequestError) ||
-            !error.retryable ||
-            typeof error.retryAfterMs !== "number" ||
-            !error.message.startsWith("rate limit exceeded for config.patch")
-          ) {
-            throw error;
-          }
-          await delay(error.retryAfterMs);
-          return apply();
-        });
-        assert.equal(result.sentinel.payload.stats.requiresRestart, false);
-      };
+      const patch = createHotReloadConfigPatcher(primary);
       const readPrometheus = async () => {
         const response = await fetch(`${gateway.baseUrl}/api/diagnostics/prometheus`, {
           headers: { authorization: `Bearer ${gateway.token}` },

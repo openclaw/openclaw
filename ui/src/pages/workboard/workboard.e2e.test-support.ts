@@ -1,4 +1,4 @@
-import { rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   WorkboardBoardSummary,
@@ -6,7 +6,7 @@ import type {
   WorkboardEvent,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import type { Browser, Locator, Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -15,7 +15,6 @@ import {
   takeControlUiViewportScreenshot,
   waitForControlUiProofSurface,
 } from "../../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiE2eWaitTimeoutMs } from "../../test-helpers/control-ui-e2e.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -76,44 +75,12 @@ export function makeBoard(
 }
 
 export function createWorkboardProof(
-  owner: { readonly browser: Browser },
   scope: string,
-  viewport = { width: 2400, height: 1000 },
   options: { parent?: string; captureMode?: "chromium" | "webkit" | "element" } = {},
 ) {
   const directory = captureEnabled ? createControlUiE2eArtifactDir(scope, options.parent) : "";
-  const screenshots: string[] = [];
-  const videos: string[] = [];
   return {
     directory,
-    async open(label = scope) {
-      const rawVideoDir = path.join(directory, `${label}-raw`);
-      const context = await owner.browser.newContext({
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-        recordVideo: captureEnabled ? { dir: rawVideoDir, size: viewport } : undefined,
-      });
-      const page = await context.newPage().catch(async (error: unknown) => {
-        await context.close().catch(() => {});
-        throw error;
-      });
-      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
-      const video = page.video();
-      return {
-        page,
-        async close(this: void) {
-          await context.close();
-          if (video) {
-            const videoPath = path.join(directory, `${label}.webm`);
-            await video.saveAs(videoPath);
-            videos.push(videoPath);
-            // Keep raw evidence if closing or copying the recording fails.
-            await rm(rawVideoDir, { force: true, recursive: true });
-          }
-        },
-      };
-    },
     async capture(
       page: Page,
       name: string,
@@ -141,15 +108,6 @@ export function createWorkboardProof(
               : await capture(page, surface, content);
           await writeFile(filename, png);
         }
-        screenshots.push(filename);
-      }
-    },
-    async writeManifest() {
-      if (captureEnabled) {
-        await writeFile(
-          path.join(directory, "manifest.json"),
-          `${JSON.stringify({ directory, screenshots, videos }, null, 2)}\n`,
-        );
       }
     },
   };

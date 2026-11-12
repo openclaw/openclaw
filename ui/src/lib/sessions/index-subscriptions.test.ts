@@ -74,8 +74,6 @@ describe("createSessionCapability message subscriptions", () => {
       let scope = { client, epoch: 0 };
       const operations = createSessionScopedOperations({
         gateway,
-        notifyCreated: vi.fn(),
-        reportError: vi.fn(),
         connection: { capture: () => scope, isCurrent: (captured) => captured === scope },
         reconcileMutation: async () => ({ status: "stale" }),
       });
@@ -132,8 +130,6 @@ describe("createSessionCapability message subscriptions", () => {
       const operations = createSessionScopedOperations({
         gateway,
         connection,
-        notifyCreated: vi.fn(),
-        reportError: vi.fn(),
         reconcileMutation: async () => ({ status: "stale" }),
       });
       onTestFinished(() => {

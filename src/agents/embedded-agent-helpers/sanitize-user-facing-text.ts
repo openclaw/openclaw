@@ -37,7 +37,6 @@ import { EXEC_NO_OUTPUT_PLACEHOLDER } from "../bash-tools.exec-output.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   stripInternalRuntimeContext,
 } from "../internal-runtime-context.js";
 
@@ -481,12 +480,8 @@ export function userFacingTextFilters(
         }
       : {
           transform: stripInternalRuntimeContext,
-          activationTokens: [
-            INTERNAL_RUNTIME_CONTEXT_BEGIN,
-            INTERNAL_RUNTIME_CONTEXT_END,
-            OPENCLAW_RUNTIME_CONTEXT_NOTICE,
-            RUNTIME_CONTEXT_HEADER,
-          ],
+          // The canonical preflight also recognizes reflowed whitespace in carrier notices.
+          create: () => createConditionalTextProjector(stripInternalRuntimeContext, () => true),
         },
     {
       transform: stripInboundMetadata,
@@ -506,7 +501,12 @@ export function userFacingTextFilters(
 
 export function sanitizeUserFacingText(
   text: unknown,
-  opts?: { errorContext?: boolean; conversationContext?: string; streaming?: boolean },
+  opts?: {
+    errorContext?: boolean;
+    conversationContext?: string;
+    streaming?: boolean;
+    preserveLeadingSourceBoundary?: boolean;
+  },
 ): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
@@ -521,8 +521,11 @@ export function sanitizeUserFacingText(
           opts?.streaming,
         )
       : raw;
+  const filters = userFacingTextFilters(opts?.errorContext, opts?.streaming);
   return applyTextFilters(
     withoutConversationContext,
-    userFacingTextFilters(opts?.errorContext, opts?.streaming),
+    opts?.preserveLeadingSourceBoundary && withoutConversationContext.startsWith("\n")
+      ? filters.filter((filter) => filter !== leadingEmptyLinesTextFilter)
+      : filters,
   );
 }

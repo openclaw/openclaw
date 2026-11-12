@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -70,7 +71,7 @@ export function createLiveActivity(gateway: ApplicationGateway, sessions: Sessio
         subscriptions.set(key, pending);
         void pending.catch((cause: unknown) => {
           if (subscriptions.get(key) === pending) {
-            errors.set(key, cause instanceof Error ? cause.message : String(cause));
+            errors.set(key, formatUiError(cause));
             publish(entries);
           }
         });

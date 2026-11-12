@@ -25,6 +25,7 @@ const CONFIG_SET_VALUE_OPTIONS = new Set([
   "--batch-file",
   "--batch-json",
   "--container",
+  "--expect-current-json",
   "--log-level",
   "--profile",
   "--provider-allowlist",
@@ -110,14 +111,12 @@ function redactConfigAuditArgv(argv: readonly string[]): string[] {
       redacted[index] = "--batch-json=***";
     }
   }
-  const positionals = findConfigPositionals(redacted, setIndex + 1, 2);
-  if (positionals.length < 2) {
+  const [pathIndex, valueIndex] = findConfigPositionals(redacted, setIndex + 1, 2);
+  if (pathIndex === undefined || valueIndex === undefined) {
     return redacted;
   }
-  const pathIndex = positionals[0]!;
-  const valueIndex = positionals[1]!;
   const configPath = redacted[pathIndex];
-  if (typeof configPath === "string" && isSensitiveConfigPath(configPath)) {
+  if (configPath !== undefined && isSensitiveConfigPath(configPath)) {
     redacted[valueIndex] = "***";
   }
   return redacted;
@@ -469,7 +468,7 @@ export async function scrubConfigAuditLog(params: {
       filePath: path.join(directory, path.basename(auditPath)),
       content: outLines.join("\n"),
       mode: 0o600 & ~process.umask(),
-      dirMode: (await fs.stat(directory)).mode & 0o7777,
+      dirMode: "preserve",
       beforeRename: async ({ filePath }) => {
         // Replacing a log must not discard entries appended after the read.
         const size = await fs.stat(filePath).then(

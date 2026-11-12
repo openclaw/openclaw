@@ -130,12 +130,6 @@
 }
 
 .chat-tool-row__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
   opacity: 0;
   transition:
     opacity 150ms ease-out,
@@ -344,31 +338,6 @@
   overflow: hidden;
   white-space: nowrap;
   color: var(--chat-tool-secondary-color);
-}
-
-/* Active-task text wave: a subtle left-to-right color sweep across the
-   running row's primary text (same shimmer language as the skeleton/usage
-   loaders, clipped to glyphs). The band fades text toward --bg so it stays
-   correct in both themes. Scoped to no-preference so reduced-motion users
-   keep plain static text and syntax colors. */
-@media (prefers-reduced-motion: no-preference) {
-  /* Whichever element names the work in progress: the action verb on file rows,
-     the command itself on terminal rows. Syntax tokens inherit `color`, so the
-     clipped gradient paints their glyphs too. */
-  .chat-tool-row--running :is(.chat-tool-row__verb, .chat-tool-row__cmd) {
-    background-image: linear-gradient(
-      90deg,
-      var(--text) 0%,
-      var(--text) 35%,
-      color-mix(in srgb, var(--text) 42%, var(--bg) 58%) 50%,
-      var(--text) 65%,
-      var(--text) 100%
-    );
-    background-size: 200% 100%;
-    background-clip: text;
-    color: transparent;
-    animation: text-shimmer 2.2s ease-in-out infinite;
-  }
 }
 
 .chat-diffstat {
@@ -751,7 +720,7 @@
 
 .chat-tool-card__action-btn:hover,
 .chat-tool-card__action-btn:focus-visible,
-.chat-tool-card__actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
+.chat-tool-card__actions :where(.chat-copy-btn:is(:hover, :focus-visible)) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
 }
@@ -913,17 +882,6 @@
 .chat-tool-card__widget-actions-panel {
   min-width: 164px;
   max-width: 208px;
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
-}
-
-.chat-tool-card__widget-actions .session-menu__item {
-  min-height: 32px;
-  padding-inline: 7px;
-  font-size: calc(13px * var(--control-ui-text-scale));
 }
 
 .chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
@@ -1126,8 +1084,16 @@
   }
 }
 
+/* Completed work reads as a quiet heading over what follows: a medium label and
+   a resting chevron, with no divider. Two extra pixels below the uniform
+   run-block gap keep the label from crowding the reply or a leading code block. */
+.chat-work-group {
+  margin-block-end: 2px;
+}
+
 .chat-work-group .chat-activity-group__label {
   color: inherit;
+  font-weight: var(--control-ui-font-weight-semibold);
 }
 
 .chat-work-group__total {
@@ -1163,10 +1129,15 @@
   }
 }
 
-.chat-work-group__separator {
-  width: 100%;
-  height: 1px;
-  background: var(--border);
+/* The live headline keeps its entrance alongside the shared running sweep. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    .chat-activity-group__label--live.text-shimmer {
+      animation:
+        chat-activity-headline-enter 160ms ease-out,
+        text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
+    }
+  }
 }
 
 @media (pointer: coarse) {
@@ -1295,7 +1266,7 @@ openclaw-chat-tool-output {
   margin: 8px 0;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
 }
 

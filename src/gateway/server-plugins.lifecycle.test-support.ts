@@ -215,17 +215,38 @@ export function installInstanceBindingConfigIo() {
 }
 
 export async function requireBoundRuntime(
-  runtimes: readonly PluginRuntime[],
-  label: string,
+  coordinator: InstanceBindingProbeCoordinator,
+  since = 0,
 ): Promise<{ runtime: PluginRuntime }> {
-  for (const runtime of runtimes) {
-    if (await runtime.gateway.isAvailable()) {
-      // Plugin runtimes are proxies. Keep the async result non-thenable so
-      // Promise assimilation does not materialize the broad runtime graph.
-      return { runtime };
-    }
-  }
-  throw new Error(`${label} Gateway did not register an instance-bound plugin runtime`);
+  return await vi.waitUntil(
+    async () => {
+      for (let index = since; index < coordinator.runtimes.length; index++) {
+        const runtime = coordinator.runtimes[index]!;
+        if (
+          coordinator.registrationModes[index] !== "full" ||
+          !(await runtime.gateway.isAvailable())
+        ) {
+          continue;
+        }
+        try {
+          // Host availability also covers retired/prepared registrations; exercise admission.
+          await requestInstanceBindingProbe(runtime);
+        } catch (error) {
+          if (
+            !(error instanceof Error) ||
+            error.message !== 'Plugin "instance-binding-probe" runtime is no longer active.'
+          ) {
+            throw error;
+          }
+          continue;
+        }
+        // Keep the proxy inside a non-thenable result; later assertions retain this exact owner.
+        return { runtime };
+      }
+      return false;
+    },
+    { timeout: 30_000 },
+  );
 }
 
 export function requestInstanceBindingProbe(runtime: PluginRuntime) {

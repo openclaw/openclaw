@@ -22,9 +22,7 @@ export function compactUsageOverviewFamilies(
   const stores: Array<{ agentId: string; storePath: string }> = [];
   const storeIndex = new Map<string, number>();
   const compact = (instance: UsageCostWorkerSession): UsageCostOverviewInstance => {
-    const marker = instance.transcriptFile
-      ? undefined
-      : parseSqliteSessionFileMarker(instance.sessionFile);
+    const marker = parseSqliteSessionFileMarker(instance.sessionFile);
     // Only markers that rebuild to the same cache key travel compactly.
     if (!marker || formatSqliteSessionFileMarker(marker) !== instance.sessionFile) {
       return instance;

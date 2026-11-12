@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { CLAUDE_CLI_CLEAR_ENV } from "./cli-constants.js";
@@ -182,13 +183,56 @@ it.each([
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
-  it.each([
-    [undefined, true],
-    [{ security: "allowlist", ask: "always" }, false],
-  ] as const)("derives bypass from default or legacy exec policy %j", (exec, bypass) => {
-    expect(executionArgs({ config: { tools: { exec } } }).includes("bypassPermissions")).toBe(
-      bypass,
-    );
+  it("keeps slash commands enabled for compact while retaining tool restriction", () => {
+    const availability = { native: ["Read"], openClaw: [] as string[] };
+    const compact = executionArgs({ toolAvailability: availability, controlOperation: "compact" });
+    expect(compact).not.toContain("--disable-slash-commands");
+    expect(compact).toContain("--tools");
+    const turn = executionArgs({ toolAvailability: availability });
+    expect(turn).toContain("--disable-slash-commands");
+  });
+
+  it.each([false, true])("layers exec policy before selecting bypass (resume=%s)", (useResume) => {
+    type Exec = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
+    const cases: [Exec | undefined, Exec | undefined, boolean][] = [
+      [undefined, undefined, true],
+      [undefined, {}, true],
+      [undefined, { ask: "always" }, false],
+      [undefined, { mode: "full" }, true],
+      [undefined, { mode: "deny" }, false],
+      [{ mode: "full" }, undefined, true],
+      [{ mode: "full" }, {}, true],
+      [{ mode: "full" }, { ask: "always" }, false],
+      [{ mode: "full" }, { security: "deny" }, false],
+      [{ mode: "full" }, { mode: "deny" }, false],
+      [{ mode: "deny" }, { ask: "off" }, false],
+      [{ mode: "deny" }, undefined, false],
+      [{ mode: "deny" }, {}, false],
+      [{ mode: "deny" }, { mode: "full" }, true],
+      [{ mode: "deny" }, { security: "full", ask: "off" }, true],
+      [{ security: "deny", ask: "off" }, undefined, false],
+      [{ security: "deny", ask: "off" }, { host: "gateway" }, false],
+      [{ security: "deny", ask: "off" }, { ask: "off" }, false],
+      [{ security: "deny", ask: "off" }, { mode: "full" }, true],
+      [{ security: "deny", ask: "off" }, { security: "full", ask: "off" }, true],
+      [{ security: "full", ask: "always" }, { security: "full" }, false],
+      [{ mode: "ask" }, { ask: "off" }, false],
+      [{ security: "allowlist", ask: "always" }, undefined, false],
+    ];
+    for (const [globalExec, agentExec, bypass] of cases) {
+      const args = executionArgs({
+        agentId: "worker",
+        useResume,
+        baseArgs: (useResume ? backend.config.resumeArgs : backend.config.args) ?? [],
+        config: {
+          tools: { exec: globalExec },
+          agents: { entries: { worker: { tools: { exec: agentExec } } } },
+        },
+      });
+      expect
+        .soft(args.includes("bypassPermissions"), JSON.stringify({ globalExec, agentExec }))
+        .toBe(bypass);
+    }
   });
 
   it("keeps per-agent exec policy for normal runs and omits only the injected mode for compaction", () => {
@@ -283,7 +327,6 @@ describe("resolveClaudeCliExecutionArgs", () => {
 
   it.each([
     ["claude-sonnet-4-6", "off", "--effort xhigh --effort=low", "--effort xhigh --effort=low"],
-    ["claude-fable-5", "off", "--effort high", "--effort low"],
     ["claude-opus-4-7", "minimal", "", "--effort low"],
     ["claude-opus-4-7", "medium", "", "--effort medium"],
   ] as const)("maps %s thinking=%s to %s", (modelId, thinkingLevel, configured, expected) => {
@@ -291,6 +334,17 @@ describe("resolveClaudeCliExecutionArgs", () => {
     expect(executionArgs({ modelId, thinkingLevel, baseArgs })).toEqual(
       argv("-p --setting-sources user", expected),
     );
+  });
+
+  it.each([
+    [true, ["--fast-mode", "on"]],
+    [false, []],
+    [undefined, []],
+  ] as const)("forwards fastMode=%s to Claude Code", (fastMode, expected) => {
+    expect(executionArgs({ fastMode, baseArgs: argv("-p --setting-sources user") })).toEqual([
+      ...argv("-p --setting-sources user"),
+      ...expected,
+    ]);
   });
 
   it("strips configured effort args when thinking is adaptive", () => {

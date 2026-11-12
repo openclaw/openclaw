@@ -64,8 +64,10 @@ describe("registered catalog list phase diagnostics", () => {
       phases.push(event);
     }
   };
-  const observe = () =>
-    onTrustedInternalDiagnosticEvent(collect, { include: ["diagnostic.phase.completed"] });
+  const observe = (trusted = true) =>
+    trusted
+      ? onTrustedInternalDiagnosticEvent(collect, { include: ["diagnostic.phase.completed"] })
+      : onInternalDiagnosticEvent(collect);
 
   beforeEach(() => {
     resetSessionCatalogTestState();
@@ -92,6 +94,7 @@ describe("registered catalog list phase diagnostics", () => {
     projection.dispose();
     resetDiagnosticEventsForTest();
     vi.restoreAllMocks();
+    expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
   it("separates projection and provider waits from synchronous planning and final response CPU", async () => {
@@ -156,7 +159,6 @@ describe("registered catalog list phase diagnostics", () => {
         { name: "sessions.catalog.list.delivery", durationMs: 3, details: { threadCpuMs: 2 } },
       ]);
       expect(phases.every((phase) => phase.trace?.traceId === leaderTrace.traceId)).toBe(true);
-      expect(JSON.stringify(phases)).not.toContain(privateText);
     } finally {
       initial.resolve();
       listing.resolve();
@@ -200,7 +202,7 @@ describe("registered catalog list phase diagnostics", () => {
     }
   });
 
-  it("preserves a failed readiness result and omits unvisited stages", async () => {
+  it("requires session readiness only for registered catalogs", async () => {
     observe();
     const failure = new Error(privateText);
     dirty = true;
@@ -208,6 +210,11 @@ describe("registered catalog list phase diagnostics", () => {
       clock = 25;
       throw failure;
     });
+    const empty = start();
+    await empty.completion;
+    expect(empty.respond).toHaveBeenCalledWith(true, { catalogs: [] });
+
+    install();
     const call = start();
     await expect(call.completion).rejects.toBe(failure);
     expect(call.respond).not.toHaveBeenCalled();
@@ -215,32 +222,24 @@ describe("registered catalog list phase diagnostics", () => {
     expect(phases).toEqual([
       expect.objectContaining({ name: "sessions.catalog.list.projection_initial", durationMs: 25 }),
     ]);
-    expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
   it.each(["untrusted", "unavailable"] as const)(
     "delivers with %s CPU sampling",
     async (sampling) => {
-      if (sampling === "untrusted") {
-        onInternalDiagnosticEvent(collect);
-      } else {
-        observe();
-        threadCpuUsage.mockImplementation(() => {
-          throw new Error(privateText);
-        });
-      }
+      observe(sampling !== "untrusted");
+      threadCpuUsage.mockImplementation(() => {
+        throw new Error(privateText);
+      });
       install();
       const call = start();
       await call.completion;
       await waitForDiagnosticEventsDrained();
       expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
+      expect(phases).toHaveLength(sampling === "untrusted" ? 0 : 3);
+      expect(phases.every((event) => event.details === undefined)).toBe(true);
       if (sampling === "untrusted") {
         expect(threadCpuUsage).not.toHaveBeenCalled();
-        expect(phases).toEqual([]);
-      } else {
-        expect(phases).toHaveLength(3);
-        expect(phases.every((event) => event.details === undefined)).toBe(true);
-        expect(JSON.stringify(phases)).not.toContain(privateText);
       }
     },
   );

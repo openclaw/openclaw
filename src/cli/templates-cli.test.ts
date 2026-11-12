@@ -1,6 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
+import { create as createTar } from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -26,9 +29,14 @@ const mocks = vi.hoisted(() => ({
   applyTemplateAddPlanStateless: vi.fn(),
   withOpenClawStateLease: vi.fn(),
   leaseAssertOwned: vi.fn(),
+  localAssertCurrent: vi.fn(),
+  localSignal: new AbortController().signal,
+  createLocalTemplateConversationAdapters: vi.fn(),
   preflightTemplatePackage: vi.fn(),
-  callGatewayFromCli: vi.fn(),
-  sleep: vi.fn(),
+  waitForAgentRuntime: vi.fn(),
+  prepareAgentSession: vi.fn(),
+  onAgentReady: vi.fn(),
+  onSetupEvent: vi.fn(),
 }));
 
 vi.mock("../runtime.js", async (importOriginal) => ({
@@ -71,16 +79,21 @@ vi.mock("../templates/add-stateless.js", async (importOriginal) => ({
 
 // mock-isolation: CLI unit tests bypass live Gateway ownership probes; the owner guard has its own test.
 vi.mock("./local-state-owner.js", () => ({
-  runWithLocalStateOwner: async ({ runLocal }: { runLocal: () => Promise<void> }) =>
-    await runLocal(),
+  runWithLocalStateOwner: async ({
+    runLocal,
+  }: {
+    runLocal: (scope: { assertCurrent: () => void; signal: AbortSignal }) => Promise<void>;
+  }) => await runLocal({ assertCurrent: mocks.localAssertCurrent, signal: mocks.localSignal }),
 }));
-vi.mock("./gateway-rpc.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCliWithTransport: mocks.callGatewayFromCli,
+// mock-isolation: command wiring uses no live cron store; scheduler behavior is covered by Template Add integration tests.
+vi.mock("../cron/local-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cron/local-service.js")>()),
+  withLocalCronService: async (_getConfig: unknown, run: (cron: unknown) => Promise<unknown>) =>
+    run({}),
 }));
-vi.mock("../utils/sleep.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../utils/sleep.js")>()),
-  sleep: mocks.sleep,
+// mock-isolation: this command test verifies adapter wiring; normal session/model owners are covered separately.
+vi.mock("./templates-agent-conversation.js", () => ({
+  createLocalTemplateConversationAdapters: mocks.createLocalTemplateConversationAdapters,
 }));
 
 const { registerTemplatesCli } = await import("./templates-cli.js");
@@ -114,31 +127,6 @@ function output() {
 }
 const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line));
 
-function gatewayConfig(agent = "worker", revision = "revision-new", applied = revision) {
-  return {
-    config: { agents: { entries: { [agent]: {} } } },
-    configRevisionHash: revision,
-    appliedConfigHash: applied,
-  };
-}
-
-async function addWithAgentReadiness(beforeWait?: () => void) {
-  const manifestPath = await writeManifest({
-    ...cliTestHelpers.minimalManifest,
-    agent: { id: "worker" },
-  });
-  const apply = mocks.applyTemplateAddPlanStateless.getMockImplementation();
-  if (!apply) {
-    throw new Error("Missing Add fixture implementation");
-  }
-  mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan, options) => {
-    beforeWait?.();
-    await options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId);
-    return apply(plan, options);
-  });
-  return await add(["--json"], manifestPath);
-}
-
 describe("templates cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -148,8 +136,14 @@ describe("templates cli", () => {
       ok: true,
       mcpServers: {},
     });
-    mocks.callGatewayFromCli.mockReset();
-    mocks.sleep.mockReset().mockResolvedValue(undefined);
+    mocks.waitForAgentRuntime.mockReset().mockResolvedValue("applied");
+    mocks.localAssertCurrent.mockReset();
+    mocks.createLocalTemplateConversationAdapters.mockReset().mockReturnValue({
+      prepareAgentSession: mocks.prepareAgentSession,
+      waitForAgentRuntime: mocks.waitForAgentRuntime,
+      onAgentReady: mocks.onAgentReady,
+      onSetupEvent: mocks.onSetupEvent,
+    });
     mocks.preflightTemplatePackage.mockReset().mockResolvedValue({
       ok: false,
       code: "package_install_unavailable",
@@ -173,12 +167,95 @@ describe("templates cli", () => {
 
   it("blocks local Add while Templates Labs is off", async () => {
     mocks.loadConfig.mockReturnValue({});
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
     expect(await add(["--dry-run", "--json"])).toMatchObject({
       ok: false,
       error: { code: "templates_labs_disabled" },
     });
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
   });
+
+  it("resolves a registry name to verified artifact bytes for dry-run and scoped Add", async () => {
+    const registry = await registryFixture();
+    const workspace = join(tempDirs.make("openclaw-registry-cli-"), "workspace");
+    const preview = await add(["--dry-run", "--json", "--workspace", workspace], registry.name);
+    expect(preview).toMatchObject({
+      template: {
+        name: registry.name,
+        version: "1.2.3",
+        integrityKind: "artifact",
+        integrity: registry.integrity,
+      },
+      summary: { blockedActions: 0 },
+    });
+    expect(existsSync(workspace)).toBe(false);
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    expect(mocks.withOpenClawStateLease).not.toHaveBeenCalled();
+    expect(mocks.createLocalTemplateConversationAdapters).not.toHaveBeenCalled();
+    expect(mocks.loadConfig).not.toHaveBeenCalled();
+    expect(mocks.listConfiguredMcpServers).toHaveBeenCalledWith({ observe: false });
+    mocks.runtime.writeJson.mockClear();
+    let extractedRoot = "";
+    mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (plan) => {
+      extractedRoot = plan.template.packageRoot;
+      expect(await readFile(join(extractedRoot, "workspace", "AGENTS.md"), "utf8")).toBe(
+        "# Demo\n",
+      );
+      return {
+        status: "partial",
+        agent: plan.agent,
+        error: { code: "fixture_partial", message: "Inspect retained resources." },
+      };
+    });
+    expect(await add(["--json", "--workspace", workspace], registry.name)).toMatchObject({
+      status: "partial",
+      error: { code: "fixture_partial" },
+    });
+    expect(existsSync(extractedRoot)).toBe(false);
+    expect(mocks.runtime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps registry trust acknowledgement separate from dependency preflight", async () => {
+    const registry = await registryFixture("trust");
+    expect(await add(["--dry-run", "--json"], registry.name)).toMatchObject({
+      riskAcknowledgementRequired: true,
+    });
+    mocks.runtime.writeJson.mockClear();
+    expect(await add(["--acknowledge-clawhub-risk", "--json"], registry.name)).toMatchObject({
+      status: "complete",
+    });
+    mocks.runtime.writeJson.mockClear();
+    mocks.applyTemplateAddPlanStateless.mockClear();
+    await registryFixture("dependency");
+    expect(await add(["--acknowledge-clawhub-risk", "--json"], registry.name)).toMatchObject({
+      summary: { blockedActions: 1 },
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ code: "package_install_unavailable" }),
+      ]),
+    });
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+  });
+
+  it.for(["family", "name", "digest", "version", "trust"] as const)(
+    "rejects registry %s mismatches before applying",
+    async (failure) => {
+      const registry = await registryFixture(failure);
+      expect(await add(["--json"], registry.name)).toMatchObject({
+        error: {
+          code:
+            failure === "digest"
+              ? "clawhub_artifact_integrity_mismatch"
+              : failure === "version"
+                ? "clawhub_version_unavailable"
+                : failure === "trust"
+                  ? "clawhub_risk_acknowledgement_required"
+                  : "clawhub_identity_mismatch",
+        },
+      });
+      expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    },
+  );
 
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
@@ -194,44 +271,43 @@ describe("templates cli", () => {
     });
   });
 
-  it.each([undefined, "demo-agent-two"])(
-    "plans package identity with agent override %s",
-    async (agentId) => {
-      const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
-      const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
-      if (agentId) {
-        mocks.loadConfig.mockReturnValue({
-          ...enabledTemplatesLabsConfig,
-          agents: { entries: { "demo-agent": {} } },
-        });
-      }
-      await add(
-        [
-          "--dry-run",
-          "--workspace",
-          workspace,
-          "--json",
-          ...(agentId ? ["--agent-id", agentId] : []),
-        ],
-        root,
-      );
-
-      expect(output()).toMatchObject({
-        schemaVersion: "openclaw.templateAddPlan.v1",
-        stability: "experimental",
-        template: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
-        agent: {
-          requestedId: "demo-agent",
-          finalId: agentId ?? "demo-agent",
-          workspace: expectedWorkspace,
-        },
-        summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions: 1 },
+  it.for([undefined, "demo-agent-two", ""])("plans package with override %s", async (agentId) => {
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
+    if (agentId) {
+      mocks.loadConfig.mockReturnValue({
+        ...enabledTemplatesLabsConfig,
+        agents: { entries: { "demo-agent": {} } },
       });
-      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-    },
-  );
+    }
+    const args = ["--dry-run", "--workspace", workspace, "--json"];
+    args.push(...(agentId === undefined ? [] : ["--agent-id", agentId]));
+    await add(args, root);
+    const blockedActions = agentId === "" ? 2 : 1;
+    expect(output()).toMatchObject({
+      schemaVersion: "openclaw.templateAddPlan.v1",
+      stability: "experimental",
+      template: { kind: "package", name: "@acme/demo-agent", version: "1.2.3" },
+      agent: {
+        requestedId: "demo-agent",
+        finalId: agentId ?? "demo-agent",
+        workspace: expectedWorkspace,
+      },
+      summary: { agentActions: 1, workspaceActions: 2, packageActions: 1, blockedActions },
+    });
+    if (agentId === "") {
+      expect(output()).toMatchObject({
+        blockers: expect.arrayContaining([expect.objectContaining({ code: "invalid_agent_id" })]),
+        actions: expect.arrayContaining([
+          expect.objectContaining({ kind: "agent", blocked: true }),
+        ]),
+      });
+    }
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(existsSync(workspace)).toBe(false);
+  });
 
-  it("redacts credential-bearing remote MCP URLs in add previews", async () => {
+  it("redacts credentials and sanitizes MCP targets in add previews", async () => {
     const manifestPath = await writeManifest({
       ...cliTestHelpers.minimalManifest,
       mcpServers: {
@@ -239,23 +315,24 @@ describe("templates cli", () => {
           url: "https://example.com/mcp?token=abc123&mode=ok",
           transport: "streamable-http",
         },
+        server: { command: "node\u001b[2Jevil\narg" },
       },
     });
     const workspace = join(tempDirs.make("openclaw-templates-add-"), "workspace");
-
     await runTemplatesAddCommand(manifestPath, { dryRun: true, workspace });
 
     const printed = logLines().join("\n");
     expect(printed).not.toMatch(/^Experimental:/m);
-    expect(printed).toContain("MCP remote:");
-    expect(printed).toContain("example.com");
+    expect(printed).toContain("MCP remote: https://example.com/mcp?token=***&mode=ok");
     expect(printed).not.toContain("abc123");
-    expect(printed).toContain("token=***");
+    expect(printed).toContain("MCP server: nodeevil\\narg");
+    expect(printed).not.toContain("\u001b[2J");
   });
 
   it("discloses capability escalations in the human dry-run", async () => {
     const path = await writeManifest({
       ...cliTestHelpers.minimalManifest,
+      agent: { ...cliTestHelpers.minimalManifest.agent, tools: { allow: ["read"] } },
       mcpServers: {
         docs: {
           command: "node",
@@ -264,13 +341,6 @@ describe("templates cli", () => {
         },
       },
     });
-    const root = dirname(path);
-    await mkdir(join(root, "profiles"));
-    await writeFile(
-      join(root, "profiles", "openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    allow: [read]\n",
-      "utf8",
-    );
 
     await add(["--dry-run"], path);
 
@@ -371,42 +441,122 @@ describe("templates cli", () => {
     }
     const [, options] = mocks.applyTemplateAddPlanStateless.mock.calls[0]!;
     options.assertCurrent();
-    expect(mocks.leaseAssertOwned).toHaveBeenCalledOnce();
+    expect(mocks.leaseAssertOwned).toHaveBeenCalled();
   });
 
-  it("accepts an already-applied Gateway config revision", async () => {
-    mocks.callGatewayFromCli.mockResolvedValue(gatewayConfig());
-
-    expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
-
-    expect(mocks.sleep).not.toHaveBeenCalled();
-  });
-
-  it("waits for the requested agent in an applied revision after a cached response", async () => {
-    mocks.callGatewayFromCli
-      .mockResolvedValueOnce(gatewayConfig("other", "revision-old"))
-      .mockResolvedValueOnce(gatewayConfig("worker", "revision-new", "revision-old"))
-      .mockResolvedValueOnce(gatewayConfig());
-
-    expect(await addWithAgentReadiness()).toMatchObject({ status: "complete" });
-
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledTimes(3);
-    expect(mocks.sleep).toHaveBeenCalledTimes(2);
-  });
-
-  it("reports the last Gateway error after the reload deadline", async () => {
-    mocks.callGatewayFromCli.mockRejectedValue(new Error("gateway unavailable"));
-    await addWithAgentReadiness(() => {
-      let reads = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => (reads++ < 2 ? 0 : 15_000));
-    });
-    expect(output()).toMatchObject({
-      status: "failed",
-      error: {
-        code: "add_failed",
-        message:
-          "Gateway did not apply the Template agent configuration in time: gateway unavailable",
-      },
-    });
-  });
+  it.for(["local", "registry"])(
+    "wires %s Add into the same offline shared installer",
+    async (source) => {
+      await add(["--json"], source === "registry" ? (await registryFixture()).name : undefined);
+      const [, options] = mocks.applyTemplateAddPlanStateless.mock.calls[0]!;
+      expect(mocks.createLocalTemplateConversationAdapters).toHaveBeenCalledExactlyOnceWith({
+        agentId: "demo-agent",
+        assertCurrent: options.assertCurrent,
+        signal: mocks.localSignal,
+        runtime: expect.objectContaining({ log: expect.any(Function) }),
+      });
+      options.assertCurrent();
+      expect(mocks.localAssertCurrent).toHaveBeenCalled();
+      expect(mocks.leaseAssertOwned).toHaveBeenCalled();
+      mocks.localAssertCurrent.mockImplementation(() => {
+        throw new Error("offline custody lost");
+      });
+      expect(() => options.assertCurrent()).toThrow("offline custody lost");
+      expect(options.prepareAgentSession).toBe(mocks.prepareAgentSession);
+      expect(options.waitForAgentRuntime).toBe(mocks.waitForAgentRuntime);
+      expect(options.onAgentReady).toBe(mocks.onAgentReady);
+      expect(options.onSetupEvent).toBe(mocks.onSetupEvent);
+      expect(options.cronGateway).toEqual(
+        expect.objectContaining({
+          add: expect.any(Function),
+          enable: expect.any(Function),
+          writeScratch: expect.any(Function),
+        }),
+      );
+      const [conversationOptions] = mocks.createLocalTemplateConversationAdapters.mock.calls[0]!;
+      conversationOptions.runtime.log("conversation output");
+      options.runtime.log("conversation output");
+      expect(logLines()).not.toContain("conversation output");
+      expect(output()).toMatchObject({ status: "complete" });
+    },
+  );
 });
+
+// Wire fixtures keep the real registry client, trust gate, downloader, extractor,
+// manifest reader, and Add planner; only HTTP responses and the final mutation are controlled.
+async function registryFixture(
+  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency",
+) {
+  const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+  const manifestPath = join(root, "CLAW.md");
+  const manifest = JSON.parse((await readFile(manifestPath, "utf8")).split("---")[1]!);
+  if (failure !== "dependency") {
+    manifest.skills = [];
+    manifest.plugins = [];
+  }
+  await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
+  const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");
+  await createTar({ gzip: true, file: archive, cwd: dirname(root) }, [root.split("/").at(-1)!]);
+  const bytes = await readFile(archive);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const npmIntegrity = "sha512-" + createHash("sha512").update(bytes).digest("base64");
+  const name = "@acme/demo-agent";
+  const pkg = {
+    name,
+    family: "template",
+    displayName: "Demo",
+    channel: "community",
+    isOfficial: false,
+    updatedAt: 1,
+    latestVersion: failure === "version" ? "latest" : "1.2.3",
+  };
+  const artifact = {
+    kind: "npm-pack",
+    sha256: failure === "digest" ? "0".repeat(64) : sha256,
+    npmIntegrity,
+  };
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const route = decodeURIComponent(url.pathname);
+    if (route.endsWith("/artifact/download")) {
+      return new Response(bytes, { headers: { "X-ClawHub-Artifact-Sha256": sha256 } });
+    }
+    if (route.endsWith("/artifact")) {
+      return Response.json({ package: pkg, version: "1.2.3", artifact });
+    }
+    if (route.endsWith("/security")) {
+      return Response.json({
+        package: pkg,
+        release: {
+          version: "1.2.3",
+          artifactKind: "npm-pack",
+          artifactSha256: artifact.sha256,
+          npmIntegrity,
+        },
+        overview: "Synthetic security review.",
+        securityAuditUrl: "https://clawhub.ai/acme/templates/demo-agent/security-audit",
+        verdict: failure === "trust" ? "suspicious" : "benign",
+        trust: {
+          scanStatus: "clean",
+          moderationState: "approved",
+          blockedFromDownload: false,
+          reasons: [],
+          pending: false,
+          stale: false,
+        },
+      });
+    }
+    if (route === "/api/v1/packages/" + name) {
+      return Response.json({
+        package: {
+          ...pkg,
+          ...(failure === "family" ? { family: "plugin" } : {}),
+          ...(failure === "name" ? { name: "@acme/other" } : {}),
+        },
+        owner: { handle: "acme" },
+      });
+    }
+    throw new Error("Unexpected registry request: " + route);
+  });
+  return { name, integrity: "sha256:" + sha256 };
+}

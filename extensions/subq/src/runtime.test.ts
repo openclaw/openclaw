@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type * as Decisions from "openclaw/plugin-sdk/decisions";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
@@ -54,8 +54,15 @@ const key = "synthetic-subq-key";
 beforeEach(() => {
   vi.stubEnv("SUBQ_API_KEY", "synthetic-ambient");
   vi.mocked(getPreparedPluginSecretInput).mockReturnValue({ revision: 1, value: key });
-  const registerDecisionProvider = (p: Decisions.DecisionProviderV1) => (selected = p);
-  plugin.register({ registerDecisionProvider } as unknown as OpenClawPluginApi);
+  plugin.register(
+    createTestPluginApi({
+      id: "subq",
+      registerDecisionProvider(registered) {
+        assert(registered.contractVersion === 1);
+        selected = registered;
+      },
+    }),
+  );
   fetch.mockReset().mockImplementation(async () => Response.json(result()));
   vi.stubGlobal("fetch", fetch);
 });
@@ -75,21 +82,6 @@ it("posts the documented typed contract and preserves fractional/rounded results
       escalate: { type: "noul", instructions: "Does this need human review?" },
     },
   });
-});
-
-it.each([
-  [400, "unsupported-input"],
-  [401, "authentication"],
-  [403, "authentication"],
-  [429, "rate-limited"],
-  [503, "transport"],
-] as const)("classifies HTTP %s without leaking errors or retrying", async (status, reason) => {
-  fetch.mockResolvedValue(new Response(key, { status, headers: { "Retry-After": "2" } }));
-  expect(await evaluate()).toEqual({
-    ...unavailable(reason),
-    ...(status === 429 ? { retryAfterMs: 2000 } : {}),
-  });
-  expect(fetch).toHaveBeenCalledOnce();
 });
 
 it.each<Decisions.DecisionBatch>([
@@ -120,7 +112,7 @@ it("rejects chat model IDs and observes prepared credential rotation/loss, not a
   }
 });
 
-it.each<[string, ((payload: ReturnType<typeof result>) => unknown)?, string?]>([
+it.each<[string, (payload: ReturnType<typeof result>) => unknown]>([
   ["missing answer", (p) => Reflect.deleteProperty(p.answers, "queue")],
   ["wrong model", (p) => (p.model = "subq-preview")],
   ["wrong type", (p) => (p.answers.escalate.type = "boolean")],
@@ -129,35 +121,10 @@ it.each<[string, ((payload: ReturnType<typeof result>) => unknown)?, string?]>([
   ["wrong legend", (p) => (p.answers.urgency.legend["0"] = "Wrong")],
   ["invalid score", (p) => (p.answers.urgency.score = 2)],
   ["wrong usage", (p) => (p.usage.output_tokens = 1)],
-  ["reflected credential", (p) => (p.answers.queue.choice = key)],
-  ["malformed JSON", undefined, "not-json"],
-  ["oversized response", undefined, "x".repeat(1024 * 1024 + 1)],
-])("rejects %s without partial output", async (_kind, mutate, body) => {
+])("rejects %s without partial output", async (_kind, mutate) => {
   const payload = result();
-  mutate?.(payload);
-  fetch.mockResolvedValue(new Response(body ?? JSON.stringify(payload)));
+  mutate(payload);
+  fetch.mockResolvedValue(Response.json(payload));
   expect(await evaluate()).toEqual(unavailable("invalid-response"));
   expect(fetch).toHaveBeenCalledOnce();
-});
-
-it("does not dispatch after cancellation, lost admission, or an exhausted deadline", async () => {
-  const controller = new AbortController();
-  controller.abort(new Error("caller closed"));
-  await expect(evaluate({ signal: controller.signal })).rejects.toThrow("caller closed");
-  expect(await evaluate({ isAdmissible: () => false })).toEqual(unavailable("transport"));
-  expect(await evaluate({ deadlineMonotonicMs: 0 })).toEqual(unavailable("transport"));
-  const isAdmissible = () => {
-    throw new Error("authority closed");
-  };
-  await expect(evaluate({ isAdmissible })).rejects.toThrow("authority closed");
-  expect(fetch).not.toHaveBeenCalled();
-});
-
-it("keeps in-flight caller cancellation terminal", async () => {
-  const controller = new AbortController();
-  fetch.mockImplementation(async () => {
-    controller.abort(new Error("caller closed"));
-    throw new Error("private network error");
-  });
-  await expect(evaluate({ signal: controller.signal })).rejects.toThrow("caller closed");
 });

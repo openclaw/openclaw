@@ -22,6 +22,7 @@ import { createDiagnosticLogRecordCapture } from "../../../../src/logging/test-h
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { createGatewaySchedulerClock } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { parseQaArtifactBase } from "./script-options.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/channel-health-monitor-lifecycle-runtime.ts";
 const SCENARIO_PATH = "qa/scenarios/observability/channel-health-monitor-lifecycle.yaml";
@@ -278,17 +279,8 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
   });
 }
 
-function parseArtifactBase(argv: readonly string[]) {
-  const index = argv.indexOf("--artifact-base");
-  const value = index >= 0 ? argv[index + 1] : undefined;
-  if (!value) {
-    throw new Error("--artifact-base is required");
-  }
-  return path.resolve(value);
-}
-
 export async function main(argv = process.argv.slice(2)) {
-  const artifactBase = parseArtifactBase(argv);
+  const artifactBase = parseQaArtifactBase(argv);
   const repoRoot = path.resolve(import.meta.dirname, "../../../..");
   const writer = createQaScriptEvidenceWriter({
     artifactBase,

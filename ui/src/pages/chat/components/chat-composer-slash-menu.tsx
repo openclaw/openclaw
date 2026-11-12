@@ -1,11 +1,11 @@
 import { For, Show, createMemo, lazy } from "solid-js";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
@@ -25,7 +25,6 @@ const SlashMenuOptions = lazy(() => import("./chat-composer-slash-menu-options.t
 const SlashArgumentOptions = lazy(() => import("./chat-composer-slash-menu-options.tsx"), {
   export: "SlashArgumentOptions",
 });
-warmWhenIdle(SlashMenuOptions.preload, SlashArgumentOptions.preload);
 
 export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; draft: string }) {
   const state = () => props.menu.state;
@@ -37,7 +36,7 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
     > = [];
     for (const [index, command] of state().slashMenuItems.entries()) {
       const category = command.source === "skill" ? "skills" : (command.category ?? "session");
-      const group = props.draft === "/" ? groups.find(([key]) => key === category) : groups.at(-1);
+      const group = groups.at(-1);
       if (group?.[0] === category) {
         group[1].push({ command, index });
       } else {
@@ -58,12 +57,16 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
         >
           {activeMode === "args" ? (
             <div class="slash-menu-group">
-              <div class="slash-menu-group__label">
-                /{state().slashMenuCommand?.name}{" "}
-                {state().slashMenuCommand
-                  ? getSlashCommandDescription(state().slashMenuCommand!)
-                  : ""}
-              </div>
+              <MenuHeading
+                label={
+                  <>
+                    /{state().slashMenuCommand?.name}{" "}
+                    {state().slashMenuCommand
+                      ? getSlashCommandDescription(state().slashMenuCommand!)
+                      : ""}
+                  </>
+                }
+              />
               <ChatLazyBoundary
                 fallback={
                   <ComposerMenuLoadingRows
@@ -103,7 +106,7 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
                       { "slash-menu-group--skills": group()[0] === "skills" },
                     ]}
                   >
-                    <div class="slash-menu-group__label">{label()}</div>
+                    <MenuHeading label={label()} />
                     <ChatLazyBoundary
                       fallback={
                         <ComposerMenuLoadingRows

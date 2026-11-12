@@ -26,6 +26,7 @@ import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
 import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
@@ -216,7 +217,22 @@ async function openTerminalSessionWithSource(
       return;
     }
   }
-  const launch = context.resolveTerminalLaunchPolicy(request.agentId);
+  const qualifiedSession = parseAgentSessionKey(request.sessionKey?.trim());
+  let launch = context.resolveTerminalLaunchPolicy(request.agentId);
+  // Only a qualified conversation can supply a missing launch owner. Unqualified
+  // aliases must retain the launch policy's refusal to select a system agent.
+  if (request.sessionKey && (launch.ok || qualifiedSession)) {
+    const requestedOwner = resolveRequestedSessionAgentId(
+      context.getRuntimeConfig(),
+      request.sessionKey,
+      qualifiedSession || !launch.ok ? request.agentId : launch.plan.agentId,
+    );
+    if (!requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    launch = context.resolveTerminalLaunchPolicy(requestedOwner.agentId);
+  }
   if (!launch.ok) {
     respondLaunchBlocked(respond, launch.block, request.failureHint);
     return;
@@ -343,18 +359,9 @@ async function openTerminalSessionWithSource(
   let agentOwner: AgentTerminalOwner | undefined;
   if (request.sessionKey) {
     const runtimeConfig = context.getRuntimeConfig();
-    const requestedOwner = resolveRequestedSessionAgentId(
-      runtimeConfig,
-      request.sessionKey,
-      launch.plan.agentId,
-    );
-    if (!requestedOwner.ok) {
-      respond(false, undefined, requestedOwner.error);
-      return;
-    }
     const agentSessionKey = resolveStoredSessionKeyForAgentStore({
       cfg: runtimeConfig,
-      agentId: requestedOwner.agentId,
+      agentId: launch.plan.agentId,
       sessionKey: request.sessionKey,
     });
     source?.assertCurrent();
@@ -363,7 +370,7 @@ async function openTerminalSessionWithSource(
       (await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: runtimeConfig,
         key: agentSessionKey,
-        agentId: requestedOwner.agentId,
+        agentId: launch.plan.agentId,
       }));
     const agentSessionId = entry?.sessionId?.trim();
     if (!agentSessionId) {
@@ -379,7 +386,7 @@ async function openTerminalSessionWithSource(
       kind: "agent",
       agentSessionKey,
       agentSessionId,
-      agentId: requestedOwner.agentId,
+      agentId: launch.plan.agentId,
     };
   }
   if (context.isConnectionActive?.(connId) === false) {
@@ -396,13 +403,7 @@ async function openTerminalSessionWithSource(
     );
     return;
   }
-  if (!context.isTerminalEnabled()) {
-    unavailable("terminal is disabled");
-    return;
-  }
-  const refreshedLaunch = context.resolveTerminalLaunchPolicy(
-    agentOwner?.agentId ?? request.agentId,
-  );
+  const refreshedLaunch = context.resolveTerminalLaunchPolicy(launch.plan.agentId);
   if (!refreshedLaunch.ok) {
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;
@@ -434,7 +435,6 @@ async function openTerminalSessionWithSource(
           source?.assertCurrent();
           return (
             context.isConnectionActive?.(connId) !== false &&
-            context.isTerminalEnabled() &&
             (!request.requireCliAgents ||
               context.getRuntimeConfig().gateway?.cliAgents?.enabled !== false) &&
             context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&

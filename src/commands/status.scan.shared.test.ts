@@ -302,7 +302,6 @@ function memoryManager(
 describe("resolveSharedMemoryStatusSnapshot", () => {
   const getMemorySearchManager = mocks.getMemorySearchManager;
   beforeEach(() => getMemorySearchManager.mockReset().mockResolvedValue({ manager: null }));
-
   function memorySnapshot(
     overrides: Partial<Parameters<typeof resolveSharedMemoryStatusSnapshot>[0]> = {},
   ) {
@@ -314,7 +313,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       ...overrides,
     });
   }
-
   it("reports native provider health instead of returning a silent null", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const health = vi.fn().mockResolvedValue({ status: "ready", message: "connected" });
@@ -322,14 +320,12 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       providerId: "records",
       provider: { health, close },
     });
-
     const result = await memorySnapshot({
       cfg: { plugins: { slots: { memory: "records" } } },
       memoryPlugin: { enabled: true, slot: "records" },
       isMemoryProviderNative: () => true,
       getMemoryProvider,
     });
-
     expect(getMemoryProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
@@ -345,7 +341,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(getMemorySearchManager).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
   });
-
   it.each(["unconfigured", "unowned fleet", "cold store"])("skips memory for %s", async (kind) => {
     const isMemoryProviderNative = vi.fn(() => false);
     const resolveMemoryConfig = vi.fn();
@@ -366,7 +361,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
-
   it.each(["explicit config", "shipped tables"])("inspects memory with %s", async (source) => {
     const databasePath = path.join(makeTempDir(tempDirs, "status-memory-"), "memory.sqlite");
     if (source === "shipped tables") {
@@ -389,39 +383,45 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     );
     expect(result).toMatchObject({ provider: "local", files: 1, dirty: true });
   });
-
-  it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
-    const manager = memoryManager({
-      provider: "memory-lancedb-pro",
-      files: 66,
-      chunks: 128,
-    });
+  it.each(["healthy", "store", "semantic"])("reports custom legacy %s probes", async (probe) => {
+    const vector = {
+      enabled: true,
+      storeAvailable: true,
+      semanticAvailable: true,
+      available: true,
+    };
+    const manager = memoryManager({ provider: "memory-lancedb-pro", vector });
+    const failedProbe =
+      probe === "store" ? "probeVectorStoreAvailability" : "probeVectorAvailability";
+    if (probe !== "healthy") {
+      manager[failedProbe].mockRejectedValue(new Error("offline"));
+    }
+    if (probe === "semantic") {
+      Reflect.deleteProperty(manager, "probeVectorStoreAvailability");
+    }
     const resolveMemoryConfig = vi.fn(() => null);
+    const requireDefaultDatabasePath = vi.fn(() => "/unused-memory.sqlite");
     getMemorySearchManager.mockResolvedValue({ manager });
-    const requireDefaultDatabasePath = vi.fn(
-      () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
-    );
-
     const result = await memorySnapshot({
-      cfg: {
-        plugins: { slots: { memory: "memory-lancedb-pro" } },
-        memory: { search: { enabled: false } },
-      },
+      cfg: { plugins: { slots: { memory: "memory-lancedb-pro" } } },
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
       requireDefaultDatabasePath,
     });
-
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(requireDefaultDatabasePath).not.toHaveBeenCalled();
-    expect(manager.probeVectorStoreAvailability).toHaveBeenCalled();
-    expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
-    expect(manager.close).toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
-      agentId: "main",
-      provider: "memory-lancedb-pro",
-      files: 66,
-      chunks: 128,
+      vector:
+        probe === "healthy"
+          ? vector
+          : {
+              ...vector,
+              storeAvailable: probe !== "store",
+              semanticAvailable: false,
+              available: false,
+              loadError: "offline",
+            },
     });
   });
 });

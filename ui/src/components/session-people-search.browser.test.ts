@@ -58,7 +58,9 @@ it.each(["assignment", "compact assignment", "members"] as const)(
         }
       };
       await shown;
-      await expect.element(page.getByText("Assign to…", { exact: true })).toBeVisible();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Assign to…", exact: true }))
+        .toBeVisible();
       const assignment = menuItem(root, "Assign to…");
       // A resting pointer opens the submenu first; Enter on its owner must not select a row.
       await userEvent.hover(assignment);
@@ -82,6 +84,7 @@ it.each(["assignment", "compact assignment", "members"] as const)(
     if (members) {
       await expect.element(sharingSearch).toHaveAttribute("aria-expanded", "false");
     } else {
+      // Assignment search is a visible field, not a collapsed action.
       await expect.element(input).toBeVisible();
     }
     if (surface === "assignment") {
@@ -110,20 +113,21 @@ it.each(["assignment", "compact assignment", "members"] as const)(
     await reopen();
     if (members) {
       await userEvent.click(sharingSearch);
-    }
-    await expect.element(input).toBeVisible();
-    if (members) {
+      await expect.element(input).toBeVisible();
       await userEvent.click(input);
     }
-    // Assignment typing must enter the visible search without a separate click.
+    // Assignment typing must reach the search without a separate click.
     await userEvent.keyboard("pc");
     expect(onAction).not.toHaveBeenCalled();
     await expect.element(input).toHaveValue("pc");
     await expect
       .element(
-        page.getByText(members ? "No people found" : "No matching people or agents", {
-          exact: true,
-        }),
+        page.getByText(
+          members ? "No people match your search." : "No people or agents match your search.",
+          {
+            exact: true,
+          },
+        ),
       )
       .toBeVisible();
     await userEvent.keyboard("{Escape}");
@@ -132,6 +136,7 @@ it.each(["assignment", "compact assignment", "members"] as const)(
       expect(document.activeElement).toBe(sharingSearch.element());
       await userEvent.click(sharingSearch);
     }
+    // Assignment Escape clears the query and keeps the field focused for the next search.
     await expect.element(input).toHaveValue("");
     await expect.element(input).toBeVisible();
     expect(document.activeElement).toBe(input.element());

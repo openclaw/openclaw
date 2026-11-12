@@ -68,7 +68,7 @@ export function beginActionDownloadCaptureOnPage(
       }
       while (capture.lastEventAtMs !== undefined) {
         const remainingQuietMs = Math.min(
-          BROWSER_ACTION_NAVIGATION_GRACE_MS - (Date.now() - capture.lastEventAtMs),
+          BROWSER_ACTION_NAVIGATION_GRACE_MS - (performance.now() - capture.lastEventAtMs),
           remainingBudgetMs(),
         );
         if (remainingQuietMs <= 0) {

@@ -46,6 +46,7 @@ export async function streamSignalEvents(params: {
   account?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  lastEventId?: string;
   onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };

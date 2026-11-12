@@ -32,6 +32,7 @@ const SYNC_SUPPORT_FILES = [
     "check-docs-mdx.mjs",
     "check-docs-mdx.mts",
     "lib/arg-utils.runtime.mjs",
+    "lib/numeric-options.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "lib/managed-cleanup-handoff.mts",

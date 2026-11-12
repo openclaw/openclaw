@@ -7,13 +7,13 @@
  * I/O is involved: this measures workspace-policy CPU/allocation, not RPC latency.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -64,9 +64,6 @@ async function run(count: number) {
     }
   }
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 await run(200);
 for (const mode of ["timing", "allocation"] as const) {
   for (let sample = 0; sample < samples; sample++) {
@@ -93,7 +90,7 @@ for (const mode of ["timing", "allocation"] as const) {
         operations: iterations,
         hostLoad,
         ...(allocation
-          ? { sampledBytesPerOperation: allocated(allocation.profile.head) / iterations }
+          ? { sampledBytesPerOperation: sumSampledHeapBytes(allocation.profile.head) / iterations }
           : {
               cpuUsPerOperation: (cpu.user + cpu.system) / iterations,
               wallUsPerOperation: (elapsedMs * 1_000) / iterations,

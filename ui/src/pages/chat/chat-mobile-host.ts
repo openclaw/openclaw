@@ -44,6 +44,8 @@ export type ChatMobileHost = {
   /** Existing connection, agent and session identity from the pane owner. */
   scopeKey: string;
   open: boolean;
+  /** Closed, but still sliding out: content stays presented while hidden and inert. */
+  exiting: boolean;
   suspended: boolean;
   mode: "dock" | "expanded";
   height: number | undefined;

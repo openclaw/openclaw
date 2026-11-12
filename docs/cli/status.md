@@ -44,9 +44,16 @@ openclaw status --usage --agent work
 | `--timeout <ms>`        | Check timeout in milliseconds (default: `60000`).                                                               |
 | `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
+An explicitly empty `--agent` is invalid; omit the flag to use the default usage
+scope. `--agent` remains valid only with `--usage`.
+
 `status --all` neutralizes terminal controls in channel and agent labels, account
 tables, and channel issue diagnostics. Embedded tabs and line breaks in these
 values display as visible escapes; report styling and multiline store guidance remain.
+
+Gateway log diagnostics skip missing files and unsupported sources such as FIFOs
+without a writer, while retaining evidence from the other regular log. Symlinks
+to regular logs remain supported; skipped log paths are not replaced or removed.
 
 Status starts one monotonic check deadline when the command begins. Local readiness, Gateway status, provider usage, and deep health consume the remaining allowance. Remote targets and explicit Gateway URLs skip local readiness but keep the same deadline. Local checks report the observed startup phase while waiting. If the Gateway is still starting when the budget expires, status reports “still starting” instead of unreachable and skips deep channel checks. JSON keeps the status report and adds `gateway.readiness: "still-starting"` and `gateway.startupPhase`. An explicit `--timeout` limits that shared allowance.
 
@@ -63,8 +70,9 @@ Channels without a check, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 checks remain `WARN`. A lifecycle `OK` does not mean a live check ran.
 
-The Update run row preserves the last recorded update outcome. A failed run is
-historical only when its saved observation of a running Gateway has a version or
+The Update run history read uses a native read-only connection instead of staging
+a copy of the shared state database. A failed run is historical only when its saved observation
+of a running Gateway has a version or
 build ID that differs from the healthy local Gateway now serving requests:
 `Last update run failed (preflight-no-good-commit) — Gateway is serving 2026.10.1;
 recorded serving version was 2026.9.4.` The installed package's starting identity
@@ -341,7 +349,10 @@ succeeds or the Gateway restarts.
 `status --json --all` reports memory details from the active memory plugin
 runtime selected by `plugins.slots.memory`. Custom memory plugins can leave
 built-in `memory.search.enabled` disabled and still report
-their own files, chunks, vector, and FTS state.
+their own files, chunks, vector, and FTS state. If the vector probe fails,
+the report marks the vector availability it could not verify as `false` and
+puts the probe error in `memory.vector.loadError` instead of repeating the
+last reported vector state.
 
 ## Related
 

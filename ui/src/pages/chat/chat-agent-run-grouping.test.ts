@@ -76,7 +76,7 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
-  it.each(["interrupted", "silent-terminal"] as const)(
+  it.each(["interrupted", "yielded", "silent-terminal"] as const)(
     "classifies a persisted tool-use tail as %s without inventing a final answer",
     (state) => {
       const runId = "run-tail";
@@ -93,7 +93,7 @@ describe("coalesceAgentRunFrames", () => {
               ...commentary.messages.map(({ message }) => message),
               ...(state === "silent-terminal" ? [terminal] : []),
             ],
-            activeRunId: null,
+            session: { lastRunId: runId, abortedLastRun: state === "interrupted" },
           },
         )[1],
       );
@@ -163,13 +163,13 @@ describe("coalesceAgentRunFrames", () => {
     expect(history.key).toBe(live.key);
   });
 
-  it("keeps a restart-recovered tool-only run in one stable frame", () => {
+  it("keeps a system-initiated tool-only run in one stable frame", () => {
     const runId = "run-recovered";
     const boundaryId = `send:${runId}`;
     const recoveryNotice = {
       kind: "notice" as const,
-      key: "notice:restart-recovery",
-      text: "Turn interrupted by a gateway restart.",
+      key: "notice:system-event",
+      text: "Check the current workspace state.",
       timestamp: 1,
       startsTurn: true as const,
       boundaryId,

@@ -3,14 +3,14 @@ import { readScratchStateFromDatabase } from "../cron/scratch-read.kernel.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 
 export function readLegacyHeartbeatScratch(
   storePath: string,
   agentId: string,
   options: { env: NodeJS.ProcessEnv },
 ) {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(({ db }) => {
     const storeKey = resolveCronStoreKeyInDatabase(db, storePath, options.env);
     const receipt = readDefaultProactiveJobReceiptInDatabase(db, storeKey, agentId);
     if (receipt?.phase === "complete") {

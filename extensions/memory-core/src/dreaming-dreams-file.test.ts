@@ -49,7 +49,6 @@ function writeBackfill(
   return writeBackfillDiaryEntries({
     workspaceDir,
     entries: [{ isoDay: "2026-04-05", bodyLines: [body], ...entry }],
-    timezone: "UTC",
   });
 }
 
@@ -112,15 +111,6 @@ it("reads and removes backfill entries", async () => {
   await expect(removeBackfillDiaryEntries({ workspaceDir })).resolves.toMatchObject({ removed: 1 });
 });
 
-it("refuses to overwrite a symlinked DREAMS.md", async () => {
-  const targetPath = path.join(workspaceDir, "outside.txt");
-  await fs.writeFile(targetPath, "outside\n", "utf8");
-  await fs.symlink(targetPath, dreamsPath);
-
-  await expect(writeBackfill()).rejects.toThrow("Refusing to write symlinked DREAMS.md");
-  await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("outside\n");
-});
-
 it.each(["diary", "daily", "context"] as const)(
   "preserves invalid UTF-8 bytes for %s",
   async (kind) => {
@@ -162,12 +152,15 @@ it("publishes unchanged truncated context ending in an emoji", async () => {
   expect(content).toContain(body);
 });
 
-it("skips symlinked and non-file DREAMS.md when reading recent context", async () => {
+it("preserves symlink targets and skips unsafe diary context", async () => {
   const targetPath = path.join(workspaceDir, "target-dreams.md");
-  await fs.writeFile(targetPath, renderDiary("*April 5, 2026*\n\nPrivate symlink target."));
+  const content = renderDiary("*April 5, 2026*\n\nPrivate symlink target.");
+  await fs.writeFile(targetPath, content);
   await fs.symlink(targetPath, dreamsPath);
 
   await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
+  await expect(writeBackfill()).rejects.toThrow("Refusing to write symlinked DREAMS.md");
+  await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(content);
 
   const directoryWorkspace = await createTempWorkspace("dreaming-narrative-read-directory-");
   await fs.mkdir(path.join(directoryWorkspace, "DREAMS.md"));
@@ -201,22 +194,13 @@ it("preserves an undefined error code across optional context handling", async (
   expect(code).toHaveBeenCalledTimes(2);
 });
 
-it("preserves restrictive DREAMS.md permissions across atomic replace", async () => {
-  await fs.writeFile(dreamsPath, "# Existing\n", { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(dreamsPath, 0o600);
-
-  await writeBackfill();
-
-  if (process.platform !== "win32") {
-    expect((await fs.stat(dreamsPath)).mode & 0o777).toBe(0o600);
-  }
-});
-
-it.each([false, true])("keeps the workspace directory policy (new=%s)", async (fresh) => {
+it.each([false, true])("keeps file and workspace permissions (new=%s)", async (fresh) => {
   if (fresh) {
     workspaceDir = path.join(workspaceDir, "fresh");
     dreamsPath = path.join(workspaceDir, "DREAMS.md");
   } else if (process.platform !== "win32") {
+    await fs.writeFile(dreamsPath, "# Existing\n", { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(dreamsPath, 0o600);
     await fs.chmod(workspaceDir, 0o770);
     const open = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -234,6 +218,7 @@ it.each([false, true])("keeps the workspace directory policy (new=%s)", async (f
 
   expect(await readDiary()).toContain("The archive remembered a durable fact.");
   if (process.platform !== "win32") {
+    expect((await fs.stat(dreamsPath)).mode & 0o777).toBe(0o600);
     expect((await fs.stat(workspaceDir)).mode & 0o7777).toBe(fresh ? 0o700 : 0o770);
   }
 });
@@ -369,7 +354,11 @@ describe("dream narrative publication", () => {
     },
   );
 
-  it("writes only a generic trace after empty completion", async () => {
+  it("retains fallback history without displacing useful diary continuity", async () => {
+    const olderEntry = "The archive remembered a durable fact.";
+    const newerEntry =
+      "A memory trace surfaced, but details were unavailable in this run. Then I remembered the archive.";
+    await writeBackfill(olderEntry);
     const { run } = narrativeHarness("   \n  ");
     const outcome = await run({
       data: { phase: "deep", snippets: ["A private raw staging fragment."] },
@@ -379,6 +368,17 @@ describe("dream narrative publication", () => {
     const diary = await readDiary();
     expect(diary).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expect(diary).not.toContain("A private raw staging fragment.");
+    await appendNarrativeEntry({ workspaceDir, narrative: newerEntry, nowMs: phaseDefaults.nowMs });
+    const recentDiaryEntries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 2 });
+    expect(recentDiaryEntries).toEqual([newerEntry, olderEntry]);
+
+    const next = narrativeHarness("A fresh reflection on the archive.");
+    await next.run({ data: { phase: "light", snippets: ["An archive."], recentDiaryEntries } });
+    const prompt = next.subagent.complete.mock.calls[0]?.[0].message;
+    expect(prompt).toContain(`  - ${newerEntry}\n  - ${olderEntry}`);
+    expect(prompt).not.toContain(
+      "  - A memory trace surfaced, but details were unavailable in this run.\n",
+    );
   });
 
   it("writes a generic trace without selecting credentials for an ownerless sweep", async () => {

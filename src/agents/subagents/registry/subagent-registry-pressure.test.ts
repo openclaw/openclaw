@@ -37,7 +37,7 @@ function createSuspendedBacklog(count: number) {
       delivery: suspended(),
     }),
   );
-  const harness = createHarness({}, entries[0]);
+  const harness = createHarness(entries[0]);
   for (const entry of entries) {
     harness.runs.set(entry.runId, entry);
   }

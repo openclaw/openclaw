@@ -15,15 +15,9 @@ struct ChatWorkChunksTests {
     }
 
     @Test func `shared Markdown envelope context`() throws {
-        var directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-        while directory.path != "/",
-              !FileManager.default.fileExists(atPath: directory.appendingPathComponent(
-                  "test/fixtures/chat-work-chunks.json").path)
-        {
-            directory.deleteLastPathComponent()
-        }
-        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: directory.appendingPathComponent(
-            "test/fixtures/chat-work-chunks.json")))
+        let url = try #require(Bundle.module.url(
+            forResource: "chat-work-chunks", withExtension: "json", subdirectory: "Fixtures"))
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
         for item in fixture.markdownEnvelopes {
             let work = OpenClawChatMessageContent(type: "thinking", thinking: "Recorded work")
             var content: [OpenClawChatMessageContent] = []
