@@ -136,32 +136,23 @@ describe("registerCodexSessionCli", () => {
 
     it("reports empty catalog and unmatched host results", async () => {
       callGatewayFromCli.mockResolvedValue(gatewayCatalog([]));
-
-      const emptyOutput = await runCli(["sessions"]);
-      const hostOutput = await runCli(["sessions"], { host: "node:missing" });
-
-      expect(emptyOutput).toBe("No Codex session hosts found.\n");
-      expect(hostOutput).toBe('No Codex session host matched "node:missing".\n');
+      expect(await runCli(["sessions"])).toBe("No Codex session hosts found.\n");
+      expect(await runCli(["sessions"], { host: "node:missing" })).toBe(
+        'No Codex session host matched "node:missing".\n',
+      );
     });
 
     it("prints no session list that lands after Ctrl+C", async () => {
       const work = new AsyncWorkScope();
-      // The catalog read settles only after the command scope begins closing.
       callGatewayFromCli.mockImplementation(() => work.beginClose());
-
-      const output = await work.run(() => runCli(["sessions"], { json: true }));
-
-      expect(output).toBe("");
+      expect(await work.run(() => runCli(["sessions"], { json: true }))).toBe("");
     });
   });
 
   describe("continue", () => {
     it.each([false, true])("continues a Gateway-local thread (JSON=%s)", async (json) => {
       const sessionKey = "harness:codex:supervision:branch\u001b[2J";
-      callGatewayFromCli.mockResolvedValueOnce({
-        sessionKey,
-        ignored: true,
-      });
+      callGatewayFromCli.mockResolvedValueOnce({ sessionKey, ignored: true });
 
       const output = await runCli(["continue", "thread-1"], {
         agent: "JarVis",
@@ -189,9 +180,7 @@ describe("registerCodexSessionCli", () => {
   describe("archive", () => {
     it("renders a successful archive in human-readable output", async () => {
       callGatewayFromCli.mockResolvedValueOnce({ ok: true });
-
       const output = await runCli(["archive", "thread-2"], { "confirm-no-other-runner": true });
-
       expect(output).toBe("Archived Codex thread thread-2.\n");
     });
   });

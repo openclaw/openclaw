@@ -291,8 +291,7 @@ openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--h
 - `--json` prints the structured Gateway response.
 
 Ctrl-C or SIGTERM stops a pending `sessions` catalog read without printing a late
-result; the CLI exits with status 130 or 143. Interrupted `continue` and `archive`
-writes still report their admitted receipts.
+result; the CLI exits with status 130 or 143.
 
 All three commands accept `--agent <id>` and inherit `--url`, `--token`, and `--timeout <ms>` from the
 Gateway client. Session listing defaults to 75,000 ms so cold paired-node

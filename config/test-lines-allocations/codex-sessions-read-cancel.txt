@@ -1,2 +1,0 @@
-# Codex session catalog list cancellation joins the command work scope before quiet completion.
-11

@@ -175,22 +175,18 @@ async function listCodexSessions(options: CodexSessionsCliOptions): Promise<void
     ...(host ? { hostIds: [host] } : {}),
     ...(cursor && host ? { cursors: { [host]: cursor } } : {}),
   };
-  // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
   const signal = getAsyncWorkSignal();
-  let raw: unknown;
-  try {
-    raw = await callGatewayFromCli("sessions.catalog.list", gatewayOptions(options), params, {
-      mode: "cli",
-      // Federation invokes paired nodes, so this inherits node.invoke's write scope.
-      scopes: ["operator.write"],
-      ...(signal ? { signal } : {}),
-    });
-  } catch (error) {
-    if (signal?.aborted) {
-      return;
+  const raw = await callGatewayFromCli("sessions.catalog.list", gatewayOptions(options), params, {
+    mode: "cli",
+    // Federation invokes paired nodes, so this inherits node.invoke's write scope.
+    scopes: ["operator.write"],
+    signal,
+  }).catch((error: unknown) => {
+    if (!signal?.aborted) {
+      throw error;
     }
-    throw error;
-  }
+  });
+  // A catalog that settles after Ctrl+C or SIGTERM is not printed.
   if (signal?.aborted) {
     return;
   }
