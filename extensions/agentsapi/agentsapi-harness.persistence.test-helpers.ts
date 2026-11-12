@@ -23,7 +23,7 @@ import {
 import { vi } from "vitest";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
-import { createModel, createHostedSession } from "./agentsapi.test-support.js";
+import { createModel, createHostedSession, createTurn } from "./agentsapi.test-support.js";
 import plugin from "./index.js";
 
 export function registerHarness(
@@ -259,4 +259,27 @@ export function mockClient(sessionId: string) {
   const message = vi.spyOn(AgentsApiClient.prototype, "message").mockResolvedValue();
   vi.spyOn(AgentsApiClient.prototype, "items").mockResolvedValue([]);
   return { create, update, message, session };
+}
+
+export function createCompletedSessionFactory(): typeof import("./agentsapi-session.js").createAgentsApiSession {
+  return (options) => {
+    const turn = createTurn({ id: `turn-${options.sessionId}`, session_id: options.sessionId });
+    return {
+      isAvailable: () => false,
+      isSettled: () => true,
+      wasSubmitted: () => true,
+      queueMessage: async () => {},
+      readUsageTurns: async () => [],
+      run: async (prompt, persistInput, onSubmitted) => {
+        await persistInput();
+        await options.client.message(options.sessionId, prompt, options.signal);
+        await options.connectEnvironment?.("executor-environment");
+        onSubmitted();
+        options.onSettled?.();
+        return { turn, cancelled: false, terminatedByTool: false };
+      },
+      close: async () => {},
+      reconcileAfterClose: async () => turn,
+    };
+  };
 }

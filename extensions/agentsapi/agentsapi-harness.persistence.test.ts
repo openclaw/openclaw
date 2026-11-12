@@ -22,13 +22,14 @@ import { registerMigrationTests } from "./agentsapi-harness.migration.test-helpe
 import {
   connectedEnvironment,
   createAttempt,
+  createCompletedSessionFactory,
   executorFixture,
   registerHarness,
   mockClient,
   reopenState,
   requireExecutorHarness,
 } from "./agentsapi-harness.persistence.test-helpers.js";
-import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
+import { createHostedSession } from "./agentsapi.test-support.js";
 
 const { createSession, fetchWithSsrFGuardMock, resolveProviderAuth } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
@@ -70,26 +71,7 @@ beforeEach(() => {
   });
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
-  createSession.mockImplementation((options) => {
-    const turn = createTurn({ id: `turn-${options.sessionId}`, session_id: options.sessionId });
-    return {
-      isAvailable: () => false,
-      isSettled: () => true,
-      wasSubmitted: () => true,
-      queueMessage: async () => {},
-      readUsageTurns: async () => [],
-      run: async (prompt, persistInput, onSubmitted) => {
-        await persistInput();
-        await options.client.message(options.sessionId, prompt, options.signal);
-        await options.connectEnvironment?.("executor-environment");
-        onSubmitted();
-        options.onSettled?.();
-        return { turn, cancelled: false, terminatedByTool: false };
-      },
-      close: async () => {},
-      reconcileAfterClose: async () => turn,
-    };
-  });
+  createSession.mockImplementation(createCompletedSessionFactory());
 });
 
 afterEach(() => {
