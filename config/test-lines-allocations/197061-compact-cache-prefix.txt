@@ -1,0 +1,5 @@
+# Manual-compaction prefix rebuild regressions for PR #197061: prefix and
+# cache-read passthrough, slash-command preservation for compact control ops,
+# tool/error-precedence forwards, and the renamed reliability consumer
+# contract. Exact net growth for PR #197061.
+201
