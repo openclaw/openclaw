@@ -40,6 +40,7 @@ async function advance(request: GatewayRequestMock, ms: number, calls: number) {
 
 async function mountTab(
   request = createGatewayRequestMock().mockResolvedValue(page("stable", "Stable catalog")),
+  prepare?: (sidebar: Awaited<ReturnType<typeof mountSidebar>>["sidebar"]) => void,
 ) {
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
@@ -49,6 +50,7 @@ async function mountTab(
     gateway.gateway,
     createSessions("main", ["agent:main:main"]),
   );
+  prepare?.(sidebar);
   sidebar.connected = true;
   await settleLitElement(sidebar);
   await vi.advanceTimersByTimeAsync(0);
@@ -197,17 +199,94 @@ describe("AppSidebar catalog event refresh", () => {
     },
   );
 
-  it("rechecks visibility after queued background admission", async () => {
-    const setVisibility = visibilityFixture();
+  it.each(["navigation", "collapsed", "view"] as const)(
+    "pauses discovery while the %s surface hides catalogs",
+    async (surface) => {
+      const { request, sidebar } = await mountTab();
+      if (surface === "navigation") {
+        sidebar.navigationVisible = false;
+      } else if (surface === "collapsed") {
+        sidebar.navigationCollapsed = true;
+      } else {
+        sidebar.navigationView = "online";
+      }
+      await settleLitElement(sidebar);
+      await advance(request, 125_000, 1);
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions[0]?.name).toBe(
+        "Stable catalog",
+      );
+      sidebar.navigationVisible = true;
+      sidebar.navigationCollapsed = false;
+      sidebar.navigationView = "sessions";
+      await settleLitElement(sidebar);
+      await advance(request, 5_000, 2);
+      await advance(request, 5_000, 2);
+      if (surface === "navigation") {
+        sidebar.navigationVisible = false;
+        await settleLitElement(sidebar);
+        await sidebar.sessionData.refreshSessionCatalogs();
+        expect(request).toHaveBeenCalledTimes(3);
+        await advance(request, 125_000, 3);
+      }
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "fills a collapsed sidebar once and opens it %s the poll deadline",
+    async (opening) => {
+      const { request, sidebar } = await mountTab(undefined, (mounted) => {
+        mounted.navigationCollapsed = true;
+      });
+      expect(sidebar.sessionData.sessionCatalogs[0]?.hosts[0]?.sessions[0]?.name).toBe(
+        "Stable catalog",
+      );
+      await advance(request, opening === "before" ? 10_000 : 125_000, 1);
+      sidebar.navigationCollapsed = false;
+      await settleLitElement(sidebar);
+      if (opening === "before") {
+        await advance(request, 109_000, 1);
+        await advance(request, 1_000, 2);
+      } else {
+        await advance(request, 0, 2);
+      }
+    },
+  );
+
+  it("keeps the poll cadence when the sidebar opens before the next poll", async () => {
     const { request, sidebar } = await mountTab();
-    const context = sidebar.sessionData.context;
-    context?.connectionBootstrap.setForegroundRoute(undefined);
-    document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(5_000);
-    setVisibility("hidden");
-    context?.connectionBootstrap.setForegroundRoute(null);
-    await advance(request, 300_000, 1);
-    setVisibility("visible");
-    await advance(request, 5_000, 2);
+    sidebar.navigationCollapsed = true;
+    await settleLitElement(sidebar);
+    await advance(request, 30_000, 1);
+    sidebar.navigationCollapsed = false;
+    await settleLitElement(sidebar);
+    await advance(request, 89_000, 1);
+    await advance(request, 1_000, 2);
   });
+
+  it.each(["document", "navigation"] as const)(
+    "rechecks %s visibility after queued background admission",
+    async (surface) => {
+      const setVisibility = visibilityFixture();
+      const { request, sidebar } = await mountTab();
+      const context = sidebar.sessionData.context;
+      context?.connectionBootstrap.setForegroundRoute(undefined);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5_000);
+      if (surface === "document") {
+        setVisibility("hidden");
+      } else {
+        sidebar.navigationVisible = false;
+        await settleLitElement(sidebar);
+      }
+      context?.connectionBootstrap.setForegroundRoute(null);
+      await advance(request, 300_000, 1);
+      if (surface === "document") {
+        setVisibility("visible");
+      } else {
+        sidebar.navigationVisible = true;
+        await settleLitElement(sidebar);
+      }
+      await advance(request, 5_000, 2);
+    },
+  );
 });
