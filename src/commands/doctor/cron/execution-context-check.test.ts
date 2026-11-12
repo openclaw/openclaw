@@ -102,6 +102,12 @@ const ownerTools = "owner-only tools such as sessions, portal, nodes, gateway an
 
 it.each([
   ["owner", null, {}, false],
+  [
+    "catalog-only owner",
+    "contractor",
+    { gateway: { roles: { definitions: roleConfig.gateway!.roles!.definitions } } },
+    false,
+  ],
   ["member", null, roleConfig, true],
   ["removed", undefined, {}, true],
   ["sandboxed", "contractor", roleConfig, true],
@@ -169,4 +175,32 @@ it("continues a read-only parent review after errors and reports only applicable
   expect(mocks.readSession).toHaveBeenCalledWith(
     expect.objectContaining({ agentId: "main", sessionKey: PARENT, readConsistency: "latest" }),
   );
+});
+
+it.each([
+  ["no roles", {}, false],
+  [
+    "catalog only",
+    { gateway: { roles: { definitions: roleConfig.gateway!.roles!.definitions } } },
+    false,
+  ],
+  ["enforced roles", roleConfig, true],
+  [
+    "identity scopes",
+    { gateway: { auth: { identityScopes: { "owner@example.test": ["operator.admin"] } } } },
+    true,
+  ],
+] as const)("checks an unlinked channel requester with %s", async (_name, cfg, unverified) => {
+  mocks.jobs = [
+    jobRow("channel", {
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        channelRequester: { version: 1, channel: "telegram", accountId: "default", senderId: "42" },
+      },
+    }),
+  ];
+  const text = await noteText(cfg as OpenClawConfig);
+  expect(text).toContain(ownerTools);
+  expect(text?.includes("Doctor could not verify it")).toBe(unverified);
 });
