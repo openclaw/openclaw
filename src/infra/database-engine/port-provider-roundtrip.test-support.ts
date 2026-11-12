@@ -126,6 +126,33 @@ export async function runProviderRoundtrip(client: Client, directory: string) {
         { engine: "postgres", store_id: storeId, schema: restored.namespace },
       );
     }
+    // Exact captures from builds before typed row digests record JSON digests without an id.
+    assert.equal(manifest.verification.digest, "typed-v1");
+    const legacyTables = await (async () => {
+      using image = openNodeSqliteDatabase(file("backup/database.sqlite"), {
+        readOnly: true,
+        readBigInts: true,
+      });
+      const legacyDigest = true;
+      return (
+        await inspectDatabasePort(
+          { engine: "sqlite", db: image },
+          descriptor,
+          undefined,
+          false,
+          legacyDigest,
+        )
+      ).tables;
+    })();
+    const { digest: _digest, ...current } = manifest.verification;
+    const legacy = { ...manifest, verification: { ...current, tables: legacyTables } };
+    await fixture.restore(legacy, path.join(directory, "legacy-anchor.sqlite"));
+    const unmarked = structuredClone(legacy);
+    unmarked.verification.tables = manifest.verification.tables;
+    await assert.rejects(
+      fixture.restore(unmarked, path.join(directory, "unmarked-anchor.sqlite")),
+      /Exact PostgreSQL export verification differs from its manifest/,
+    );
     assert.deepEqual(await query(`SELECT * FROM "${restored.namespace}".port_notes`), [
       { id: "note", value: "note value" },
     ]);

@@ -11,6 +11,7 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { seedPortSqlite } from "./port-command.integration.test-support.js";
 import { runDatabasePortTask } from "./port-command.worker.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
+import { inspectDatabasePort } from "./port.worker.js";
 import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
@@ -270,9 +271,16 @@ it("inspects without writing and refuses changed canonical SQLite data", async (
   const targetPath = path.join(directory, "staged.sqlite");
   await fs.copyFile(sourcePath, targetPath);
   assert(inspected.verification);
-  using changed = openNodeSqliteDatabase(targetPath);
-  changed.exec("UPDATE workboard_boards SET name = 'changed'");
-  await expect(
+  expect(inspected.verification.digest).toBe("typed-v1");
+  // A receipt recorded before typed row digests omits the digest id.
+  const { catalog: _catalog, ...legacy } = await (async () => {
+    using db = openNodeSqliteDatabase(targetPath, { readOnly: true });
+    const descriptor = await loadDatabasePortDescriptor("workboard");
+    return await inspectDatabasePort({ engine: "sqlite", db }, descriptor, undefined, false, true);
+  })();
+  expect(legacy.digest).toBeUndefined();
+  expect(legacy.tables).not.toEqual(inspected.verification.tables);
+  const verify = (verification: typeof legacy) =>
     runDatabasePortTask(
       {
         operation: "verify",
@@ -281,12 +289,66 @@ it("inspects without writing and refuses changed canonical SQLite data", async (
         engine: "sqlite",
         storeId: "00000000-0000-4000-8000-000000000001",
         namespace: "unused",
-        verification: inspected.verification,
+        verification,
+      },
+      scope,
+    );
+  await expect(verify(legacy)).resolves.toBeUndefined();
+  using changed = openNodeSqliteDatabase(targetPath);
+  changed.exec("UPDATE workboard_boards SET name = 'changed'");
+  await expect(verify(inspected.verification)).rejects.toThrow("changed canonical rows");
+  await expect(verify(legacy)).rejects.toThrow("changed canonical rows");
+  expect(await hash(sourcePath)).toBe(original);
+});
+
+it("stages a private image against a source proof recorded before typed row digests", async () => {
+  const { directory, sourcePath } = fixture();
+  const descriptor = await loadDatabasePortDescriptor("workboard");
+  const { catalog: _catalog, ...legacy } = await (async () => {
+    using db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
+    return await inspectDatabasePort({ engine: "sqlite", db }, descriptor, undefined, false, true);
+  })();
+  const identity = { storeId: "00000000-0000-4000-8000-000000000001", namespace: "unused" };
+  const stage = (targetPath: string) =>
+    runDatabasePortTask(
+      {
+        operation: "stage",
+        sourcePath,
+        targetPath,
+        to: "sqlite",
+        config: {},
+        ...identity,
+        sourceVerification: legacy,
+        resume: true,
+      },
+      scope,
+    );
+  const targetPath = path.join(directory, "staged.sqlite");
+  const staged = await stage(targetPath);
+  // The receipt keeps the recorded digest, so later verify steps check it the same way.
+  expect(staged.verification).toEqual(legacy);
+  await expect(
+    runDatabasePortTask(
+      {
+        operation: "verify",
+        sourcePath: targetPath,
+        config: {},
+        engine: "sqlite",
+        ...identity,
+        verification: staged.verification,
       },
       scope,
     ),
-  ).rejects.toThrow("changed canonical rows");
-  expect(await hash(sourcePath)).toBe(original);
+  ).resolves.toBeUndefined();
+  // A resumed stage reuses the verified target with the same legacy proof.
+  await expect(stage(targetPath)).resolves.toMatchObject({ verification: legacy });
+  {
+    using changed = openNodeSqliteDatabase(sourcePath);
+    changed.exec("UPDATE workboard_boards SET name = 'changed'");
+  }
+  await expect(stage(path.join(directory, "changed.sqlite"))).rejects.toThrow(
+    "changed canonical rows",
+  );
 });
 
 it.each([
