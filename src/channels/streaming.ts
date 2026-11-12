@@ -263,7 +263,7 @@ function buildNamedProgressLine(
   const line = {
     ...(fields?.id ? { id: fields.id } : {}),
     kind,
-    text,
+    text: fields?.label ?? text,
     label: fields?.label ?? display.label,
     // Plan and approval rows keep their plain status shape.
     ...(options?.toolIcons && kind !== "plan" && kind !== "approval"
@@ -494,9 +494,9 @@ export function buildChannelProgressDraftLine(
           correlationKey: commandBearing ? resolveCommandProgressCorrelationKey(input) : undefined,
           id: resolveProgressDraftLineId(input),
           status: input.status,
+          label: commandBearing ? undefined : input.title?.trim(),
         });
         if (input.title?.trim() && !commandBearing) {
-          line.label = input.title.trim();
           line.detail =
             input.progressText ??
             input.summary ??
