@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
@@ -13,6 +15,7 @@ import { writeStoredClaw, type StoredClaw } from "../gateway/openclaw-id/claw-st
 import { stateTest } from "../plugin-state/plugin-state-fixtures.test-support.js";
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 
@@ -121,24 +124,78 @@ it("reads every undefined member role from the local claw with the Gateway stopp
   expect(spawnCommand).not.toHaveBeenCalled();
 });
 
-it("reports missing and incomplete local membership instead of passing silently", async ({
-  state,
-}) => {
+it("does not warn for a fresh enabled install or an unlinked claw", async ({ state }) => {
   state.applyEnv();
-  expect(await detect(cfg())).toEqual([
-    expect.objectContaining({ requirement: "membership-unreadable" }),
-  ]);
-  await writeStoredClaw(claw({ alice: "viewer" }));
-  await createCorePluginStateKeyedStore({
+  expect(await detect(cfg())).toEqual([]);
+  await writeStoredClaw({ ...claw({}), authority: null });
+  expect(await detect(cfg())).toEqual([]);
+});
+
+const clawStore = () =>
+  createCorePluginStateKeyedStore<unknown>({
     ownerId: "core:openclaw-id",
     namespace: "claw",
     retention: "retained",
-  }).delete("members");
+  });
+
+it("reports incomplete local membership instead of passing silently", async ({ state }) => {
+  state.applyEnv();
+  await writeStoredClaw(claw({ alice: "viewer" }));
+  await clawStore().delete("members");
   expect(await detect(cfg())).toEqual([
     expect.objectContaining({
       requirement: "membership-unreadable",
-      message: expect.stringContaining("missing members"),
+      message: "Doctor could not read OpenClaw ID membership from the local claw record.",
+      fixHint: expect.stringContaining("Access"),
     }),
+  ]);
+});
+
+for (const members of [null, [], 42]) {
+  it(`reports a malformed member collection: ${JSON.stringify(members)}`, async ({ state }) => {
+    state.applyEnv();
+    await writeStoredClaw(claw({ alice: "undefined-role" }));
+    await clawStore().register("members", members);
+    expect(await detect(cfg())).toEqual([
+      expect.objectContaining({ requirement: "membership-unreadable" }),
+    ]);
+  });
+}
+
+it("never includes corrupt record secrets in membership diagnostics", async ({ state }) => {
+  state.applyEnv();
+  await writeStoredClaw(claw({ alice: "viewer" }));
+  await closeOpenClawStateDatabaseAsync();
+  const secret = "abcdef0123456789".repeat(4);
+  const db = new DatabaseSync(resolveOpenClawStateSqlitePath());
+  try {
+    // Deliberately corrupt retained bytes; public writers only accept valid JSON.
+    db.prepare(
+      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+    ).run(`{"invite":{"proof_key":${secret}"}}`, "core:openclaw-id", "@retained.claw", "invites");
+  } finally {
+    db.close();
+  }
+  const findings = await detect(cfg());
+  expect(findings).toEqual([expect.objectContaining({ requirement: "membership-unreadable" })]);
+  const diagnostic = JSON.stringify(findings);
+  for (let i = 0; i <= secret.length - 8; i++) {
+    expect(diagnostic).not.toContain(secret.slice(i, i + 8));
+  }
+  expect(findings[0]?.message).toBe(
+    "Doctor could not read OpenClaw ID membership from the local claw record.",
+  );
+});
+
+it("does not mistake an unreadable existing store for an unlinked install", async ({ state }) => {
+  state.applyEnv();
+  const databasePath = resolveOpenClawStateSqlitePath();
+  await fs.mkdir(path.dirname(databasePath), { recursive: true });
+  await fs.writeFile(databasePath, "not a SQLite database");
+  const config = cfg();
+  config.gateway!.roles!.default = "viewer";
+  expect(await detect(config)).toEqual([
+    expect.objectContaining({ requirement: "membership-unreadable" }),
   ]);
 });
 
