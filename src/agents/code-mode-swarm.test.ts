@@ -224,6 +224,32 @@ function expectCollectAdvertised(tool: { parameters: unknown }, advertised: bool
   }
 }
 
+describe("Code Mode Access", () => {
+  it.each([undefined, "standard", "daybreak_blue", "daybreak_red"])(
+    "passes %s through the native spawn owner",
+    async (program) => {
+      const harness = createSwarmHarness();
+      await runSwarmCode(
+        harness,
+        `return await agents.run("Research", ${JSON.stringify({ cyberAccessProgram: program })});`,
+      );
+      const input = swarmMocks.spawnSubagentDirect.mock.calls[0]?.[0];
+      expect(input).toBeDefined();
+      expect(input.cyberAccessProgram).toBe(program);
+    },
+  );
+  it("rejects invalid Access before creating a child", async () => {
+    const harness = createSwarmHarness();
+    const result = await runSwarmCode(
+      harness,
+      'return await agents.run("Research", { cyberAccessProgram: "invalid" });',
+    );
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
+    expect(JSON.stringify(result)).toContain("cyberAccessProgram");
+    expect(swarmMocks.spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+});
+
 describe("Code Mode swarm guest", () => {
   it("maps agents.run schema options through spawn and returns structured completion", async () => {
     const first = await workerExec(

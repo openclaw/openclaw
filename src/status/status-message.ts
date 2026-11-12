@@ -77,7 +77,11 @@ import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
-import { formatTokensPairValue, formatCacheHitValue } from "./status-usage-format.js";
+import {
+  formatTokensPairValue,
+  formatCacheHitValue,
+  formatContextTokensValue,
+} from "./status-usage-format.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -180,16 +184,6 @@ function resolveExecutionLabel(
   return sandboxMode === "off" ? "direct" : `unknown/${sandboxMode}`;
 }
 
-const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
-  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
-  if (total == null) {
-    return `?/${ctxLabel}`;
-  }
-  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
-  const totalLabel = formatTokenCount(total);
-  return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
-};
-
 const formatEstimatedContextBudgetTokens = (
   status: SessionEntry["contextBudgetStatus"] | undefined,
   contextTokens: number | null | undefined,
@@ -212,7 +206,7 @@ const formatEstimatedContextBudgetTokens = (
 export const formatContextUsageShort = (
   total: number | null | undefined,
   contextTokens: number | null | undefined,
-) => `Context ${formatTokens(total, contextTokens ?? null)}`;
+) => `Context ${formatContextTokensValue(total, contextTokens ?? null)}`;
 
 const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) {
@@ -701,8 +695,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const contextUsageLabel =
     totalTokens == null || (totalTokens === 0 && usageReport?.state !== "available")
       ? (formatEstimatedContextBudgetTokens(contextBudgetStatus, contextTokens) ??
-        formatTokens(totalTokens, contextTokens ?? null))
-      : formatTokens(totalTokens, contextTokens ?? null);
+        formatContextTokensValue(totalTokens, contextTokens ?? null))
+      : formatContextTokensValue(totalTokens, contextTokens ?? null);
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
@@ -882,6 +876,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     [versionLine, cronNow?.timeLine, uptimeLine],
     [
       `🧠 Model: ${modelValue}`,
+      entry?.cyberAccessProgram ? `🔐 Access: ${entry.cyberAccessProgram}` : null,
       `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
       selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
       configuredFallbacksLine,
@@ -923,6 +918,9 @@ export function buildStatusMessageParts(args: StatusArgs) {
     }
   };
   pushStatusRow("🧠 Model", modelValue);
+  if (entry?.cyberAccessProgram) {
+    pushStatusRow("🔐 Access", entry.cyberAccessProgram);
+  }
   pushStatusRow("🌐 Endpoint", selectedEndpoint ?? "unknown");
   pushStatusRow("🔑 Auth", selectedAuthLabelValue);
   pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));

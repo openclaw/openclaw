@@ -142,6 +142,9 @@ export function createRequestNativeSubagentRuntime(
           ? { model: `${child.modelProvider}/${child.model}` }
           : {}),
         ...(child.thinkingLevel !== undefined ? { thinking: child.thinkingLevel } : {}),
+        ...(child.cyberAccessProgram !== undefined
+          ? { cyberAccessProgram: child.cyberAccessProgram }
+          : {}),
         ...(child.fastMode !== undefined ? { fastMode: child.fastMode } : {}),
       };
       // Session controls are not provider telemetry: do not infer observed facts.
@@ -282,6 +285,9 @@ export function createRequestNativeSubagentRuntime(
         label: params.label,
         model: params.model,
         thinking: params.thinking,
+        ...(params.cyberAccessProgram !== undefined
+          ? { cyberAccessProgram: params.cyberAccessProgram }
+          : {}),
         fastMode: params.fastMode,
         context: params.context,
         // Present only when requested, so existing replay fingerprints stay unchanged.
@@ -295,6 +301,9 @@ export function createRequestNativeSubagentRuntime(
       const requested: NativeSubagentSelection["requested"] = {
         ...(args.model !== undefined ? { model: args.model } : {}),
         ...(args.thinking !== undefined ? { thinking: args.thinking } : {}),
+        ...(args.cyberAccessProgram !== undefined
+          ? { cyberAccessProgram: args.cyberAccessProgram }
+          : {}),
         ...(args.fastMode !== undefined ? { fastMode: args.fastMode } : {}),
       };
       const replayKey = createHash("sha256")
