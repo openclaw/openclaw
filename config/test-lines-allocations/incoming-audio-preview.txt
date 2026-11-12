@@ -1,0 +1,3 @@
+# Incoming audio playback, lazy waveform loading, and browser play/pause/seek regressions.
+# Exact net TypeScript test-line growth for PR #196787; shared baseline unchanged.
+160

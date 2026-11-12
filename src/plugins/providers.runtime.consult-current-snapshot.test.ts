@@ -22,7 +22,7 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./manifest-registry-installed.js")>()),
   loadPluginManifestRegistryForInstalledIndex: (params: unknown) => mocks.manifests(params),
 }));
-import { resolveExternalAuthProfilesWithPlugins } from "./provider-runtime.js";
+import { nativePluginBindings } from "./loader-runtime-load.js";
 import { isPluginProvidersLoadInFlight } from "./providers.runtime.js";
 
 let request = { config: {}, env: {}, workspaceDir: "/workspace/a" };
@@ -62,7 +62,7 @@ it.each(["in-flight check", "external auth profiles"])(
       expect(mocks.manifests).not.toHaveBeenCalled();
     } else {
       expect(
-        resolveExternalAuthProfilesWithPlugins({
+        nativePluginBindings.externalProfiles.resolveExternalAuthProfilesWithPlugins({
           ...request,
           context: { env: {}, store: { version: 1, profiles: {} } },
         }),
