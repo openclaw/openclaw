@@ -5,6 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import {
+  LEGACY_WORKSPACE_ATTESTATION_HEADER,
+  resolveLegacyWorkspaceSourcePaths,
+} from "../agents/workspace-legacy-state.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
@@ -112,6 +116,10 @@ describe("Gateway workspace migration readiness", () => {
         path.join(sandboxWorkspaceDir, "openclaw-workspace-state.json"),
         JSON.stringify({ version: 1 }),
       );
+      const attestation = resolveLegacyWorkspaceSourcePaths(sandboxWorkspaceDir, { env: state.env })
+        .stateDirAttestationPaths[0]!;
+      await fs.mkdir(path.dirname(attestation), { recursive: true });
+      await fs.writeFile(attestation, "");
       return sandboxWorkspaceDir;
     };
     const workspaces: string[] = [];
@@ -153,6 +161,28 @@ describe("Gateway workspace migration readiness", () => {
     await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
 
     expect(prepare.mock.calls.filter(([sql]) => sql.includes('"retained_window"'))).toEqual([]);
+  });
+
+  it("starts ready with sandbox-written setup and sibling markers in a shared root", async () => {
+    const workspaceRoot = state.path("shared-sandbox");
+    await state.writeConfig({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+      agents: {
+        defaults: {
+          workspace: state.workspaceDir,
+          sandbox: { mode: "all", scope: "shared", workspaceAccess: "ro", workspaceRoot },
+        },
+      },
+    } satisfies OpenClawConfig);
+    await fs.mkdir(workspaceRoot, { recursive: true });
+    const sourcePath = path.join(workspaceRoot, "openclaw-workspace-state.json");
+    const legacyBytes = JSON.stringify({ version: 1 });
+    await fs.writeFile(sourcePath, legacyBytes);
+    await fs.writeFile(`${workspaceRoot}.attested`, `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`);
+    const port = await getFreePort();
+    server = await start(port);
+    expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
+    expect(await fs.readFile(sourcePath, "utf8")).toBe(legacyBytes);
   });
 
   it.each(["disk", "supplied snapshot"])(
