@@ -47,7 +47,8 @@ function createPane() {
     );
   async function openSearch(query?: string, origin: HTMLElement = composer) {
     origin.focus();
-    origin.dispatchEvent(keyEvent("f", true));
+    origin.dispatchEvent(key("f", true));
+    flush();
     await vi.dynamicImportSettled();
     await waitForSolid(() => expect(document.activeElement).toBe(search()));
     if (query !== undefined) {
@@ -58,9 +59,9 @@ function createPane() {
   return { container, composer, search, openSearch, onClearReply, onAbort };
 }
 
-const keyEvent = (value: string, ctrlKey = false) =>
+const key = (value: string, ctrlKey = false) =>
   new KeyboardEvent("keydown", { key: value, ctrlKey, bubbles: true, cancelable: true });
-const escape = () => keyEvent("Escape");
+const escape = () => key("Escape");
 
 it("returns to the composer when the shortcut origin has been removed", async () => {
   const pane = createPane();
@@ -116,9 +117,9 @@ describe("per-pane chat presentation state", () => {
         renderChatInto(container);
         const composer = getComposerTextarea(container);
         composer.focus();
-        for (const key of ["f", "а"]) {
+        for (const character of ["f", "а"]) {
           const navigationEvent = new KeyboardEvent("keydown", {
-            key,
+            key: character,
             code: "KeyF",
             ...other,
             bubbles: true,
@@ -129,7 +130,7 @@ describe("per-pane chat presentation state", () => {
           expect(container.querySelector(".agent-chat__search-bar")).toBeNull();
           expect(document.activeElement).toBe(composer);
           const event = new KeyboardEvent("keydown", {
-            key,
+            key: character,
             code: "KeyF",
             ...primary,
             bubbles: true,
@@ -138,6 +139,7 @@ describe("per-pane chat presentation state", () => {
 
           composer.dispatchEvent(event);
           expect(event.defaultPrevented).toBe(true);
+          flush();
           await vi.dynamicImportSettled();
           await waitForSolid(() =>
             expect(document.activeElement).toBe(
@@ -148,7 +150,7 @@ describe("per-pane chat presentation state", () => {
           );
 
           const closeEvent = new KeyboardEvent("keydown", {
-            key,
+            key: character,
             code: "KeyF",
             ...primary,
             bubbles: true,
@@ -191,6 +193,7 @@ describe("per-pane chat presentation state", () => {
           cancelable: true,
         }),
       );
+      flush();
       await vi.dynamicImportSettled();
       await waitForSolid(() =>
         expect(document.activeElement).toBe(
@@ -226,7 +229,6 @@ describe("per-pane chat presentation state", () => {
       toggleTranscriptSearch(paneId);
       renderPane(container, paneId);
       await vi.dynamicImportSettled();
-      flush();
     };
     renderPane(paneA, "pane-a");
     renderPane(paneB, "pane-b");

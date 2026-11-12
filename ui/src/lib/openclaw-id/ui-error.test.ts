@@ -27,7 +27,13 @@ describe("OpenClaw ID display errors", () => {
 
   it("keeps local-only instructions specific to sign-in and setup", () => {
     const error = refusal("not_local_operator");
-    expect(openClawIdUiError(error, "signIn").message).toMatch(/^Sign in on the computer/);
+    expect(openClawIdUiError(error, "signIn").message).toMatch(/^Sign in through Tailscale/);
+    expect(openClawIdUiError(refusal("not_personal_connection"), "signIn").message).toMatch(
+      /^Sign in through Tailscale/,
+    );
+    expect(openClawIdUiError(refusal("access_denied"), "signIn").message).toBe(
+      "Sign-in was cancelled in OpenClaw ID.",
+    );
     expect(openClawIdUiError(error, "setup").message).toMatch(/^To turn on remote access/);
   });
 

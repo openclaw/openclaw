@@ -2684,6 +2684,8 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.472e88743ad96449","source":"Show more"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4c36ddaf8a05ba91","source":"Thread failed"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarPages.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f909e3670ef8f380","source":"Thread queued"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ComposerDrafts.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2bc49cc6c1e7b5c8","source":"Could not save %@ with this draft. Send or remove it before switching chats."},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+ComposerDrafts.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.fad811608482da37","source":"Too large to send: %@"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.799cac119604d02e","source":"Failed"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7041419e2eb7da1d","source":"Finished"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5cbe4fa686096254","source":"Idle"},
