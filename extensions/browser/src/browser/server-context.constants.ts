@@ -1,6 +1,9 @@
 /** Maximum managed page tabs kept open before best-effort cleanup starts. */
 export const MANAGED_BROWSER_PAGE_TAB_LIMIT = 8;
 
+/** Idle time before an extension profile releases its debugger attachments. */
+export const EXTENSION_IDLE_RELEASE_MS = 60_000;
+
 export const OPEN_TAB_DISCOVERY_WINDOW_MS = 2000;
 export const OPEN_TAB_DISCOVERY_POLL_MS = 100;
 

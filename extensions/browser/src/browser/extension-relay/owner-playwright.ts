@@ -40,6 +40,9 @@ export async function connectRelayBrowser(
       timeout: 5_000,
       headers: {},
       preparedTransport: transport,
+      // Playwright otherwise forces prefers-color-scheme: light (and focus
+      // emulation) on every tab of the user's signed-in browser.
+      noDefaults: true,
     });
     try {
       if (
