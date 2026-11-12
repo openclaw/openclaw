@@ -14,7 +14,7 @@ jobs:
     if: github.run_attempt == 1 && github.repository == 'openclaw/openclaw' && '6d306591d7373a89dd06f6258c0955708079030b'
       != '0000000000000000000000000000000000000000'
     runs-on: ubuntu-24.04
-    timeout-minutes: 34
+    timeout-minutes: 18
     outputs:
       baseline_artifact_id: ${{ steps.baseline_native_runtime_upload.outputs.artifact-id }}
       baseline_bundled_recovery: 'false'
@@ -1713,6 +1713,7 @@ jobs:
         != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
       FRV_ARM: baseline
       FRV_SOURCE_SHA: e0dd0206412af448b324387435dd8fed6575fd7b
+      FRV_CACHE_MODE: 'off'
     steps:
     - name: Start complete job clock
       run: echo "FRV_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -2563,7 +2564,7 @@ jobs:
       id: apple-mermaid-inputs
       run: echo "key=$(node scripts/prepare-apple-mermaid.mjs --cache-key)" >> "$GITHUB_OUTPUT"
     - name: Restore Apple Mermaid assets
-      if: steps.apple-mermaid-inputs.outputs.key != '' && 'off' != 'off'
+      if: steps.apple-mermaid-inputs.outputs.key != '' && env.FRV_CACHE_MODE != 'off'
       id: apple-mermaid-cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
@@ -2655,7 +2656,7 @@ jobs:
         echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
     - name: Restore SwiftPM cache
       id: swiftpm-cache
-      if: '''off'' != ''off'''
+      if: env.FRV_CACHE_MODE != 'off'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ~/Library/Caches/org.swift.swiftpm
@@ -2664,7 +2665,7 @@ jobs:
           ${{ runner.os }}-swiftpm-
     - name: Restore Swift build directory cache
       id: swift-build-cache
-      if: contains(fromJSON('["release","tests"]'), matrix.phase) && 'off' != 'off'
+      if: contains(fromJSON('["release","tests"]'), matrix.phase) && env.FRV_CACHE_MODE != 'off'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: apps/macos/.build
@@ -3079,6 +3080,7 @@ jobs:
         != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
       FRV_ARM: candidate
       FRV_SOURCE_SHA: 6d306591d7373a89dd06f6258c0955708079030b
+      FRV_CACHE_MODE: 'off'
     steps:
     - name: Start complete job clock
       run: echo "FRV_JOB_START=$(date +%s)" >> "$GITHUB_ENV"
@@ -3929,7 +3931,7 @@ jobs:
       id: apple-mermaid-inputs
       run: echo "key=$(node scripts/prepare-apple-mermaid.mjs --cache-key)" >> "$GITHUB_OUTPUT"
     - name: Restore Apple Mermaid assets
-      if: steps.apple-mermaid-inputs.outputs.key != '' && 'off' != 'off'
+      if: steps.apple-mermaid-inputs.outputs.key != '' && env.FRV_CACHE_MODE != 'off'
       id: apple-mermaid-cache
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
@@ -4021,7 +4023,7 @@ jobs:
         echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
     - name: Restore SwiftPM cache
       id: swiftpm-cache
-      if: '''off'' != ''off'''
+      if: env.FRV_CACHE_MODE != 'off'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ~/Library/Caches/org.swift.swiftpm
@@ -4030,7 +4032,7 @@ jobs:
           ${{ runner.os }}-swiftpm-
     - name: Restore Swift build directory cache
       id: swift-build-cache
-      if: contains(fromJSON('["release","tests"]'), matrix.phase) && 'off' != 'off'
+      if: contains(fromJSON('["release","tests"]'), matrix.phase) && env.FRV_CACHE_MODE != 'off'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: apps/macos/.build
