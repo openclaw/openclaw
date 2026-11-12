@@ -35,6 +35,7 @@ it("loads secret providers only when selected Gateway credentials use a ref", as
     resolveSecretRefValues: vi.fn(async () => new Map([["env:default:TEST_TOKEN", "ref-token"]])),
   }));
   vi.resetModules();
+  // mock-isolation: Observe provider initialization without loading the real provider graph.
   vi.doMock("../secrets/resolve.js", loadProviders);
   try {
     const { resolveGatewayInteractiveSurfaceAuth } = await import("./auth-surface-resolution.js");
