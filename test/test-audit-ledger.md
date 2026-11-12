@@ -556,6 +556,15 @@ formatting, source-line and test-line ratchets passed. Full local ClawSweeper
 review of `6c07f87ef1c397281053836c97af0968d3e6be01` found no actionable issues.
 Hosted CI and landing remain pending.
 
+### Diagnostics OTel content-capture completion proof
+
+At `7814aa8d127a93d136cda3445d109b79c9edb43b`, three capture-disabled rows
+accept missing span attributes as an empty object. The planned repair requires
+the expected terminal outcome before checking private-content absence. Keep all
+nine cases; no production or helper changes are planned. Runtime baseline,
+terminal-recorder mutations and final validation remain pending in the native
+PR checkout because the managed source checkout has no qualified dependencies.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Pending: Twitch settled flag; it needs current-source and runtime keeper qualification.
