@@ -197,7 +197,7 @@ describe("ensurePlaywrightChromium", () => {
 
   it.each([
     { lane: "root", uid: 0, statuses: [127, 0, 127, 0, 0], expected: 0, ci: false },
-    { lane: "local", uid: 501, statuses: [127, 0, 127], expected: 1, ci: false },
+    { lane: "local", uid: 501, statuses: [127, 0, 127, 127], expected: 1, ci: false },
     { lane: "CI missing host deps", uid: 501, statuses: [23, 0, 0], expected: 0, ci: true },
   ])(
     "repairs unstartable Linux Chromium only when permitted: $lane",
@@ -258,6 +258,26 @@ describe("ensurePlaywrightChromium", () => {
       },
       23,
     );
+  });
+
+  it("names the missing system library when an installed Chromium cannot start", () => {
+    const loaderError =
+      "/cache/chromium/chrome: error while loading shared libraries: libnspr4.so: cannot open shared object file: No such file or directory";
+    const log = vi.fn();
+    const spawnSync = vi.fn((command: string) =>
+      command === linuxLane.executablePath
+        ? { status: 127, stderr: `${loaderError}\n` }
+        : { status: 0 },
+    );
+
+    expectStatus({ existsSync: () => true, getuid: () => 501, log, spawnSync }, 1);
+    expectInstall(spawnSync, 2, ["chromium"]);
+    expect(log.mock.calls.slice(-2)).toEqual([
+      [`[ui-e2e] Chromium launch failed: ${loaderError}`],
+      [
+        "[ui-e2e] Install Chromium's system libraries as root: pnpm --dir ui exec playwright install-deps chromium",
+      ],
+    ]);
   });
 
   it("installs Linux system Chromium packages with sudo for non-root lanes", () => {
