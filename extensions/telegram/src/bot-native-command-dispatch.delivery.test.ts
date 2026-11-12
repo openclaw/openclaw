@@ -511,20 +511,13 @@ describe("Telegram registered plugin delivery", () => {
     const upload = resolveTelegramTestUpload(payload, "document");
     expect(await upload.text()).toBe(content);
     expect(payload.message_thread_id).toBe("77");
-    const previousRequests = http.requests.length;
     mediaUrl = forbidden;
     await bot.handleUpdate({ update_id: 3211, message: groupCommand("/plug", 77) });
-    const later = http.requests.slice(previousRequests);
-    expect(later.filter(({ method }) => method === "sendDocument")).toEqual([]);
-    // The forbidden file stays unread; the answer still reaches the routed topic.
-    expect(
-      later
-        .filter(({ method }) => method === "sendMessage")
-        .map(({ fields }) => [fields.text, fields.message_thread_id]),
-    ).toContainEqual([
-      "Workspace report\n⚠️ private.pdf: Delivery failed. Try sending this file again.",
-      77,
-    ]);
+    expect(effects().filter(({ method }) => method === "sendDocument")).toHaveLength(1);
+    expect(effects().at(-1)?.payload).toMatchObject({
+      text: "Workspace report\n⚠️ private.pdf: Delivery failed. Try sending this file again.",
+      message_thread_id: 77,
+    });
   });
 
   it.each(["presentation", "reaction"] as const)(

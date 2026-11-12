@@ -10,17 +10,18 @@ import type { MarkdownTableMode, ReplyToMode } from "openclaw/plugin-sdk/config-
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   buildOutboundMediaLoadOptions,
+  MediaFetchError,
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { appendReplyMediaFailures, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { LocalMediaAccessError, loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
 import {
   canonicalizeTelegramPresentationPayload,
@@ -54,7 +55,6 @@ import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
 import { planTelegramTextDeliveryPages } from "../telegram-text-delivery.js";
 import { emitTelegramMessageSentHooks } from "./delivery.hooks.js";
-import { deliverTelegramMediaWithTextFallback } from "./delivery.media-load-fallback.js";
 import { maybePinFirstDeliveredMessage } from "./delivery.pin.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 import {
@@ -725,15 +725,32 @@ async function deliverReplyPlan(
       if (mediaList.length === 0 && resolvedReplyText) {
         firstDeliveredMessageId = await deliverTextReply(textReply);
       } else if (mediaList.length > 0) {
-        const mediaDelivery = await deliverTelegramMediaWithTextFallback({
-          deliverMedia: () => deliverMediaReply({ ...textReply, reply, mediaList }),
-          deliverText: (text) => deliverTextReply({ ...textReply, text }),
-          text: reply.text,
-          mediaUrls: mediaList,
-          partlyDelivered: () => deliveredCount() > deliveredCountBeforeReply,
-          onFallback: (error) =>
-            params.runtime.error?.(danger(`telegram media not attached: ${String(error)}`)),
-        });
+        const mediaDelivery = await deliverMediaReply({ ...textReply, reply, mediaList }).catch(
+          async (error: unknown) => {
+            // Preprocessing cannot check media first loaded here; keep the text with a receipt.
+            if (
+              !(error instanceof MediaFetchError || error instanceof LocalMediaAccessError) ||
+              deliveredCount() > deliveredCountBeforeReply
+            ) {
+              throw error;
+            }
+            params.runtime.error?.(danger(`telegram media not attached: ${String(error)}`));
+            const text =
+              appendReplyMediaFailures(
+                reply.text,
+                mediaList.map((url, index) => ({
+                  code: "delivery-failed",
+                  kind: "document",
+                  label:
+                    (URL.canParse(url) ? new URL(url).pathname : url)
+                      .split(/[\\/]/)
+                      .findLast(Boolean) ?? `Attachment ${index + 1}`,
+                })),
+              ) ?? "";
+            const firstDeliveredMessageId = await deliverTextReply({ ...textReply, text });
+            return { firstDeliveredMessageId, visibleFallbackText: text, mediaUrls: [] };
+          },
+        );
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
         deliveredMediaUrls = mediaDelivery.mediaUrls;
         if (mediaDelivery.visibleFallbackText !== undefined) {
