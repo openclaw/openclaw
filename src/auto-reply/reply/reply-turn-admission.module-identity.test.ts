@@ -59,7 +59,8 @@ it("keeps admitted session ownership when transformed plugins import the native 
               options.kind !== "dynamic-import" ||
               filename ===
                 path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts") ||
-              filename === path.join(repo, "src/infra/temp-artifact-cleanup.ts")
+              filename === path.join(repo, "src/infra/temp-artifact-cleanup.ts") ||
+              filename === path.join(repo, "src/logging/logger-file-worker.ts")
             ) {
               return resolved;
             }
