@@ -12,7 +12,7 @@ import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
-import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
@@ -504,8 +504,10 @@ export async function resolveGatewayScopedTools(
           conversationToolPolicy: params.conversationToolPolicy,
           inputProvenance: params.inputProvenance,
           trustedInternalHandoff: params.trustedInternalHandoff,
+          // Completion handoffs read the requester entry; prepare it from the
+          // worker so a retained MCP read scope cannot leave it unprepared.
           conversationCapabilityProfile: completionHandoff
-            ? resolveConversationCapabilityProfile({
+            ? await prepareConversationCapabilityProfile({
                 config: params.cfg,
                 agentId: policyAgentId,
                 sessionKey: runtimePolicySessionKey,
