@@ -220,8 +220,11 @@ Developer API; Vertex AI and other base URLs do not serve this endpoint.
 Boolean questions map to native `noul` questions, and their `true` and `false`
 criteria become `true_description` and `false_description`. Choice questions
 keep their labels; a `null` description marks a self-explanatory option. Score
-levels use zero-based rubric positions. Each question needs instructions,
-because the model never sees question keys. Question keys must match
+levels use zero-based rubric positions. The model never sees question keys, so
+write the full question in its instructions. When a Choice or Score question
+omits instructions, OpenClaw asks Gemini which option or level best fits the
+input. A Boolean question needs instructions or true/false criteria. Question
+keys must match
 `[A-Za-z0-9_-]`, up to 64 characters. OpenClaw returns `unsupported-input` for
 any other request without calling the API.
 

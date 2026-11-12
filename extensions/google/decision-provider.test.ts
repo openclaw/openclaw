@@ -160,6 +160,38 @@ it("evaluates typed questions through the native Decisions endpoint", async () =
   expect(mocks.release).toHaveBeenCalledOnce();
 });
 
+it("asks the rubric itself when optional instructions are omitted", async () => {
+  mocks.fetch.mockResolvedValue(
+    Response.json({
+      answers: {
+        route: { type: "choice", choice: "a", probabilities: { a: 0.9, b: 0.1 }, confidence: 0.9 },
+        level: {
+          type: "score",
+          score: 0.1,
+          legend: { "0": "Low", "1": "High" },
+          probabilities: { "0": 0.9, "1": 0.1 },
+          confidence: 0.9,
+        },
+        urgent: { type: "noul", noul: 0.2, confidence: 0.8 },
+      },
+      usage: { total_input_tokens: 40, total_output_tokens: 0 },
+    }),
+  );
+  const omitted: DecisionBatchV2 = {
+    state: { type: "text", text: "Checkout is down." },
+    questions: {
+      route: { type: "choice", criteria: { a: "A", b: "B" } },
+      level: { type: "score", criteria: ["Low", "High"] },
+      urgent: { type: "boolean", criteria: { true: "Urgent", false: "Routine" } },
+    },
+  };
+  expect(await registered().evaluate(omitted, context())).toMatchObject({ status: "ok" });
+  const { questions } = JSON.parse(mocks.fetch.mock.calls[0]![1].body);
+  expect(questions.route.instructions).toBe("Which option best fits the input?");
+  expect(questions.level.instructions).toBe("Which level best describes the input?");
+  expect(questions.urgent.instructions).toBe("Does the true description apply to the input?");
+});
+
 it("sends image evidence as inline content blocks", async () => {
   mocks.fetch.mockResolvedValue(
     Response.json({
@@ -221,7 +253,7 @@ it("rejects batches the native wire cannot carry before dispatch", async () => {
     [
       {
         state: batch.state,
-        questions: { route: { type: "choice", criteria: { a: "A", b: "B" } } },
+        questions: { urgent: { type: "boolean" } },
       },
       context(),
       "unsupported-input",

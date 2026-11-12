@@ -19,6 +19,27 @@ function text(value: DecisionEntry | undefined): string {
   return typeof value === "string" ? value : value == null ? "" : JSON.stringify(value);
 }
 
+/**
+ * Gemini requires non-empty instructions, but OpenClaw makes them optional when the
+ * criteria already define the judgment. A neutral prompt asks the rubric itself.
+ */
+function instructionsFor(question: GeminiDecisionBatch["questions"][string]): string {
+  const explicit = text(question.instructions);
+  if (explicit) {
+    return explicit;
+  }
+  if (question.type === "choice") {
+    return "Which option best fits the input?";
+  }
+  if (question.type === "score") {
+    return "Which level best describes the input?";
+  }
+  return question.type === "boolean" &&
+    (question.criteria?.true != null || question.criteria?.false != null)
+    ? "Does the true description apply to the input?"
+    : "";
+}
+
 /** Admit only batches the native wire can represent; malformed caller data still throws. */
 export function supportsGeminiDecisionBatch(batch: DecisionBatchV2): batch is GeminiDecisionBatch {
   if (!validateDecisionBatchV2(batch) || batch.state.type === "list") {
@@ -30,8 +51,8 @@ export function supportsGeminiDecisionBatch(batch: DecisionBatchV2): batch is Ge
   return Object.entries(batch.questions).every(
     ([id, question]) =>
       QUESTION_KEY.test(id) &&
-      // Instructions are required; the model never sees question keys.
-      text(question.instructions) !== "" &&
+      // A Boolean needs a question or criteria; the model never sees question keys.
+      instructionsFor(question) !== "" &&
       (question.type === "boolean" ||
         question.type === "choice" ||
         (question.type === "score" && question.criteria.every((level) => text(level) !== ""))),
@@ -54,7 +75,7 @@ function encodeInput(state: GeminiDecisionBatch["state"]) {
 function encodeQuestions(batch: GeminiDecisionBatch) {
   return Object.fromEntries(
     Object.entries(batch.questions).map(([id, question]) => {
-      const instructions = text(question.instructions);
+      const instructions = instructionsFor(question);
       if (question.type === "boolean") {
         const criteria = question.criteria;
         return [
