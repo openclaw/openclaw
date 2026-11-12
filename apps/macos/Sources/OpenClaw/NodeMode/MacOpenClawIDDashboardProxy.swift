@@ -148,7 +148,10 @@ final class MacOpenClawIDDashboardProxy: Sendable {
                     return
                 }
                 if request.isWebSocket {
-                    try await MacNodeOpenClawIDBridgeWebSocket.serve(request: request, reader: reader, io: io) {
+                    // The Control UI's Gateway socket is the root path, never the worker route.
+                    try await MacNodeOpenClawIDBridgeWebSocket.serve(
+                        request: request, reader: reader, io: io, path: "/")
+                    {
                         try await self.session.prepareWebSocket(request: self.upstreamRequest(request))
                     }
                 } else {
