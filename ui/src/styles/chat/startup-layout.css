@@ -208,13 +208,12 @@ div.chat-thread:where(.chat-thread--annotations) {
   color: var(--chat-text);
   overflow-wrap: anywhere;
   word-break: break-word;
-  /* Serif chat faces need macOS stem darkening to stay crisp at chat size:
-     the app-wide `antialiased` (base.css body) thins their hairlines into
-     gray smear. applyChatFontSmoothing (app/typography.ts) sets `auto` when
-     the resolved chat typeface is a serif; unset falls back to the inherited
-     app-wide smoothing. */
-  -webkit-font-smoothing: var(--chat-font-smoothing, inherit);
-  -moz-osx-font-smoothing: var(--chat-font-smoothing, inherit);
+  /* Chat prose keeps macOS stem darkening for every typeface: the app-wide
+     `antialiased` (base.css body) thins serif hairlines into gray smear and
+     makes light sans faces such as Instrument Sans read thin and harsh at
+     chat size. Chrome and labels keep the app-wide smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* Notices reserve the same trailing space as message groups, including their footer. */
