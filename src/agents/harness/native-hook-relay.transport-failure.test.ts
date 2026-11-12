@@ -1,7 +1,9 @@
 // Covers relay-transport failure surfacing: bridge client disconnect, failure
 // disposition attribution, and the consecutive-failure escalation to an error.
 import { randomUUID } from "node:crypto";
-import { request as httpRequest } from "node:http";
+import { EventEmitter } from "node:events";
+import { createServer, request as httpRequest } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -37,8 +39,13 @@ const { isNativeHookRelayTransportFailedError } =
   await import("./native-hook-relay-transport-error.js");
 const { NATIVE_HOOK_RELAY_BRIDGE_INVOCATION_DEADLINE_MS, recordNativeHookRelayTransportFailure } =
   await import("./native-hook-relay-transport-failure.js");
-const { invokeNativeHookRelay, registerNativeHookRelay, testing } =
-  await import("./native-hook-relay.js");
+const {
+  dispatchNativeHookRelayHttpCallback,
+  invokeNativeHookRelay,
+  registerNativeHookRelay,
+  testing,
+} = await import("./native-hook-relay.js");
+const { handleNativeHookRelayBridgeRequest } = await import("./native-hook-relay-bridge.js");
 const { nativeHookRelayState } = await import("./native-hook-relay-state.js");
 
 /**
@@ -873,6 +880,125 @@ describe("native hook relay transport failure escalation", () => {
       request.destroy();
       await request.failed;
     }
+  });
+
+  it("holds the server deadline for a relay admitted with a longer command budget", async () => {
+    const relayId = `codex-budget-deadline-${randomUUID()}`;
+    const exceeded = "native hook relay bridge invocation deadline exceeded";
+    let hookEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      hookEntered = resolve;
+    });
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId,
+      sessionId: "session-1",
+      runId: "run-1",
+      // Stands in for workspace readiness, which waits inside the host pre-tool call.
+      runBeforeToolCall: async () => {
+        hookEntered();
+        return await new Promise<never>(() => {});
+      },
+      command: { timeoutMs: NATIVE_HOOK_RELAY_BRIDGE_INVOCATION_DEADLINE_MS + 20_000 },
+    });
+    let record: Awaited<ReturnType<typeof readNativeHookRelayBridgeRecord>>;
+    await vi.waitFor(
+      async () => {
+        record = await readNativeHookRelayBridgeRecord({ relayId });
+        expect(record?.relayId).toBe(relayId);
+      },
+      { timeout: 5_000 },
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const request = openNativeHookRelayBridgeRequest(record!, {
+      provider: "codex",
+      relayId,
+      generation: relay.generation,
+      event: "pre_tool_use",
+      rawPayload: preToolUsePayload("native-slow-readiness"),
+    });
+    try {
+      await entered;
+      await vi.advanceTimersByTimeAsync(NATIVE_HOOK_RELAY_BRIDGE_INVOCATION_DEADLINE_MS + 10_000);
+      expect(loggedMessages(subsystemLogger.warn)).not.toContain(exceeded);
+      // The admitted budget is still a ceiling, not an exemption.
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(loggedMessages(subsystemLogger.warn)).toContain(exceeded);
+    } finally {
+      vi.useRealTimers();
+      request.destroy();
+      await request.failed;
+    }
+  });
+
+  it("names the latched terminal failure to a remote callback", async () => {
+    const relayId = `codex-remote-terminal-${randomUUID()}`;
+    const relay = registerEscalationRelay(relayId);
+    const bridge = nativeHookRelayState.relayBridges.get(relayId)!;
+    bridge.remoteEnabled = true;
+    failTransport(relayId, TRANSPORT_FAILURE_THRESHOLD);
+    const server = createServer((req, res) => {
+      void dispatchNativeHookRelayHttpCallback(req, res);
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${port}/__openclaw__/native-hook/${relayId}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${bridge.token}` },
+        body: JSON.stringify({
+          provider: "codex",
+          relayId,
+          generation: relay.generation,
+          event: "pre_tool_use",
+          rawPayload: preToolUsePayload("native-remote-terminal"),
+        }),
+      });
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "native hook relay transport failed",
+      });
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => {
+        server.close(resolve);
+      });
+    }
+  });
+
+  it("does not charge an unauthenticated disconnect to the relay", async () => {
+    const relayId = `codex-unauthenticated-disconnect-${randomUUID()}`;
+    registerEscalationRelay(relayId);
+    const bridge = nativeHookRelayState.relayBridges.get(relayId)!;
+    // The socket died before the handler ran, so the abort signal starts aborted.
+    const req = Object.assign(new EventEmitter(), {
+      method: "POST",
+      url: "/invoke",
+      headers: { authorization: "Bearer stale-token" },
+      destroyed: true,
+      complete: false,
+      socket: { destroyed: true },
+    });
+    const res = Object.assign(new EventEmitter(), {
+      destroyed: true,
+      writableFinished: false,
+      writeHead: vi.fn(),
+      end: vi.fn(),
+    });
+    await handleNativeHookRelayBridgeRequest(req as never, res as never, {
+      provider: "codex",
+      relayId,
+      token: bridge.token,
+      registration: testing.getNativeHookRelayRegistrationForTests(relayId) as never,
+      bridge,
+      invokeRelay: invokeNativeHookRelay,
+    });
+
+    expect(res.writeHead).toHaveBeenCalledWith(403, expect.anything());
+    expect(readTransportFailureCount(relayId)).toBe(0);
   });
 
   it("keeps the streak accounting the withheld projection does not own", () => {

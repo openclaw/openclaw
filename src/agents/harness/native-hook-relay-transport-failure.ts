@@ -66,6 +66,7 @@ const NATIVE_HOOK_RELAY_TRANSPORT_FAILURE_THRESHOLD = 3;
  * This bounds a parent that stopped making progress, so it is deliberately short.
  * An invocation parked on a human approval is still making progress and re-arms
  * the ceiling instead of tripping it; see isNativeHookRelayAwaitingApproval.
+ * A relay registered with a longer command budget uses that budget instead.
  */
 export const NATIVE_HOOK_RELAY_BRIDGE_INVOCATION_DEADLINE_MS = 30_000;
 

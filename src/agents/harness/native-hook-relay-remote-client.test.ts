@@ -78,6 +78,11 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
       if (mode === "hang") {
         return;
       }
+      if (mode === "terminal" || mode === "opaque") {
+        const error = mode === "terminal" ? "native hook relay transport failed" : "server detail";
+        res.writeHead(500).end(JSON.stringify({ ok: false, error }));
+        return;
+      }
       res.writeHead(mode === "redirect" ? 302 : 200, {
         location: "https://127.0.0.1/never-follow",
       });
@@ -114,6 +119,10 @@ it("verifies TLS and sends only the relay capability; refuses redirects and boun
     expect(received).toBe(2);
     mode = "large";
     await expect(invoke()).rejects.toThrow("response too large");
+    mode = "terminal";
+    await expect(invoke()).rejects.toThrow(/^native hook relay transport failed$/);
+    mode = "opaque";
+    await expect(invoke()).rejects.toThrow("rejected (500)");
     mode = "hang";
     await expect(invoke(AbortSignal.timeout(30))).rejects.toThrow("connection failed");
     await save(url.replace("https:", "http:"));

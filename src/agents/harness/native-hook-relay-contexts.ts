@@ -121,6 +121,8 @@ export type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
+  /** Relay-level command budget the child was admitted with; bounds the bridge deadline. */
+  commandTimeoutMs?: number;
   /** Consecutive relay-transport failures, latched terminal once the threshold trips. */
   relayTransportFailures?: {
     consecutive: number;

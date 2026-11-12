@@ -190,6 +190,7 @@ function registerNativeHookRelayInternal(
   const relayId = normalizeRelayKey(params.relayId, "id") ?? randomUUID();
   const generation = normalizeRelayKey(params.generation, "generation") ?? randomUUID();
   const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
+  const commandTimeoutMs = normalizePositiveInteger(params.command?.timeoutMs, 0);
   const now = Date.now();
   const expiresAtMs = resolveNativeHookRelayExpiresAtMs(params.ttlMs);
   const expiresAtMonotonicMs = resolveNativeHookRelayMonotonicExpiresAtMs(params.ttlMs);
@@ -239,6 +240,7 @@ function registerNativeHookRelayInternal(
       expiresAtMs,
       preToolUseFailureProjections: new Map(),
       relayTransportFailures: { consecutive: 0 },
+      ...(commandTimeoutMs > 0 ? { commandTimeoutMs } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.runBeforeToolCall ? { runBeforeToolCall: params.runBeforeToolCall } : {}),
       ...(approvalHost ? { approvalHost } : {}),
