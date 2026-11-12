@@ -56,6 +56,15 @@ suite.define(() => {
         .click();
       const notes = page.locator(".workboard-detail__text-trigger--notes");
       await notes.waitFor({ state: "visible" });
+      // Notes are reading text and keep macOS stem darkening; app chrome stays antialiased.
+      const smoothing = (selector: string) =>
+        page
+          .locator(selector)
+          .evaluate((element) =>
+            getComputedStyle(element).getPropertyValue("-webkit-font-smoothing"),
+          );
+      expect(await smoothing(".workboard-detail__text-trigger--notes span")).toBe("auto");
+      expect(await smoothing("body")).toBe("antialiased");
       const editor = page.locator("workboard-inline-text textarea");
       const line = await notes.evaluate((element, text) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);

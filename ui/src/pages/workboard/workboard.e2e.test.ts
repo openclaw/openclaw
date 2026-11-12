@@ -183,7 +183,12 @@ suite.define(() => {
   });
 
   it("keeps read-only cards inspectable without mutation controls", async () => {
-    const runningCard = card({ id: "read-only", title: "Inspect only", status: "running" });
+    const runningCard = card({
+      id: "read-only",
+      title: "Inspect only",
+      status: "running",
+      notes: "Read-only notes",
+    });
     await withPage(async (page) => {
       await installWorkboard(page, [runningCard], {
         operatorScopes: ["operator.read"],
@@ -198,6 +203,14 @@ suite.define(() => {
       }
       expect(await page.locator(".workboard-detail__note").count()).toBe(0);
       expect(await page.getByRole("button", { name: /Add note/u }).count()).toBe(0);
+      // Read-only notes are reading text too and keep macOS stem darkening.
+      expect(
+        await readOnlyDetail
+          .locator(".workboard-detail__description")
+          .evaluate((element) =>
+            getComputedStyle(element).getPropertyValue("-webkit-font-smoothing"),
+          ),
+      ).toBe("auto");
     });
   });
 
