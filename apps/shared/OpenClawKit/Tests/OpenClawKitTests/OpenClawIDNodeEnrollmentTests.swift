@@ -505,7 +505,7 @@ struct OpenClawIDNodeEnrollmentTests {
             }
             await #expect(throws: (any Error).self) { try await attempt() }
             #expect(await store.saved == nil)
-            let remembered = ["higher-binding", "stale", "excluded"].contains(scenario)
+            let remembered = ["stale", "excluded"].contains(scenario)
             #expect(await store.observed?.snapshotSequence == (remembered ? 3 : 0))
             if remembered {
                 // This fresh-looking older snapshot was accepted before refused observations were retained.
@@ -513,7 +513,7 @@ struct OpenClawIDNodeEnrollmentTests {
                 #expect(await store.observed?.snapshotSequence == 3)
                 #expect(await store.saved == nil)
             } else {
-                // Neither a future nor an unverified assertion may poison honest evidence.
+                // Neither a future, an unverified, nor a binding-ahead assertion may poison honest evidence.
                 let target = try await attempt()
                 #expect(target.state.snapshotSequence == 2)
                 #expect(await store.saved?.state == target.state)
@@ -550,8 +550,10 @@ struct OpenClawIDNodeEnrollmentTests {
                 for: Data("openclaw/\(type)/v1\0".utf8) + OpenClawIDCanonicalJSON.object(body).encoded)))
             return .object(fields)
         }
-        // The third attempt must not resurrect binding 4; the fourth must not roll membership back.
-        let evidence: [(Int64, Int64, Int64)] = [(4, 9, 5), (4, 10, 4), (4, 10, 4), (5, 9, 5)]
+        // Lagging snapshots are refused but keep the newest membership order; the fourth is older
+        // than that order, yet its retirement of binding 4 is kept. A snapshot can never retire
+        // more than its verified binding.
+        let evidence: [(Int64, Int64, Int64)] = [(5, 9, 4), (5, 10, 4), (5, 10, 4), (5, 8, 5)]
         for (index, values) in evidence.enumerated() {
             let (bindingSequence, sequence, snapshotBinding) = values
             var response = try #require(json["response"]).fields(["descriptor", "snapshot"])
@@ -587,7 +589,7 @@ struct OpenClawIDNodeEnrollmentTests {
                     onVerificationCode: { _ in })
             }
             #expect(await store.observed?.snapshotSequence == (index == 0 ? 9 : 10))
-            #expect(await store.observed?.snapshotBindingSequence == 5)
+            #expect(await store.observed?.snapshotBindingSequence == (index == 3 ? 5 : 4))
             #expect(await store.saved == nil)
         }
     }
