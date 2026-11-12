@@ -206,7 +206,7 @@ if (!reused) {
 git(repo, "config", "maintenance.auto", "false");
 const { fingerprint } = await managedWorktrees.resolveRepositoryIdentity(repo);
 const records: ManagedWorktreeRecord[] = reused
-  ? (await managedWorktrees.listRegistryRecords()).sort((a, b) => a.createdAt - b.createdAt)
+  ? (await managedWorktrees.listRegistryRecords()).toSorted((a, b) => a.createdAt - b.createdAt)
   : [];
 if (reused) {
   assert.equal(reused.filesPerWorktree, fixture.files);
