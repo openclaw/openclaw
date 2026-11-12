@@ -22,6 +22,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronJob } from "../cron/types.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -52,6 +53,7 @@ import {
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { writeSinkPlugin } from "./gateway.sessions-send-provenance.transport.test-support.js";
 import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
+import { createDeliveryCrashPreload } from "./server-database-engine-delivery-crash.test-support.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
@@ -337,10 +339,11 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       expect(persisted).toEqual([{ value_json: JSON.stringify(PREFS_PATH) }]);
     }));
 
-  it(
-    "recovers a queued final receipt after its Gateway dies before queue ACK",
+  it.for(["receipt-before-ack", "acceptance-before-receipt", "response-lost"] as const)(
+    "recovers a queued final after its Gateway dies at %s",
     { timeout: 90_000 },
-    async ({ signal }) => {
+    async (window, { signal }) => {
+      const receiptCommitted = window === "receipt-before-ack";
       await using resources = new AsyncDisposableStack();
       type Boundary = { id: string; pid: number };
       const held = createDeferred<Boundary>();
@@ -352,9 +355,14 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
           const body = await readRequestText(request);
           if (request.method === "POST" && request.url === "/sink") {
             deliveries.push(JSON.parse(body));
+            if (window === "response-lost") {
+              // The sink accepted the request; the caller receives no response or identity.
+              response.destroy();
+              return;
+            }
             response.setHeader("content-type", "application/json");
             response.end(JSON.stringify({ channel: "telegram", messageId: "accepted-final" }));
-          } else if (request.method === "POST" && request.url === "/ack") {
+          } else if (request.method === "POST" && request.url === "/held") {
             held.resolve(JSON.parse(body));
             response.writeHead(204).end();
           } else if (request.method === "POST" && request.url === "/recovered") {
@@ -367,51 +375,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       });
       const serverUrl = await listenLoopback(server);
       resources.defer(() => closeHttpServer(server));
-      // Hold the request before execution, unlike committed ACK reply-loss coverage.
-      // On restart, observe the real ACK response with one clock across Gateway threads.
-      const preload = (id: string, observe = false, offset = 0) =>
-        `data:text/javascript,${encodeURIComponent(`
-          import threads, { Worker, isMainThread } from "node:worker_threads";
-          import { syncBuiltinESMExports } from "node:module";
-          import { deserialize } from "node:v8";
-          const now = Date.now.bind(Date);
-          Date.now = () => now() + ${offset};
-          threads.Worker = class extends Worker {
-            constructor(url, options = {}) {
-              super(url, { ...options, execArgv: [
-                ...(options.execArgv ?? process.execArgv), "--import", import.meta.url,
-              ] });
-            }
-          };
-          syncBuiltinESMExports();
-          if (isMainThread) {
-            const post = Worker.prototype.postMessage;
-            const emit = Worker.prototype.emit;
-            let target;
-            const report = (id) => fetch(${JSON.stringify(`${serverUrl}/${observe ? "recovered" : "ack"}`)}, {
-              method: "POST", body: JSON.stringify({ id, pid: process.pid })
-            }).then((response) => { if (!response.ok) throw new Error("Boundary report failed"); });
-            Worker.prototype.postMessage = function(request, ...rest) {
-              if (request?.type === "execute") {
-                const command = deserialize(request.input);
-                if (command?.type === "deliveryQueue.ack" &&
-                    command.input?.id === ${JSON.stringify(id)}) {
-                  ${observe ? "target = { worker: this, requestId: request.id };" : "void report(command.input.id); return;"}
-                }
-              }
-              return Reflect.apply(post, this, [request, ...rest]);
-            };
-            Worker.prototype.emit = function(event, ...args) {
-              const reply = args[0];
-              if (target?.worker === this && event === "message" &&
-                  reply?.id === target.requestId && reply.ok === true) {
-                target = undefined;
-                void report(${JSON.stringify(id)});
-              }
-              return Reflect.apply(emit, this, [event, ...args]);
-            };
-          }
-        `)}`;
       const nodeExecutable = resolveTestNodeExecPath();
       const gatewayPrefix = [nodeExecutable];
       const instance = await createOpenClawTestInstance({
@@ -518,7 +481,10 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       );
       await closeOpenClawAgentDatabasesAsync(current.stateDir);
       await closeStateDatabaseForTest();
-      gatewayPrefix.push("--import", preload(completion.deliveryId));
+      gatewayPrefix.push(
+        "--import",
+        createDeliveryCrashPreload({ window, id: completion.deliveryId, serverUrl }),
+      );
       await instance.startGateway();
       const firstChild = instance.child!;
       const boundary = await withinTest(held.promise, signal);
@@ -555,12 +521,24 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         deliveries: [
           {
             id: boundary.id,
-            state: "delivered",
-            receipt: { platformMessageId: "accepted-final", resultCount: 1 },
+            state: receiptCommitted ? "delivered" : "queued",
+            ...(receiptCommitted
+              ? { receipt: { platformMessageId: "accepted-final", resultCount: 1 } }
+              : {}),
           },
         ],
       };
       expect(entry.pendingFinalDelivery).toMatchObject(expected);
+      if (!receiptCommitted) {
+        expect(entry.pendingFinalDelivery?.deliveries?.[0]?.receipt).toBeUndefined();
+      }
+      expect(queued.recoveryState).toBe(
+        window === "response-lost" ? "send_attempt_started" : "unknown_after_send",
+      );
+      if (window === "response-lost") {
+        expect(queued.retryCount).toBe(1);
+        expect(queued.lastError).toMatch(/fetch failed/i);
+      }
       const identity = entry.pendingFinalDelivery!;
       expect(queued.deliveryCompletion).toMatchObject({
         kind: "pending-final",
@@ -577,20 +555,51 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const afterCrash = await readQueue();
       expect(afterCrash).toMatchObject([{ status: "pending" }]);
       const crashed: QueuedDelivery = JSON.parse(afterCrash[0]!.entry_json);
-      expect(crashed.availableAt).toEqual(expect.any(Number));
-      // Simulate elapsed lease time without rewriting custody or waiting a real minute.
+      if (window !== "response-lost") {
+        expect(crashed.availableAt).toEqual(expect.any(Number));
+      }
+      // Advance past the persisted lease and retry deadline without rewriting custody.
       // The heartbeat owner and its worker must observe the same epoch clock.
-      gatewayPrefix[2] = preload(
-        boundary.id,
-        true,
-        Math.max(0, crashed.availableAt! - Date.now()) + 1_000,
-      );
+      gatewayPrefix[2] = createDeliveryCrashPreload({
+        window,
+        id: boundary.id,
+        serverUrl,
+        observe: true,
+        offset:
+          Math.max(
+            0,
+            (crashed.availableAt ?? 0) - Date.now(),
+            (crashed.lastAttemptAt ?? crashed.enqueuedAt) +
+              computeBackoffMs(crashed.retryCount) -
+              Date.now(),
+          ) + 1_000,
+      });
       await instance.startGateway();
       const ack = await withinTest(recovered.promise, signal);
       expect(ack).toEqual({ id: boundary.id, pid: instance.child?.pid });
       expect(ack.pid).not.toBe(firstChild.pid);
-      expect(await readQueue()).toEqual([]);
-      expect((await readEntry()).pendingFinalDelivery).toEqual(identity);
+      const settledEntry = await readEntry();
+      if (receiptCommitted) {
+        expect(await readQueue()).toEqual([]);
+        expect(settledEntry.pendingFinalDelivery).toEqual(identity);
+      } else {
+        const failed = await readQueue();
+        expect(failed).toMatchObject([{ status: "failed" }]);
+        expect(JSON.parse(failed[0]!.entry_json)).toMatchObject({
+          id: boundary.id,
+          completionRetention: "permanent",
+          recoveryState: "completed_permanent",
+        });
+        expect(settledEntry.pendingFinalDelivery).toMatchObject({
+          ...identity,
+          deliveries: [{ id: boundary.id, state: "unknown" }],
+        });
+        expect(settledEntry.pendingFinalDelivery?.deliveries?.[0]?.receipt).toBeUndefined();
+        expect(settledEntry.pendingDeliveryNotice).toMatchObject({
+          intentId: identity.intentId,
+          state: "owed",
+        });
+      }
       await instance.stopGateway();
       expect(deliveries).toHaveLength(1);
     },
