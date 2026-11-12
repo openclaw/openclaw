@@ -152,7 +152,7 @@ describe("scribes catalog", () => {
       });
     }
     expect(checkRunMessage("claim-consolidation", `${claimsOnly(current)}\nTidy titles.`)).toEqual({
-      state: "edited",
+      state: "differs",
       current,
     });
     expect(checkRunMessage("claim-consolidation", `${current}\nTidy titles.`)).toEqual({
@@ -160,7 +160,17 @@ describe("scribes catalog", () => {
     });
     const granola = runMessage("granola", { meetings: "all", since: "today" });
     const edited = earlierOf(granola).replace("left pending", "skipped and left for later");
-    expect(checkRunMessage("granola", edited)).toEqual({ state: "edited", current: granola });
+    expect(checkRunMessage("granola", edited)).toEqual({ state: "differs", current: granola });
+    // Granola runs gained the needs-attention rule; a message from before it is upgraded.
+    expect(granola).toContain("end with `Scribe status: needs attention — <why>` instead.");
+    const beforeAttention = granola.slice(
+      0,
+      granola.lastIndexOf("\n\nIf meetings are left pending"),
+    );
+    expect(checkRunMessage("granola", beforeAttention)).toEqual({
+      state: "outdated",
+      current: granola,
+    });
     expect(checkRunMessage("granola", `${granola}\nAlso tag speakers.`)).toEqual({
       state: "custom",
     });
@@ -182,6 +192,7 @@ describe("scribes catalog", () => {
       ["`Scribe status: failed - not writable`", "failed", "not writable"],
       ["_Scribe status: on — next run America/Los_Angeles_", "on", "next run America/Los_Angeles"],
       ["scribe status: on", "on", ""],
+      ["Scribe status: needs attention — 3 left pending", "needs-attention", "3 left pending"],
       ["Scribe status: maybe — x"],
       ["All done."],
     ];
@@ -248,6 +259,8 @@ describe("scribes state", () => {
       [{ session, job: job() }, "on"],
       [{ session, job: job({ enabled: false }) }, "paused"],
       [{ session, job: job(), messages: [result("failed")] }, "failing"],
+      [{ session, job: job(), messages: [result("needs attention")] }, "attention"],
+      [{ session, messages: [result("needs attention")] }, "failing"],
       [{ session, job: job({ enabled: false }), messages: [result("failed")] }, "paused"],
       [{ session, job: job({ state: { consecutiveErrors: 2 } }) }, "failing"],
       [
@@ -410,7 +423,8 @@ describe("scribes state", () => {
     ]);
     const repair = { ...user("Repair the Knowledge scribe"), timestamp: 1_500 };
     const repaired = await load([repair, assistant("Scribe status: on — repaired")]);
-    expect([repaired.status, repaired.result?.summary]).toEqual(["on", "repaired"]);
+    // The repair decides the state; the shown result stays the run's.
+    expect([repaired.status, repaired.result?.summary]).toEqual(["on", "store is read-only"]);
   });
 
   it("detects conversation counts and MEMORY.md, omitting what it cannot read", async () => {

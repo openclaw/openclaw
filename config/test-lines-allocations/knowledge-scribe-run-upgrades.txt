@@ -1,3 +1,0 @@
-# Knowledge scribe run-message upgrades and fresh-session runs: catalog classification,
-# run-transcript status precedence and the Scribes page update/reset flow. Covers the net growth beyond the remaining ceiling (+162 net), including the consolidation run-message version check.
-137

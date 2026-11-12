@@ -10,12 +10,10 @@ import {
 } from "./scribe-dialog.js";
 import {
   repairScribe,
-  needsUpdate,
   runScribeNow,
   setScribePaused,
   startScribe,
   turnOffScribe,
-  updateScribe,
 } from "./scribes-actions.js";
 import { scribeById, scribeLabel } from "./scribes-catalog.js";
 import {
@@ -30,6 +28,15 @@ import {
   type ScribeSnapshot,
   type ScribeStatus,
 } from "./scribes-state.js";
+import {
+  markUpdating,
+  settleUpdates,
+  update,
+  updateNotice,
+  updateState,
+  updatingNotice,
+  watchUpdates,
+} from "./scribes-updates.js";
 import { storeLabel, storeOf } from "./stores-view.js";
 import { icon } from "./ui-icons.js";
 
@@ -37,6 +44,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   available: ["Available", ""],
   starting: ["Starting", ""],
   on: ["On", "scribe-chip-on"],
+  attention: ["Needs attention", "scribe-chip-warn"],
   paused: ["Paused", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
@@ -48,13 +56,6 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
  * moment could force a second run; that is a visible, harmless extra run.
  */
 const firstRuns = new Set<string>();
-/**
- * Automation revisions this page already asked to update. The update is a turn in the scribe's
- * conversation, so the revision stays until that turn re-declares the automation; this keeps
- * reloads in that gap from asking again. A turn that left it unchanged is asked again after the
- * page is reopened.
- */
-const updatesAsked = new Set<string>();
 
 /** Scribes the list shows under "On": everything set up that is not finished or startable. */
 const isOn = (status: ScribeStatus) => status !== "available" && status !== "done";
@@ -126,7 +127,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
   const { status, job, result } = snapshot;
   const meta = el("span", undefined, "scribe-meta");
   const dot = el("span", undefined, "scribe-dot");
-  if (status === "failing" || status === "missing") {
+  if (status === "failing" || status === "missing" || status === "attention") {
     dot.classList.add("scribe-dot-warn");
   } else if (status !== "on") {
     dot.classList.add("scribe-dot-idle");
@@ -210,6 +211,8 @@ export async function scribes(ui: Page, n: number, target: HTMLElement) {
       : detectSources(host, agentId).catch(() => ({})),
   ]);
   const snapshots = loaded;
+  settleUpdates(ui, snapshots);
+  watchUpdates(ui);
   if (host.connection.canWrite) {
     await Promise.all(
       snapshots.map(async (snapshot) => {
@@ -247,27 +250,6 @@ async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
     // Not started: forget it so the next load tries again and nothing shows it as running.
     firstRuns.delete(job.id);
     ui.announce(`${snapshot.scribe.title}: the first run did not start. ${ui.errorText(error)}`);
-  }
-}
-
-/**
- * Bring a scribe's automation up to date with this version of Knowledge: each run in a fresh
- * session, and an unedited run message from an earlier version replaced. The Scribes page owns
- * this because it is where the owner, with write access, manages scribe automations; it asks the
- * scribe's conversation, which re-declares its automation with the owner's turn authority.
- */
-async function update(ui: Page, snapshot: ScribeSnapshot, agentId: string) {
-  const { job } = snapshot;
-  const asked = job && `${job.id}:${job.configRevision ?? ""}`;
-  if (!job || !asked || updatesAsked.has(asked) || !needsUpdate(snapshot)) {
-    return;
-  }
-  updatesAsked.add(asked);
-  try {
-    await updateScribe(ui.s.context.host, snapshot, job, agentId);
-    ui.announce(`${snapshot.scribe.title}: asked its conversation to update its automation.`);
-  } catch (error) {
-    ui.announce(`${snapshot.scribe.title}: the update was not sent. ${ui.errorText(error)}`);
   }
 }
 
@@ -387,52 +369,15 @@ function activeRow(ui: Page, snapshot: ScribeSnapshot) {
   );
   chevron.setAttribute("aria-label", `Open ${scribe.title}`);
   chevron.append(icon("chevronRight", 16));
-  if (snapshot.runMessage?.state === "edited") {
-    actions.append(chip("Update available"));
+  const state = updateState(ui, snapshot.job);
+  if (state === "updating") {
+    actions.append(chip("Updating…"));
+  } else if (snapshot.runMessage?.state === "differs") {
+    actions.append(chip("New run instructions"));
   }
   actions.append(statusChip(snapshot.status), chevron);
   row.append(link, actions);
   return row;
-}
-
-/**
- * The notice for a hand-edited run message when Knowledge generates a different one: the edit is
- * kept until the owner chooses the current message.
- */
-function updateNotice(
-  ui: Page,
-  snapshot: ScribeSnapshot,
-  job: ScribeJob,
-  agentId: string,
-  current: string,
-) {
-  const { scribe } = snapshot;
-  const notice = el("div", undefined, "knowledge-notice scribe-update");
-  notice.append(
-    el(
-      "span",
-      `Update available. This version of Knowledge generates a different run message for ${scribe.title}. Its run message was edited, so it was kept.`,
-    ),
-  );
-  const reset = button(
-    "Use current run message…",
-    () =>
-      openConfirmDialog(
-        "Use the current run message?",
-        `Its conversation updates the automation so later runs of ${scribe.title} follow this message instead of the edited one. The edit is not kept.`,
-        "Use current message",
-        async () => {
-          await updateScribe(ui.s.context.host, snapshot, job, agentId, current);
-          ui.announce(`Asked ${scribeLabel(scribe)} to use the current run message.`);
-          void ui.load();
-        },
-        el("pre", current, "scribe-prompt-text scribe-update-message"),
-      ),
-    "knowledge-button knowledge-small",
-  );
-  reset.disabled = !ui.s.context.host.connection.canWrite;
-  notice.append(reset);
-  return notice;
 }
 
 function availableRow(
@@ -578,7 +523,13 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     actions.append(
       control(
         "Repair",
-        () => repairScribe(host, snapshot, job, agentId),
+        async () => {
+          await repairScribe(host, snapshot, job, agentId);
+          // Restoring an archived conversation needs no turn; every other repair is one.
+          if (!(status === "missing" && session?.archived)) {
+            markUpdating(ui, job);
+          }
+        },
         status === "missing" && session?.archived
           ? `Restored ${scribeLabel(scribe)} and turned it back on.`
           : `Asked ${scribeLabel(scribe)} to repair its setup.`,
@@ -748,7 +699,10 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
   }
   history.append(rows);
   root.append(crumb, head, feedback);
-  if (job && snapshot.runMessage?.state === "edited") {
+  const state = updateState(ui, job);
+  if (state) {
+    root.append(updatingNotice(scribe, state));
+  } else if (job && snapshot.runMessage?.state === "differs") {
     root.append(updateNotice(ui, snapshot, job, agentId, snapshot.runMessage.current));
   }
   root.append(grid, history);

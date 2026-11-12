@@ -102,11 +102,17 @@ function fixture(world: {
   const create = vi.fn(async () => "agent:main:dock:new");
   const open = vi.fn();
   const connection = { connected: true, canRead: true, canWrite: world.canWrite ?? true };
-  const host = { request, connection, sessions: { create, open }, basePath: "" };
+  // Gateway events the page listens to, by name.
+  const events = new Map<string, () => void>();
+  const onEvent = vi.fn((name: string, listener: () => void) => {
+    events.set(name, listener);
+    return () => events.delete(name);
+  });
+  const host = { request, connection, sessions: { create, open }, basePath: "", onEvent };
   const load = vi.fn(async () => true);
   const scribesTab = document.createElement("button");
   const ui = {
-    s: { context: { host }, scribe: "", storesSnapshot: undefined },
+    s: { context: { host }, scribe: "", storesSnapshot: undefined, tab: "scribes" },
     live: () => true,
     viewedAgent: () => "main",
     displayName: (id: string) => (id === "main" ? "Main" : id),
@@ -124,7 +130,7 @@ function fixture(world: {
     page.replaceChildren(target);
     return target;
   };
-  return { ui, calls, request, create, open, load, render, page, scribesTab };
+  return { ui, calls, request, create, open, load, render, page, scribesTab, events };
 }
 const reviewSetup = scribeSetup(
   "claim-consolidation",
@@ -488,27 +494,72 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   expect(prompt.endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(true);
   unedited.page.remove();
 
-  const edited = `${earlier}\nAlso tidy page titles.`;
-  const { render, ui, calls, page } = fixture({
+  const differing = `${earlier}\nAlso tidy page titles.`;
+  const job = {
+    ...legacy,
+    sessionTarget: "current",
+    payload: { kind: "agentTurn", message: differing },
+  };
+  const { render, ui, calls, page, events } = fixture({
     sessions: reviewSession,
-    jobs: [
-      { ...legacy, sessionTarget: "current", payload: { kind: "agentTurn", message: edited } },
-    ],
+    jobs: [job],
     runs: [{ ts: 1_793_000_000_000, status: "ok", runId: "r1", sessionKey: "s-run" }],
   });
-  expect((await render()).querySelector(".scribe-row")?.textContent).toContain("Update available");
+  const row = (await render()).querySelector(".scribe-row")?.textContent;
+  expect(row).toContain("New run instructions");
   expect(calls.some(([method]) => method === "chat.send")).toBe(false);
   ui.s.scribe = "claim-consolidation";
-  const view = await render();
+  let view = await render();
+  expect(view.querySelector(".scribe-update")?.textContent).toContain(
+    "differs from what this version of Knowledge generates",
+  );
   expect(buttonNamed(view, "Open run")).toBeTruthy();
-  buttonNamed(view, "Use current run message…").click();
+  buttonNamed(view, "Replace with new…").click();
   const confirm = page.querySelector("dialog")!;
-  expect(confirm.querySelector("pre")?.textContent).toBe(runMessage);
-  buttonNamed(confirm, "Use current message").click();
+  // Only the changed lines: the claims-only step and counts out, the five-step ones in.
+  const changed = [...confirm.querySelectorAll("pre del, pre ins")].map((line) => line.textContent);
+  expect(changed).toEqual([
+    expect.stringMatching(/^− 2\. Follow the "Scribe runs"/),
+    expect.stringMatching(/^− 3\. End your reply .*withdrawn and left>`\.\n$/),
+    expect.stringMatching(/^\+ 2\. Follow every step/),
+    expect.stringMatching(/^\+ 3\. End your reply .*left unchanged>`\.\n$/),
+    "− Also tidy page titles.\n",
+  ]);
+  buttonNamed(confirm, "Replace with new").click();
   await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
   expect(String(calls.at(-1)![1]!.message).endsWith(`\`\`\`text\n${runMessage}\n\`\`\``)).toBe(
     true,
   );
+  // Updating until the automation's revision changes, which a cron change reloads to show.
+  view = await render();
+  expect(view.querySelector(".scribe-update")?.textContent).toMatch(/^Updating Knowledge/);
+  expect(events.has("cron.inventory.changed")).toBe(true);
+  Object.assign(job, {
+    configRevision: "rev-8",
+    payload: { kind: "agentTurn", message: runMessage },
+  });
+  view = await render();
+  expect(view.querySelector(".scribe-update")).toBeNull();
+  expect(ui.announce).toHaveBeenCalledWith("Knowledge Consolidation: updated.");
+  expect(events.has("cron.inventory.changed")).toBe(false);
+});
+
+it("says so when an update leaves the automation unchanged past the wait", async () => {
+  // A failing scribe offers Repair; its turn is watched like an update.
+  const failing = { ...reviewJob, state: { ...reviewJob.state, consecutiveErrors: 1 } };
+  const { render, ui, calls } = fixture({ sessions: reviewSession, jobs: [failing] });
+  ui.s.scribe = "claim-consolidation";
+  buttonNamed(await render(), "Repair").click();
+  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
+  expect((await render()).querySelector(".scribe-update")?.textContent).toMatch(/^Updating/);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 4 * 60_000);
+  try {
+    expect((await render()).querySelector(".scribe-update")?.textContent).toContain(
+      "hasn't changed after 3 minutes",
+    );
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 
 it("reports a skipped run that could not complete as failed", async () => {

@@ -261,12 +261,14 @@ const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
 
 /**
  * Wording a run message is generated from; earlier releases generated some of it differently.
- * `work` and `counts` replace a scribe's current work step and closing counts.
+ * `work` and `counts` replace a scribe's current work step and closing counts; `rules` are a
+ * scribe's extra closing rules after the failure rule.
  */
 type RunWording = {
   access: string;
   work?: Partial<Record<ScribeId, string>>;
   counts?: Partial<Record<ScribeId, string>>;
+  rules?: Partial<Record<ScribeId, string>>;
 };
 
 const ACCESS_UNPROVISIONED =
@@ -281,6 +283,14 @@ const CLAIMS_ONLY = {
   },
   counts: { "claim-consolidation": "claims examined, linked, superseded, withdrawn and left" },
 };
+// A Granola run that only left meetings pending, with nothing outside the run in the way, did no
+// work it can call done; it says so instead of reporting `on`.
+const GRANOLA_ATTENTION = {
+  rules: {
+    granola:
+      "If meetings are left pending and none was ingested, and nothing outside this run held them back (still recording, no transcript yet, or verification that still fails after a fix attempt), end with `Scribe status: needs attention — <why>` instead.",
+  },
+};
 
 /**
  * Every wording a released run message was generated from, oldest first; the last is current.
@@ -291,13 +301,15 @@ const RUN_WORDINGS: readonly RunWording[] = [
   { access: ACCESS_UNPROVISIONED, ...CLAIMS_ONLY },
   { access: ACCESS_NEVER_WRITTEN, ...CLAIMS_ONLY },
   { access: ACCESS_NEVER_WRITTEN },
+  { access: ACCESS_NEVER_WRITTEN, ...GRANOLA_ATTENTION },
 ];
 
-// The access step, work step and closing counts a wording generates for one scribe.
+// The access step, work step, closing counts and extra rules a wording generates for one scribe.
 const wordingParts = (id: ScribeId, wording: RunWording) => [
   wording.access,
   wording.work?.[id] ?? WORK[id],
   wording.counts?.[id] ?? COUNTS[id],
+  wording.rules?.[id] ?? "",
 ];
 const CURRENT_WORDING = RUN_WORDINGS.at(-1)!;
 
@@ -364,6 +376,7 @@ function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING) {
     ]),
     "",
     FAILED,
+    ...(wording.rules?.[scribe.id] ? ["", wording.rules[scribe.id]!] : []),
   ].join("\n");
 }
 
@@ -400,6 +413,7 @@ export function setupPrompt(setup: ScribeSetup) {
       ]),
       "",
       FAILED,
+      ...(CURRENT_WORDING.rules?.[scribe.id] ? ["", CURRENT_WORDING.rules[scribe.id]!] : []),
     ].join("\n");
   }
   return [
@@ -446,15 +460,17 @@ function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
 /**
  * How an ongoing scribe's run message compares with the one Knowledge generates now.
  * - current: it is the current generated message.
- * - custom: it was edited by hand, and nothing in it is wording Knowledge has since replaced.
- * - outdated: an earlier version generated it and it was not edited; `current` replaces it.
- * - edited: it was edited by hand and still carries wording Knowledge has since replaced (an update
+ * - custom: it differs from every generated message, and nothing in it is wording Knowledge has
+ *   since replaced.
+ * - outdated: an earlier version generated it unchanged; `current` replaces it.
+ * - differs: it differs from every generated message and still carries wording Knowledge has since
+ *   replaced, so new run instructions are available (the plugin can't tell who changed it). An update
  *   is available); `current` is what resetting it applies, for the settings the message names
  *   (the defaults when it names none Knowledge generates).
  */
 export type RunMessageCheck =
   | { state: "current" | "custom" }
-  | { state: "outdated" | "edited"; current: string };
+  | { state: "outdated" | "differs"; current: string };
 
 /** Compare a scribe automation's run message with every message each version generated. */
 export function checkRunMessage(id: ScribeId, message: string): RunMessageCheck {
@@ -474,19 +490,22 @@ export function checkRunMessage(id: ScribeId, message: string): RunMessageCheck 
   const replaced = RUN_WORDINGS.slice(0, -1).some((wording) =>
     wordingParts(id, wording).some(
       (text, part) =>
-        text !== current[part] && message.includes(text) && !message.includes(current[part]!),
+        text !== "" &&
+        text !== current[part] &&
+        message.includes(text) &&
+        !message.includes(current[part]!),
     ),
   );
   if (!replaced) {
     return { state: "custom" };
   }
-  // An edited message keeps its settings when it still names a generated settings line.
+  // A differing message keeps its settings when it still names a generated settings line.
   const named = choices.find((options) =>
     workSettings(scribeSetup(id, "ongoing", options)).every((line) =>
       message.includes(`- ${line}`),
     ),
   );
-  return { state: "edited", current: generate(named ?? defaultOptions(id)) };
+  return { state: "differs", current: generate(named ?? defaultOptions(id)) };
 }
 
 /** First words of every repair prompt; the page never forces a first run after one. */

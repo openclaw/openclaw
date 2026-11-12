@@ -5,7 +5,7 @@ read_when:
   - You are turning on the scheduled consolidation of unlinked claims
   - You want Granola meetings ingested into Knowledge automatically
   - A scribe shows Failing or Conversation not found on the Scribes tab
-  - A scribe shows Update available after you update OpenClaw
+  - A scribe shows New run instructions after you update OpenClaw
 title: "Knowledge scribes"
 sidebarTitle: "Scribes"
 ---
@@ -168,22 +168,25 @@ made directly from the page would drop it. The update:
 
 - Moves an automation that runs in its conversation's own session to the
   `current` session target, so later runs start fresh.
-- Replaces a run message that an earlier Knowledge generated and nobody edited
-  with the current one, for the same settings.
+- Replaces a run message that an earlier Knowledge generated, unchanged, with
+  the new one for the same settings.
 - Keeps the schedule, and keeps a paused scribe paused.
 
-A run message edited by hand is never replaced. When it still carries wording
-that the installed Knowledge has replaced, the scribe shows **Update
-available**, and its detail offers **Use current run message…**. It shows the
-current message for the settings the edited one names and, when you confirm,
-asks the conversation to update the automation with it. An edit that carries no
-replaced wording shows nothing.
+A saved run message that differs from what this version generates is never
+replaced on its own; the page can't tell who changed it. When it still carries
+wording the installed Knowledge has replaced, the scribe shows **New run
+instructions**, and its detail offers **Replace with new…**. The confirmation
+lists the lines that change, for the settings the saved message names, and
+replacing sends the same update turn with the new message. A differing message
+that carries no replaced wording shows nothing.
 
-The page asks once per automation revision and announces it; reopen the Scribes
-tab to ask again if the turn left the automation unchanged. A scribe that is
-running or whose conversation is not found is updated on a later load. Until the
-Scribes tab loads, a scribe keeps running its earlier message, which still
-works.
+After an update, **Replace with new…** or **Repair** sends its turn, the scribe
+shows **Updating…** and the tab refreshes when the automation changes. If it
+hasn't changed after 3 minutes, the tab says so; open the conversation to see
+what the turn did. The page asks for an update once per automation revision. A
+scribe that is running or whose conversation is not found is updated on a later
+load. Until the Scribes tab loads, a scribe keeps running its earlier message,
+which still works.
 
 ## States
 
@@ -192,6 +195,7 @@ works.
 | Available              | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                               |
 | Starting               | The conversation received its prompt but has not reported its status yet.                                                                      |
 | On                     | Its automation is enabled and the last run did not fail.                                                                                       |
+| Needs attention        | Its last run reported `needs attention`: it finished without doing its work, and nothing outside the run held it back.                         |
 | Paused                 | Its automation is disabled.                                                                                                                    |
 | Failing                | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or the start turn stopped without a status. |
 | Done                   | A once scribe finished.                                                                                                                        |
@@ -201,10 +205,16 @@ The Scribes tab derives an ongoing scribe's state from its automation: whether
 it exists and targets the scribe's conversation, whether it is enabled, and its
 last run. Each scribe turn also ends its reply with a plain status line, such as
 `Scribe status: done — read 3 files, saved 12 items`. The states are `on`,
-`done`, and `failed`. The tab uses that line where the automation cannot tell:
-whether a once scribe is Done or Failing, and whether setup succeeded before the
-page starts the first run. It also shows the line's sentence as the result
-summary.
+`done`, `failed`, and `needs attention`. The tab uses that line where the
+automation cannot tell: whether a once scribe is Done or Failing, whether setup
+succeeded before the page starts the first run, and whether a run needs
+attention. It shows the sentence of the last run's line as its result; answers
+to setup, repair and update turns are not run results.
+
+A Learn from Granola run reports `needs attention` when it left meetings pending,
+ingested none, and nothing outside the run held them back. A meeting stays
+pending only while it is still being recorded, its transcript is not ready, or
+verification still fails after a fix attempt.
 
 ## Controls
 
@@ -212,16 +222,16 @@ Open a scribe for its schedule, next and last run, model, failure alert, and
 recent runs. Learn from Granola also shows the Granola plugin's state as its
 source.
 
-| Control                  | Effect                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run now                  | Runs the automation immediately. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                   |
-| Pause / Resume           | Disables or enables the automation.                                                                                                                                                                                                                                                                                                                                                                            |
-| Turn off…                | Removes the automation. The conversation is kept.                                                                                                                                                                                                                                                                                                                                                              |
-| Open conversation        | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                               |
-| Open run                 | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its transcript.                                                                                                                                                                                                                                                                                                      |
-| Use current run message… | For a scribe whose edited run message carries replaced wording: shows the message this Knowledge generates and asks the conversation to use it when you confirm.                                                                                                                                                                                                                                               |
-| Repair                   | Gets the automation running again. For an archived conversation it restores the conversation and turns the automation back on, without a model turn. For a deleted conversation, or a failing scribe, it asks the scribe's conversation (a new one when deleted) to recreate its automation there, keeping its schedule and run message (an unedited earlier message becomes the current one), and turn it on. |
-| Start again…             | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                                                                                                                                                                                                                                                                                            |
+| Control           | Effect                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run now           | Runs the automation immediately. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                |
+| Pause / Resume    | Disables or enables the automation.                                                                                                                                                                                                                                                                                                                                                                         |
+| Turn off…         | Removes the automation. The conversation is kept.                                                                                                                                                                                                                                                                                                                                                           |
+| Open conversation | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                            |
+| Open run          | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its transcript.                                                                                                                                                                                                                                                                                                   |
+| Replace with new… | For a scribe whose saved run message differs and carries replaced wording: lists the lines that change and asks the conversation to use the new message when you confirm.                                                                                                                                                                                                                                   |
+| Repair            | Gets the automation running again. For an archived conversation it restores the conversation and turns the automation back on, without a model turn. For a deleted conversation, or a failing scribe, it asks the scribe's conversation (a new one when deleted) to recreate its automation there, keeping its schedule and run message (an unchanged earlier message becomes the new one), and turn it on. |
+| Start again…      | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                                                                                                                                                                                                                                                                                         |
 
 Controls need write access. Pause, resume, and turn off are rejected if the
 automation changed since the page read it; the page shows the error, and
@@ -234,8 +244,9 @@ reopening the scribe shows its current state.
 - Conversation counts and the `MEMORY.md` size come from Gateway reads. A count
   the Gateway cannot provide is left out rather than estimated.
 - The tab reads status lines from the conversation's last 100 messages, and
-  for an ongoing scribe from the last 20 messages of its latest run's transcript. A start or
-  repair sent after that run began takes precedence.
+  for an ongoing scribe from the last 20 messages of its latest run's transcript. A start,
+  repair or update answered after that run began decides the state, but the
+  shown result stays the run's.
 - An ongoing scribe's conversation is the one its automation belongs to (the
   `current` job's session key, or the session an earlier `session:<key>` job
   targets), read by session key, so renaming it is safe. A scribe without an automation is found by
