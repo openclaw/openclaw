@@ -303,6 +303,91 @@ describe("slack native approval adapter", () => {
     await assertRoutes(true, false);
   });
 
+  async function resolveExecOriginWithStoredSession(params: {
+    liveTo: string;
+    liveThreadId: string;
+    storedTo: string;
+    storedThreadId?: string;
+  }) {
+    const storePath = createTempStorePath();
+    const sessionKey = "agent:main:slack:channel:c123";
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "slack",
+            to: params.storedTo,
+            accountId: "default",
+            ...(params.storedThreadId ? { threadId: params.storedThreadId } : {}),
+          },
+        }),
+      },
+    });
+    const cfg = {
+      ...buildConfig({
+        execApprovals: { enabled: true, approvers: ["U123APPROVER"], target: "channel" },
+      }),
+      session: { store: storePath },
+    } as OpenClawConfig;
+    const request = createExecApprovalRequest();
+    request.request.sessionKey = sessionKey;
+    request.request.turnSourceTo = params.liveTo;
+    request.request.turnSourceThreadId = params.liveThreadId;
+    return {
+      cfg,
+      route: route(cfg, request, "exec"),
+      origin: await origin?.(route(cfg, request, "exec")),
+    };
+  }
+
+  it("routes exec approvals from a top-level channel message to that channel", async () => {
+    const { route: input, origin: target } = await resolveExecOriginWithStoredSession({
+      liveTo: "channel:C123",
+      liveThreadId: "1712345678.123456",
+      storedTo: "channel:C123",
+    });
+
+    expect(target).toEqual({ to: "channel:C123", threadId: "1712345678.123456" });
+    // The delivery planner picks the origin surface whenever an origin target resolves.
+    expect((await delivery?.(input))?.preferredSurface).toBe("origin");
+  });
+
+  // The negative cases below must hold with and without the origin matcher widening.
+  it.each([
+    {
+      name: "a different channel",
+      liveTo: "channel:C123",
+      storedTo: "channel:C999",
+    },
+    {
+      name: "a different explicit thread in the same channel",
+      liveTo: "channel:C123",
+      storedTo: "channel:C123",
+      storedThreadId: "1712345999.000001",
+    },
+    {
+      name: "a different workspace",
+      liveTo: "team:T111:channel:C123",
+      storedTo: "team:T222:channel:C123",
+    },
+  ])(
+    "does not route exec approvals to the live channel when the stored session targets $name",
+    async ({ liveTo, storedTo, storedThreadId }) => {
+      const { origin: target } = await resolveExecOriginWithStoredSession({
+        liveTo,
+        liveThreadId: "1712345678.123456",
+        storedTo,
+        storedThreadId,
+      });
+
+      expect(target).toBeNull();
+    },
+  );
+
   it("resolves Slack app conversation plugin approvals to the live D-channel thread", async () => {
     const target = await origin?.(
       route(
