@@ -3,9 +3,9 @@ import type { AgentMessage } from "../../types.js";
 import { CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.js";
 import { MAX_LATEST_USER_REQUEST_CHARS } from "./compaction-details.js";
 import {
+  extractCompactionMessageText,
   findLatestCompactionUserMessage,
   formatCompactionUserLabel,
-  getCompactionContent,
 } from "./utils.js";
 
 const LATEST_USER_REQUEST_TRUNCATED_MARKER = "\n[... latest user request truncated ...]\n";
@@ -13,11 +13,8 @@ const MAX_REQUIRED_ASK_CONTEXT_CHARS = 2_000;
 const REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER = "\n[... split-turn ask context truncated ...]\n";
 
 function extractLatestUserRequest(messages: AgentMessage[]): string | undefined {
-  const message = findLatestCompactionUserMessage(
-    messages,
-    (candidate) => getCompactionContent(candidate.content).text,
-  );
-  const source = message ? getCompactionContent(message.content).text.trim() : "";
+  const message = findLatestCompactionUserMessage(messages, extractCompactionMessageText);
+  const source = message ? extractCompactionMessageText(message) : "";
   if (!source || source.length <= MAX_LATEST_USER_REQUEST_CHARS) {
     return source || undefined;
   }
@@ -101,12 +98,12 @@ export function resolveLatestUnresolvedUserRequest(params: {
 export function formatSplitTurnSourceAsk(messages: AgentMessage[]): string {
   const sourceMessage = messages.findLast(
     (message): message is Extract<AgentMessage, { role: "user" }> =>
-      message.role === "user" && Boolean(getCompactionContent(message.content).text.trim()),
+      message.role === "user" && Boolean(extractCompactionMessageText(message)),
   );
   if (!sourceMessage) {
     return "";
   }
-  const sourceText = getCompactionContent(sourceMessage.content).text;
+  const sourceText = extractCompactionMessageText(sourceMessage);
   const sourceLabel = formatCompactionUserLabel(sourceMessage);
   return formatRequiredAskContext(
     sourceLabel === "User" ? sourceText : `[${sourceLabel}]: ${sourceText}`,

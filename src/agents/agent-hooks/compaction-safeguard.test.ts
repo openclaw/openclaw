@@ -751,6 +751,25 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(identifiersSection.length).toBeLessThanOrEqual(maxChars * 0.25 + 100);
   });
 
+  it("redacts credentials in preserved turns and extracted identifiers", async () => {
+    const pem = "-----BEGIN PRIVATE KEY-----\nMIIEFAKEpem\n-----END PRIVATE KEY-----";
+    const secrets = `token=FAKEtok12345 sk-FAKEsk1234567890ab ghp_FAKEghp1234567890ab ${pem}`;
+    const redacted = "deploy with [redacted] [redacted] [redacted] [redacted]";
+    mockSummarizeCompactionHistory.mockResolvedValue(structuredSummary());
+    const session = createQualityGuardSessionManager({ recentTurnsPreserve: 1 });
+    const event = createCompactionEvent({
+      messageText: `deploy with ${secrets}`,
+      preparation: { latestUnresolvedUserRequest: redacted },
+    });
+    const original = structuredClone(event.preparation.messagesToSummarize);
+    const { result } = await runCompactionScenario(session, event);
+    const summary = expectCompactionResult(result).summary;
+    expect(summary).toContain(`## Recent turns preserved verbatim\n- User: ${redacted}`);
+    expect(summary).toContain("Latest user request context:");
+    expect(summary).not.toMatch(/FAKE|PRIVATE KEY/);
+    expect(event.preparation.messagesToSummarize).toEqual(original);
+  });
+
   it("restores source ask evidence omitted by the split-turn summary", async () => {
     const olderAsk = "summarize the earlier provider migration";
     const latestAsk = "confirm whether the aurora migration completed successfully";

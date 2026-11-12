@@ -61,9 +61,14 @@ describe("run-owned compaction requests", () => {
   it.each(internalSources)(
     "retains the $label source when its split turn falls back without a summary",
     ({ label, metadata }) => {
-      const source = "Inspect the worker artifact; do not publish it.";
+      const source = "Inspect the worker artifact; do not publish it. token=FAKEtok12345";
+      const redacted = "Inspect the worker artifact; do not publish it. [redacted]";
       const input = Object.assign(
-        { role: "user" as const, content: source, timestamp: 3 },
+        {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: source }],
+          timestamp: 3,
+        },
         metadata,
       );
       const entries = [
@@ -79,7 +84,9 @@ describe("run-owned compaction requests", () => {
       if (!result.ok) {
         throw result.error;
       }
-      expect(result.value.summary).toContain(`[${label}]: ${source}`);
+      expect(result.value.summary).toContain(`[${label}]: ${redacted}`);
+      expect(result.value.summary).not.toContain("FAKEtok12345");
+      expect(input.content[0]?.text).toBe(source);
       expect(result.value.firstKeptEntryId).toBe("entry-3");
     },
   );
@@ -102,7 +109,7 @@ describe("run-owned compaction requests", () => {
   );
 
   it("keeps the admitted human request across later internal updates", () => {
-    const request = "Review the patch; do not deploy it.";
+    const request = "Review the patch; do not deploy it. token=FAKEtok12345";
     const entries = [
       messageEntry({ role: "user", content: "Completed earlier task", timestamp: 1 }, 0),
       messageEntry(assistant("Completed.", 2), 1),
@@ -119,7 +126,9 @@ describe("run-owned compaction requests", () => {
       ),
       messageEntry(assistant("Review continues.", 6), 5),
     ];
-    expect(prepare(entries, "entry-2").latestUnresolvedUserRequest).toBe(request);
+    expect(prepare(entries, "entry-2").latestUnresolvedUserRequest).toBe(
+      "Review the patch; do not deploy it. [redacted]",
+    );
   });
 
   it("does not carry a prior checkpoint's pending ask into a new internal run", () => {

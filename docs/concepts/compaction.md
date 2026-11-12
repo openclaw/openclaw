@@ -218,6 +218,11 @@ Preflight compaction also uses that chain when the primary auth profile is alrea
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
 
+Text quoted from the conversation into compaction summaries has credential shapes
+redacted before excerpts are clipped. This includes preserved recent turns,
+split-turn context, the latest request, and extracted identifiers. The stored
+transcript keeps the original text.
+
 ### Identifier preservation
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.
