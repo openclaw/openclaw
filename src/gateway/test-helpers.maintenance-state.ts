@@ -24,6 +24,7 @@ export function createGatewayMaintenanceStateForTest(params?: {
   const worktreeGcResult = new WorktreeGcProgress().result;
   const worktreeGc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(worktreeGcResult);
   // Timer fixtures keep worktree cleanup inventories out of shared-state workers.
+  vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue(undefined);
   vi.spyOn(localWorkspaceGc, "sweepLocalWorkspaceManifests").mockResolvedValue(undefined);
   vi.spyOn(scratchMaintenance, "prepareScratchMaintenanceTargets").mockResolvedValue({
     targets: [],

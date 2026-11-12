@@ -59,6 +59,8 @@ const enSettings = {
     },
     copyId: "Copy ID",
     setDefault: "Set default",
+    accessRestricted:
+      "You do not have access to this agent setting. Ask a Gateway operator for access.",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -404,6 +406,7 @@ const enSettings = {
       notReady: "Not configured",
       unavailable: "Unavailable",
       unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
+      catalogFailedHint: "Couldn’t check realtime voice readiness.",
       activeProvider: "Active provider: {provider}",
       noProvider: "No realtime voice provider is configured yet.",
     },
@@ -631,7 +634,6 @@ const enSettings = {
     enabledSummary: "{enabled}/{total} enabled",
     enableAll: "Enable all",
     disableAll: "Disable all",
-    loadConfig: "Load the config to change tool profiles.",
     explicitAllowlist: "This agent uses a tool allowlist. Manage it in Config:",
     globalAllowlist: "Agent overrides can’t enable tools blocked by the global allowlist:",
     loadingCatalog: "Loading tools…",
@@ -762,10 +764,12 @@ const enSettings = {
       p99Hint: "99% of measured pings completed in this time or less.",
       unit: "ms",
       failed: "Last ping failed. Retrying…",
+      unavailable: "Ping isn’t available for this connection.",
     },
     activity: {
       title: "Gateway activity",
       failed: "Couldn’t refresh activity. Retrying…",
+      unavailable: "Host activity isn’t available for this connection.",
       offline: "Reconnect to see activity.",
     },
     access: {
@@ -1271,7 +1275,7 @@ const enSettings = {
         "Uses the selected model's thinking policy instead of saving a global thinking override.",
       fastModeHelpLabel: "About speed defaults",
       fastModeHelp:
-        "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. On requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
+        "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. Fast requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
       fastModeDefaultHelp:
         "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
     },
@@ -2020,7 +2024,8 @@ const enSettings = {
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
       modelDisabled: "disabled",
-      modelUnavailable: "unavailable (no small model)",
+      modelUnavailable: "Utility model status unavailable",
+      modelNotLoaded: "Utility model status not loaded",
       modelPicker: "Small model",
       modelPickerHint: "Used for observer digests and other short utility tasks.",
       modelCatalogUnavailable: "Explicit model catalog unavailable",
@@ -2034,6 +2039,8 @@ const enSettings = {
       gateway: "Gateway",
       status: "Status",
     },
+    readRestricted: "These settings are managed by Gateway operators.",
+    readDisconnected: "Reconnect to load these Gateway settings.",
     root: "<root>",
     itemCount: "[{count} item]",
     itemCountPlural: "[{count} items]",
@@ -2048,6 +2055,7 @@ const enSettings = {
     autoSavePaused: registerSettingsSidebarEnglish.catalog.configView.autoSavePaused,
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
+    autoSaveDeferred: registerSettingsSidebarEnglish.catalog.configView.autoSaveDeferred,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     discardChanges: registerSettingsSidebarEnglish.catalog.configView.discardChanges,
     discardChangesTitle: registerSettingsSidebarEnglish.catalog.configView.discardChangesTitle,

@@ -154,7 +154,7 @@ describe("exec command analysis", () => {
     expect(windowsEscapeArg(value)).toEqual({ ok: false });
   });
 
-  it("evaluates inline cmd payloads against the inner executable", () => {
+  it("evaluates inline cmd payloads against the inner executable", async () => {
     const dir = makeExecApprovalsTempDir();
     const nodePath = makeExecutable(dir, process.platform === "win32" ? "node" : "node.exe");
     makeExecutable(dir, process.platform === "win32" ? "cmd" : "cmd.exe");
@@ -166,7 +166,7 @@ describe("exec command analysis", () => {
     });
 
     expect(analysis.ok).toBe(true);
-    const result = evaluateExecAllowlist({
+    const result = await evaluateExecAllowlist({
       analysis,
       allowlist: [{ pattern: nodePath }],
       safeBins: new Set(),

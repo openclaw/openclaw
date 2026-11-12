@@ -231,6 +231,10 @@ Transcript reports preserve valid recorded per-call totals and allocations, incl
 Anthropic fast-mode estimates multiply base and tier rates alike, preserving tier thresholds and mixed 5-minute/1-hour cache-write pricing.
 
 Omitting `cost`, or setting it to `{}`, inherits the catalog pricing schedule.
+A provider without a price of its own, such as a custom proxy, inherits the price of the one
+vendor that publishes the same model id: a proxy serving `claude-opus-5-5` estimates at
+Anthropic's API rate. The id must match exactly, so serving variants such as `-fast` keep their own price.
+Private and loopback endpoints never inherit a published price.
 Explicit flat or all-zero model prices do not inherit a catalog tier schedule.
 Omitted flat-rate fields can still inherit catalog defaults. An explicit
 `tieredPricing` schedule takes precedence over the catalog schedule.
@@ -240,7 +244,8 @@ publisher reads public pricing sources, including OpenCode's official catalog
 and Venice's public model API when the provider declares the native source.
 Base rates and context tiers come from the same source; usage rendering makes no
 network requests. Hosted updates activate with the Gateway's next prepared
-catalog generation, without restarting. Each estimation operation captures one
+catalog generation, without restarting. A hosted row's price replaces the
+bundled row's for each new model call's recorded cost as well as for estimates. Each estimation operation captures one
 pricing context, so a publication cannot change its rates halfway through.
 Set `models.catalogRefresh.enabled: false` to disable
 hosted catalog traffic on offline or restricted networks; bundled pricing still

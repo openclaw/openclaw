@@ -15,10 +15,19 @@ export {
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
-  readSecretFile,
   readSecretFileSync,
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";
+
+/** Filesystem validation belongs to the external-file owner, outside the caller's event loop. */
+export async function readSecretFile(
+  filePath: string,
+  label: string,
+  options: FsSafeSecretFileReadOptions = {},
+): Promise<string> {
+  const { readSecretFileInWorker } = await import("./secret-file-read.js");
+  return await readSecretFileInWorker(filePath, label, options);
+}
 
 // Private secret writes reject directory preservation and keep numeric mode enforcement.
 type SecretFileWriteParams = Omit<Parameters<typeof writeSecretFileAtomicImpl>[0], "dirMode"> & {

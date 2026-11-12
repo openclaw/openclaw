@@ -76,7 +76,7 @@ import {
   runGatewayCronSessionEvent,
 } from "./server-cron-event-dispatch.js";
 import { createGatewayCronHeartbeatSummary } from "./server-cron-heartbeat-summary.js";
-import { describeCronInferenceMigration } from "./server-cron-inference.js";
+import { createCronInferenceMigrationDiagnostic } from "./server-cron-inference.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronWebhook,
@@ -88,6 +88,7 @@ import { createGatewayCronPublisher } from "./server-cron-publication.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
+  createSessionAutomationSource,
   registerSessionAutomationSource,
   unregisterSessionAutomationSource,
 } from "./session-automation-index.js";
@@ -344,7 +345,7 @@ export function buildGatewayCronService(params: {
     storePath,
     cronEnabled,
     cronConfig: params.cfg.cron,
-    describeJobLoadWarning: (job) => describeCronInferenceMigration(getRuntimeConfig(), job),
+    describeJobLoadWarning: createCronInferenceMigrationDiagnostic(getRuntimeConfig),
     hostExecutionDisabled,
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     admitScheduledOccurrence: ({ job }) => admitGatewayCronOccurrence(job, resolveCronAgent),
@@ -833,17 +834,14 @@ export function buildGatewayCronService(params: {
     });
     return stopPromise;
   };
-  const automationSource = {
-    getJobs: () => cron.getLoadedJobs(),
-    getDefaultAgentId: () => cron.getDefaultAgentId(),
-  };
+  const automationSource = createSessionAutomationSource(cron, cronEnabled);
   const stopCron = cron.stop.bind(cron);
   let stopped = false;
   let started = false;
   let startPromise: Promise<void> | undefined;
   let schedulingPaused = false;
   let schedulingResume: Deferred | undefined;
-  const stopCronLifecycle = (preserveExitWatchers = false) => {
+  const stopCronLifecycle = (handover = false) => {
     stopped = true;
     heartbeatSummary.clear();
     started = false;
@@ -853,13 +851,14 @@ export function buildGatewayCronService(params: {
     schedulingResume = undefined;
     settleExitWatcherHandoff(false);
     try {
-      stopCron();
-      if (preserveExitWatchers) {
+      if (handover) {
+        cron.handOver();
         // A committed replacement owns these children; fence this scheduler
         // without terminating the adopted manager.
         exitWatchersStopped = true;
         exitWatcherMutationRevision += 1;
       } else {
+        stopCron();
         stopExitWatchers();
       }
       void stopStreamWatchers().catch((err: unknown) => {
@@ -874,11 +873,9 @@ export function buildGatewayCronService(params: {
       unregisterSessionAutomationSource(automationSource);
     }
   };
-  cron.stop = () => {
+  cron.stop = () => stopCronLifecycle();
+  cron.stopAndDrain = async () => {
     stopCronLifecycle();
-  };
-  const stopAndDrainCron = async (preserveExitWatchers = false) => {
-    stopCronLifecycle(preserveExitWatchers);
     await drainGatewayCron({
       settlements: [
         cron.waitForIdle(),
@@ -889,7 +886,6 @@ export function buildGatewayCronService(params: {
       logger: cronLogger,
     });
   };
-  cron.stopAndDrain = () => stopAndDrainCron();
   const pauseScheduling = cron.pauseScheduling.bind(cron);
   const resumeScheduling = cron.resumeScheduling.bind(cron);
   cron.pauseScheduling = () => {
@@ -1003,8 +999,10 @@ export function buildGatewayCronService(params: {
         exitWatchers = watchers;
         return watchers.updateHandlers(exitWatcherHandlers);
       },
+      // A reload lets runs still executing here finish instead of aborting them.
       stopOwner: async () => {
-        await stopAndDrainCron(true);
+        stopCronLifecycle(true);
+        await Promise.all([startPromise, stopStreamWatchers()]);
       },
     }),
     reconcileExitWatchers,

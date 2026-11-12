@@ -20,7 +20,7 @@ import type {
   ProjectedLifecycleMutation,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { prepareSessionActorEntryPatch } from "./session-actor-entry-publication.worker.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";

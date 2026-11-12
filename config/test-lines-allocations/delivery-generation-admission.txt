@@ -1,2 +1,0 @@
-33
-# Regression: retained delivery/source assertions avoid filesystem polling and reject database retirement.

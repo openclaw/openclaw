@@ -1,5 +1,5 @@
 // Exercise the tunnel connect boundary with the real SQLite pairing broker.
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import http, { type IncomingMessage } from "node:http";
 import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
@@ -28,6 +28,7 @@ import { NODE_CLIENT, openWs } from "./server.auth.test-helpers.js";
 import {
   connectReq,
   createGatewaySuiteHarness,
+  rpcReq,
   installGatewayTestHooks,
   testState,
 } from "./test-helpers.js";
@@ -57,6 +58,13 @@ function nodePeer() {
     authority: { clawId: "test-claw", rootPub: "test-root", listedSeq: nextPeer },
   });
   return peerKey;
+}
+// Removal then a new owner approval lists the same W under a later seq.
+function relist(peerKey: string) {
+  const principal = peers.get(peerKey)!;
+  const listedSeq = principal.authority!.listedSeq + 1000;
+  peers.set(peerKey, { ...principal, authority: { ...principal.authority!, listedSeq } });
+  return listedSeq;
 }
 beforeAll(async () => {
   vi.spyOn(http.Server.prototype, "emit").mockImplementation(function (
@@ -96,6 +104,11 @@ beforeAll(async () => {
     record: async (deviceId, role, peerKey) => {
       bindings.set(`${deviceId}:${role}`, peerKey);
     },
+    forget: async (tokens) => {
+      for (const token of tokens) {
+        bindings.delete(`${token.deviceId}:${token.role}`);
+      }
+    },
     reportMismatch: () => {},
   });
 });
@@ -112,10 +125,11 @@ async function connect(
   path: string,
   commands = ["system.run"],
   caps = ["approved"],
+  ws?: Awaited<ReturnType<typeof openWs>>,
 ) {
-  const ws = await openWs(started.port, { [header]: peerKey });
+  const socket = ws ?? (await openWs(started.port, { [header]: peerKey }));
   try {
-    return await connectReq(ws, {
+    return await connectReq(socket, {
       client: { ...NODE_CLIENT, platform: "linux", displayName: description.display_name },
       role: "node",
       scopes: [],
@@ -125,7 +139,9 @@ async function connect(
       caps,
     });
   } finally {
-    ws.close();
+    if (!ws) {
+      socket.close();
+    }
   }
 }
 
@@ -203,6 +219,33 @@ test("keeps removal manual when the first tunnel connection used an existing pai
     (await listDevicePairing()).pending.find((entry) => entry.deviceId === identity.deviceId)
       ?.silent,
   ).not.toBe(true);
+  // The manual grant consumed only that listing; a newly approved listing pairs once.
+  const listedSeq = relist(peer);
+  expect((await connect(peer, path)).ok).toBe(true);
+  expect(
+    (await getPairedDevice(identity.deviceId))?.tokens?.node?.approval?.authority,
+  ).toMatchObject({ listedSeq });
+  await removeNodePairings([peer]);
+});
+
+test("pairs once per owner-approved listing after removal, never again under that listing", async () => {
+  const peer = nodePeer();
+  const path = identityPath("ocid-node-relisted");
+  expect((await connect(peer, path)).ok).toBe(true);
+  const deviceId = loadOrCreateDeviceIdentity({ path }).deviceId;
+  await removeNodePairings([peer]);
+  const listedSeq = relist(peer);
+  expect((await connect(peer, path)).ok).toBe(true);
+  expect(await getPairedDevice(deviceId)).toMatchObject({
+    approvedVia: "openclaw-id-node",
+    tokens: { node: { approval: { peerKey: peer, authority: { listedSeq } } } },
+  });
+  // Under the same listing: another device and a Devices-only removal both stay manual.
+  expect((await connect(peer, identityPath("ocid-node-relisted-second"))).ok).toBe(false);
+  await removePairedDeviceRole({ deviceId });
+  await closeOpenClawStateDatabaseAsync();
+  expect((await connect(peer, path)).ok).toBe(false);
+  expect(await getPairedDevice(deviceId)).toBeNull();
 });
 
 test("removes only peer-granted node roles, preserving unrelated operator grants and repeat cleanup", async () => {
@@ -265,6 +308,26 @@ test("does not approve merged operator requests or stale principals", async () =
     setOpenClawIdNodeDescriptionLookup((key) => (peers.has(key) ? description : undefined));
   }
   expect(ssh).not.toHaveBeenCalled();
+});
+
+test("refuses an unlisted node before pairing and closes a live session once its listing is removed", async () => {
+  const pendingPath = identityPath("ocid-node-unlisted");
+  const unlisted = `iroh:${"f".repeat(64)}`;
+  expect((await connect(unlisted, pendingPath)).ok).toBe(false);
+  expect(
+    await getPairedDevice(loadOrCreateDeviceIdentity({ path: pendingPath }).deviceId),
+  ).toBeNull();
+  const peer = nodePeer();
+  const ws = await openWs(started.port, { [header]: peer });
+  expect((await connect(peer, identityPath("ocid-node-live"), undefined, undefined, ws)).ok).toBe(
+    true,
+  );
+  // Discovery may still serve the node's earlier signed listing; the Gateway checks its own.
+  peers.delete(peer);
+  const closed = once(ws, "close");
+  void rpcReq(ws, "node.event", { event: "probe" }).catch(() => {});
+  expect((await closed)[0]).toBe(4001);
+  await removeNodePairings([peer]);
 });
 
 test("reconciles orphaned listing provenance while retaining current nodes", async () => {

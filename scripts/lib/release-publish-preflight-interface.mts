@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import type { ReleasePublishGate } from "./release-publish-gates.mts";
+import { validateRetiredLineReason } from "./release-version.mjs";
 
 export type ReleasePublishPreflightOptions = {
   repo: string;
@@ -16,6 +17,7 @@ export type ReleasePublishPreflightOptions = {
   publishOpenclawNpm?: boolean;
   openclawNpmResumeRunId?: string;
   pluginSdkApiAcknowledgement?: string;
+  retiredLinePublicationReason?: string;
   windowsNodeTag?: string;
   windowsNodeInstallerDigests?: string;
   npmTelegramRunId?: string;
@@ -37,6 +39,9 @@ export function buildReleasePublishDispatchCommand(
   workflowRef: string,
   resume: string,
 ) {
+  if (options.retiredLinePublicationReason) {
+    validateRetiredLineReason(options.retiredLinePublicationReason);
+  }
   const fields = {
     tag: options.tag,
     preflight_run_id: options.preflightRunId ?? options.fullReleaseValidationRunId,
@@ -49,6 +54,7 @@ export function buildReleasePublishDispatchCommand(
     publish_openclaw_npm: String(options.publishOpenclawNpm !== false),
     openclaw_npm_resume_run_id: resume,
     plugin_sdk_api_acknowledgement: options.pluginSdkApiAcknowledgement,
+    retired_line_publication_reason: options.retiredLinePublicationReason,
     windows_node_tag: options.windowsNodeTag,
     windows_node_installer_digests: options.windowsNodeInstallerDigests,
     npm_telegram_run_id: options.npmTelegramRunId,
@@ -106,6 +112,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     "publish-openclaw-npm",
     "openclaw-npm-resume-run-id",
     "plugin-sdk-api-acknowledgement",
+    "retired-line-publication-reason",
     "windows-node-tag",
     "windows-node-installer-digests",
     "npm-telegram-run-id",
@@ -159,6 +166,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     publishOpenclawNpm: value("publish-openclaw-npm", "true") === "true",
     openclawNpmResumeRunId: value("openclaw-npm-resume-run-id"),
     pluginSdkApiAcknowledgement: value("plugin-sdk-api-acknowledgement"),
+    retiredLinePublicationReason: value("retired-line-publication-reason") || undefined,
     windowsNodeTag: value("windows-node-tag"),
     windowsNodeInstallerDigests: value("windows-node-installer-digests"),
     npmTelegramRunId: value("npm-telegram-run-id"),

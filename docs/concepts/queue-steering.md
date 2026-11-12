@@ -58,6 +58,13 @@ those tool calls through the same cleanup path. The queued message keeps its
 place and is delivered once when the run can accept it or the next turn starts.
 The action never targets a later run. Unsupported tools keep the wait explanation.
 
+Queued follow-ups show **Queued behind the current turn** in the Control UI,
+including messages whose steering attempt fell back to the queue. Use **Stop**
+to stop the current turn, or the available **Steer** / **Send now** action to
+redirect it. Slow-send logs distinguish admission waits with
+`detail.reply.admission.active_run_wait`, `mailbox_wait`, `inputs_wait`,
+`followup_barrier_wait`, and `successor_barrier_wait` timings under the same prefix.
+
 A steered channel reply carries that message's quoted or forwarded context into
 the model input. Quoted content stays conversation data; commands and answers to
 pending questions use the literal incoming text. Text-only transcript entries
@@ -195,6 +202,10 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. Gateway chat sends acknowledge saved input custody without waiting
 for steering admission behind older queued messages or for the active turn to end.
+The built-in runtime waits up to two minutes for an accepted steer to reach its
+transcript boundary. If it can withdraw the still-pending input, the input returns
+to the followup queue. Rejection logs include the runtime's reason, capped at 512
+characters; a transcript timeout is distinct from an initial refusal to accept input.
 Steering and followup delivery retain their original order, and later events report
 the input's outcome. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
@@ -208,6 +219,8 @@ interrupted input follows the existing recovery rules.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
+This also covers messages waiting for a turn during reply initialization, including
+command-bearing messages. Slow-send diagnostics attribute these admission waits to `queued`.
 
 The `runId` returned by `chat.send` remains that input's public identity when
 steering falls back to a followup. Queue admission does not complete it. Its
