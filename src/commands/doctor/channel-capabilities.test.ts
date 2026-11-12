@@ -11,6 +11,12 @@ const channelPluginMocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(() => undefined),
 }));
 
+const readOnlyPluginMocks = vi.hoisted(() => ({
+  resolveReadOnlyChannelPluginsForConfig: vi.fn(
+    (): { plugins: Array<Record<string, unknown>> } => ({ plugins: [] }),
+  ),
+}));
+
 vi.mock("../../channels/plugins/bundled.js", () => ({
   getBundledChannelPlugin: channelPluginMocks.getBundledChannelPlugin,
 }));
@@ -18,6 +24,15 @@ vi.mock("../../channels/plugins/bundled.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: channelPluginMocks.getChannelPlugin,
 }));
+
+vi.mock("../../channels/plugins/read-only.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../channels/plugins/read-only.js")>();
+  return {
+    ...actual,
+    resolveReadOnlyChannelPluginsForConfig:
+      readOnlyPluginMocks.resolveReadOnlyChannelPluginsForConfig,
+  };
+});
 
 function expectCapabilities(
   channelId: string,
@@ -46,6 +61,9 @@ describe("doctor channel capabilities", () => {
   beforeEach(() => {
     channelPluginMocks.getBundledChannelPlugin.mockReset().mockReturnValue(undefined);
     channelPluginMocks.getChannelPlugin.mockReset().mockReturnValue(undefined);
+    readOnlyPluginMocks.resolveReadOnlyChannelPluginsForConfig
+      .mockReset()
+      .mockReturnValue({ plugins: [] });
   });
 
   it("returns canonical top-level route semantics from googlechat plugin metadata", () => {
@@ -141,6 +159,37 @@ describe("doctor channel capabilities", () => {
     });
 
     expect(await resolveDoctorChannelAccountIds("telegram", {}, [])).toBeUndefined();
+  });
+
+  it("resolves account ids through the configured read-only loader when the registry is empty", async () => {
+    const resolveAccount = (_cfg: unknown, accountId?: string | null) => ({
+      accountId: accountId === "Work" ? "work" : accountId,
+    });
+    const cfg = { channels: { telegram: { accounts: { default: {}, work: {} } } } };
+    const env = { TELEGRAM_BOT_TOKEN: "test-token" };
+    readOnlyPluginMocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
+      plugins: [
+        {
+          id: "telegram",
+          config: {
+            listAccountIds: () => ["default", "Work"],
+            resolveAccount,
+          },
+        },
+      ],
+    });
+
+    await expect(
+      resolveDoctorChannelAccountIds("telegram", cfg, ["default", "Work"], { env }),
+    ).resolves.toEqual({
+      configured: ["default", "work"],
+      runtime: ["default", "work"],
+    });
+    expect(readOnlyPluginMocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(cfg, {
+      env,
+      includePersistedAuthState: false,
+      includeSetupFallbackPlugins: true,
+    });
   });
 
   it.each([false, true])(

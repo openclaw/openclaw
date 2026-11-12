@@ -365,6 +365,7 @@ export async function runDoctorRepairSequence(params: {
   const emptyAllowlistWarnings = await runWithCurrentPluginMetadata(async () =>
     scanEmptyAllowlistPolicyWarnings(state.candidate, {
       doctorFixCommand: params.doctorFixCommand,
+      env,
       ...(await createChannelDoctorEmptyAllowlistPolicyHooks({ cfg: state.candidate, env })),
     }),
   );
