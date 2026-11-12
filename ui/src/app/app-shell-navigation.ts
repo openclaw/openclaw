@@ -3,9 +3,13 @@ import {
   isSessionRouteId,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
+  sameRouteLocation,
 } from "../app-route-paths.ts";
 import { isRouteId, type RouteId } from "../app-routes.ts";
+import { pathForSession } from "../app-session-path-builder.ts";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
   resolveSessionNavigationAgentId,
@@ -18,6 +22,7 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -84,7 +89,8 @@ export class ShellNavigationOwner {
     if (!context || !isRouteId(routeId)) {
       return;
     }
-    this.host.closeNavDrawer({ restoreFocus: true });
+    // The new draft owns focus after it mounts; a drawer return must not reclaim it.
+    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session" });
     context.navigate(
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
@@ -185,6 +191,44 @@ export class ShellNavigationOwner {
     }
   }
 
+  synchronizeSessionUrl(): void {
+    const context = this.host.context;
+    const { routeId, location, committedRouteId, committedLocation, committedSessionKey } =
+      this.host.routeState;
+    if (
+      !context ||
+      context.gateway.snapshot.phase !== "connected" ||
+      this.host.routeState.sessionUrlPending ||
+      !isSessionRouteId(committedRouteId) ||
+      routeId !== committedRouteId ||
+      !committedLocation ||
+      !committedSessionKey ||
+      !sameRouteLocation(location, committedLocation) ||
+      !sameRouteLocation(window.location, committedLocation)
+    ) {
+      return;
+    }
+    const target = sessionRefFromPath(committedLocation.pathname, context.basePath);
+    // The settled route owns identity; use the same live name projection as the tab title.
+    const row = context.sessions.presentation.result?.sessions.find(
+      (candidate) => candidate.key === committedSessionKey,
+    );
+    if (target?.kind !== "short" || !row?.displayName?.trim()) {
+      return;
+    }
+    const pathname = pathForSession(committedRouteId, target.agentId, row.key, context.basePath, {
+      displayName: row.displayName,
+      shortIdLength: target.shortId.length,
+    });
+    if (!pathname || pathname === committedLocation.pathname) {
+      return;
+    }
+    // Rename only the settled route; pending navigation owns the address bar.
+    // Carry its resolved identity so a title change needs no discovery request.
+    prepareSessionNavigationHandoff(context.gateway, pathname, row.key);
+    context.replace(committedRouteId, { ...committedLocation, pathname });
+  }
+
   updateRouteState(routeState: ShellRouteState): void {
     this.host.routeState = routeState;
     if (routeState.routeId !== undefined) {
@@ -257,8 +301,12 @@ export class ShellNavigationOwner {
     if (context) {
       this.host.ensureAgentsList(context.gateway.snapshot);
     }
+    this.synchronizeSessionUrl();
     if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
-      this.host.settingsSearchQuery = "";
+      // The embedded list is this search's home, so its results survive Back.
+      if (routeState.routeId !== "settings") {
+        this.host.settingsSearchQuery = "";
+      }
       this.host.lastWorkspaceLocation = {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",
@@ -279,6 +327,20 @@ export class ShellNavigationOwner {
 
   openNewSession(agentId: string, target?: NewSessionTarget): void {
     this.navigate("new-session", { search: newSessionSearch(agentId, target) });
+  }
+
+  /** Escape: one level up from a subpage, out of Settings from a top-level section. */
+  leaveSettingsLevel(): void {
+    const { routeId, location } = this.host.routeState;
+    const basePath = this.host.context?.basePath ?? "";
+    const parent =
+      routeId && isRouteId(routeId) ? settingsParentTarget(routeId, location, basePath) : null;
+    if (parent) {
+      const { routeId: parentRoute, ...parentLocation } = parent;
+      this.navigate(parentRoute, parentLocation);
+      return;
+    }
+    this.exitSettings();
   }
 
   exitSettings(): void {

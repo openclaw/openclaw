@@ -16,6 +16,7 @@ import {
   recoverNodeRuntime,
 } from "../../node-runtime-recovery.mjs";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -94,8 +95,7 @@ const probeResult = (text: boolean): SpawnSyncReturns<string> => ({
 
 const originalArgv = process.argv;
 const originalExecArgv = process.execArgv;
-const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const ttyMock = createCliTtyMock();
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
 const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const nodeVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "node")!;
@@ -176,21 +176,12 @@ afterEach(async () => {
   process.exitCode = originalExitCode;
   process.argv = originalArgv;
   process.execArgv = originalExecArgv;
-  for (const [stream, descriptor] of [
-    [process.stdin, stdinTtyDescriptor],
-    [process.stdout, stdoutTtyDescriptor],
-  ] as const) {
-    if (descriptor) {
-      Object.defineProperty(stream, "isTTY", descriptor);
-    } else {
-      Reflect.deleteProperty(stream, "isTTY");
-    }
-  }
+  ttyMock.restore();
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
-    Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
     Object.defineProperty(process, "execPath", execPathDescriptor);
   }
+  Object.defineProperty(process.versions, "node", nodeVersionDescriptor);
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   if (home) {
@@ -218,6 +209,30 @@ async function expectRecoveryStarted(options: Parameters<typeof recoverNodeRunti
 }
 
 describe("runtime recovery discovery", () => {
+  it.each([true, false])(
+    "selects only an installed security-patched Node for a certificate-only gap (patched=%s)",
+    async (patched) => {
+      mocks.currentAdmitted = true;
+      Object.defineProperty(process.versions, "node", { value: "24.21.0", configurable: true });
+      const candidate = await writeFixture("bin/node");
+      mocks.admissible.add(candidate);
+      mocks.probe.mockReturnValue({
+        ...probeResult(true),
+        stdout: JSON.stringify({
+          nodeVersion: patched ? "24.22.1" : "24.21.0",
+          sqliteProbe: sqlite(true),
+        }),
+      });
+      if (patched) {
+        await expectRecoveryStarted({ homeDir: home, allowInstall: true });
+        expect(mocks.spawn.mock.calls[0]?.[0]).toBe(candidate);
+      } else {
+        expect(await recoverNodeRuntime({ homeDir: home, allowInstall: true })).toBe(false);
+        expect(mocks.spawn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     { platform: "win32", quote: '"', relative: false, selected: true },
     { platform: "win32", quote: "", relative: false, selected: true },

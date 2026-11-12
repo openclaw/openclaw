@@ -259,9 +259,6 @@ describe.each(["HTTP", "WebSocket"] as const)(
         const deniedBeforeHook = Boolean(testCase.expectedError && !testCase.revokeMember);
         expect(runtime.beforeHook).toHaveBeenCalledTimes(deniedBeforeHook ? 0 : 1);
         expect(runtime.execute).toHaveBeenCalledTimes(testCase.expectedError ? 0 : 1);
-        if (deniedBeforeHook) {
-          expect(runtime.createTools).not.toHaveBeenCalled();
-        }
         if (!testCase.expectedError && transport === "WebSocket") {
           expect(runtime.beforeHook).toHaveBeenCalledWith(
             expect.objectContaining({

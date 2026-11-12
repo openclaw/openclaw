@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { iteratePluginRootContributions } from "../plugins/plugin-root-contributions.js";
@@ -94,11 +95,22 @@ function resolveHookDiscoveryRoots(
 ): HookDiscoveryRoot[] {
   const bundledHooksDir = opts?.bundledHooksDir ?? resolveBundledHooksDir();
   return [
-    ...normalizeTrimmedStringList(opts?.config?.hooks?.internal?.load?.extraDirs).map((dir) => ({
-      dir: resolveUserPath(dir),
-      source: "openclaw-managed" as const,
-      includeRoot: true,
-    })),
+    ...filterStringEntries(opts?.config?.hooks?.internal?.load?.extraDirs)
+      .filter((dir) => dir.trim())
+      .map((dir) => {
+        // Resolve only the invocation base and home through the trimming resolver.
+        // The configured directory's whitespace belongs to its filesystem identity.
+        const expanded = dir.startsWith("~")
+          ? expandHomePrefix(dir, { home: resolveUserPath("~") })
+          : dir;
+        return {
+          dir: path.isAbsolute(expanded)
+            ? path.resolve(expanded)
+            : path.resolve(resolveUserPath("."), expanded),
+          source: "openclaw-managed" as const,
+          includeRoot: true,
+        };
+      }),
     ...(bundledHooksDir ? [{ dir: bundledHooksDir, source: "openclaw-bundled" as const }] : []),
     ...resolvePluginHookDirs({ workspaceDir, config: opts?.config }),
     { dir: opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks"), source: "openclaw-managed" },

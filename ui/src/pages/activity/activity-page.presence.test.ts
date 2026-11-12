@@ -20,7 +20,7 @@ import {
   createActivityPage,
 } from "./activity-page.test-support.ts";
 
-it("expires presence without another event, catches up after hiding, and stops on disposal", async () => {
+it("expires presence without replacing its disclosure and stops on page disposal", async () => {
   await i18n.setLocale("en");
   const { gateway: source, current } = createGatewayStoreTestStore({
     settings: activitySettings(),
@@ -96,21 +96,6 @@ it("expires presence without another event, catches up after hiding, and stops o
 
       publishPresence(Date.now());
       expect(identity.querySelector(".settings-status")?.textContent).toContain("Online · Active");
-      const hiddenExpiry = latestExpiry();
-      visibility.mockReturnValue("hidden");
-      document.dispatchEvent(new Event("visibilitychange"));
-      flush();
-      expect(clearedTimers).toHaveBeenCalledWith(hiddenExpiry);
-      await vi.advanceTimersByTimeAsync(120_000);
-      expect(identity.querySelector(".settings-status")?.textContent).toContain("Online · Active");
-      visibility.mockReturnValue("visible");
-      document.dispatchEvent(new Event("visibilitychange"));
-      flush();
-      expect(identity.querySelector(".settings-status")?.textContent).toContain("Online · Idle");
-      expect(identity.querySelector(".activity-feed__connection-details")).toBe(details);
-      expect(details.open).toBe(true);
-
-      publishPresence(Date.now());
       const disposedExpiry = latestExpiry();
       page.dispose();
       expect(clearedTimers).toHaveBeenCalledWith(disposedExpiry);

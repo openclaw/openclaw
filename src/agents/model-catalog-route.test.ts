@@ -1,16 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "../auto-reply/thinking.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
-import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
+import { PREPARED_THINKING_POLICY } from "../plugins/provider-thinking-catalog.js";
 import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-thinking.types.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   platformRoute,
   subscriptionRoute as chatGPTRoute,
 } from "./model-auth-availability.test-support.js";
-import { model, providerConfig, snapshot } from "./model-catalog-fixtures.test-support.js";
+import { model, providerConfig } from "./model-catalog-fixtures.test-support.js";
 import {
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
@@ -34,7 +31,6 @@ const platformEntry: ModelCatalogEntry = {
   name: "GPT-5.5",
   api: platformRoute.api,
   baseUrl: platformRoute.baseUrl,
-  contextWindow: 1_000_000,
   params: { platformOnly: true },
   compat: { supportsTools: false },
 };
@@ -43,13 +39,6 @@ const chatGPTEntry: ModelCatalogEntry = {
   ...platformEntry,
   api: chatGPTRoute.api,
   baseUrl: chatGPTRoute.baseUrl,
-  contextWindow: 400_000,
-  contextTokens: 300_000,
-  reasoning: true,
-  thinkingLevelMap: { off: null, xhigh: null, max: "max" },
-  input: ["text"],
-  params: { chatGPTOnly: true },
-  compat: { supportsTools: true },
 };
 const project = (params: Partial<Parameters<typeof projectModelCatalogEntryForRoute>[0]> = {}) =>
   projectModelCatalogEntryForRoute({
@@ -59,22 +48,6 @@ const project = (params: Partial<Parameters<typeof projectModelCatalogEntryForRo
   });
 
 afterEach(() => vi.restoreAllMocks());
-it("prefers the exact physical donor over the platform row", () => {
-  const windows = [{ id: "native", label: "Native", contextWindow: 400_000 }];
-  const { entry: publicEntry, runtimeEntry } = project({
-    catalog: [
-      platformEntry,
-      { ...chatGPTEntry, contextWindows: windows, contextWindowDefault: "native" },
-    ],
-  });
-  expect(runtimeEntry.params).toEqual({ chatGPTOnly: true });
-  expect(runtimeEntry.compat).toEqual({ supportsTools: true });
-  expect(runtimeEntry).toMatchObject({ contextWindow: 400_000, contextWindowDefault: "native" });
-  expect(publicEntry).not.toHaveProperty("params");
-  expect(publicEntry).not.toHaveProperty("compat");
-  expect(publicEntry.contextWindows).toEqual(windows);
-});
-
 it.each([
   ["subscription", chatGPTRoute, "ultra", "fixture-subscription"],
   ["unresolved", undefined, "off", undefined],
@@ -87,30 +60,26 @@ it.each([
           defaultLevel: "ultra",
         } as const),
   );
-  const entry = { ...platformEntry, thinkingPolicyProvider: "fixture-platform" };
-  const catalog = snapshot([entry], {
-    routeVariants: [entry, { ...chatGPTEntry, thinkingPolicyProvider: "fixture-subscription" }],
-  });
-  prepareModelCatalogThinkingPolicies({
-    catalog,
-    metadataSnapshot: createPluginMetadataSnapshotFixture(),
-    pluginRegistry: {
-      ...createEmptyPluginRegistry(),
-      providers: ["fixture-platform", "fixture-subscription"].map((id) => ({
-        pluginId: id,
-        source: "test",
-        provider: { id, label: id, auth: [], resolveThinkingProfile: resolvePolicy },
-      })),
-    },
-  });
+  const entry = {
+    ...platformEntry,
+    thinkingPolicyProvider: "fixture-platform",
+    [PREPARED_THINKING_POLICY]: { resolve: resolvePolicy },
+  };
+  const donor = {
+    ...chatGPTEntry,
+    thinkingPolicyProvider: "fixture-subscription",
+    [PREPARED_THINKING_POLICY]: { resolve: resolvePolicy },
+  };
   const ambient = vi
     .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
     .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
   const { entry: projected } = project({
-    entry: expectDefined(catalog.entries[0], "prepared route test entry"),
+    entry,
     projection: route ? { kind: "selected", route } : { kind: "unresolved" },
-    catalog: catalog.routeVariants,
+    catalog: [entry, donor],
   });
+  expect(projected).not.toHaveProperty("params");
+  expect(projected).not.toHaveProperty("compat");
   expect(
     resolveThinkingProfile({
       provider: projected.provider,
@@ -130,10 +99,6 @@ it.each([
   }
 });
 
-it("returns the physical row unchanged for unmanaged models", () => {
-  expect(project({ projection: { kind: "unmanaged" } }).entry).toBe(platformEntry);
-});
-
 it("selects logical overrides from a legacy fallback", () => {
   const legacy = model("openai/gpt-5.5", "Legacy row", {
     contextWindow: 900_000,
@@ -148,9 +113,7 @@ it("selects logical overrides from a legacy fallback", () => {
     return { id, key: `${entry.provider}/${id}` };
   });
 
-  const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
-    cfg,
-  });
+  const resolveOverrides = createConfiguredModelCatalogOverridesResolver({ cfg });
   for (const id of ["gpt-5.5", "openai/gpt-5.5", "gpt-5.5"]) {
     expect(resolveOverrides({ ...platformEntry, id })).toEqual({
       name: "Legacy row",

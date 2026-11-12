@@ -1,14 +1,12 @@
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 
-type EmbeddedAttemptTrajectoryRecorder = {
-  describeFlushState: () => string | undefined;
-  flush: () => Promise<void>;
-};
-
 export async function flushEmbeddedAttemptTrajectoryRecorder(params: {
   runId: string;
   sessionId: string;
-  trajectoryRecorder: EmbeddedAttemptTrajectoryRecorder | null;
+  trajectoryRecorder: {
+    describeFlushState: () => string | undefined;
+    flush: () => Promise<void>;
+  } | null;
   log: { warn: (message: string) => void };
 }): Promise<void> {
   await runAgentCleanupStep({

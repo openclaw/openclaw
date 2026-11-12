@@ -12,15 +12,7 @@ import {
 } from "./runtime.js";
 
 export type {
-  EmbeddingInput,
-  EmbeddingProvider,
   EmbeddingProviderAdapter,
-  EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
-  EmbeddingProviderCreateResult,
-  EmbeddingProviderIndexIdentity,
-  EmbeddingProviderRuntime,
-  EmbeddingUsage,
   RegisteredEmbeddingProvider,
 } from "./embedding-provider-types.js";
 

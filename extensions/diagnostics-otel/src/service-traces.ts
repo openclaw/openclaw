@@ -7,7 +7,10 @@ import {
   type Tracer,
 } from "@opentelemetry/api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  normalizeDiagnosticTraceContext,
+  normalizeDiagnosticValue,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -15,13 +18,12 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
-import {
-  contextForTraceContext,
-  normalizedTrustedTraceContext,
-  normalizeTraceContext,
-} from "./service-trace-context.js";
+import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(
+  tracer: Tracer,
+  runtimeOptions: { captureContent?: boolean } = {},
+) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
@@ -72,7 +74,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     );
   };
   const trustedTraceContext = (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) =>
-    metadata.trusted ? normalizeTraceContext(evt.trace) : undefined;
+    metadata.trusted ? normalizeDiagnosticTraceContext(evt.trace) : undefined;
   // Internal-dispatcher events are linkable on their own; everything else defers to
   // the shared trusted-trace-context rule, which also accepts an untrusted payload
   // whose trace context came from OpenClaw-owned scope (metadata.trustedTraceContext).
@@ -81,7 +83,7 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     metadata: DiagnosticEventMetadata,
   ) =>
     metadata.internal
-      ? normalizeTraceContext(evt.trace)
+      ? normalizeDiagnosticTraceContext(evt.trace)
       : normalizedTrustedTraceContext(evt, metadata);
   const trustedSpanAliasOwner = (evt: DiagnosticEventPayload): string | undefined =>
     "runId" in evt ? evt.runId || undefined : undefined;
@@ -249,18 +251,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) => {
     span.setAttributes?.(redactOtelAttributes(attributes));
   };
-  const retainTrustedSpanContext = (
-    traceId: string,
-    spanId: string,
-    spanContext: SpanContext,
-    owner?: string,
-  ) => {
-    retainedTrustedSpanContexts.set(
-      retainedTrustedSpanContextKey(traceId, spanId, owner),
-      spanContext,
-    );
-    pruneMapToMaxSize(retainedTrustedSpanContexts, MAX_RETAINED_TRUSTED_SPAN_CONTEXTS);
-  };
   // Retention keys on the diagnostic ids the event carries. Taking the whole context
   // (not a bare trace id) makes an OTel SpanContext a type error here; keying by OTel
   // ids instead would silently split every late child into its own trace.
@@ -287,12 +277,14 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     span.end(endTimeMs);
     for (const retainedKey of retainedKeys) {
-      retainTrustedSpanContext(
-        traceContext.traceId,
-        retainedKey.spanId,
+      const traceId = traceContext.traceId;
+      const retainedSpanId = retainedKey.spanId;
+      const owner = retainedKey.owner;
+      retainedTrustedSpanContexts.set(
+        retainedTrustedSpanContextKey(traceId, retainedSpanId, owner),
         spanContext,
-        retainedKey.owner,
       );
+      pruneMapToMaxSize(retainedTrustedSpanContexts, MAX_RETAINED_TRUSTED_SPAN_CONTEXTS);
     }
   };
 
@@ -317,6 +309,23 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     if (evt.agentId) {
       spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
+    }
+    // Session identity rides the captureContent gate: a collector trusted with raw
+    // prompt and tool content is trusted with the session identifier, so trace
+    // backends can group spans per conversation. The value is the session id —
+    // the durable identifier assigned at session creation, not the session key.
+    // A /new reset clears history but preserves the durable session id, so reset
+    // continuations stay grouped in the same backend conversation; a fresh id
+    // arises when a session is first created. The raw session key (which can
+    // embed channel peer ids) is never exported.
+    // Metric attributes stay low-cardinality and never carry session
+    // identifiers.
+    if (runtimeOptions.captureContent) {
+      const sessionId = evt.sessionId;
+      if (sessionId) {
+        spanAttrs["gen_ai.conversation.id"] = sessionId;
+        spanAttrs["openclaw.session.id"] = sessionId;
+      }
     }
   };
 

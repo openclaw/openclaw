@@ -5,9 +5,7 @@ export async function replySilently(
   params: { content: string; ephemeral?: boolean },
   onError?: (error: unknown) => void,
 ) {
-  try {
-    await interaction.reply(params);
-  } catch (error) {
-    onError?.(error);
-  }
+  await interaction[interaction.responseState === "deferred-update" ? "followUp" : "reply"](
+    params,
+  ).catch((error: unknown) => onError?.(error));
 }

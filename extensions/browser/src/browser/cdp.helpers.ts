@@ -257,25 +257,6 @@ function canonicalBrowserWebSocketIdentity(url: string): string {
   return `${canonicalCdpAuthority(parsed, parsed.protocol)}/devtools/browser/${pathMatch[1]}`;
 }
 
-/** Build restart-stable hashes without retaining endpoint credentials. */
-function createCdpOwnershipFingerprints(params: {
-  profileName: string;
-  cdpUrl: string;
-  browserWebSocketUrl: string;
-}): {
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
-} {
-  return {
-    profileFingerprint: fingerprintCdpIdentity(
-      JSON.stringify([params.profileName, canonicalCdpProfileIdentity(params.cdpUrl)]),
-    ),
-    browserInstanceFingerprint: fingerprintCdpIdentity(
-      canonicalBrowserWebSocketIdentity(params.browserWebSocketUrl),
-    ),
-  };
-}
-
 type CdpTabOwnershipParams = {
   profileName: string;
   cdpUrl: string;
@@ -327,11 +308,13 @@ async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Pro
       ownership: {
         status: "durable",
         nativeTargetId: params.nativeTargetId,
-        ...createCdpOwnershipFingerprints({
-          profileName: params.profileName,
-          cdpUrl: params.cdpUrl,
-          browserWebSocketUrl: advertisedWebSocketUrl,
-        }),
+        /** Build restart-stable hashes without retaining endpoint credentials. */
+        profileFingerprint: fingerprintCdpIdentity(
+          JSON.stringify([params.profileName, canonicalCdpProfileIdentity(params.cdpUrl)]),
+        ),
+        browserInstanceFingerprint: fingerprintCdpIdentity(
+          canonicalBrowserWebSocketIdentity(advertisedWebSocketUrl),
+        ),
       },
       browserWebSocketUrl,
       browserWebSocketLookup: pinned?.lookup,

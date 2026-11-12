@@ -1,8 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import {
   getCliHistoryWriter,
   runWithCliHistoryWriter,
@@ -18,6 +20,7 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { CliSessionBinding } from "../../config/sessions/types.js";
 import { commitCronConversationResult } from "../../cron/conversation-result.js";
+import { runInAgentRunWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildPersistedVoiceMessage } from "../../talk/voice-transcript.js";
@@ -64,13 +67,15 @@ const fixture = (withHeader?: boolean) => createHistoryBoundaryFixture(sessionDi
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 type RunParams = PreparedCliRunContext["params"];
 const identity = { credential: { type: "token" as const, provider: "test-cli", token: "epoch-a" } };
+const prepareWriter = async (params: RunParams) =>
+  expectDefined(await prepareCliHistoryBoundary(params, identity), "admitted history writer");
 const append = (f: Fixture, content: string, timestamp = 2) =>
   f.manager().appendMessage({ role: "user", content, timestamp });
-const persistAnswer = (params: RunParams, text: string) =>
+const persistAnswer = (params: RunParams, text: string, modelId = "test-model") =>
   persistCliAssistantTranscript({
     runParams: { ...params, persistAssistantTranscript: true },
     text,
-    modelId: "test-model",
+    modelId,
     stopReason: "stop",
   });
 const withCredential = (
@@ -187,19 +192,7 @@ describe("CLI transcript account boundary", () => {
               allowRawTranscriptReseed: true,
             });
             expect(JSON.stringify(await loadTranscriptEvents(f.target))).toBe(before);
-            expect(notes.reseedMessages).toEqual([]);
-            expect(notes.durableContext).toBeUndefined();
-            if (turn === 1) {
-              const fresh = await loadCliSessionPromptContext({
-                ...params,
-                nativeSessionId: undefined,
-                rawTranscriptReseedReason: "auth-unknown",
-                allowRawTranscriptReseed: true,
-              });
-              expect(fresh.resumeContext).toBeUndefined();
-              expect(fresh.reseedMessages).toEqual([]);
-              expect(fresh.durableContext).toBeUndefined();
-            }
+            expect([notes.reseedMessages, notes.durableContext]).toEqual([[], undefined]);
             const context = buildPreparedCliRunContext({
               provider,
               sessionTarget: f.target,
@@ -263,12 +256,7 @@ describe("CLI transcript account boundary", () => {
             });
             const output = await executePreparedCliRun(context, binding?.sessionId);
             expect(output.sessionId).toBeTruthy();
-            const persisted = await persistCliAssistantTranscript({
-              runParams: params,
-              text: output.text,
-              modelId: context.modelId,
-              stopReason: "stop",
-            });
+            const persisted = await persistAnswer(params, output.text, context.modelId);
             expect(persisted.owned).toBe(true);
             await appendTranscriptMessage(f.target, {
               message: makeAssistantMessageFixture({
@@ -309,8 +297,7 @@ describe("CLI transcript account boundary", () => {
     await f.withRun("worker-preparation", async (params) => {
       const sql = observeHostDataSql();
       try {
-        const writer = await prepareCliHistoryBoundary(params, identity);
-        expect(writer).toBeDefined();
+        await prepareWriter(params);
         expect(sql.queries, `MAIN SQL observations: ${sql.queries.length}`).toEqual([]);
       } finally {
         sql.restore();
@@ -426,20 +413,18 @@ describe("CLI transcript account boundary", () => {
   it("compares resolved static tokens rather than the unchanged SecretRef", async () => {
     const f = await fixture();
     const tokenRef = { source: "env" as const, provider: "default", id: "TEST_TOKEN" };
-    await f.run(
-      undefined,
+    await withCredential(
+      f,
+      { type: "token", provider: "test-cli", token: "resolved-a", tokenRef },
       async (allowed) => {
         expect(allowed).toBe(true);
         append(f, "prior token", 1);
       },
-      {},
-      { type: "token", provider: "test-cli", token: "resolved-a", tokenRef },
     );
-    await f.run(
-      undefined,
-      async (allowed) => expect(allowed).toBe(false),
-      {},
+    await withCredential(
+      f,
       { type: "token", provider: "test-cli", token: "resolved-b", tokenRef },
+      async (allowed) => expect(allowed).toBe(false),
     );
   });
 
@@ -467,6 +452,34 @@ describe("CLI transcript account boundary", () => {
     release.resolve();
     await expect(background).resolves.toBeUndefined();
     expect(JSON.stringify(f.manager().getEntries())).toContain("detached result");
+    await f.run("epoch-a", async (allowed) => expect(allowed).toBe(false));
+  });
+
+  it("covers the run's own message-tool reply mirrored outside its async context", async () => {
+    const f = await seededFixture();
+    // A message-tool send reaches the Gateway outside the CLI run's async context.
+    const mirror = (runId: string, text: string) =>
+      runWithCliHistoryWriter(undefined, () =>
+        runInAgentRunWriteContext(runId, () =>
+          appendAssistantMessageToSessionTranscript({
+            agentId: f.target.agentId,
+            sessionKey: f.target.sessionKey,
+            expectedSessionId: f.target.sessionId,
+            storePath: f.target.storePath,
+            text,
+          }),
+        ),
+      );
+    await f.run("epoch-a", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      await mirror(params.runId, "own mirrored reply");
+    });
+    await f.run("epoch-a", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      expect(await history(allowed, params)).toContain("own mirrored reply");
+      // Another run's id lends no writer, so its row still breaks coverage.
+      await mirror("unrelated-run", "foreign mirrored reply");
+    });
     await f.run("epoch-a", async (allowed) => expect(allowed).toBe(false));
   });
 
@@ -542,6 +555,44 @@ describe("CLI transcript account boundary", () => {
     });
   });
 
+  it("an empty reset after more history than the bounded read still starts fresh", async () => {
+    const f = await seededFixture();
+    const appendAsync = (content: string) =>
+      f.manager().appendMessageAsync({ role: "user", content, timestamp: 2 });
+    for (let index = 0; index < 120; index += 1) {
+      await appendAsync(`A long history ${index}`);
+    }
+    const kept = f.manager().getLeafId() ?? undefined;
+    f.manager().appendResetBoundary("reset", kept);
+    await f.run("epoch-b", async (allowed) => expect(allowed).toBe(false));
+    f.manager().appendResetBoundary("reset");
+    await f.run("epoch-b", async (allowed) => {
+      expect(allowed).toBe(true);
+      await appendAsync("B fresh canary");
+    });
+    await f.run("epoch-b", async (allowed, params) => {
+      const prompt = await history(allowed, params);
+      expect(prompt).toContain("B fresh canary");
+      expect(prompt).not.toContain("A long history");
+    });
+    // Once its run closes, the writer that established it cannot read it into a CLI input.
+    const closed = await f.run("epoch-b", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      return { params, writer: expectDefined(getCliHistoryWriter(f.target), "writer") };
+    });
+    await expect(
+      runWithCliHistoryWriter(closed.writer, () => history(true, closed.params)),
+    ).rejects.toThrow();
+    // The new boundary stays account-bound: another account gets nothing, and the original
+    // account does not regain history once a foreign account touched it.
+    for (const epoch of ["epoch-c", "epoch-b"]) {
+      await f.run(epoch, async (allowed, params) => {
+        expect(allowed).toBe(false);
+        expect((await history(allowed, params)) ?? "").not.toContain("B fresh canary");
+      });
+    }
+  });
+
   it("admits a finished writer's successor while refusing the live writer", async () => {
     const f = await seededFixture();
     await f.withRun("orchestrator-prior", async (params) => {
@@ -572,11 +623,7 @@ describe("CLI transcript account boundary", () => {
     await f.withRun("direct-cli-recovery", async (params) => {
       params.sessionEntry = loadSessionEntryReadOnly(f.target);
       const expectedSession = params.sessionEntry;
-      const writer = await prepareCliHistoryBoundary(params, identity);
-      expect(writer).toBeDefined();
-      if (!writer) {
-        throw new Error("Missing admitted history writer");
-      }
+      const writer = await prepareWriter(params);
       expect(params.sessionEntry).toBe(expectedSession);
       expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).toBe(params.runId);
       await runWithCliHistoryWriter(writer, async () => {
@@ -613,17 +660,14 @@ describe("CLI transcript account boundary", () => {
       const before = f.manager().getEntries();
 
       await expect(claim.revoke()).resolves.toBe(true);
-      const result = await persistCliAssistantTranscript({
-        runParams: {
+      const result = await persistAnswer(
+        {
           ...params,
           expectedLifecycleRevision: claim.expectedLifecycleRevision,
           expectedWriterRunId: claim.expectedWriterRunId,
-          persistAssistantTranscript: true,
         },
-        text: "late terminal CLI answer",
-        modelId: "test-model",
-        stopReason: "stop",
-      });
+        "late terminal CLI answer",
+      );
 
       expect(result).toMatchObject({ owned: true });
       expect(result.terminalAnchor).toBeUndefined();
@@ -667,11 +711,7 @@ describe("CLI transcript account boundary", () => {
       });
       await f.withRun("direct-cli-recovery", async (params) => {
         params.sessionEntry = loadSessionEntryReadOnly(f.target);
-        const writer = await prepareCliHistoryBoundary(params, identity);
-        expect(writer).toBeDefined();
-        if (!writer) {
-          throw new Error("Missing admitted history writer");
-        }
+        const writer = await prepareWriter(params);
         await writer.assertReadable();
         await f.withRun(replacementRunId, async (replacement) => {
           await claimAgentSessionWriter(replacement);

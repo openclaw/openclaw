@@ -13,7 +13,7 @@ import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-sel
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
-import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import { createModelCatalogView } from "../agents/model-catalog-view.js";
 import {
   areRuntimeModelRefsEquivalent,
   shouldPreferActiveRuntimeAliasAuthLabel,
@@ -54,7 +54,12 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.read.js";
-import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
+import {
+  estimateAggregateUsageCostAsync,
+  resolveModelCostConfig,
+  formatTokenCount,
+  formatUsd,
+} from "../utils/usage-format.js";
 import {
   buildCodexSyntheticUsageAuth,
   resolveUsageCredentialType,
@@ -415,10 +420,7 @@ export async function buildStatusReplyParts(
           summary.missingCostEntries > 0
             ? `missing cost: ${formatMissingCostEntries(summary)}`
             : formatUsd(summary.totalCost);
-        const tokens =
-          summary.usageReport?.state === "unavailable"
-            ? `usage incomplete · ${formatTokenCount(summary.totalTokens)} known tokens`
-            : `${formatTokenCount(summary.totalTokens)} tok`;
+        const tokens = `${formatTokenCount(summary.totalTokens)} tok`;
         const line = `💵 ${cost ? `${cost} · ` : ""}${tokens} (today)`;
         usageLine = [usageLine, line].filter(Boolean).join("\n");
       }
@@ -500,8 +502,13 @@ export async function buildStatusReplyParts(
         : accountConfig?.richMessages === false
           ? "Telegram rich messages: off · enable richMessages for this Telegram account"
           : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
+    const widgetsSetting = accountConfig?.widgets ?? telegramConfig?.widgets;
+    channelFeatureLine +=
+      widgetsSetting === true
+        ? "\nTelegram widgets: on · Bot API 10.4 message widgets in private chats"
+        : "\nTelegram widgets: off · set channels.telegram.widgets=true for interactive widgets";
   }
-  const { buildStatusMessageParts } = await loadStatusMessageRuntime();
+  const { buildStatusMessageParts, resolveStatusMessageUsage } = await loadStatusMessageRuntime();
   const configuredThinkingDefault = resolveConfiguredThinkingDefault({
     cfg,
     agentId: statusAgentId,
@@ -509,23 +516,30 @@ export async function buildStatusReplyParts(
     model: selectedLookupModel,
   });
   const catalog = owner ? (owner.isCurrent() ? owner.modelCatalog : undefined) : undefined;
-  const contextCatalog = catalog
-    ? catalog.entries.map(
-        (entry) =>
-          selectModelCatalogRuntimeEntry({
-            entry,
-            routeVariants: catalog.routeVariants,
-            runtimeId: effectiveHarness ?? "openclaw",
-            allowApiFallback: false,
-          }).entry,
-      )
-    : owner
-      ? []
-      : (thinkingCatalog ?? []).filter((entry) =>
-          entry.nativeRuntime
-            ? entry.nativeRuntime === effectiveHarness
-            : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
-        );
+  const catalogView =
+    catalog &&
+    createModelCatalogView({
+      cfg,
+      catalog: catalog.entries,
+      routeVariants: catalog.routeVariants,
+    });
+  const contextCatalog =
+    catalog && catalogView
+      ? catalog.entries.map(
+          (entry) =>
+            catalogView.selectRuntimeEntry({
+              entry,
+              runtimeId: effectiveHarness ?? "openclaw",
+              allowApiFallback: false,
+            }).entry,
+        )
+      : owner
+        ? []
+        : (thinkingCatalog ?? []).filter((entry) =>
+            entry.nativeRuntime
+              ? entry.nativeRuntime === effectiveHarness
+              : ["openclaw", "auto", entry.provider].includes(effectiveHarness ?? "openclaw"),
+          );
   const selectedCatalogEntry = findModelInCatalog(
     contextCatalog,
     selectedLookupProvider,
@@ -620,7 +634,7 @@ export async function buildStatusReplyParts(
     agentId: statusAgentId,
     preparedSessionEntry: sessionEntry,
   });
-  return buildStatusMessageParts({
+  const statusArgs = {
     config: cfg,
     preparedSandboxRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
@@ -676,5 +690,25 @@ export async function buildStatusReplyParts(
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,
     transcriptUsage,
-  });
+  } satisfies Parameters<typeof buildStatusMessageParts>[0];
+  const preparedUsage = resolveStatusMessageUsage(statusArgs);
+  const estimatedCostUsd =
+    preparedUsage.estimatedCostUsd ??
+    (await estimateAggregateUsageCostAsync({
+      usage: {
+        input: preparedUsage.inputTokens,
+        output: preparedUsage.outputTokens,
+        cacheRead: preparedUsage.cacheRead,
+        cacheWrite: preparedUsage.cacheWrite,
+        usageReport: preparedUsage.usageReport,
+      },
+      prepareCost: () =>
+        resolveModelCostConfig({
+          provider: preparedUsage.activeProvider,
+          model: preparedUsage.activeModel,
+          config: cfg,
+          allowPluginNormalization: false,
+        }),
+    }));
+  return buildStatusMessageParts({ ...statusArgs, preparedUsage, estimatedCostUsd });
 }

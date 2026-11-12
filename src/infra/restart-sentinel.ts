@@ -32,10 +32,7 @@ import {
 } from "./update-failure-report-receipt.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 
-export type {
-  RestartSentinelContinuation,
-  RestartSentinelPayload,
-} from "./restart-sentinel-store.js";
+export type { RestartSentinelPayload } from "./restart-sentinel-store.js";
 export type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 export type VerifiedGitUpdateReceipt = {

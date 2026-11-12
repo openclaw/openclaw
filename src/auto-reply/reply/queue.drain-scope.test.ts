@@ -1,12 +1,5 @@
-// The followup drain outlives its enqueue request across debounce and retries, but
-// its continuation must not inherit the triggering request's AsyncWorkScope. A
-// drained queued turn runs an agent run whose embedded-agent-runner entry bridges
-// through the ambient scope tracker (run-orchestrator.ts trackOwner pattern), so
-// if the drain inherits the request scope, tracked work in the drained turn
-// rejects with "Async work scope is closed" once the request settles. The drain
-// error is neither deferred nor a restart signal, so the drain loop logs and
-// reschedules against the same closed scope forever, silently dropping the queued
-// follow-up. A detached continuation owns a fresh async work scope instead.
+// Drains outlive their enqueue request. Inheriting its closed AsyncWorkScope
+// would reject tracked work and silently retry the queued turn forever.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it } from "vitest";
 import {
@@ -27,60 +20,82 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { handoffCompletedSourceReply } from "./queue/drain.js";
 import { clearFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
-it.each(["S1", "unrelated"])(
-  "preserves the source runner and applies the post-clear rebind only to session %s",
-  async (sessionId) => {
+it.each([
+  {},
+  { originatingChannel: "discord" },
+  { originatingTo: "channel:other" },
+  { originatingAccountId: "other" },
+  { originatingThreadId: "other" },
+  { originatingReplyToId: "other" },
+  { currentInboundEventKind: "room_event" as const },
+])("keeps completed-reply context scoped to the next matching queued input: %j", async (route) => {
+  const key = "completed-reply-route";
+  const source = createRun(
+    {
+      prompt: "answered request",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+      originatingThreadId: "thread",
+    },
+    { sessionKey: key, sourceReplyDeliveryMode: "message_tool_only" },
+  );
+  const operation = createReplyOperation({
+    sessionKey: key,
+    sessionId: source.run.sessionId,
+    resetTriggered: false,
+  });
+  const next = createRun({ ...source, prompt: "fresh request", ...route }, source.run);
+  const later = createRun({ ...source, prompt: "later request" }, source.run);
+  const contexts: Array<string | undefined> = [];
+  const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 10 };
+  try {
+    enqueueFollowupRun(key, next, settings);
+    enqueueFollowupRun(key, later, settings);
+    handoffCompletedSourceReply(operation, source);
+    scheduleFollowupDrain(key, async (run) => {
+      contexts.push(run.currentInboundContext?.text);
+    });
+    operation.complete();
+    await next.controllerInput!.settlement.promise;
+    await later.controllerInput!.settlement.promise;
+    expect(contexts).toEqual([
+      Object.keys(route).length === 0
+        ? expect.stringContaining("preceding turn already delivered")
+        : undefined,
+      undefined,
+    ]);
+  } finally {
+    operation.complete();
+    clearFollowupQueue(key);
+  }
+});
+
+it.each([
+  ["S1", true, "S2"],
+  ["unrelated", true, undefined],
+  ["unrelated", false, undefined],
+] as const)(
+  "drains session %s with source registration %s and admission session %s",
+  async (sessionId, registered, admissionSessionId) => {
     const key = `source-runner-rebind-${sessionId}`;
     const outcome = createDeferredCore<{ runner: string; run: FollowupRun }>();
     const source = createRun({ prompt: "queued source" });
+    const settings = { mode: "followup", debounceMs: 0, cap: 10 } as const;
+    const record = (runner: string) => async (run: FollowupRun) => outcome.resolve({ runner, run });
+    const callback = registered ? record("source") : undefined;
     source.run.sessionId = sessionId;
     try {
-      enqueueFollowupRun(
-        key,
-        source,
-        { mode: "followup", debounceMs: 0, cap: 10 },
-        "none",
-        async (run) => outcome.resolve({ runner: "source", run }),
-        false,
-      );
-      scheduleFollowupDrain(
-        key,
-        async (run) => outcome.resolve({ runner: "wake", run }),
-        undefined,
-        { from: "S1", to: "S2" },
-      );
+      enqueueFollowupRun(key, source, settings, "none", callback, false);
+      scheduleFollowupDrain(key, record("wake"), undefined, { from: "S1", to: "S2" });
       const executed = await outcome.promise;
-      expect(executed.runner).toBe("source");
-      expect(executed.run.admissionSessionId).toBe(sessionId === "S1" ? "S2" : undefined);
+      expect(executed.runner).toBe(registered ? "source" : "wake");
+      expect(executed.run.admissionSessionId).toBe(admissionSessionId);
       expect(source.admissionSessionId).toBeUndefined();
-      await source.controllerInput?.claim?.settlement.promise;
-    } finally {
-      clearFollowupQueue(key);
-    }
-  },
-);
-
-it.each([true, false])(
-  "uses the source runner when registered=%s, otherwise the waking runner",
-  async (registered) => {
-    const key = `source-runner-${registered}`;
-    const outcome = createDeferredCore<string>();
-    const source = createRun({ prompt: "queued source" });
-    try {
-      enqueueFollowupRun(
-        key,
-        source,
-        { mode: "followup", debounceMs: 0, cap: 10 },
-        "none",
-        registered ? async () => outcome.resolve("source") : undefined,
-        false,
-      );
-      scheduleFollowupDrain(key, async () => outcome.resolve("wake"));
-      await expect(outcome.promise).resolves.toBe(registered ? "source" : "wake");
       await source.controllerInput?.claim?.settlement.promise;
     } finally {
       clearFollowupQueue(key);
@@ -106,10 +121,7 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
       requestRoot.run(async () => {
         enqueueFollowupRun(key, createRun({ prompt: "queued while request admitted" }), settings);
         scheduleFollowupDrain(key, async () => {
-          // The drain outlives the enqueue request across debounce and retries; by
-          // the time the queued turn runs, the triggering request has settled and its
-          // async work scope has closed. Model the embedded-agent-runner entry: it
-          // captures the ambient tracker and bridges the whole run through it.
+          // Model the runner's ambient tracker after the enqueue scope closes.
           await scopeClosed.promise;
           const trackOwner = captureAsyncWorkTracker();
           const work = new AsyncWorkScope();

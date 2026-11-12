@@ -24,6 +24,7 @@ export {
   type MockOpenAiRequestSnapshot,
 } from "./src/providers/mock-openai/mock-openai-contracts.js";
 export { startQaMockOpenAiServer } from "./src/providers/mock-openai/server.js";
+export { listMockCodexModelInfos } from "./src/providers/shared/mock-model-config.js";
 export { isQaSelfCheckSuccessful, type QaSelfCheckResult } from "./src/self-check.js";
 export { runQaE2eSelfCheck } from "./src/self-check-runner.js";
 export {

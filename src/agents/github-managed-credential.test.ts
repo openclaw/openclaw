@@ -77,6 +77,36 @@ describe("managed credential isolation", () => {
     vi.unstubAllEnvs();
   });
 
+  it("verifies personal display identity without preparing a child environment", async () => {
+    await install(profile("personal", ""), "synthetic-personal-display");
+    clearGitHubCredentialVerificationCache();
+    const params = {
+      profileId,
+      accountId: account.id,
+      assertCurrent: () => {},
+      forDisplay: true as const,
+    };
+    // Cold reads start the existing worker, which inherits the process environment.
+    // Display results never carry a child-command environment, cold or warm.
+    expect(await preparePersonalGitHubPublicationIdentity(params)).not.toHaveProperty("env");
+    const ambient = process.env;
+    let enumerations = 0;
+    process.env = new Proxy(ambient, {
+      ownKeys(target) {
+        enumerations++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    try {
+      const identity = await preparePersonalGitHubPublicationIdentity(params);
+      expect(identity.account).toMatchObject({ accountId: account.id, login: account.login });
+      expect(enumerations).toBe(0);
+      expect(identity).not.toHaveProperty("env");
+    } finally {
+      process.env = ambient;
+    }
+  });
+
   it("keeps OAuth installation, rotation and personal publication at their public issuer", async () => {
     setRuntimeConfigSnapshot(enterprise());
     const profileDir = profile("personal", "");

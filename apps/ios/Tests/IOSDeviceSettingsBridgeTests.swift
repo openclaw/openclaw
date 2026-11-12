@@ -10,16 +10,16 @@ struct IOSDeviceSettingsBridgeTests {
         let original = try Self.controlUIConfig()
         let model = NodeAppModel(audioAdmissionInitiallyAllowed: false)
         model.activeGatewayConnectConfig = original
-        model.setOperatorConnected(true)
-        defer { model.setOperatorConnected(false) }
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
+        defer { model.apply(.dropped, to: .operator, route: nil) }
 
         var document = IOSDeviceSettingsDocument()
         document.commitNavigation()
         let beforeReconnect = document.requestIdentity(authorityGeneration: model.operatorAuthorityGeneration)
         #expect(document.accepts(beforeReconnect, authorityGeneration: model.operatorAuthorityGeneration))
 
-        model.setOperatorConnected(false)
-        model.setOperatorConnected(true)
+        model.apply(.dropped, to: .operator, route: nil)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         #expect(model.isOperatorGatewayConnected)
         #expect(document.isAvailable)
         #expect(!document.accepts(beforeReconnect, authorityGeneration: model.operatorAuthorityGeneration))
@@ -41,8 +41,8 @@ struct IOSDeviceSettingsBridgeTests {
         #expect(document.accepts(afterCredentialChange, authorityGeneration: model.operatorAuthorityGeneration))
 
         document.startNavigation()
-        model.setOperatorConnected(false)
-        model.setOperatorConnected(true)
+        model.apply(.dropped, to: .operator, route: nil)
+        model.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         document.invalidateRequests()
         let provisional = document.requestIdentity(authorityGeneration: model.operatorAuthorityGeneration)
         #expect(!document.accepts(provisional, authorityGeneration: model.operatorAuthorityGeneration))
@@ -156,8 +156,11 @@ struct IOSDeviceSettingsBridgeTests {
         let settings = try #require(URL(string: "https://gateway.example:8443/openclaw/settings/device"))
         func trusted(_ source: URL?, mainFrame: Bool = true, hostingView: Bool = true) -> Bool {
             IOSDeviceSettingsBridge.isTrustedSource(
-                source, webViewURL: settings, gatewayURL: gateway,
-                isMainFrame: mainFrame, isHostingWebView: hostingView)
+                source,
+                webViewURL: settings,
+                gatewayURL: gateway,
+                isMainFrame: mainFrame,
+                isHostingWebView: hostingView)
         }
         #expect(trusted(settings))
         #expect(!trusted(settings, mainFrame: false))
@@ -174,8 +177,11 @@ struct IOSDeviceSettingsBridgeTests {
             #expect(!trusted(URL(string: value)))
         }
         #expect(!IOSDeviceSettingsBridge.isTrustedSource(
-            settings, webViewURL: URL(string: "https://other.example/"), gatewayURL: gateway,
-            isMainFrame: true, isHostingWebView: true))
+            settings,
+            webViewURL: URL(string: "https://other.example/"),
+            gatewayURL: gateway,
+            isMainFrame: true,
+            isHostingWebView: true))
     }
 
     @Test func `failed provisional navigation restores only the retained document with fresh authority`() {

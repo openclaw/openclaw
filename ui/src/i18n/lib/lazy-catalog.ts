@@ -1,5 +1,6 @@
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { registerLazyLocaleCatalog } from "./locale-catalog.ts";
+import { mergeCatalog } from "./merge-catalog.ts";
 import type { TranslationMap } from "./types.ts";
 
 type NamespaceLoader = () => Promise<{ default: TranslationMap }>;
@@ -39,17 +40,6 @@ export function createLazyLocaleCatalog(
     },
   });
   return base;
-}
-
-function mergeCatalog(target: TranslationMap, source: TranslationMap): void {
-  for (const [key, value] of Object.entries(source)) {
-    if (typeof value === "string") {
-      target[key] = value;
-    } else {
-      const nested = target[key];
-      mergeCatalog((target[key] = typeof nested === "object" ? nested : {}), value);
-    }
-  }
 }
 
 function hasMissingEnglish(

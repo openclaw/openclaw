@@ -8,7 +8,7 @@ import "../../styles/chat/working-indicator.css";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { createBackgroundLayoutRef } from "../../components/session-background-layout-context.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
@@ -28,7 +28,6 @@ export const preloadNewSessionSubmission = () =>
   void NewSessionSubmission.preload().catch(() => undefined);
 
 type DraftAction = { label: string; onClick: () => void; disabled?: boolean };
-export type DraftErrorProps = { message: string; action?: DraftAction };
 export type NewSessionBodyProps = {
   error: string | null;
   errorAction?: DraftAction;
@@ -51,28 +50,28 @@ function newSessionAnnouncement(
     : undefined;
 }
 
-export function DraftError(props: DraftErrorProps) {
+export function DraftError(props: { message: string; action?: DraftAction }) {
   return (
-    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
-      <span class="new-session-page__alert-icon" aria-hidden="true">
-        <Icon name="alertTriangle" />
-      </span>
-      <span class="callout__content new-session-page__alert-message">
-        {formatUiError(props.message)}
-      </span>
-      <Show when={props.action}>
-        {(action) => (
-          <button
-            class="btn btn--sm"
-            type="button"
-            disabled={action().disabled}
-            onClick={() => action().onClick()}
-          >
-            {action().label}
-          </button>
-        )}
-      </Show>
-    </div>
+    <InlineAlert
+      tone="danger"
+      class="new-session-page__error new-session-page__alert"
+      action={
+        <Show when={props.action}>
+          {(action) => (
+            <button
+              class="btn btn--sm"
+              type="button"
+              disabled={action().disabled}
+              onClick={() => action().onClick()}
+            >
+              {action().label}
+            </button>
+          )}
+        </Show>
+      }
+    >
+      {formatUiError(props.message)}
+    </InlineAlert>
   );
 }
 
@@ -98,6 +97,7 @@ export function NewSessionBody(props: NewSessionBodyProps) {
           props.inChat ? "" : "new-session-page__scroll",
           {
             "chat-thread": Boolean(props.pendingMessage || props.inChat),
+            "chat-thread--annotations": Boolean(props.pendingMessage || props.inChat),
             "chat-thread--direct":
               Boolean(props.pendingMessage || props.inChat) && avatarPlacement() === "footer",
           },

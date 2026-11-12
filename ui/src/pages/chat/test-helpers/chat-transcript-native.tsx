@@ -12,12 +12,14 @@ import {
 } from "../components/chat-thread-interactions.ts";
 import { ChatThread } from "../components/chat-thread-view.tsx";
 import type { ChatTranscript } from "../components/chat-transcript-controller.ts";
+import type { TranscriptRow } from "../components/chat-transcript-layout.ts";
 import { TranscriptSearch } from "../components/chat-transcript-search.tsx";
 import type { ChatTranscriptSession } from "../components/chat-transcript-session.ts";
 import {
   flushDeferredRowPrune,
   type TestContentRow,
 } from "../components/chat-transcript.test-support.ts";
+import { settleChatMount } from "./chat-mount-frames.ts";
 
 class NativeFixture {
   constructor(
@@ -29,6 +31,7 @@ class NativeFixture {
 
 type NativeContent = JSX.Element | NativeFixture;
 const mounts = new WeakMap<HTMLElement, ReturnType<typeof mountSolid<{ value: NativeContent }>>>();
+const rowContent = (row: TranscriptRow) => (row.kind === "content" ? row.content : null);
 
 function Content(props: { value: NativeContent }) {
   const fixture = () => (props.value instanceof NativeFixture ? props.value : undefined);
@@ -70,7 +73,8 @@ export function render(value: NativeContent, container: HTMLElement): void {
   if (existing) {
     existing.update({ value });
   } else {
-    mounts.set(container, mountSolid(Content, { value }, container));
+    const mount = () => mountSolid(Content, { value }, container);
+    mounts.set(container, transcript ? settleChatMount(mount) : mount());
   }
   transcript?.update();
 }
@@ -153,13 +157,8 @@ export async function mountTestTranscript(
   });
   container.scrollTo = (options?: ScrollToOptions | number) => {
     if (typeof options === "object") {
-      container.scrollTop = Math.max(
-        0,
-        Math.min(
-          options.top ?? container.scrollTop,
-          container.scrollHeight - container.clientHeight,
-        ),
-      );
+      const maximum = container.scrollHeight - container.clientHeight;
+      container.scrollTop = Math.max(0, Math.min(options.top ?? container.scrollTop, maximum));
     }
   };
   let currentRows = initialRows;
@@ -170,18 +169,8 @@ export async function mountTestTranscript(
   container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
   const renderRows = (rows: readonly TestContentRow[]) => {
     currentRows = rows;
-    render(
-      transcript.renderSession(`agent:main:${paneId}`, (session) => {
-        currentSession = session;
-        return session.render(
-          rows,
-          (row) => (row.kind === "content" ? row.content : null),
-          null,
-          false,
-        );
-      }),
-      container,
-    );
+    currentSession = transcript.renderSession(`agent:main:${paneId}`, (session) => session);
+    render(currentSession.render(rows, rowContent, null, false), container);
     transcript.update();
     flush();
   };
@@ -256,3 +245,8 @@ export const contact = (identifier: number, target: EventTarget): Touch => ({
   rotationAngle: 0,
   force: 1,
 });
+
+export function renderReadyRows(session: ChatTranscriptSession, rows: readonly TranscriptRow[]) {
+  session.layout.ready = true;
+  return session.render(rows, rowContent, null, false);
+}

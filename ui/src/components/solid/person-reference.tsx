@@ -2,7 +2,6 @@ import { render, spread } from "@solidjs/web";
 import { createSignal, onSettled, Show } from "solid-js";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createIdleImport } from "../../lib/idle-import.ts";
-import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -32,6 +31,7 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
   const portal = createPortaledHovercardOwner(() => close());
   let trigger: HTMLButtonElement | undefined;
   let stopRoute: (() => void) | undefined;
+  let stopGateway: (() => void) | undefined;
   let stopEvents: (() => void)[] = [];
   let runtime: ReturnType<typeof createPersonReferenceCard> | undefined;
   let disposePending: (() => void) | undefined;
@@ -47,6 +47,9 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
     disposePending = undefined;
     stopRoute?.();
     stopRoute = undefined;
+    stopGateway?.();
+    stopGateway = undefined;
+    connection.invalidate();
     stopEvents.forEach((stop) => stop());
     stopEvents = [];
     portal.reset();
@@ -60,34 +63,16 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
     }
   }
 
-  function escape(event: KeyboardEvent) {
-    if (event.key !== "Escape") {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    const restore = portal.card?.contains(document.activeElement);
-    close();
-    if (restore) {
-      portal.returnFocus(trigger ?? null);
-    }
-  }
-
-  const gateway = context ? projectGateway(context.gateway) : undefined;
   const syncConnection = () => {
-    if (gateway && connection.transition(gateway.read().snapshot)) {
+    if (context && connection.transition(context.gateway.snapshot)) {
       close();
     } else {
       renderCard();
     }
   };
   onSettled(() => {
-    // Retire connection-bound cards while their transcript trigger remains mounted.
-    const stopGateway = gateway?.subscribe(syncConnection);
-    syncConnection();
     return () => {
       cardCode.dispose();
-      stopGateway?.();
       close();
       connection.dispose();
     };
@@ -98,6 +83,11 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
       return;
     }
     active.get(trigger.ownerDocument)?.close();
+    // Closed mentions have no connection-bound work. Start from the live snapshot at admission.
+    if (context) {
+      connection.transition(context.gateway.snapshot);
+      stopGateway = context.gateway.subscribe(syncConnection);
+    }
     active.set(trigger.ownerDocument, { host, close, refresh: renderCard });
     const card = createPortaledHovercard(
       "openclaw-person-reference-" + ++nextCardId,
@@ -106,6 +96,7 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
     portal.markTrigger(trigger);
     portal.mount(trigger, card, "vertical", true, () => runtime?.dispose());
     if (portal.card !== card) {
+      close();
       return;
     }
     let showUnavailable: (() => void) | undefined;
@@ -127,7 +118,7 @@ function PersonReferenceContent(props: PersonReferenceProperties, host: HTMLElem
       listen(card, "pointerleave", portal.handleCardPointerLeave),
       listen(document, "pointerdown", outside, true),
       listen(document, "focusin", outside, true),
-      listen(document, "keydown", escape, true),
+      listen(document, "keydown", portal.handleEscape, true),
     ];
     // Navigation ends the portaled card before its retained transcript can render again.
     stopRoute = context?.router.subscribe(close);

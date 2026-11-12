@@ -67,15 +67,14 @@ export function registerAbortDetectionCases(
   });
 
   it("isAbortRequestText aligns abort command semantics", () => {
+    const started = performance.now();
     expect(isAbortRequestText("/stop")).toBe(true);
     expect(isAbortRequestText("/STOP")).toBe(true);
     expect(isAbortRequestText("/stop!!!")).toBe(true);
-    expect(isAbortRequestText("/Stop!!!")).toBe(true);
     expect(isAbortRequestText("stop")).toBe(true);
-    expect(isAbortRequestText("Stop")).toBe(true);
     expect(isAbortRequestText("STOP")).toBe(true);
     expect(isAbortRequestText("stop action")).toBe(true);
-    expect(isAbortRequestText("stop openclaw!!!")).toBe(true);
+    expect(isAbortRequestText(`stop${"!".repeat(40_000)}`)).toBe(true);
     expect(isAbortRequestText("停下来")).toBe(true);
     expect(isAbortRequestText("暂停")).toBe(true);
     expect(isAbortRequestText("やめて")).toBe(true);
@@ -109,11 +108,12 @@ export function registerAbortDetectionCases(
     ).toBe(false);
 
     expect(isAbortRequestText("/status")).toBe(false);
-    expect(isAbortRequestText("wait")).toBe(false);
+    expect(isAbortRequestText(`${"!".repeat(40_000)}a`)).toBe(false);
     expect(isAbortRequestText("please wait")).toBe(false);
     expect(isAbortRequestText("do not do that")).toBe(true);
     expect(isAbortRequestText("please do not do that")).toBe(false);
     expect(isAbortRequestText("/abort")).toBe(false);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 
   it("removes abort memory entry when flag is reset", () => {

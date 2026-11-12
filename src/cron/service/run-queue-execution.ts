@@ -2,11 +2,12 @@ import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-terminatio
 import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
-import { resolveCronSessionTargetSessionKey } from "../session-target.js";
+import { resolveCronContinuationSessionKey } from "../session-target.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
@@ -16,7 +17,9 @@ import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
+import { wakeCronRunQueues } from "./run-queue-wake.js";
 import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   emit,
   isImmediateCronRunMode,
@@ -30,6 +33,7 @@ import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.j
 
 /** Transient payloads and reply promises only; the worker owns queue order and capacity. */
 export type CronLaunchContext = {
+  job: CronQueuedRun["job"];
   receipt: CronQueuedRun["runReceipt"];
   context: OpenClawStateWorkerContext;
   options: RunOptions;
@@ -41,7 +45,37 @@ export type CronLaunchContext = {
   removeCancellation?: () => void;
   completion: ReturnType<typeof createDeferredCore<CronRunResult>>;
   activation: ReturnType<typeof createDeferredCore<void>>;
+  receiptSettlement?: Promise<void>;
 };
+
+/** Best effort: if this write fails, the fired run counts as a check until it ends. */
+async function settleConditionCheck(
+  state: CronServiceState,
+  entry: CronQueuedRun,
+  context: OpenClawStateWorkerContext,
+): Promise<void> {
+  try {
+    const { job } = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "cron.settleConditionCheck",
+        input: {
+          storeKey: state.deps.storeKey,
+          jobId: entry.job.id,
+          receiptId: entry.runReceipt.receiptId,
+        },
+      }),
+    );
+    if (job) {
+      applyCronRuntimeRowsToState(state, [job]);
+      wakeCronRunQueues(state);
+    }
+  } catch (error) {
+    state.deps.log.warn(
+      { jobId: entry.job.id, err: String(error) },
+      "cron: fired condition still counted as a check",
+    );
+  }
+}
 
 export async function launchCronRun(
   state: CronServiceState,
@@ -50,20 +84,20 @@ export async function launchCronRun(
   cancel: (reason: string) => Promise<void>,
 ) {
   const { options } = pending;
-  const continuationSession =
-    entry.job.operatorSource && resolveCronSessionTargetSessionKey(entry.job.sessionTarget);
+  const continuationSession = resolveCronContinuationSessionKey(entry.job);
   if (continuationSession) {
+    // The queue parks a timed occurrence while its conversation is busy, so for those this
+    // normally returns at once. Requested and event runs, and a turn that starts between the
+    // drain and this launch, wait here with their slot held.
     await waitForSessionRunIdle(continuationSession, undefined, {
       signal: state.schedulerScope.signal,
     });
   }
   await ensureLoaded(state);
   pending.context.admission.assertCurrent();
-  // Transfer ends the plugin's admission authority; this accepted occurrence
-  // executes under live Cron/run/tool authority, not the retired source lease.
-  if (!pending.eventTransferred) {
-    options.commitGuard?.();
-  }
+  // Request authority ends at enqueue; occurrences restore the job's scheduled authority.
+  // On-exit watchers still own their source until execution consumes the exit.
+  options.onExit?.commitGuard();
   const current = state.store?.jobs.find((job) => job.id === entry.job.id);
   const force = options.mode === "force" || options.onExit !== undefined;
   const unavailable =
@@ -76,12 +110,18 @@ export async function launchCronRun(
     isPluginCommandCronJob(current ?? entry.job) &&
     !isJobEnabled(entry.job) &&
     current?.updatedAtMs === entry.job.updatedAtMs;
+  const disabledBeforeLaunch =
+    current !== undefined &&
+    isJobEnabled(pending.job) &&
+    !isJobEnabled(current) &&
+    !retiredByThisLaunch;
   // One final live owner/eligibility check; a disable may still race dispatch.
   if (
     state.stopped ||
     pending.generation !== state.lifecycleGeneration ||
     !current ||
     unavailable ||
+    disabledBeforeLaunch ||
     current.state.runningReceiptId !== entry.runReceipt.receiptId ||
     (options.event && cronSourceIdentity(current) !== options.event.input.sourceIdentity) ||
     (!force && ((!isJobEnabled(current) && !retiredByThisLaunch) || current.state.autoDisabled)) ||
@@ -91,7 +131,11 @@ export async function launchCronRun(
     await cancel(
       unavailable
         ? describeUnavailableCronAgent(entry.runReceipt.agentId)
-        : "cron: job became ineligible before launch",
+        : !current
+          ? "cron: job removed before launch"
+          : disabledBeforeLaunch
+            ? "cron: job disabled before launch"
+            : "cron: job became ineligible before launch",
     );
     return;
   }
@@ -167,6 +211,7 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
+      onConditionFired: () => settleConditionCheck(state, entry, pending.context),
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(
@@ -197,8 +242,7 @@ export async function launchCronRun(
     });
   }
   options.onTriggerDisposition?.(
-    result.triggerEval?.busy ||
-      (hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy")
+    hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy"
       ? "busy"
       : result.status === "error"
         ? "error"
@@ -236,7 +280,12 @@ export async function launchCronRun(
           : {}),
       },
     ],
-    { discardWhenStopped: true },
+    {
+      discardWhenStopped: true,
+      onReceiptSettlement: (settlement) => {
+        pending.receiptSettlement = settlement;
+      },
+    },
   );
   if (!manual && finalized.length && !pending.batch.notified) {
     pending.batch.notified = maybeNotifyIsolatedAgentSetupTimeout(state, {

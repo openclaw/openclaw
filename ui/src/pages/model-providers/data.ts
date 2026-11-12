@@ -16,7 +16,10 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../components/provider-icon-data.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
@@ -44,10 +47,16 @@ export type ModelProviderRemovalTarget = { provider: string; credentialType?: "a
 /** One account's sign-out, or a provider removal with its displayed credential scope. */
 export type ModelProviderPendingLogout = { cardId: string; label: string } & (
   | { target: ModelProviderLogoutTarget }
-  | { removeTargets: ModelProviderRemovalTarget[]; keptSource?: string; configKey?: string }
+  | {
+      removeTargets: ModelProviderRemovalTarget[];
+      keptSource?: string;
+      configKey?: string;
+      /** Names of default models this provider serves; removal leaves them selected. */
+      defaultModels?: string;
+    }
 );
 
-export type ModelProviderCard = {
+export type ModelProviderCard = ProviderPresentation & {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
   /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
@@ -84,7 +93,7 @@ export type ModelProviderCard = {
   usage?: ProviderUsageSnapshot;
 };
 
-type ConfiguredModelProvider = {
+type ConfiguredModelProvider = ProviderPresentation & {
   key: string;
   hasApiKey: boolean;
   apiKeyReference?: boolean;
@@ -97,6 +106,7 @@ type ModelProviderCardsInput = {
   providerOutcomes?: ModelCatalogProviderOutcome[];
   pendingProviders?: readonly string[];
   configProviders?: ConfiguredModelProvider[];
+  providerPresentations?: Record<string, ProviderPresentation>;
   providerUsage: UsageSummary | null;
 };
 
@@ -379,9 +389,21 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      const presentation =
+        input.providerPresentations?.[draft.card.configKey ?? draft.card.id] ??
+        input.models?.find(
+          (model) => canonicalModelAuthProviderId(model.provider) === draft.card.id,
+        ) ??
+        input.configProviders?.find(
+          (provider) => canonicalModelAuthProviderId(provider.key) === draft.card.id,
+        );
+      const name = presentation?.providerName;
+      const icon = presentation?.providerIcon;
       return Object.assign(
         {},
         draft.card,
+        name ? { displayName: name, providerName: name } : {},
+        icon ? { providerIcon: icon } : {},
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );
@@ -435,16 +457,26 @@ export function resolveDefaultModelPresentation(
       ...modelSettingFallbacks(defaults.utilityModel),
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
-  const selectable: ModelPickerEntry[] = (models ?? []).filter(
-    (model) => model.available !== false || selected.has(modelCatalogRef(model)),
-  );
-  const seen = new Set(selectable.map(modelCatalogRef));
-  // An unavailable catalog cannot establish that a saved model is unavailable.
-  const availability = models === null ? {} : { available: false as const };
-  for (const ref of selected) {
-    if (seen.has(ref)) {
+  const source = models ?? [];
+  const missing = new Set(selected);
+  let filtered: ModelPickerEntry[] | undefined;
+  for (let index = 0; index < source.length; index++) {
+    const model = source[index]!;
+    if (model.available === false && !selected.has(modelCatalogRef(model))) {
+      filtered ??= source.slice(0, index);
       continue;
     }
+    if (missing.size > 0) {
+      missing.delete(modelCatalogRef(model));
+    }
+    filtered?.push(model);
+  }
+  // Preserve catalog identity through unrelated page notifications; copy only for
+  // actual filtering or saved selections absent from the published catalog.
+  const selectable: ModelPickerEntry[] = filtered ?? (missing.size > 0 ? [...source] : source);
+  // An unavailable catalog cannot establish that a saved model is unavailable.
+  const availability = models === null ? {} : { available: false as const };
+  for (const ref of missing) {
     const { model: modelRef, profile } = splitTrailingAuthProfile(ref);
     if (profile) {
       const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
@@ -576,6 +608,7 @@ export function buildModelProviderPresentation(params: {
   const cards = buildModelProviderCards({
     ...data,
     models: catalog.models,
+    providerPresentations: catalog.providerPresentations,
     providerOutcomes: catalog.hasSnapshot
       ? (catalog.providerOutcomes ?? [])
       : data.providerOutcomes,

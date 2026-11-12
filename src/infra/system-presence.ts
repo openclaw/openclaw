@@ -272,19 +272,23 @@ export function listSystemPresence(options?: { includeConnectionId?: string }): 
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()]
       .filter(([key]) => key !== SELF_KEY)
-      .toSorted((a, b) => a[1].presence.ts - b[1].presence.ts);
+      // oxlint-disable-next-line unicorn/no-array-sort -- filter created a private array.
+      .sort((a, b) => a[1].presence.ts - b[1].presence.ts);
     const toDrop = entries.size - MAX_ENTRIES;
     for (const [key] of sorted.slice(0, toDrop)) {
       entries.delete(key);
     }
   }
-  return [...entries.values()]
-    .filter(
-      (entry) =>
-        !entry.pending ||
-        (options?.includeConnectionId !== undefined &&
-          entry.presence.connectionId === options.includeConnectionId),
-    )
-    .map((entry) => entry.presence)
-    .toSorted((a, b) => b.ts - a.ts);
+  return (
+    [...entries.values()]
+      .filter(
+        (entry) =>
+          !entry.pending ||
+          (options?.includeConnectionId !== undefined &&
+            entry.presence.connectionId === options.includeConnectionId),
+      )
+      .map((entry) => entry.presence)
+      // oxlint-disable-next-line unicorn/no-array-sort -- map created a private array.
+      .sort((a, b) => b.ts - a.ts)
+  );
 }

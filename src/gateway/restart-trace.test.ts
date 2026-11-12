@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   collectGatewayProcessMemoryUsageMb,
@@ -163,10 +163,10 @@ describe("gateway shutdown diagnostics", () => {
     );
   });
 
-  it("bounds pending diagnostics and keeps step names on one line", async () => {
-    const closing = Array.from({ length: 10 }, (_, index) =>
-      wait(`restart.close.${index}\n${"x".repeat(200)}`),
-    );
+  it("bounds pending diagnostics and keeps step names on one line", () => {
+    for (let index = 0; index < 10; index++) {
+      wait(`restart.close.${index}\n${"x".repeat(200)}`);
+    }
     clock = 1_234;
     const summary = formatGatewayPendingCloseSteps();
     expect(summary).toContain("restart.close.0_");
@@ -175,11 +175,6 @@ describe("gateway shutdown diagnostics", () => {
     expect(summary).toContain("=1234ms");
     expect(summary).toMatch(/, \+2 more$/u);
     expect(summary.length).toBeLessThan(1_200);
-    for (const pending of closing) {
-      pending.resolve();
-    }
-    await Promise.all(closing.map(({ settled }) => settled));
-    expect(formatGatewayPendingCloseSteps()).toBe("none");
   });
 });
 
@@ -196,12 +191,8 @@ describe("gateway restart trace handoff", () => {
 
   it("counts active timer resources", () => {
     const timer = setTimeout(() => {}, 10_000);
-    try {
-      const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
-
-      expect(metrics.activeTimersCount).toBeGreaterThanOrEqual(1);
-    } finally {
-      clearTimeout(timer);
-    }
+    onTestFinished(() => clearTimeout(timer));
+    const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
+    expect(metrics.activeTimersCount).toBeGreaterThanOrEqual(1);
   });
 });

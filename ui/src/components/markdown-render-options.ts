@@ -8,8 +8,10 @@ export const MARKDOWN_PARSE_LIMIT = 40_000;
 export type MarkdownRenderOptions = {
   assistantTranscriptRoleHeaders?: boolean;
   codeBlockChrome?: "copy" | "none";
-  codeBlockInteraction?: "interactive" | "static";
+  codeBlockInteraction?: "interactive" | "wrap" | "static";
   fileLinks?: boolean;
+  /** Selection cues accept query-bearing references without resolving or reading them. */
+  documentFileLinks?: boolean | "select";
   humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
@@ -33,6 +35,7 @@ export function normalizeMarkdownRenderOptions(
     codeBlockChrome: options.codeBlockChrome ?? "copy",
     codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
+    documentFileLinks: options.documentFileLinks ?? false,
     humanMentions: options.humanMentions ?? [],
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,

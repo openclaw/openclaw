@@ -3,9 +3,9 @@
 import type { SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import * as uuid from "../../lib/uuid.ts";
 import { QUICK_ACTIONS_QUESTION } from "../../test-helpers/custodian-quick-actions.ts";
+import { suspendingGatewayError as unavailable } from "../../test-helpers/gateway-errors.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 
@@ -26,14 +26,7 @@ function historyRequest(
   );
   return { request, historyCalls: () => calls };
 }
-function unavailable(message = "Gateway is suspending") {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message,
-    retryable: true,
-    details: { reason: "gateway-suspending", phase: "draining" },
-  });
-}
+
 const history = (text: string) => ({ turns: [{ role: "assistant", text, at: 1 }] });
 function reopen(set: ReturnType<typeof createContext>["setGatewaySnapshot"]) {
   set({ suspensionPhase: "draining" });
@@ -135,6 +128,32 @@ it("releases a retired history read before its transport settles", async () => {
   await refresh;
   await page.updateComplete;
   expect(page.textContent).not.toContain("Retired history");
+});
+
+it("shows only a labeled spinner while the socket is down", async () => {
+  const request = vi.fn(async (_method: string, params?: { message?: string }) =>
+    params?.message
+      ? new Promise(() => {})
+      : { sessionId: "custodian-session", reply: "Ready", action: "none" },
+  );
+  const { context, setGatewaySnapshot } = createContext(request);
+  const { page } = await mountPage(context);
+  await waitForFast(() => expect(page.store.canSend).toBe(true));
+
+  void page.store.send("Install it");
+  setGatewaySnapshot({ phase: "reconnecting" });
+
+  await waitForFast(() => expect(page.querySelector(".custodian__catch-up")).not.toBeNull());
+  const status = page.querySelector(".custodian__catch-up");
+  expect(status?.getAttribute("role")).toBe("status");
+  expect(status?.querySelector(".sr-only")?.textContent).toBe("Reconnecting…");
+  expect(status?.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  expect(status?.textContent).toBe("Reconnecting…");
+  expect(page.querySelector('[role="alert"]')).toBeNull();
+
+  setGatewaySnapshot({ phase: "connected" });
+  await waitForFast(() => expect(page.store.canSend).toBe(true));
+  expect(page.querySelector(".custodian__catch-up")).toBeNull();
 });
 
 it("retries reconnect hydration once per availability edge", async () => {

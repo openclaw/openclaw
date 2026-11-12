@@ -29,6 +29,84 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
   const presented = useContext(ContentPresentation);
   const [failed, setFailed] = createSignal(false);
   let button!: HTMLButtonElement;
+  function VideoPoster(childProps: {
+    getTarget: () => HTMLElement;
+    onFailed: () => void;
+  }): JSX.Element {
+    const [posterUrl, setPosterUrl] = createSignal<string>();
+    let active = true;
+    let controller: AbortController | undefined;
+    let currentPoster: string | undefined;
+    const release = () => {
+      controller?.abort();
+      controller = undefined;
+      if (currentPoster) {
+        URL.revokeObjectURL(currentPoster);
+      }
+      currentPoster = undefined;
+    };
+    const requestPoster = () => {
+      if (!active || controller) {
+        return;
+      }
+      const request = new AbortController();
+      controller = request;
+      void requestVideoPoster({
+        key: props.key,
+        src: props.src,
+        width: 400,
+        height: 225,
+        signal: request.signal,
+      }).then((blob) => {
+        // Hiding, parking, or disposal aborts this request through release().
+        if (request.signal.aborted) {
+          return;
+        }
+        if (blob) {
+          currentPoster = URL.createObjectURL(blob);
+          setPosterUrl(currentPoster);
+        } else {
+          childProps.onFailed();
+        }
+      });
+    };
+    onSettled(() => {
+      const stopObserving = observeChatAttachmentViewport(
+        childProps.getTarget(),
+        requestPoster,
+        () => {
+          if (active) {
+            release();
+            setPosterUrl(undefined);
+          }
+        },
+      );
+      return () => {
+        active = false;
+        stopObserving();
+        release();
+      };
+    });
+    return (
+      <Show
+        when={posterUrl()}
+        fallback={<span class="chat-message-image chat-video-preview__placeholder" />}
+      >
+        {(url) => (
+          <img
+            class="chat-message-image"
+            src={url()}
+            alt={props.label}
+            onError={() => {
+              release();
+              childProps.onFailed();
+            }}
+          />
+        )}
+      </Show>
+    );
+  }
+
   return (
     <div class="chat-video-preview__content">
       <Show when={!failed()} fallback={props.fallback}>
@@ -45,13 +123,7 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
             when={presented()}
             fallback={<span class="chat-message-image chat-video-preview__placeholder" />}
           >
-            <VideoPoster
-              key={props.key}
-              src={props.src}
-              label={props.label}
-              getTarget={() => button}
-              onFailed={() => setFailed(true)}
-            />
+            <VideoPoster getTarget={() => button} onFailed={() => setFailed(true)} />
           </Show>
           <span class="chat-video-preview__play" aria-hidden="true">
             <Icon name="play" />
@@ -59,82 +131,5 @@ function VideoPreviewContent(props: VideoPreviewProps): JSX.Element {
         </button>
       </Show>
     </div>
-  );
-}
-
-function VideoPoster(props: {
-  key: string;
-  src: string;
-  label: string;
-  getTarget: () => HTMLElement;
-  onFailed: () => void;
-}): JSX.Element {
-  const [posterUrl, setPosterUrl] = createSignal<string>();
-  let active = true;
-  let controller: AbortController | undefined;
-  let currentPoster: string | undefined;
-  const release = () => {
-    controller?.abort();
-    controller = undefined;
-    if (currentPoster) {
-      URL.revokeObjectURL(currentPoster);
-    }
-    currentPoster = undefined;
-  };
-  const requestPoster = () => {
-    if (!active || controller) {
-      return;
-    }
-    const request = new AbortController();
-    controller = request;
-    void requestVideoPoster({
-      key: props.key,
-      src: props.src,
-      width: 400,
-      height: 225,
-      signal: request.signal,
-    }).then((blob) => {
-      // Hiding, parking, or disposal aborts this request through release().
-      if (request.signal.aborted) {
-        return;
-      }
-      if (blob) {
-        currentPoster = URL.createObjectURL(blob);
-        setPosterUrl(currentPoster);
-      } else {
-        props.onFailed();
-      }
-    });
-  };
-  onSettled(() => {
-    const stopObserving = observeChatAttachmentViewport(props.getTarget(), requestPoster, () => {
-      if (active) {
-        release();
-        setPosterUrl(undefined);
-      }
-    });
-    return () => {
-      active = false;
-      stopObserving();
-      release();
-    };
-  });
-  return (
-    <Show
-      when={posterUrl()}
-      fallback={<span class="chat-message-image chat-video-preview__placeholder" />}
-    >
-      {(url) => (
-        <img
-          class="chat-message-image"
-          src={url()}
-          alt={props.label}
-          onError={() => {
-            release();
-            props.onFailed();
-          }}
-        />
-      )}
-    </Show>
   );
 }

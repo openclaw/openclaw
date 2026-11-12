@@ -6,19 +6,10 @@ import { statIfExists } from "./path-existence.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 import { readImmutableService } from "./update-immutable-service.js";
 
-export type ImmutableOperatorBuildAccount = {
-  account: string;
-  uid: number;
-  gid: number;
-  path: string;
-};
-
 const provisioning = "https://docs.openclaw.ai/cli/update#immutable-release-installations";
 
 /** Resolve the fallback before the update owner creates any control or staging files. */
-export async function resolveImmutableOperatorBuildAccount(
-  descriptor: ImmutableInstallDescriptor,
-): Promise<ImmutableOperatorBuildAccount> {
+export async function resolveImmutableOperatorBuildAccount(descriptor: ImmutableInstallDescriptor) {
   if (process.geteuid?.() !== 0) {
     const operator = os.userInfo();
     if (operator.uid > 0) {

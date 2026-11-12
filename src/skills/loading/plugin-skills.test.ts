@@ -55,9 +55,9 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: hoisted.loadPluginRegistrySnapshot,
 }));
 
-vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
-  resolvePluginMetadataSnapshot: hoisted.resolvePluginMetadataSnapshot,
+vi.mock("../../plugins/plugin-metadata-snapshot-required.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot-required.js")>()),
+  resolvePluginMetadataSnapshotRequiredRuntime: hoisted.resolvePluginMetadataSnapshot,
 }));
 
 const tempDirs = createTrackedTempDirs();

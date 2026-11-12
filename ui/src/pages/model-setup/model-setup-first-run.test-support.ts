@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ModelCatalogEntry,
@@ -195,28 +195,9 @@ export function mountDetection(
   });
 }
 
-export async function createMountedFirstRun(
-  result: Partial<SystemAgentSetupDetectResult>,
-  handlers?: Parameters<typeof mockRequests>[1],
-  options: {
-    firstRun?: boolean;
-    refreshError?: string;
-    beforeRefresh?: () => Promise<void>;
-  } = {},
-) {
-  const fixture = createFirstRunContext(options.refreshError, options.beforeRefresh);
-  if (handlers) {
-    mockRequests(fixture.request, handlers);
-  }
-  return {
-    ...fixture,
-    ...(await mountDetection(fixture.context, fixture.client, result, options.firstRun ?? true)),
-  };
-}
-
 export function modalButton(page: ParentNode, label: string) {
   return [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
-    (button) => button.textContent?.trim() === label,
+    (button) => (button.getAttribute("aria-label") ?? button.textContent?.trim()) === label,
   );
 }
 

@@ -1,6 +1,7 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,10 +21,6 @@ import { createModelSpeedPolicyResolver } from "./model-fast-mode.js";
 import type { StreamFn } from "./runtime/index.js";
 
 const sse = (value: unknown) => "data: " + JSON.stringify(value) + "\n\n";
-function sendJson(reply: ServerResponse, status: number, body: unknown) {
-  reply.writeHead(status, { "content-type": "application/json" });
-  reply.end(JSON.stringify(body));
-}
 const response = {
   id: "resp_tier_fixture",
   object: "response",
@@ -94,7 +91,7 @@ describe("ClawRouter agent service-tier HTTP composition", () => {
                 supportedReasoningEfforts: ["high"],
                 pricing: { serviceTiers: tiers },
               });
-              sendJson(reply, 200, {
+              respondJson(reply, {
                 providers: [
                   {
                     id: "openai",
@@ -132,32 +129,37 @@ describe("ClawRouter agent service-tier HTTP composition", () => {
               });
               return;
             }
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
+            const bodyText = await readRequestText(request);
             requests.push({
               path: request.url,
               authorization: request.headers.authorization,
               agent: request.headers["x-clawrouter-agent-id"],
               session: request.headers["x-clawrouter-session-id"],
               requestId: request.headers["x-request-id"],
-              body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+              body: JSON.parse(bodyText),
             });
             if (mode === "reject-tier") {
-              sendJson(reply, 400, {
-                error: {
-                  code: "service_tier_not_allowed",
-                  message:
-                    "Service tier priority is not allowed for openai/tier-fixture on this key; allowed tiers: default.",
+              respondJson(
+                reply,
+                {
+                  error: {
+                    code: "service_tier_not_allowed",
+                    message:
+                      "Service tier priority is not allowed for openai/tier-fixture on this key; allowed tiers: default.",
+                  },
                 },
-              });
+                400,
+              );
               return;
             }
             if (mode === "reject") {
-              sendJson(reply, 403, {
-                error: { message: "Synthetic route policy denied", type: "permission_error" },
-              });
+              respondJson(
+                reply,
+                {
+                  error: { message: "Synthetic route policy denied", type: "permission_error" },
+                },
+                403,
+              );
               return;
             }
             reply.writeHead(200, { "content-type": "text/event-stream", connection: "close" });

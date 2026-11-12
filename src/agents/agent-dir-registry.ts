@@ -1,7 +1,10 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "../infra/boundary-path.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -50,17 +53,26 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
     close: () => observations.forEach((observation) => observation.close()),
   };
   preparedPaths.set(pathname, prepared);
+  let observedThisTurn = false;
   // Each lexical ancestor can be a symlink replaced independently of the leaf.
   for (let child = pathname; path.dirname(child) !== child; child = path.dirname(child)) {
     const basename = path.basename(child);
     observations.push(
       observeOwnedDirectory(path.dirname(child), (filename) => {
-        if (filename === undefined || filename === basename) {
-          if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
-            return;
-          }
-          preparedPaths.delete(pathname);
-          prepared.close();
+        if (!observedThisTurn && (filename === undefined || filename === basename)) {
+          // One recovery sweep notifies every ancestor; share its in-flight lookup.
+          observedThisTurn = true;
+          void resolveIdentityPathViaExistingAncestor(pathname)
+            .then((resolved) => {
+              if (preparedPaths.get(pathname) === prepared && resolved !== key) {
+                preparedPaths.delete(pathname);
+                prepared.close();
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              observedThisTurn = false;
+            });
         }
       }),
     );

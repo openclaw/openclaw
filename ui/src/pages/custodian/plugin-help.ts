@@ -99,7 +99,7 @@ export function createPluginHelpRequest(
         ({ formatPluginHelpValue } = await import("./plugin-help-value.ts"));
       } catch {
         if (pluginHelpState(context).scope === scope && state.selectionEpoch === selectionEpoch) {
-          showToast({ message: t("custodian.pluginHelpFailed") });
+          showToast({ severity: "error", message: t("custodian.pluginHelpFailed") });
         }
         return;
       }

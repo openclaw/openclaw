@@ -16,6 +16,7 @@ import {
   createFreshRunIntegrationState,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import type { CompactionAccountingFact } from "./run/internal-params.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
@@ -59,45 +60,6 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
 
   afterEach(() => state?.cleanup());
 
-  it("lets before_agent_reply claim cron runs before the embedded attempt starts", async () => {
-    hooks.runBeforeAgentReply.mockResolvedValue(handledReply("dreaming claimed"));
-    const onExecutionPhase = vi.fn();
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      trigger: "cron",
-      jobId: "cron-job-123",
-      prompt: "__openclaw_memory_core_short_term_promotion_dream__",
-      onExecutionPhase,
-    });
-
-    expect(hooks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
-    expect(onExecutionPhase).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "before_agent_reply" }),
-    );
-    const [hookPayload, hookContext] = firstBeforeAgentReplyCall();
-    expect(hookPayload).toEqual({
-      cleanedBody: "__openclaw_memory_core_short_term_promotion_dream__",
-    });
-    expect(hookContext).toMatchObject({
-      jobId: "cron-job-123",
-      agentId: "main",
-      sessionId: "test-session",
-      sessionKey: createOverflowRunParams(state).sessionKey,
-      workspaceDir: state.workspaceDir,
-      trigger: "cron",
-    });
-    expect([hookContext?.senderId, hookContext?.chatId, hookContext?.channel]).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
-    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
-    expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
-    // No provider ran; diagnostic capture must not attribute the hook text to a model.
-    expect(result.meta.providerStarted).toBe(false);
-  });
-
   it("re-arms setup progress when a scheduled hook does not claim", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult());
     const onExecutionPhase = vi.fn();
@@ -137,11 +99,31 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
     { name: "stable cron root", sessionKey: "agent:main:cron:hook-authority" },
     { name: "ordinary session", sessionKey: "agent:main:hook-authority" },
   ])("retains before-reply authority through a handled hook for $name", async (scenario) => {
-    const params = await prepareHookSession(scenario.sessionKey);
+    const params = {
+      ...(await prepareHookSession(scenario.sessionKey)),
+      jobId: "cron-job-123",
+      prompt: "__openclaw_memory_core_short_term_promotion_dream__",
+    };
     let requestAuthority: (() => void) | undefined;
     let claimAuthority: (() => void) | undefined;
+    const observe = vi.fn<(fact: CompactionAccountingFact | undefined) => void>();
+    const { loadSessionEntry } = await import("../../config/sessions/session-accessor.js");
     const effect = vi.fn();
     hooks.runBeforeAgentReply.mockImplementation(async (_event, context) => {
+      const entry = loadSessionEntry({ ...params.sessionTarget, readConsistency: "latest" });
+      expect(entry?.activeWriterRunId).toBe(params.runId);
+      expect(observe).toHaveBeenCalledExactlyOnceWith({
+        kind: "durable",
+        count: 0,
+        target: {
+          agentId: "main",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: params.sessionTarget.storePath,
+          lifecycleRevision: params.sessionTarget.expectedLifecycleRevision,
+          activeWriterRunId: params.runId,
+        },
+      });
       requestAuthority = captureGuardedFetchRequestAuthority();
       claimAuthority = readClaimingHookAdmission(context)?.assertCurrent;
       expect(requestAuthority).toBeTypeOf("function");
@@ -152,9 +134,21 @@ describe("runEmbeddedAgent before_agent_reply seam", () => {
       return handledReply("hook completed");
     });
 
-    const result = await runEmbeddedAgent(params);
-
+    const result = await runEmbeddedAgent({ ...params, onCompactionAccounting: observe });
+    const [payload, context] = firstBeforeAgentReplyCall();
+    expect(payload).toEqual({ cleanedBody: params.prompt });
+    expect(context).toMatchObject({
+      jobId: params.jobId,
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: state.workspaceDir,
+      trigger: "cron",
+    });
+    const { senderId, chatId, channel } = context;
+    expect([senderId, chatId, channel]).toEqual([undefined, undefined, undefined]);
     expect(result.payloads).toEqual([{ text: "hook completed" }]);
+    expect(result.meta.providerStarted).toBe(false);
     expect(effect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(() => requestAuthority?.()).toThrow("Guarded request authority is no longer active");

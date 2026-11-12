@@ -8,7 +8,6 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
-import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
@@ -146,7 +145,7 @@ it("captures repaired model usage before queued delivery and throwing cleanup", 
         content: "model reply",
         partial,
       },
-    } satisfies AgentSessionEvent);
+    });
     emit({ type: "message_end", message: after });
     for (const model of ["delivery-mirror", "gateway-injected"]) {
       message(emit, { ...assistant(99_000), provider: "openclaw", model });
@@ -168,29 +167,21 @@ it("captures repaired model usage before queued delivery and throwing cleanup", 
   expect(observed).toEqual(expected);
 });
 
-it("clears the assistant and its exact usage when compaction starts a new attempt", () => {
-  const { emit, attempt } = harness();
-  const reply = assistant(100, {
-    content: [{ type: "text", text: "before compaction" }],
-    usage: usage(100, 20, 300),
-  });
-  emit({ type: "message_end", message: reply });
-  expect(attempt()).toEqual([
-    reply,
-    ["before compaction"],
-    expect.objectContaining({ input: 100, output: 20, cacheRead: 300, total: 420 }),
-  ]);
-  emit(completed());
-  expect(attempt()).toEqual([undefined, [], undefined]);
-});
-
 it.each([false, true])("waits for compaction and every retry (retry=%s)", async (retry) => {
-  const { emit, subscription } = harness();
+  const { emit, subscription, attempt } = harness();
   emit({ type: "compaction_start" });
   expect(subscription.isCompacting()).toBe(true);
   expect(subscription.getCompactionCount()).toBe(0);
   if (retry) {
+    const reply = assistant(100, { usage: usage(100, 20, 300) });
+    emit({ type: "message_end", message: reply });
+    expect(attempt()).toEqual([
+      reply,
+      ["model reply"],
+      expect.objectContaining({ input: 100, output: 20, cacheRead: 300, total: 420 }),
+    ]);
     emit(completed(true, 20_000, 12_345));
+    expect(attempt()).toEqual([undefined, [], undefined]);
     expect(subscription.getCompactionCount()).toBe(1);
     expect(subscription.getLastCompactionTokensAfter()).toBe(12_345);
     emit(completed());

@@ -141,6 +141,7 @@ private fun WorkspaceDirectoryScreen(
           listing.entries
         }
       totalEntries = listing.totalEntries
+      errorText = null
     } catch (_: Throwable) {
       errorText = nativeString("Could not load this folder.")
     } finally {

@@ -17,6 +17,7 @@ import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { assertSessionControllerOperation } from "../../../sessions/session-controller.state.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { expectCollected, expectLiveObjects } from "../../../test-utils/retention.js";
 import { attachCliReplyBackend } from "../../cli-runner/execution-target.js";
 import { runWithCliTurn } from "../../cli-runner/turn-admission.js";
 import {
@@ -105,6 +106,44 @@ describe("deferred logical-turn lifecycle", () => {
     handles.length = 0;
     vi.restoreAllMocks();
   });
+
+  it.each(["complete", "discard"] as const)(
+    "releases completed attempt callbacks and terminal data after %s",
+    async (settle) => {
+      class SessionPayload {
+        active = true;
+      }
+      const payloads: WeakRef<SessionPayload>[] = [];
+      const createOwner = () => {
+        const payload = new SessionPayload();
+        payloads.push(new WeakRef(payload));
+        const owner = ownerFor("retained-owner", {
+          isCurrent: () => payload.active,
+          onRetryWaitCompleted: () => {
+            payload.active = true;
+          },
+          clearActiveRun: () => {
+            payload.active = false;
+          },
+        });
+        owner.recordSessionEnd({ payload });
+        return owner;
+      };
+      const active = createOwner();
+      const completed = [];
+      for (let index = 0; index < 20; index++) {
+        const owner = createOwner();
+        await owner[settle]();
+        completed.push(owner);
+      }
+      await expectLiveObjects(payloads, 1);
+      await active[settle]();
+      await expectCollected(...payloads);
+      for (const owner of completed) {
+        await owner[settle]();
+      }
+    },
+  );
 
   it.each([false, true])("preserves the first caller cancellation (timeout=%s)", (timedOut) => {
     const caller = new AbortController();

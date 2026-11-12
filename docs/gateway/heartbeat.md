@@ -63,7 +63,9 @@ workspace and state directory are on different filesystems, Doctor also keeps
 the original in a private `HEARTBEAT.md.doctor-archived.*` directory beside its
 former location. Writes through an already-open file descriptor remain
 recoverable there. A file recreated after completed migration is retained and
-reported; it does not overwrite the operator-owned job.
+reported by path without reading its contents or following a symlink, even when
+it could not safely be imported. It does not block Doctor or update admission
+and does not overwrite the operator-owned job.
 
 If existing scratch differs from `HEARTBEAT.md` and was not imported from that
 file, Doctor preserves the scratch and original file, prints a notice, and
@@ -74,6 +76,10 @@ instructions into the job. Repeating Doctor keeps both originals and succeeds.
 Doctor prints this one-time note when migration completes:
 
 > Migrated heartbeats now use standard Automations delivery. Heartbeat-specific duplicate suppression and no-route skipping were removed: repeated updates can be delivered, and a missing route no longer skips the run before execution. Delivery failures follow ordinary automation handling. Review the migrated jobs' delivery settings if you relied on either behavior.
+
+When an alert includes an edge `HEARTBEAT_OK` acknowledgement, delivery removes
+the token without flattening the alert's line breaks or indentation. Paragraphs,
+lists, and fenced code blocks retain their formatting.
 
 Migrated model overrides follow the agent's existing model policy. If a heartbeat
 model is outside that policy, Doctor drops the job's model override and reports

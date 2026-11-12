@@ -5,7 +5,11 @@ import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { renderConfigInto, renderConfigView } from "./config-view.test-support.tsx";
+import {
+  renderConfigInto,
+  renderConfigView,
+  requiredConfigElement as required,
+} from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
 
@@ -49,19 +53,6 @@ describe("config form and navigation", () => {
   function selectConfigTab(container: HTMLElement, name: string) {
     const tab = required(container, `#config-sections-tab-${name}`, HTMLElement);
     tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-  }
-
-  function required<T extends Element>(
-    container: HTMLElement,
-    selector: string,
-    constructor: new () => T,
-  ): T {
-    const element = container.querySelector(selector);
-    expect(element).toBeInstanceOf(constructor);
-    if (!(element instanceof constructor)) {
-      throw new Error(`Expected element matching "${selector}"`);
-    }
-    return element;
   }
 
   function disclosure(container: HTMLElement) {
@@ -167,7 +158,7 @@ describe("config form and navigation", () => {
       [...groups[0]!.querySelectorAll(".settings-row__title")].map((node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Open links in Control UI browser", "Browser Enabled"]);
+    ).toEqual(["Open links in Control UI browser", "Enabled"]);
   });
 
   it("honors advanced disclosure overrides and subsection scope", () => {
@@ -364,6 +355,40 @@ describe("config form and navigation", () => {
     expect(onWebPushSubscribe).toHaveBeenCalledOnce();
   });
 
+  it("exposes a Web Push subscription error as an alert on the shipped Settings page", () => {
+    const error = "This browser push subscription belongs to another Gateway.";
+    const { container, props } = renderConfigView({
+      navRootLabel: "Notifications",
+      includeSections: ["__notifications__"],
+      includeVirtualSections: true,
+      schema: object({}),
+      formValue: {},
+      webPush: {
+        supported: true,
+        canManage: true,
+        canReadPreferences: true,
+        permission: "granted",
+        subscription: "vapid-mismatch",
+        loading: false,
+        error,
+      },
+    });
+
+    selectConfigTab(container, "__notifications__");
+    Object.assign(props, {
+      activeSection: "__notifications__",
+      showModeToggle: false,
+      showRootTab: false,
+    });
+    renderConfigInto(props, container);
+
+    const card = required(container, "#settings-communications-notifications", HTMLElement);
+    expect(normalizedText(card)).toContain(error);
+    const alert = required(card, '[role="alert"]', HTMLElement);
+    expect(alert.textContent).toContain(error);
+    expect(alert.closest(".settings-row")).not.toBeNull();
+  });
+
   it.each(["tabs", "accordion"] as const)(
     "groups channel settings without changing patch paths (%s)",
     (settingsLayout) => {
@@ -417,7 +442,7 @@ describe("config form and navigation", () => {
       expect(picker.selectedOptions[0]?.textContent?.trim()).toBe("Other");
       const content = () => normalizedText(required(container, ".settings-page", HTMLElement));
       expect(content()).toContain("Group policy");
-      expect(content()).toContain("Channel Model Overrides");
+      expect(content()).toContain("Channel model overrides");
       expect(content()).not.toContain("Bot username");
       props.onSubsectionChange = (key) => {
         props.activeSubsection = key;

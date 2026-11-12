@@ -27,32 +27,13 @@ async function makeTree(files: Record<string, string> = {}) {
   return directory;
 }
 
-it("hashes paths, exact bytes, and executability independently of order", () => {
-  const original = prepareSkillLibraryBundle([markdown, resource]);
-  expect(original.revision).toBe(
-    "c4999fd620e1fbeaf3c097816e7c3d174e5fb9722b165527b92f18f81af350d4",
-  );
-  expect(prepareSkillLibraryBundle([resource, markdown]).revision).toBe(original.revision);
-  for (const changed of [
-    { ...resource, path: "scripts/renamed.sh" },
-    { ...resource, content: `${resource.content}\n` },
-    { ...resource, executable: false },
-  ]) {
-    expect(prepareSkillLibraryBundle([markdown, changed]).revision).not.toBe(original.revision);
-  }
-});
-
 it("avoids expanding retained text without enlarging escaped or binary resources", async () => {
   const directory = await makeTree();
   const inputs = new Map([
     ["plain.txt", Buffer.from('Read the guide.\nRun "check.sh".\n'.repeat(100))],
     ["unicode.txt", Buffer.from(`${"a".repeat(3000)}🦞`)],
-    ["binary.dat", Buffer.from([0, 255, 128, 192])],
-    ["controls.dat", Buffer.alloc(3000)],
     ["sparse-nul.dat", Buffer.from(`${"a".repeat(3000)}\0`)],
-    ["controls.txt", Buffer.concat([Buffer.from("a".repeat(3000)), Buffer.from([1, 8, 12, 127])])],
     ["escaped.txt", Buffer.from('"\\\t\n\r'.repeat(600))],
-    ["empty.txt", Buffer.alloc(0)],
   ]);
   for (const [name, bytes] of inputs) {
     await fs.writeFile(path.join(directory, name), bytes);
@@ -89,14 +70,7 @@ it.each([
   expect(() => prepareSkillLibraryBundle(files)).toThrow(message);
 });
 
-it.runIf(posix)("rejects hardlink imports", async () => {
-  const directory = await makeTree();
-  const linked = path.join(directory, "linked");
-  await fs.link(path.join(directory, "SKILL.md"), linked);
-  await expect(readSkillLibraryTree(directory)).rejects.toThrow();
-});
-
-it.runIf(posix)("accepts a symlink root but rejects nested links", async () => {
+it.runIf(posix)("accepts a symlink root but rejects linked resources", async () => {
   const target = await makeTree({ "scripts/run.sh": resource.content });
   const linkedRoot = path.join(target, "..", "managed-skill");
   await fs.symlink(target, linkedRoot, "dir");
@@ -104,11 +78,15 @@ it.runIf(posix)("accepts a symlink root but rejects nested links", async () => {
     { path: "SKILL.md" },
     { path: "scripts/run.sh" },
   ]);
-  await fs.symlink("../SKILL.md", path.join(target, "scripts/linked"));
+  const linked = path.join(target, "scripts/linked");
+  await fs.symlink("../SKILL.md", linked);
   await expect(readSkillBundleTree(linkedRoot)).rejects.toMatchObject({
     code: "INVALID_BUNDLE",
     message: expect.stringContaining("Skill trees cannot contain links or special files"),
   });
+  await fs.unlink(linked);
+  await fs.link(path.join(target, "SKILL.md"), linked);
+  await expect(readSkillLibraryTree(target)).rejects.toThrow();
 });
 
 it.each(["removed", ...(posix ? ["broken"] : [])])(

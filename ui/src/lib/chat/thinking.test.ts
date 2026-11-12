@@ -33,16 +33,12 @@ const sessionFor = (entry: ModelCatalogEntry) => ({
 const highProfile = { thinkingLevels: [{ id: "high", label: "High" }], thinkingDefault: "high" };
 const roster = (
   session: SelectParams["session"],
-  defaults: NonNullable<SelectParams["sessionsResult"]>["defaults"] = {
-    modelProvider: null,
-    model: null,
-    contextTokens: null,
-  },
+  defaults: Partial<NonNullable<SelectParams["sessionsResult"]>["defaults"]> = {},
 ): NonNullable<SelectParams["sessionsResult"]> => ({
   ts: 1,
   path: "",
   count: 1,
-  defaults,
+  defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
   sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1, ...session }],
 });
 
@@ -119,9 +115,7 @@ it("preserves explicitly empty default labels metadata", () => {
   const entry = model();
   const session = sessionFor(entry);
   const defaults = { ...session, contextTokens: null, thinkingOptions: [] };
-  const state = select({ catalog: [entry], defaults, session });
-
-  expect(state.options).toEqual([]);
+  expect(select({ catalog: [entry], defaults, session }).options).toEqual([]);
   expect(isThinkingLevelOptionForSession(session, defaults, "high", [entry])).toBe(false);
 });
 
@@ -145,30 +139,18 @@ it("omits blank thinking choices and keeps the first normalized duplicate label 
 
 it("keeps non-reasoning Off-only metadata distinct from an empty profile", () => {
   const entry = model({
-    id: "plain",
-    name: "Plain model",
     agentRuntime: undefined,
     reasoning: false,
     thinkingLevels: [{ id: "off", label: "off" }],
     thinkingDefault: "off",
   });
   const session = { modelProvider: entry.provider, model: entry.id, thinkingLevel: "off" };
-  const state = select({ catalog: [entry], session });
-
-  expect(state).toMatchObject({ options: [], selection: { source: "default", value: "off" } });
+  expect(select({ catalog: [entry], session })).toMatchObject({
+    options: [],
+    selection: { source: "default", value: "off" },
+  });
   expect(isThinkingLevelOptionForSession(session, undefined, "off", [entry])).toBe(true);
   expect(isThinkingLevelOptionForSession(session, undefined, "high", [entry])).toBe(false);
-});
-
-const lunaModel = model({
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  provider: "openai",
-  thinkingLevels: [
-    { id: "max", label: "max" },
-    { id: "ultra", label: "ultra" },
-  ],
-  thinkingDefault: "ultra",
 });
 
 it("normalizes canonical Ultra command input", () => {
@@ -193,37 +175,24 @@ it("does not promote an unsupported persisted Ultra override into a slider stop"
   expect(state.options.map((option) => option.value)).toEqual(["max"]);
 });
 
-it("does not inherit same-model thinking metadata from a different runtime", () => {
-  const state = select({
-    catalog: [lunaModel],
-    sessionsResult: roster(
-      {
-        modelProvider: "openai",
-        model: "gpt-5.6-luna",
-        agentRuntime: { id: "codex", source: "session-key" },
-      },
-      {
-        ...sessionFor(lunaModel),
-        contextTokens: null,
-        thinkingLevels: lunaModel.thinkingLevels,
-        thinkingDefault: lunaModel.thinkingDefault,
-      },
-    ),
-  });
-
-  expect(state.options.map((option) => option.value)).not.toContain("ultra");
-  expect(state.inherited.value).not.toBe("ultra");
-});
-
-it("inherits catalog thinking metadata when runtimes do not conflict", () => {
-  const state = select({
-    catalog: [{ ...lunaModel, agentRuntime: undefined }],
-    session: {
-      ...sessionFor(lunaModel),
-      agentRuntime: { id: "codex", source: "session-key" },
-    },
-  });
-
-  expect(state.options.map((option) => option.value)).toEqual(["max", "ultra"]);
-  expect(state.inherited.value).toBe("ultra");
-});
+it.each([true, false])(
+  "inherits thinking metadata only without a runtime conflict (%s)",
+  (conflict) => {
+    const profile = {
+      thinkingLevels: ["max", "ultra"].map((id) => ({ id, label: id })),
+      thinkingDefault: "ultra",
+    };
+    const defaults = model(profile);
+    const entry = { ...defaults, agentRuntime: conflict ? defaults.agentRuntime : undefined };
+    const session = {
+      ...sessionFor(entry),
+      agentRuntime: { id: "codex", source: "session-key" as const },
+    };
+    const state = select({
+      catalog: [entry],
+      sessionsResult: roster(session, { ...sessionFor(defaults), ...profile }),
+    });
+    expect(state.options.map((option) => option.value)).toEqual(conflict ? [] : ["max", "ultra"]);
+    expect(state.inherited.value).toBe(conflict ? "" : "ultra");
+  },
+);

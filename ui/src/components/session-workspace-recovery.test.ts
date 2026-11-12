@@ -32,7 +32,6 @@ function createRecoveryHarness() {
       },
     });
   const move = createDeferred();
-  let current = true;
   const abort = new AbortController();
   const snapshot = {
     ...createGatewayHarness(client).gateway.snapshot,
@@ -45,10 +44,7 @@ function createRecoveryHarness() {
     .mockResolvedValue(true);
   const request = vi.spyOn(client, "request").mockImplementation(async () => await move.promise);
   const operations: Promise<unknown>[] = [];
-  const retire = () => {
-    current = false;
-    abort.abort();
-  };
+  const retire = () => abort.abort();
   return {
     recoveryError,
     remove,
@@ -61,7 +57,7 @@ function createRecoveryHarness() {
         action: "delete",
         session,
         scope: { client, gateway: { snapshot }, signal: abort.signal },
-        isCurrent: () => current,
+        isCurrent: () => !abort.signal.aborted,
         request: remove,
       });
       operations.push(operation);

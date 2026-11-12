@@ -11,6 +11,8 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
 
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 
+export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
+
 /** Anonymous public-page presentation; remote URLs never cross into the renderer. */
 export type ControlUiLinkPreview = {
   title?: string;

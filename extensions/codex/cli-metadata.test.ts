@@ -4,12 +4,15 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  moduleLoaded: false,
   registerCodexSessionCli: vi.fn(),
 }));
 
-vi.mock("./src/session-cli.js", () => ({
-  registerCodexSessionCli: mocks.registerCodexSessionCli,
-}));
+// mock-isolation: Observe deferred loading without importing the real session CLI runtime.
+vi.mock("./src/session-cli.js", () => {
+  mocks.moduleLoaded = true;
+  return { registerCodexSessionCli: mocks.registerCodexSessionCli };
+});
 
 import entry from "./cli-metadata.js";
 
@@ -34,6 +37,7 @@ describe("codex CLI metadata entry", () => {
       ],
     });
     expect(mocks.registerCodexSessionCli).not.toHaveBeenCalled();
+    expect(mocks.moduleLoaded).toBe(false);
 
     const registrar = registerCli.mock.calls[0]?.[0];
     if (typeof registrar !== "function") {
@@ -49,5 +53,6 @@ describe("codex CLI metadata entry", () => {
     });
 
     expect(mocks.registerCodexSessionCli).toHaveBeenCalledWith(program);
+    expect(mocks.moduleLoaded).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 import { Show } from "solid-js";
+import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import "../../../styles/session-panel-rail.css";
 import "./chat-subagents-working.css";
 import "./chat-subagents-panel-desktop.css";

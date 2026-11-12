@@ -22,6 +22,8 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { getPreparedAgentDeletionDiscovery } from "../../state/agent-deletion-journal-status.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import type { SessionEntryPair } from "../session-list-order.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -40,6 +42,7 @@ type SessionCatalogRequestEntrySnapshot = {
   freeze: () => void;
   captureHostInstances: (host: SessionCatalogHost, instances: SessionCatalogInstances) => void;
   entryForSession: (sessionKey: string) => SessionEntry | undefined;
+  isMember: (sessionKey: string, profileId: string) => boolean;
   projectHostSessions: (
     host: SessionCatalogHost,
     instances: SessionCatalogInstances,
@@ -95,7 +98,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   if (params.projection.needsSelectionPreparation({ metadataOnly: true })) {
     throw new Error("Prepare current session metadata before capturing catalog entries");
   }
-  const selectionRevision = params.projection.state.revision;
+  const deletions = getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath());
   const cachedPlanning =
     params.sessionKeys === undefined
       ? planningEntriesByRevision
@@ -103,6 +106,8 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
           ?.get(params.cfg)
           ?.get(params.fallbackAgentId)
       : undefined;
+  // Retained provider pages must not keep the weak key for the full planning roster alive.
+  const planningRevision = cachedPlanning?.revision ?? {};
   const entriesByAgentId =
     cachedPlanning?.entriesByAgentId ?? new Map<string, CapturedAgentEntries>();
   const entryIndexByAgentId =
@@ -129,7 +134,12 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   const captureAgentEntries = (rawAgentId: string): CapturedAgentEntries | undefined => {
     const agentId = normalizeAgentId(rawAgentId);
     if (!entriesByAgentId.has(agentId)) {
-      if (frozen) {
+      // Catalog discovery omits deleted stores; targeted session reads retain their refusal.
+      if (
+        frozen ||
+        (deletions?.status === "present" &&
+          deletions.entries.some((entry) => entry.agentId === agentId))
+      ) {
         return undefined;
       }
       if (params.sessionKeys && !selectedKeysByAgentId) {
@@ -181,11 +191,12 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       params.fallbackAgentId,
       ...listAgentIds(params.cfg).filter((agentId) => agentId !== params.fallbackAgentId),
     ];
-    catalogEntries = agentIds.flatMap((agentId) =>
-      (captureAgentEntries(agentId)?.pairs ?? []).map(([sessionKey, entry]) =>
-        Object.freeze({ sessionKey, entry, agentId }),
-      ),
-    );
+    catalogEntries = [];
+    for (const agentId of agentIds) {
+      for (const pair of captureAgentEntries(agentId)?.pairs ?? []) {
+        catalogEntries.push(Object.freeze({ sessionKey: pair[0], entry: pair[1], agentId }));
+      }
+    }
     Object.freeze(catalogEntries);
     return catalogEntries;
   };
@@ -252,7 +263,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
           configs.set(params.cfg, agents);
         }
         const planning = cachedPlanning ?? {
-          revision: {},
+          revision: planningRevision,
           entriesByAgentId,
           entryIndexByAgentId,
           catalogEntries: entries,
@@ -263,7 +274,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       frozen = true;
     },
     captureHostInstances: (host, instances) => {
-      adoptionRevisions.set(instances, selectionRevision);
+      adoptionRevisions.set(instances, planningRevision);
       for (const session of host.sessions) {
         if (!session.sessionKey) {
           continue;
@@ -276,6 +287,15 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       }
     },
     entryForSession,
+    isMember: (sessionKey, profileId) => {
+      const target = params.projection.sharingTarget({
+        key: sessionKey,
+        agentId: entryAgentId(sessionKey),
+      });
+      return Boolean(
+        target && params.projection.hasMembership(target.storePath, target.storeKey, profileId),
+      );
+    },
     projectHostSessions: (host, instances, audience) => {
       const source = JSON.stringify(host);
       const revision = params.projection.sharingRevision;

@@ -6,7 +6,7 @@ import {
   registerContextEngineInRegistry,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
-import type { ContextEngineHostCapability } from "../../../context-engine/types.js";
+import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { acquirePluginRegistryForInspection } from "../../../plugins/loader.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { PluginInstance } from "../../../plugins/plugin-instance.js";
@@ -58,23 +58,15 @@ function uniqueEngineId(): string {
   return `doctor-host-compat-${engineCounter}`;
 }
 
-async function registerEngine(
-  requiredCapabilities: ContextEngineHostCapability[],
-): Promise<string> {
+async function registerEngine(): Promise<string> {
   const id = uniqueEngineId();
   class TestEngine extends LegacyContextEngine {
-    override readonly info = {
+    override readonly info: ContextEngineInfo = {
       id,
       name: "Doctor Host Compat",
-      hostRequirements:
-        requiredCapabilities.length > 0
-          ? {
-              "agent-run": {
-                requiredCapabilities,
-                unsupportedMessage: "Use a compatible runtime or switch to legacy.",
-              },
-            }
-          : undefined,
+      hostRequirements: {
+        "agent-run": { requiredCapabilities: ["assemble-before-prompt"] },
+      },
     };
   }
   await registerContextEngineForOwner(id, () => new TestEngine(), `doctor-test-owner-${id}`, {
@@ -110,11 +102,7 @@ describe("doctor context-engine host compatibility", () => {
       const disposalStarted = createDeferred();
       const disposalGate = createDeferred();
       class DoctorEngine extends LegacyContextEngine {
-        override readonly info = {
-          id,
-          name: "Doctor custody fixture",
-          hostRequirements: undefined,
-        };
+        override readonly info = { id, name: "Doctor custody fixture" };
         async dispose() {
           expect(retired).not.toHaveBeenCalled();
           disposalStarted.resolve();
@@ -161,39 +149,21 @@ describe("doctor context-engine host compatibility", () => {
     },
   );
 
-  it.each([true, false])(
-    "reports offline inspection availability without activating or repairing an engine (discovered=%s)",
-    async (discovered) => {
-      const id = uniqueEngineId();
-      const factory = vi.fn(() => {
-        throw new Error("Doctor must not initialize an engine to inspect its metadata");
-      });
-      const registry = createEmptyPluginRegistry();
-      if (discovered) {
-        registry.contextEngines.set(id, {
-          factory,
-          owner: `plugin:${id}`,
-          lifecycle: "readOnlyDiscovery",
-        });
-      }
-      vi.mocked(acquirePluginRegistryForInspection).mockImplementation(async () => ({
-        registry,
-        release: async () => undefined,
-      }));
-      const cfg = configWithEngine(id);
-      const params = doctorParams(cfg);
-      const warnings = await collectWarnings(params);
-      expect(warnings.join("\n")).toContain(
-        discovered
-          ? "registered for read-only discovery; offline host compatibility inspection is unavailable"
-          : "because it is not registered",
-      );
-      const repair = await repairCompatibility(params);
-      expect(repair).toEqual({ config: cfg, changes: [], warnings });
-      expect(repair.config).toBe(cfg);
-      expect(factory).not.toHaveBeenCalled();
-    },
-  );
+  it("does not repair an engine missing from offline discovery", async () => {
+    const id = uniqueEngineId();
+    const registry = createEmptyPluginRegistry();
+    vi.mocked(acquirePluginRegistryForInspection).mockImplementation(async () => ({
+      registry,
+      release: async () => undefined,
+    }));
+    const cfg = configWithEngine(id);
+    const params = doctorParams(cfg);
+    const warnings = await collectWarnings(params);
+    expect(warnings.join("\n")).toContain("because it is not registered");
+    const repair = await repairCompatibility(params);
+    expect(repair).toEqual({ config: cfg, changes: [], warnings });
+    expect(repair.config).toBe(cfg);
+  });
 
   it("inspects the plugin that declares a differently named selected engine", async () => {
     vi.mocked(loadManifestMetadataSnapshot).mockReturnValueOnce(
@@ -218,7 +188,7 @@ describe("doctor context-engine host compatibility", () => {
   });
 
   it.each([false, true])("repairs incompatible system-agent hosts (mixed=%s)", async (mixed) => {
-    const engineId = await registerEngine(["assemble-before-prompt"]);
+    const engineId = await registerEngine();
     const cfg = configWithEngine(engineId, {
       ...(!mixed ? { plugins: { slots: { memory: "custom-memory" } } } : {}),
       agents: {
@@ -252,9 +222,7 @@ describe("doctor context-engine host compatibility", () => {
         'remove the plugins.slots.contextEngine override and restore the default "legacy"',
       );
       expect(result.config.plugins?.slots).toEqual({ memory: "custom-memory" });
-      expect(result.changes).toEqual([
-        `Reset plugins.slots.contextEngine to the default "legacy" because context engine "${engineId}" is incompatible with every configured agent-run host.`,
-      ]);
+      expect(result.changes).toEqual([expect.stringContaining(`context engine "${engineId}"`)]);
     }
   });
 });

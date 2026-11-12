@@ -380,3 +380,29 @@ it("does not authorize an unchanged declarative job, but rebinds a changed decla
   ).toMatchObject({ created: false, updated: true });
   expect((await readJob())?.toolsAllowProvenance).toEqual(localProvenance);
 });
+
+it.each([
+  { provenance: "native channel requester", authority: fullAuthority },
+  { provenance: "local caller origin", authority: localAuthority },
+])("keeps the $provenance when bind records the parent link", async ({ authority }) => {
+  const created = await cron.add(
+    requesterDeclaration({ declarationKey: undefined, sessionTarget: "isolated" }),
+    authority,
+  );
+  const stored = (await readJob())!;
+  const sourceConversation = {
+    sessionKey: requesterOwner.sessionKey,
+    sessionId: "parent-session",
+    lifecycleRevision: "parent-revision",
+  };
+  await cron.update(created.id, {}, { bindSourceConversation: sourceConversation });
+  const bound = (await readJob())!;
+  expect(bound.sourceConversation).toEqual(sourceConversation);
+  expect(bound.toolsAllowProvenance).toEqual(stored.toolsAllowProvenance);
+  // A later executable edit still clears requester facts it was not bound to.
+  await cron.update(created.id, { name: "Changed model context" });
+  expect((await readJob())?.toolsAllowProvenance?.channelRequester).toBeUndefined();
+  expect((await readJob())?.toolsAllowProvenance?.callerOrigin ?? { kind: "unknown" }).toEqual({
+    kind: "unknown",
+  });
+});

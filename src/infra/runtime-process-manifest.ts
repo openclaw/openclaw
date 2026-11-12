@@ -17,36 +17,29 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     } as const;
   }
 
+  const loaderFreeEntrypoint = (modulePath: string) =>
+    runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
+
   return {
+    daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
-    repositoryPublicationRestore: runtimeProcessEntrypoint(
+    repositoryPublicationRestore: loaderFreeEntrypoint(
       "gateway/repository-publication-restore.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspacePublicationSnapshot: runtimeProcessEntrypoint(
+    nodeWorkspacePublicationSnapshot: loaderFreeEntrypoint(
       "node-host/node-worker-publication-snapshot.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceManifest: runtimeProcessEntrypoint(
+    nodeWorkspaceManifest: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-manifest.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceGitHistory: runtimeProcessEntrypoint(
+    nodeWorkspaceGitHistory: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-git-history.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
     ),
+    doctorDatabaseBloat: runtimeProcessEntrypoint("commands/doctor-db-bloat.worker"),
     backupDatabaseDiscovery: runtimeProcessEntrypoint("infra/backup-database-discovery.worker"),
     sqliteHeaderProbe: runtimeProcessEntrypoint("infra/sqlite-header-probe.worker"),
     databaseBackup: runtimeProcessEntrypoint("snapshot/database-backup.worker"),
@@ -57,35 +50,34 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     databasePortCommand: runtimeProcessEntrypoint(
       "infra/database-engine/port-command.entry.worker",
     ),
+    stallObserver: runtimeProcessEntrypoint("logging/diagnostic-stall-observer.worker"),
+    fileLog: runtimeProcessEntrypoint("logging/logger-file.worker"),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
-    shutdownHardExit: runtimeProcessEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
+    openclawIdTunnel: runtimeProcessEntrypoint("gateway/openclaw-id/tunnel-child/entry"),
+    shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
       "infra/package-update-integrity-hasher.worker",
     ),
     packageLocalOverrides: runtimeProcessEntrypoint("infra/package-local-overrides.worker"),
     directoryWatchHost: runtimeProcessEntrypoint("infra/directory-watch-host.worker"),
     directoryWatchParent: runtimeProcessEntrypoint("infra/directory-watch-parent.worker"),
-    workspaceQuiescenceAcquire: runtimeProcessEntrypoint(
+    workspaceQuiescenceAcquire: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-acquire.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRenew: runtimeProcessEntrypoint(
+    workspaceQuiescenceRenew: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-renew.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRelease: runtimeProcessEntrypoint(
+    workspaceQuiescenceRelease: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-release.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     packageActivationRecovery: runtimeProcessEntrypoint(
       "infra/package-update-activation-sealed",
       "package-update-activation-recovery",
+      ".mjs",
+    ),
+    managedHandoffPostgresBridge: runtimeProcessEntrypoint(
+      "infra/update-managed-service-handoff-postgres.worker",
+      "managed-handoff-postgres-bridge.worker",
       ".mjs",
     ),
     managedHandoffRuntime: runtimeProcessEntrypoint(
@@ -115,11 +107,14 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fileToolPlanning: runtimeProcessEntrypoint("agents/sessions/tools/file-tool-planning.worker"),
     fileToolRead: runtimeProcessEntrypoint("agents/sessions/tools/read-file.worker"),
     attachmentProcessor: runtimeProcessEntrypoint("media/attachment-processor.worker"),
+    widgetScriptSyntax: runtimeProcessEntrypoint("canvas/widget-script-syntax.worker"),
     gitOperations: runtimeProcessEntrypoint("infra/git-operation.worker"),
     gitPackCleanup: runtimeProcessEntrypoint("agents/worktrees/git-pack-cleanup.worker"),
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
+    execRealpath: runtimeProcessEntrypoint("infra/exec-realpath.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
+    secretFileRead: runtimeProcessEntrypoint("infra/secret-file-read.worker"),
     ttsPreferences: runtimeProcessEntrypoint("tts/tts-settings-write.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
@@ -196,6 +191,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "config/sessions/session-accessor.sqlite-archive.worker",
     ),
     sessionTranscript: runtimeProcessEntrypoint("config/sessions/session-transcript.worker"),
+    usageOverview: runtimeProcessEntrypoint("infra/session-cost-usage-overview-report.worker"),
     workerTranscriptCommit: runtimeProcessEntrypoint(
       "gateway/worker-environments/transcript-commit.worker",
     ),
@@ -258,6 +254,7 @@ export const pluginRuntimeProcessManifest = {
     ...pluginRuntimeProcess("code-mode-quickjs", "src/executor", "src/code-mode.worker"),
     sourceWorkerName: "code-mode.worker",
   },
+  codexStdio: pluginRuntimeProcess("codex", "stdio-worker-entrypoint", "stdio.worker"),
   codexCatalogPage: pluginRuntimeProcess(
     "codex",
     "catalog-page-worker-entrypoint",
@@ -310,6 +307,14 @@ export const pluginRuntimeProcessManifest = {
   iMessageChatDb: {
     ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
     sourceWorkerName: "chat-db.worker",
+  },
+  knowledgeRegistry: {
+    ...pluginRuntimeProcess("knowledge", "src/registry-client", "src/registry-worker"),
+    sourceWorkerName: "registry-worker",
+  },
+  knowledgeStorage: {
+    ...pluginRuntimeProcess("knowledge", "src/storage-client", "src/storage-worker"),
+    sourceWorkerName: "storage-worker",
   },
   mxcLauncher: {
     plugin: "mxc",
@@ -440,6 +445,14 @@ export const pluginRuntimeProcessManifest = {
     sourceWorkerName: "telegram-ingress-worker.runtime",
     distWorkerPath: "telegram-ingress-worker.runtime.js",
   },
+  telegramWidgetCheck: {
+    ...pluginRuntimeProcess(
+      "telegram",
+      "src/widgets/widget-check",
+      "src/widgets/widget-check.worker",
+    ),
+    sourceWorkerName: "widget-check.worker",
+  },
   onnxInference: pluginRuntimeProcess("onnx", "index", "src/inference.worker"),
   teamReportsStore: pluginRuntimeProcess("team-reports", "index", "src/store.worker"),
   teamReportsRun: pluginRuntimeProcess("team-reports", "index", "src/run.worker"),
@@ -461,6 +474,7 @@ export const runtimeProcessDeployManifest = {
     source: "src/worker/worker-deploy-client-credentials.ts",
     split: false,
   },
+  "file-log.worker": { source: "src/worker/worker-deploy-file-log.ts", split: false },
   "file-tool-planning.worker": {
     source: "src/worker/worker-deploy-file-tool-planning.ts",
     split: false,
@@ -501,6 +515,10 @@ export const runtimeProcessHelperManifest = {
 
 // Each sealed bootstrap selects only the sibling entries it owns.
 export const runtimeProcessSealedManifest = {
+  managedHandoff: {
+    ownerSource: "src/infra/update-managed-service-handoff-sealed.ts",
+    entries: [["postgresBridge", "managedHandoffPostgresBridge"]],
+  },
   worker: {
     ownerSource: "src/worker/worker-deploy-runtime.ts",
     entries: [
@@ -508,6 +526,7 @@ export const runtimeProcessSealedManifest = {
       ["codeModeNode", "code-mode-node.worker"],
       ["stateRead", "openclaw-state-read.worker"],
       ["workerNativeLifecycle", "worker-native-lifecycle.worker"],
+      ["fileLog", "file-log.worker"],
       ["fileToolPlanning", "file-tool-planning.worker"],
       ["fileToolRead", "file-tool-read.worker"],
       ["gatewayStateOwnerHeartbeat", "gateway-state-owner-heartbeat.worker"],
@@ -529,20 +548,14 @@ export const runtimeProcessSealedManifest = {
     ownerSource: string;
     entries: readonly (readonly [
       keyof ReturnType<typeof createRuntimeProcessEntrypoints>,
-      keyof typeof runtimeProcessDeployManifest | keyof typeof runtimeProcessHelperManifest,
+      (
+        | keyof typeof runtimeProcessDeployManifest
+        | keyof typeof runtimeProcessHelperManifest
+        | keyof ReturnType<typeof createRuntimeProcessEntrypoints>
+      ),
     ])[];
   }
 >;
-
-export function createSealedRuntimeProcessEntrypoints(
-  group: keyof typeof runtimeProcessSealedManifest,
-  currentModuleUrl: string,
-) {
-  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
-    name,
-    url: new URL(`./${entry}.mjs`, currentModuleUrl),
-  }));
-}
 
 /** Source-only build workers are declared without entering the packaged runtime graph. */
 export const runtimeProcessToolingEntrypoints = {
@@ -652,6 +665,14 @@ export function createStandaloneRuntimeProcessEntrypoints(
 
 // Script assets execute in their destination runtime rather than a worker thread.
 export const runtimeProcessScriptEntrypoints = {
+  bunSqliteLibraryProbe: {
+    buildSource: "src/infra/bun-sqlite-library-probe.entry.ts",
+    sourceModule: "src/infra/bun-sqlite-library-probe.generated.ts",
+    sourceBinding: "BUN_SQLITE_LIBRARY_PROBE_SOURCE",
+    kind: "file",
+    fileName: "bun-sqlite-library-probe.mjs",
+    materialize: true,
+  },
   packageCliNodeProbe: {
     buildSource: "scripts/lib/package-cli-node-probe.entry.mjs",
     sourceModule: "scripts/lib/package-cli-node-probe.generated.mjs",
@@ -686,6 +707,7 @@ export const runtimeProcessScriptEntrypoints = {
     kind: "file",
     fileName: "daemon-runtime-probe.mjs",
     materialize: true,
+    runtimeEntrypoint: "daemonRuntimeProbe",
   },
   updateStateSizes: {
     sourceModule: "src/infra/update-state-sizes.generated.mjs",

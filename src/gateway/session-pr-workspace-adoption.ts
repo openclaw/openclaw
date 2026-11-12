@@ -7,18 +7,20 @@ import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-
 import { resolveCanonicalWorkspacePath } from "../agents/workspace-state-identity.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import {
-  hasSessionControllerQueuedWork,
-  isCompetingSessionControllerWorkActive,
-} from "../sessions/session-controller.context.js";
+import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.context.js";
 import {
   captureSessionTarget,
   runSessionMutation,
 } from "../sessions/session-controller.lifecycle.js";
+import type { ProjectRequester } from "./project-access.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareSessionFileWorkspace } from "./session-file-workspace.js";
 import { commitPreparedSessionWorkspace } from "./session-lifecycle-preparation.js";
+import {
+  resolvePullRequestProjectSource,
+  resolveSessionProjectRootForRecord,
+} from "./session-project-source.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 
 /** The yielded caller owns admission; siblings keep their original shared source. */
@@ -28,18 +30,20 @@ export async function adoptUnboundPullRequestWorkspace(params: {
   entry: InternalSessionEntry;
   sandbox: SandboxContext;
   assertCurrent: () => void;
-  verifyBeforeBinding: () => Promise<void>;
+  verifyBeforeBinding?: () => Promise<void>;
+  projectSource?: { host: string; repository: string; requester: ProjectRequester };
   signal?: AbortSignal;
 }) {
   const { context, target, entry, sandbox } = params;
   assertLocalSandboxWorkspaceBackend(sandbox.backendId);
   const cfg = context.getRuntimeConfig();
   const workspaceDir = resolveAgentWorkspaceDir(cfg, target.agentId);
+  const originalRoot = sandbox.workspaceDir;
   const prior = entry.priorWorkspace;
   const recovering =
     prior?.worktreeId === entry.worktree?.id &&
     prior?.sessionId === entry.sessionId &&
-    prior?.fileRoot === sandbox.workspaceDir;
+    prior?.fileRoot === originalRoot;
   if (
     !recovering &&
     (entry.worktree ||
@@ -47,8 +51,6 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       entry.projectId ||
       entry.deviceFolder ||
       entry.execNode ||
-      entry.spawnedCwd ||
-      entry.spawnedWorkspaceDir ||
       entry.pendingWorktree ||
       entry.pendingProjectGitUrl ||
       (entry.sessionRoot !== undefined &&
@@ -63,48 +65,61 @@ export async function adoptUnboundPullRequestWorkspace(params: {
     params.signal?.throwIfAborted();
     params.assertCurrent();
     assertWorkspaceCurrent();
-    const busy =
-      hasSessionControllerQueuedWork(target.storePath, identities, target.agentId) ||
-      isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
-      isCompetingSessionControllerWorkActive(
-        `agent:${target.agentId}`,
-        identities,
-        target.agentId,
-      ) ||
-      listExecSessionsForCancellation().some(
-        (process) =>
-          process.agentId === target.agentId &&
-          (process.sessionKey === target.sessionKey || process.scopeKey === target.sessionKey) &&
-          (!process.exited ||
-            process.finalizing ||
-            process.cleanupUncertain ||
-            process.finalizationFailed ||
-            (process.backgrounded && !process.terminalPollObserved && !process.requestCancelled)),
-      ) ||
+    // The handoff holds queued follow-ups; only competing execution blocks adoption.
+    // An exited, finalized process cannot compete, and its output stays readable
+    // through process log, so an unread result (including a requested stop) is not busy.
+    const process = listExecSessionsForCancellation().find(
+      (candidate) =>
+        candidate.agentId === target.agentId &&
+        (candidate.sessionKey === target.sessionKey || candidate.scopeKey === target.sessionKey) &&
+        (!candidate.exited ||
+          candidate.finalizing ||
+          candidate.cleanupUncertain ||
+          candidate.finalizationFailed),
+    );
+    const describeProcess = (exec: NonNullable<typeof process>) =>
+      !exec.exited
+        ? `background exec ${exec.id} is still running; poll or kill it`
+        : exec.finalizing
+          ? `background exec ${exec.id} is still cleaning up; poll it until it settles`
+          : `background exec ${exec.id} could not confirm its cleanup; inspect it with process log`;
+    const child = () =>
       listSubagentRunsForRequester(target.sessionKey, {
         requesterSessionId: entry.sessionId,
         requesterLifecycleRevision: entry.lifecycleRevision,
         requesterAgentId: target.agentId,
         requesterStorePath: target.storePath,
-      }).some(
-        (child) =>
-          child.execution.endedAt === undefined ||
-          child.killReconciliation ||
-          child.requesterSettleWake ||
-          child.delivery?.status === "pending" ||
-          child.delivery?.status === "in_progress",
-      ) ||
-      Boolean(
-        context.terminalSessions?.listAgent({
-          kind: "agent",
-          agentId: target.agentId,
-          agentSessionKey: target.sessionKey,
-          agentSessionId: entry.sessionId,
-        }).length,
+      }).find(
+        (run) =>
+          run.execution.endedAt === undefined ||
+          run.killReconciliation ||
+          run.requesterSettleWake ||
+          run.delivery?.status === "pending" ||
+          run.delivery?.status === "in_progress",
       );
-    if (busy) {
+    const blockingChild = process ? undefined : child();
+    const blocker = process
+      ? describeProcess(process)
+      : blockingChild
+        ? `child ${blockingChild.childSessionKey} has not finished or delivered its result`
+        : context.terminalSessions?.listAgent({
+              kind: "agent",
+              agentId: target.agentId,
+              agentSessionKey: target.sessionKey,
+              agentSessionId: entry.sessionId,
+            }).length
+          ? "a terminal is still open for this conversation"
+          : isCompetingSessionControllerWorkActive(target.storePath, identities, target.agentId) ||
+              isCompetingSessionControllerWorkActive(
+                `agent:${target.agentId}`,
+                identities,
+                target.agentId,
+              )
+            ? "another run of this conversation is still active"
+            : undefined;
+    if (blocker) {
       throw new Error(
-        "This conversation still has queued input, background work, a child or a terminal. Finish or observe that work, then retry prepare_pr; nothing was stopped or moved.",
+        `This conversation still has background work, a child or a terminal: ${blocker}. Finish that work, then retry workspace preparation; nothing was stopped or moved.`,
       );
     }
   };
@@ -131,7 +146,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
         entry,
       );
       assertIdle();
-      if (!oldFiles.root || oldFiles.root !== sandbox.workspaceDir) {
+      if (!oldFiles.root || oldFiles.root !== originalRoot) {
         throw new Error(
           "The conversation's source changed before PR preparation; retry in its current workspace.",
         );
@@ -150,10 +165,25 @@ export async function adoptUnboundPullRequestWorkspace(params: {
           "The conversation's message boundary is unavailable; retry PR preparation.",
         );
       }
+      const source = params.projectSource;
+      const project = source ? await resolvePullRequestProjectSource(cfg, source) : undefined;
+      const projectRoot = project
+        ? await resolveSessionProjectRootForRecord(project, true)
+        : undefined;
+      assertIdle();
+      if (projectRoot && !projectRoot.ok) {
+        throw new Error(projectRoot.error.message);
+      }
       const prepared = await prepareSessionWorktree({
         cfg,
-        target: { ...target, key: target.sessionKey, entry },
-        workspace: { kind: "empty" },
+        target: {
+          ...target,
+          key: target.sessionKey,
+          entry,
+          projectId: project?.id,
+          sandboxRequired: true,
+        },
+        workspace: projectRoot?.value ?? { kind: "empty" },
         runSetupScript: false,
         signal: params.signal,
         commitGuard: assertIdle,
@@ -167,7 +197,7 @@ export async function adoptUnboundPullRequestWorkspace(params: {
         throw new Error("PR preparation did not allocate a managed workspace.");
       }
       try {
-        await params.verifyBeforeBinding();
+        await params.verifyBeforeBinding?.();
         assertIdle();
       } catch (error) {
         await prepared.value.rollback?.();
@@ -175,6 +205,8 @@ export async function adoptUnboundPullRequestWorkspace(params: {
       }
       const bound = await commitPreparedSessionWorkspace({
         prepared: prepared.value,
+        projectId: project?.id,
+        signal: params.signal,
         priorWorkspace: {
           worktreeId: worktree.id,
           sessionId: entry.sessionId,
@@ -191,8 +223,8 @@ export async function adoptUnboundPullRequestWorkspace(params: {
             current.worktree ||
             current.repositoryWorkspaceId ||
             current.projectId ||
-            current.spawnedCwd ||
-            current.spawnedWorkspaceDir ||
+            current.spawnedCwd !== entry.spawnedCwd ||
+            current.spawnedWorkspaceDir !== entry.spawnedWorkspaceDir ||
             current.pendingWorktree ||
             current.pendingProjectGitUrl ||
             current.sessionRoot !== entry.sessionRoot

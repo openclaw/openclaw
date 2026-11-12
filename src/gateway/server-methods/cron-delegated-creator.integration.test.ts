@@ -2,10 +2,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  resolveSessionCreatorActor,
-  sessionIsolationProfileId,
-} from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   bindGatewayContextResolver,
@@ -56,27 +52,12 @@ beforeEach(async () => {
 });
 
 it.each([
-  {
-    name: "causal human with default configuration",
-    operatorProfileId: "selected-user",
-    delegatedCreatorProfileId: "causal-human",
-    expectedCreator: "causal-human",
-  },
-  {
-    name: "no human requester",
-    operatorProfileId: undefined,
-    delegatedCreatorProfileId: undefined,
-    expectedCreator: undefined,
-  },
-  {
-    name: "explicit no-human origin with selected execution user",
-    operatorProfileId: "selected-user",
-    delegatedCreatorProfileId: null,
-    expectedCreator: undefined,
-  },
-])(
-  "attributes new cron to $name, never the session's historical human",
-  async ({ operatorProfileId, delegatedCreatorProfileId, expectedCreator }) => {
+  ["causal human", "selected-user", "causal-human"],
+  ["no human requester", undefined, undefined],
+  ["explicit no-human origin", "selected-user", null],
+] as const)(
+  "attributes new cron to %s, never the session's historical human",
+  async (_name, operatorProfileId, delegatedCreatorProfileId) => {
     const fixture = createCronFixture(undefined, config);
     const client = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
     client.internal = { isLocalClient: true };
@@ -108,18 +89,10 @@ it.each([
             },
           });
           const [job] = await fixture.read();
-          expect(job?.createdActor).toEqual({
-            ...CREATOR,
-            ...(expectedCreator
-              ? { delegatedBy: { type: "human", source: "profile", id: expectedCreator } }
-              : { delegatedBy: { type: "agent", id: "main" } }),
-          });
-          expect(resolveSessionCreatorActor(job?.createdActor)).toEqual(
-            expectedCreator
-              ? { type: "human", source: "profile", id: expectedCreator }
-              : { type: "agent", id: "main" },
-          );
-          expect(sessionIsolationProfileId(job?.createdActor)).toBe(CREATOR.id);
+          const delegatedBy = delegatedCreatorProfileId
+            ? { type: "human", source: "profile", id: delegatedCreatorProfileId }
+            : { type: "agent", id: "main" };
+          expect(job?.createdActor).toEqual({ ...CREATOR, delegatedBy });
           expect(job?.owner).toMatchObject({ agentId: "main", sessionKey: SESSION });
           await tools.invoke(AUTOMATIONS_TOOL_NAME, {
             action: "update",

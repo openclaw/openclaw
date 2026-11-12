@@ -7,8 +7,8 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { collectSessionMemoryEntries } from "./session-memory-entry.worker.test-support.js";
 
@@ -140,10 +140,7 @@ it("keeps repeated sessions isolated by their admitted input bounds", async () =
 it("waits for delivery before reading later export batches and retries a failed delivery", async () => {
   await withOpenClawTestState({ label: "session-memory-entry-delivery" }, async (state) => {
     const requests = Array.from({ length: 3 }, (_, index) => {
-      const options = scopeFor(
-        path.join(state.sessionsDir(), "sessions.json"),
-        `delivery-${index}`,
-      );
+      const options = scopeFor(path.join(state.sessionsDir(), "sessions.json"), `d-${index}`);
       return { absPath: options.sessionKey, options };
     });
     const body = "bounded fixture ".repeat(150_000);
@@ -178,16 +175,56 @@ it("waits for delivery before reading later export batches and retries a failed 
       await observed;
       observer.restore();
     }
-    replace(requests[2]!.options, [userEvent("newer", "Committed after failure.")]);
+    // Above snapshot retention, each request renders and consumes its own export snapshot.
+    replace(requests[2]!.options, [userEvent("newer", "Later. ".repeat(684_000))]);
     const delivered: number[] = [];
     expect(
-      await collectSessionMemoryEntries(requests, async (index, value) => {
+      await collectSessionMemoryEntries([...requests, requests[2]!], async (index, value) => {
         delivered.push(index);
-        if (index === 2) {
-          expect(value).toMatchObject(contentEntry("User: Committed after failure."));
+        if (index >= 2) {
+          expect(value).toMatchObject(
+            contentEntry(expect.stringMatching(/^(User: Later\.( Later\.)*\n?){6000}$/)),
+          );
         }
       }),
-    ).toHaveLength(3);
-    expect(delivered).toEqual([0, 1, 2]);
+    ).toHaveLength(4);
+    expect(delivered).toEqual([0, 1, 2, 3]);
+  });
+});
+
+it("restarts a sliced export after a concurrent change and discards its delivered pages", async () => {
+  await withOpenClawTestState({ label: "session-memory-entry-restart" }, async (state) => {
+    const scope = scopeFor(path.join(state.sessionsDir(), "sessions.json"), "restart");
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    // Six 1 MB rows exceed snapshot retention and the 2 MiB slice budget.
+    const rows = Array.from({ length: 6 }, (_, index) =>
+      userEvent(`row-${index}`, `row${index} `.repeat(200_000)),
+    );
+    replace(scope, rows);
+    const updates: string[] = [];
+    let appended = false;
+    const [exported] = await collectSessionMemoryEntries(
+      [{ absPath: scope.sessionKey, options: scope }],
+      undefined,
+      (_index, update) => {
+        updates.push("reset" in update ? "reset" : "page");
+        if (!appended) {
+          appended = true;
+          expect(
+            appendTranscriptMessageSync(scope, {
+              eventId: "concurrent",
+              message: { role: "assistant", content: "Concurrent answer." },
+            }),
+          ).toMatchObject({ ok: true });
+        }
+      },
+    );
+    assert(exported && "entry" in exported && exported.entry, "Expected a hot export");
+    // The restarted export reads the transcript current at its fresh head.
+    expect(updates).toContain("reset");
+    expect(updates.indexOf("reset")).toBeGreaterThan(0);
+    expect(exported.entry.content.endsWith("\nAssistant: Concurrent answer.")).toBe(true);
+    expect(exported.entry.content.startsWith("User: row0 row0")).toBe(true);
+    expect(exported.entry.lineCount).toBe(exported.entry.content.split("\n").length);
   });
 });

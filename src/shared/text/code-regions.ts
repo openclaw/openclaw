@@ -1,11 +1,58 @@
+import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import {
   findMarkdownCodeRegions as findCodeRegions,
   parseMarkdownOwnership,
 } from "../../../packages/markdown-core/src/reasoning-tags.js";
+import {
+  advanceProtectionScanState,
+  createProtectionScanState,
+} from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { isInsideCode } from "./code-ranges.js";
 
 export { findCodeRegions };
 export type { CodeRegion } from "./code-ranges.js";
+
+/** Per-stream ownership: retain the parser's mutable tail instead of reparsing settled blocks. */
+export function createCodeRegionResolver() {
+  // Pending candidates and cumulative snapshots interleave; neither should evict the other's tail.
+  const scans: Array<{
+    text: string;
+    retainStart: number;
+    regions: ReturnType<typeof findCodeRegions>;
+  }> = [];
+  return (text: string): ReturnType<typeof findCodeRegions> => {
+    if (!/[`~\t]| {4}/u.test(text)) {
+      return [];
+    }
+    const index = scans.findIndex((scan) => text.startsWith(scan.text));
+    const previous = index < 0 ? undefined : scans.splice(index, 1)[0];
+    if (previous?.text === text) {
+      scans.unshift(previous);
+      return previous.regions;
+    }
+    const offset = previous?.retainStart ?? 0;
+    const tail = text.slice(offset);
+    const ownership = findCodeOwnership(tail);
+    // Definitions can affect later images; retain their enclosing containers too, since
+    // a definition's indented line alone can become code without its earlier list marker.
+    const retain = ownership.definitions.length ? 0 : ownership.retainStart;
+    const lineStart =
+      retain === 0
+        ? 0
+        : Math.max(tail.lastIndexOf("\n", retain - 1), tail.lastIndexOf("\r", retain - 1)) + 1;
+    for (const region of ownership.regions) {
+      region.start += offset;
+      region.end += offset;
+    }
+    const regions = [
+      ...(previous?.regions.filter((region) => region.end <= offset) ?? []),
+      ...ownership.regions,
+    ];
+    scans.unshift({ text, retainStart: offset + lineStart, regions });
+    scans.length = Math.min(scans.length, 2);
+    return regions;
+  };
+}
 
 export {
   createTextPartCodeRegionResolver,
@@ -24,6 +71,131 @@ export function findCodeOwnership(
   return ownership;
 }
 
+/** Reuse canonical Markdown ownership only across safe checkpoint appends. */
+export function createCodeOwnershipResolver() {
+  let ownershipSource = "";
+  let openBlock = false;
+  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+  return (text: string) => {
+    const last = ownership?.regions.at(-1);
+    // A blank container prefix can gain code content without another newline.
+    const partialContainerLine =
+      last?.block &&
+      last.end < ownershipSource.length &&
+      /^[ \t>]*$/u.test(
+        ownershipSource.slice(
+          Math.max(ownershipSource.lastIndexOf("\n"), ownershipSource.lastIndexOf("\r")) + 1,
+        ),
+      );
+    // A new line can advance settlement even when code ranges stay unchanged.
+    if (
+      ownership &&
+      !partialContainerLine &&
+      !text.includes("\n", ownershipSource.length) &&
+      !text.includes("\r", ownershipSource.length) &&
+      (!last?.block || last.end !== ownershipSource.length || openBlock) &&
+      canReuseMarkdownOwnership(ownershipSource, text, ownership)
+    ) {
+      if (openBlock && last) {
+        ownership = {
+          ...ownership,
+          regions: [...ownership.regions.slice(0, -1), { ...last, end: text.length }],
+        };
+      }
+      ownershipSource = text;
+      return ownership;
+    }
+    ownership = findCodeOwnership(text);
+    ownershipSource = text;
+    const tail = ownership.regions.at(-1);
+    const lineStart = tail
+      ? Math.max(text.lastIndexOf("\n", tail.start - 1), text.lastIndexOf("\r", tail.start - 1)) + 1
+      : 0;
+    const topLevel = tail && /^ {0,3}$/u.test(text.slice(lineStart, tail.start));
+    openBlock = Boolean(
+      tail?.block &&
+      tail.end === text.length &&
+      ((topLevel && scanFenceSpans(text.slice(tail.start)).state.open) ||
+        /^(?: {4}|\t)/u.test(
+          text.slice(Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1),
+        )),
+    );
+    return ownership;
+  };
+}
+
+/** Stable retained Markdown boundary and the context required to resume its tail. */
+export function findTextCheckpoint(
+  text: string,
+  referenceLength: number,
+  resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
+): {
+  offset: number;
+  context: string;
+  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
+} {
+  const state = createProtectionScanState();
+  let cursor = referenceLength;
+  let lastLineStart = cursor;
+  let closedFence = false;
+  for (let end = text.indexOf("\n", cursor); end !== -1; end = text.indexOf("\n", cursor)) {
+    const line = text.slice(cursor, end + 1);
+    const inFence = Boolean(state.fenceChar);
+    advanceProtectionScanState(state, line);
+    // References, image descriptions, and setext headings can need earlier paragraph context.
+    if (
+      state.paragraphAmbiguous ||
+      state.structuralUnknown ||
+      (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
+    ) {
+      const ownership = resolveOwnership(text);
+      if (ownership.continuation) {
+        return { ...ownership.continuation, definitions: ownership.definitions };
+      }
+      const retain = ownership.retainStart;
+      let start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
+      const startsDefinition = ownership.definitions.some(
+        (definition) =>
+          definition.start >= start && /^[ \t]*$/.test(text.slice(start, definition.start)),
+      );
+      if (!startsDefinition) {
+        const adjacentDefinition = ownership.definitions.findLast(
+          (definition) =>
+            definition.end <= start &&
+            /^[ \t]*(?:\r\n|\r|\n)[ \t]*$/.test(text.slice(definition.end, start)),
+        );
+        // A synthetic blank after a definition would turn adjacent indented prose into code.
+        if (adjacentDefinition) {
+          start = text.lastIndexOf("\n", adjacentDefinition.start - 1) + 1;
+        }
+      }
+      const completeEnd = text.lastIndexOf("\n") + 1;
+      if (
+        !/\r(?!\n)/.test(text) &&
+        ownership.regions.some((region) => region.block && region.start === retain)
+      ) {
+        const fence = scanFenceSpans(text.slice(start, completeEnd)).state.open;
+        if (fence) {
+          return {
+            offset: completeEnd,
+            context: fence.marker + "\n",
+            definitions: ownership.definitions,
+          };
+        }
+      }
+      return { offset: start, context: "", definitions: ownership.definitions };
+    }
+    lastLineStart = cursor;
+    cursor = end + 1;
+    closedFence = inFence && !state.fenceChar;
+  }
+  if (state.fenceChar) {
+    // Only the proven top-level fence is carried; its settled body is never parsed again.
+    return { offset: cursor, context: state.fenceChar.repeat(state.fenceLength) + "\n" };
+  }
+  return { offset: closedFence ? cursor : lastLineStart, context: "" };
+}
+
 /** Reuse a parsed prefix only when an append cannot change Markdown ownership. */
 export function canReuseMarkdownOwnership(
   previousText: string,
@@ -33,7 +205,19 @@ export function canReuseMarkdownOwnership(
   if (!nextText.startsWith(previousText)) {
     return false;
   }
-  const appended = nextText.slice(previousText.length);
+  return canReuseMarkdownOwnershipForAppend(
+    previousText,
+    nextText.slice(previousText.length),
+    ownership,
+  );
+}
+
+/** Reuse a parsed prefix only when appending `appended` cannot change Markdown ownership. */
+export function canReuseMarkdownOwnershipForAppend(
+  previousText: string,
+  appended: string,
+  ownership?: ReturnType<typeof findCodeOwnership>,
+): boolean {
   if (!appended) {
     return true;
   }
@@ -54,6 +238,10 @@ export function canReuseMarkdownOwnership(
   if (!ownership) {
     return true;
   }
+  // Closing an angle destination can turn earlier backticks into URL text.
+  if (/[>)]/u.test(appended) && previousText.includes("<")) {
+    return false;
+  }
   if (ownership.unsettledDefinitionStarts.length > 0) {
     return false;
   }
@@ -66,7 +254,7 @@ export function canReuseMarkdownOwnership(
   // Inline code inside a streamed link title stops being code when the title closes.
   if (
     ownership.retainStart < previousText.length &&
-    completesInlineLinkTitle(previousText, nextText, ownership.retainStart)
+    completesInlineLinkTitleForAppend(previousText, appended, ownership.retainStart)
   ) {
     return false;
   }
@@ -263,8 +451,11 @@ function hasReferenceDefinitionColon(text: string, labelStart: number) {
   return false;
 }
 
-function completesInlineLinkTitle(previousText: string, nextText: string, retainStart: number) {
-  const appended = nextText.slice(previousText.length);
+function completesInlineLinkTitleForAppend(
+  previousText: string,
+  appended: string,
+  retainStart: number,
+) {
   const appendedBoundary = appended.includes(">") ? stripBlockquotePrefixes(appended) : appended;
   if (!/["']\s*\)|\)\s*\)|^\s*\)/u.test(appendedBoundary)) {
     return false;

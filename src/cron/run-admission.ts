@@ -31,6 +31,7 @@ import {
   captureCronJobStandingGrantAuthority,
 } from "./active-jobs.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
+import { resolveScheduledSenderBit } from "./execution-context-registry.js";
 import type { MintedScheduledExecution } from "./scheduled-occurrence.js";
 import type { CronExecutionIdentityAdmission } from "./service/state.js";
 
@@ -43,6 +44,7 @@ export function prepareCronRunAdmission(params: {
   runId: string;
   sessionId?: string;
   sessionKey: string;
+  sourceReplySessionKey?: string;
   jobId: string;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   channelRequester?: CronAuthenticatedChannelRequester;
@@ -120,6 +122,7 @@ export function prepareCronRunAdmission(params: {
         agentId: params.agentId,
         runId,
         sessionKey: params.sessionKey,
+        sourceReplySessionKey: params.sourceReplySessionKey,
         sessionId: params.sessionId,
         requesterAccountId:
           scheduledMessageAuthority && scheduledToolPolicy?.mode === "account"
@@ -163,6 +166,8 @@ export function prepareCronRunAdmission(params: {
     messageActionTurnCapability,
     /** The minted execution context once the run is admitted. */
     readScheduledExecution: () => params.scheduledExecution.current(),
+    /** The run's one sender bit, shared by every runtime candidate. */
+    scheduledSender: resolveScheduledSenderBit(params.scheduledExecution.result),
     close,
     finish: async () => {
       await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(close);

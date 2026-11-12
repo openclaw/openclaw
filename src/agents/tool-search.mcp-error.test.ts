@@ -20,7 +20,7 @@ import {
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
+async function createDeferredMcpCall(result: CallToolResult) {
   const catalog = {
     version: 1 as const,
     generatedAt: 0,
@@ -39,7 +39,7 @@ function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
       }),
     ],
   };
-  return staticRuntime({
+  const runtime: SessionMcpRuntime = staticRuntime({
     sessionId: "session-tool-search-mcp-error",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
@@ -47,6 +47,9 @@ function makeMcpRuntime(result: CallToolResult): SessionMcpRuntime {
     peekCatalog: () => catalog,
     callTool: async () => result,
   });
+  const materialized = await materializeBundleMcpToolsForRun({ runtime });
+  const target = expectDefined(materialized.tools[0], "materialized MCP tool");
+  return { callTool: createDeferredCall(target), target };
 }
 
 function createDeferredCall(target: AnyAgentTool) {
@@ -58,12 +61,6 @@ function createDeferredCall(target: AnyAgentTool) {
     controls.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME),
     `${TOOL_CALL_RAW_TOOL_NAME} control`,
   );
-}
-
-async function createDeferredMcpCall(result: CallToolResult) {
-  const materialized = await materializeBundleMcpToolsForRun({ runtime: makeMcpRuntime(result) });
-  const target = expectDefined(materialized.tools[0], "materialized MCP tool");
-  return { callTool: createDeferredCall(target), target };
 }
 
 describe("Tool Search MCP failures", () => {
@@ -82,6 +79,18 @@ describe("Tool Search MCP failures", () => {
       .join("\n");
     expect(text).toContain("Saved preview");
     expect(text).not.toContain(image.data);
+  });
+
+  it("sends a wrapped MCP array to the model once, without indentation", async () => {
+    const items = [{ id: "C1", name: "#general" }];
+    const { callTool, target } = await createDeferredMcpCall({
+      content: [{ type: "text", text: JSON.stringify(items, null, 1) }],
+      structuredContent: { items },
+    });
+    const result = await callTool.execute("deferred-wrapped", { id: target.name, args: {} });
+    const text = JSON.stringify(result.content);
+    expect(text.match(/#general/g)).toHaveLength(1);
+    expect(text).not.toMatch(/\\n {2}/);
   });
 
   it.each([

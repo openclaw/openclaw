@@ -4,6 +4,7 @@ import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
 import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { createSilentPluginLogger } from "../../../test/helpers/mock-logger.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
@@ -45,15 +46,6 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../infra/outbound/message.js", () => ({
   sendMessage: workflowMocks.sendMessage,
 }));
-
-function createSilentPluginLogger() {
-  return {
-    info() {},
-    warn() {},
-    error() {},
-    debug() {},
-  };
-}
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-attachments-");
 

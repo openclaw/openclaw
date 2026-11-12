@@ -24,6 +24,7 @@ import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { clearPendingQueueItemsForRun } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { setSelectedChatSessionArchived } from "./chat-session-archive.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applyChatModelCatalogSnapshot } from "./chat-state-refresh.ts";
@@ -44,7 +45,12 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
-const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input.settled"]);
+const PENDING_INPUT_REASONS = new Set([
+  "send",
+  "agent.run.started",
+  "agent.input.steering",
+  "agent.input.settled",
+]);
 type ChatPanePresentation = () => boolean;
 
 function refreshChatEventHistory(
@@ -137,7 +143,7 @@ function handleSessionMessageEvent(
     });
   }
   if (matchesChat && event.archived !== null) {
-    state.selectedChatSessionArchived = event.archived;
+    setSelectedChatSessionArchived(state, event.archived);
   }
   const runIdBeforeApply = state.chatRunId;
   rememberAuthoritativeTerminal({ event, host: state, matchesChat, payload, runIdBeforeApply });
@@ -243,7 +249,7 @@ function handleSessionsChangedEvent(
     }
   }
   if (event && matchesChat && event.archived !== null) {
-    state.selectedChatSessionArchived = event.archived;
+    setSelectedChatSessionArchived(state, event.archived);
   }
   if (result.applied) {
     if (
@@ -313,46 +319,32 @@ export function handlePageGatewayEvent(
     dispatchChatLiveEvent(state, event, isPresented);
     return;
   }
-  handlePageStateEvent(state, event, isPresented, sessionResult);
-}
-
-function handlePageStateEvent(
-  state: ChatPageHost,
-  event: GatewayEventFrame,
-  isPresented: ChatPanePresentation = () => true,
-  sessionResult: SessionChangedRowResult = { applied: false },
-): void {
   chatRunPresentation(state).batch(
-    () => applyPageStateEvent(state, event, isPresented, sessionResult),
+    () => {
+      if (event.event === "models.snapshot") {
+        applyChatModelCatalogSnapshot(state);
+        return;
+      }
+      if (event.event === "session.approval") {
+        if (applySessionApprovalEvent(state, event.payload, resolveChatAgentId(state))) {
+          chatRunPresentation(state).publish();
+        }
+        return;
+      }
+      if (event.event === "session.message" || event.event === "sessions.changed") {
+        const handle =
+          event.event === "session.message"
+            ? handleSessionMessageEvent
+            : handleSessionsChangedEvent;
+        const scopedChange = handle(state, event.payload, isPresented, sessionResult);
+        void resumeStoredChatOutboxes(state, event);
+        if (scopedChange) {
+          chatRunPresentation(state).publish("animation-frame");
+        }
+      }
+    },
     event.event === "session.message" || event.event === "sessions.changed"
       ? "animation-frame"
       : "immediate",
   );
-}
-
-function applyPageStateEvent(
-  state: ChatPageHost,
-  event: GatewayEventFrame,
-  isPresented: ChatPanePresentation,
-  sessionResult: SessionChangedRowResult,
-): void {
-  if (event.event === "models.snapshot") {
-    applyChatModelCatalogSnapshot(state);
-    return;
-  }
-  if (event.event === "session.approval") {
-    if (applySessionApprovalEvent(state, event.payload, resolveChatAgentId(state))) {
-      chatRunPresentation(state).publish();
-    }
-    return;
-  }
-  if (event.event === "session.message" || event.event === "sessions.changed") {
-    const handle =
-      event.event === "session.message" ? handleSessionMessageEvent : handleSessionsChangedEvent;
-    const scopedChange = handle(state, event.payload, isPresented, sessionResult);
-    void resumeStoredChatOutboxes(state, event);
-    if (scopedChange) {
-      chatRunPresentation(state).publish("animation-frame");
-    }
-  }
 }

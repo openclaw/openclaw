@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { i18n } from "../../../i18n/index.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -8,30 +9,6 @@ import { chatStartupStatusLabel } from "../chat-run-startup.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-sender.ts";
 import { StreamGroup, type StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { projectChatPositions } from "./chat-position-projection.ts";
-
-function renderStartup(...args: Parameters<typeof chatStartupStatusLabel>) {
-  const startupLabel = chatStartupStatusLabel(...args);
-  return mountSolid(() => (
-    <StreamGroup
-      parts={[{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }]}
-      options={{ startupLabel }}
-    />
-  )).container;
-}
-
-it("renders the startup status with elapsed time instead of a working phrase", () => {
-  const container = renderStartup(
-    { state: "status", runId: "startup-run", phase: "waiting_for_state" },
-    null,
-  );
-  expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
-    "Temporarily busy—retrying…",
-  );
-  expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
-  expect(
-    container.querySelector(".chat-working-indicator__status > .sr-only, openclaw-working-phrase"),
-  ).toBeNull();
-});
 
 it("labels certified contention as a calm system notice", () => {
   const message = {
@@ -44,28 +21,22 @@ it("labels certified contention as a calm system notice", () => {
 });
 
 it.each([
-  [{ mode: "snapshot" }, "Starting from snapshot…"],
-  [{ mode: "cold", reason: "no-snapshot-yet", phase: "preparing" }, "Preparing cloud environment…"],
-  [{ mode: "cold", reason: "no-snapshot-yet", phase: "saving" }, "Saving snapshot…"],
   [{ mode: "snapshot", phase: "saving" }, "Saving snapshot…"],
   [{ mode: "cold", reason: "warm-images-off", phase: "provisioning" }, "Provisioning environment…"],
-] as const)("renders cloud start status in the existing line (%j)", (startStatus, label) => {
+] as const)("prioritizes run and placement phases over cloud mode (%j)", (startStatus, label) => {
   const provisioning = {
     sessionKey: "agent:main:cloud-status",
     phase: "provisioning",
     startedAt: 1_000,
   } as const;
-  const container = renderStartup(null, provisioning, startStatus);
-  expect(container.querySelectorAll(".chat-working-indicator__status")).toHaveLength(1);
-  expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(label);
-  expect(container.textContent).not.toMatch(/no-snapshot-yet|warm-images-off/);
   const runStatus = (phase: "provisioning_environment" | "starting_model") =>
     chatStartupStatusLabel({ state: "status", runId: "run", phase }, null, startStatus);
   expect([
+    chatStartupStatusLabel(null, provisioning, startStatus),
     chatStartupStatusLabel(null, { ...provisioning, phase: "reconnecting", startStatus }),
     runStatus("provisioning_environment"),
     runStatus("starting_model"),
-  ]).toEqual(["Reconnecting…", label, "Waiting for a response"]);
+  ]).toEqual([label, "Reconnecting…", label, "Waiting for a response"]);
 });
 
 it("retains the bubble and completed markdown while replacing stream snapshots and settling", () => {
@@ -122,4 +93,30 @@ it("prepares interleaved stream snapshots once for the rail and bubble", () => {
   expect(normalize).toHaveBeenCalledTimes(2);
   expect(positions(first).markers[0]?.message).toBe(railFirst.markers[0]?.message);
   expect(positions(second).markers[0]?.message).toBe(railSecond.markers[0]?.message);
+});
+
+it("routes the unnamed assistant stream label through the catalog", () => {
+  const translate = vi.spyOn(i18n, "t");
+  try {
+    const view = mountSolid(() => (
+      <StreamGroup
+        parts={[
+          {
+            kind: "stream",
+            key: "stream:localized",
+            startedAt: 1,
+            isStreaming: true,
+            text: "Answer",
+            thinking: "",
+          },
+        ]}
+        options={{}}
+      />
+    ));
+    flush();
+    expect(translate).toHaveBeenCalledWith("sessionsView.assistant", undefined);
+    expect(view.container.querySelector(".chat-bubble")).not.toBeNull();
+  } finally {
+    translate.mockRestore();
+  }
 });

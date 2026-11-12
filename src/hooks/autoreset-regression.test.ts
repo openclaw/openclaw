@@ -18,11 +18,6 @@ const logs = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn(), verbose: vi.fn()
 
 vi.mock("../globals.js", () => ({ logVerbose: logs.verbose }));
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => logs }));
-vi.mock("../plugins/legacy-internal-hook-state.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/legacy-internal-hook-state.js")>()),
-  clearLegacyPluginInternalHooks: () => {},
-  listLegacyPluginInternalHooks: () => [],
-}));
 
 function reset() {
   clearInternalHooks();

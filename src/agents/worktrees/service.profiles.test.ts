@@ -1,12 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as commandExec from "../../process/exec.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import { addManagedWorktree } from "./checkout.js";
 import { git } from "./git-fixture.test-support.js";
@@ -25,14 +21,7 @@ function failed(stderr: string) {
 
 describe("repository source profile creation", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
-  const roots = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      vi.restoreAllMocks();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const roots = useStateDatabaseTempDirs();
   let repo: string;
   let service: ManagedWorktreeService;
   let env: NodeJS.ProcessEnv;

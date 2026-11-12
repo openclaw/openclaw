@@ -1,24 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { getEnvironmentData, Worker } from "node:worker_threads";
-import { Client } from "pg";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-  resolveRuntimeWorkerThreadExecArgv,
-  resolveRuntimeWorkerUrl,
-} from "../runtime-worker-url.js";
+  conformanceWorkerResult,
+  createConformanceWorker,
+} from "../database-engine/conformance.test-support.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import {
   captureSqliteDatabaseAdmissions,
   readSqliteDatabaseWriteTokenForPath,
 } from "../sqlite-database-admission.js";
 import { postgresLockTestEntrypoint } from "./locks-runtime.test-support.js";
 import type { PostgresLockWorkerInput } from "./locks-worker.test-support.js";
+import { usePostgresTestHarness } from "./postgres.test-support.js";
 
-const configured = getEnvironmentData("openclaw.test.workboard.connection");
-const connection = typeof configured === "string" ? configured : undefined;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { connection, client: admin, directories, prefix } = usePostgresTestHarness("locks");
 type Event = "ready" | "admission" | "statement" | "read" | "done";
 type Message = { event: Event; before?: string; after?: string; value?: number; error?: string };
 
@@ -32,10 +29,11 @@ function launch(options: Omit<PostgresLockWorkerInput, "connection" | "gates">) 
     done: Promise.withResolvers<Message>(),
   };
   const url = resolveRuntimeWorkerUrl(postgresLockTestEntrypoint);
-  const worker = new Worker(url, {
-    execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-    workerData: { ...options, connection, gates: gates.buffer },
-  });
+  const worker = createConformanceWorker(
+    url,
+    { ...options, connection, gates: gates.buffer },
+    { connection: connection! },
+  );
   const fail = (error: Error) => Object.values(events).forEach((event) => event.reject(error));
   // Some events intentionally remain unobserved in the other scenario.
   for (const event of Object.values(events)) {
@@ -45,11 +43,7 @@ function launch(options: Omit<PostgresLockWorkerInput, "connection" | "gates">) 
     message.error ? fail(new Error(message.error)) : events[message.event].resolve(message),
   );
   worker.on("error", fail);
-  const exited = new Promise<void>((resolve, reject) => {
-    worker.on("exit", (code) =>
-      code === 0 ? resolve() : reject(new Error(`PostgreSQL regression worker exited ${code}`)),
-    );
-  });
+  const exited = conformanceWorkerResult<Message>(worker, "PostgreSQL regression");
   void exited.catch(() => {});
   return {
     wait: (event: Event) => events[event].promise,
@@ -62,11 +56,8 @@ function launch(options: Omit<PostgresLockWorkerInput, "connection" | "gates">) 
 }
 
 describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
-  const admin = new Client({ connectionString: connection });
   const workers: ReturnType<typeof launch>[] = [];
   const anchors: ReturnType<typeof openNodeSqliteDatabase>[] = [];
-  const schemas: string[] = [];
-  beforeAll(() => admin.connect());
   afterEach(async () => {
     await admin.query("ROLLBACK");
     await admin.query("SELECT pg_advisory_unlock_all()");
@@ -80,11 +71,7 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
     for (const anchor of anchors.splice(0)) {
       anchor.close();
     }
-    for (const schema of schemas.splice(0)) {
-      await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
-    }
   });
-  afterAll(() => admin.end());
 
   const rows = async (sql: string) => (await admin.query(sql)).rows;
   async function lockIsFree(key: string) {
@@ -101,9 +88,8 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
 
   async function fixture() {
     const storeId = randomUUID();
-    const schema = `openclaw_lock_test_${storeId.replaceAll("-", "")}`;
-    schemas.push(schema);
-    const databasePath = path.join(tempDirs.make("postgres-locks-"), "anchor.sqlite");
+    const schema = `${prefix}_${storeId.replaceAll("-", "")}`;
+    const databasePath = path.join(directories.make("postgres-locks-"), "anchor.sqlite");
     const anchor = openNodeSqliteDatabase(databasePath);
     // Final close revokes the shared admission; retain its owner until the workers exit.
     anchors.push(anchor);

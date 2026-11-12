@@ -135,7 +135,9 @@ type CodexThreadConfigurationParams = JsonObject & {
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
   sandbox?: CodexSandboxMode | null;
+  cyberAccessProgram?: "standard" | "daybreakBlue" | "daybreakRed";
   serviceTier?: CodexServiceTier | null;
+  baseInstructions?: string;
   developerInstructions?: string;
 };
 
@@ -182,7 +184,6 @@ export type CodexThreadForkParams = CodexThreadConfigurationParams & {
   cwd?: string | null;
   permissions?: string | null;
   config?: JsonObject | null;
-  baseInstructions?: string;
   ephemeral?: boolean;
   threadSource?: string | null;
   excludeTurns?: boolean;
@@ -449,6 +450,7 @@ export type CodexModel = {
   isDefault: boolean;
   inputModalities?: string[];
   serviceTiers?: { id: string; name: string; description: string }[];
+  availableAccessPrograms?: { cyber: Array<"standard" | "daybreakBlue" | "daybreakRed"> } | null;
   supportedReasoningEfforts: {
     reasoningEffort?: string | null;
   }[];

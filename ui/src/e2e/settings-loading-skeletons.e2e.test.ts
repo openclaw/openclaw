@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -13,7 +14,10 @@ import {
   pageRunner,
   settingsPageOptions,
 } from "./config-composer-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI settings loading skeletons mocked Gateway E2E",
@@ -38,19 +42,43 @@ const withPage = (run: (page: import("playwright").Page) => Promise<void>) =>
   runPage(({ page }) => run(page));
 
 suite.define(() => {
+  it.each([
+    ["approvals", "Recent exec, plugin, and system-agent approvals."],
+    [
+      "labs",
+      "Labs contains experimental capabilities that may change, break, or disappear between releases.",
+    ],
+  ])("renders the %s subtitle before the lazy sidebar", async (id, subtitle) => {
+    await suite.withPage(
+      { viewport: { width: 820, height: 1000 }, locale: "en-US" },
+      async ({ page }) => {
+        const sidebar = await holdModuleResponse(
+          page,
+          new RegExp("/src/components/settings-sidebar-shell[.]tsx"),
+        );
+        await installMockGateway(page);
+        try {
+          await page.goto(`${suite.server.baseUrl}settings/${id}`);
+          await sidebar.request;
+          const header = page.locator(`openclaw-${id}-page .content-header`);
+          await header.locator(".page-title").waitFor();
+          await header.locator(".page-subtitle").waitFor();
+          expect(await header.locator(".page-subtitle").textContent()).toBe(
+            `${subtitle} Learn more`,
+          );
+          expect(sidebar.requests()).toBe(1);
+        } finally {
+          sidebar.release();
+        }
+      },
+    );
+  });
+
   it("renders the Models initial load as a skeleton", async () => {
     await withPage(async (page) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "reviewer", name: "Reviewer" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": createAgentRoster({ main: "Main", reviewer: "Reviewer" }, "main", "agent"),
           "config.get": configSnapshot({}, "settings-loading-models"),
           "models.list": { models: [] },
           "models.authStatus": { providers: [], ts: Date.now() },
@@ -70,7 +98,7 @@ suite.define(() => {
       await gateway.deferNext("models.authStatus");
       const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker.getByRole("menuitemradio", { name: "Reviewer", exact: true }).click();
+      await agentPicker.getByRole("option", { name: "Reviewer", exact: true }).click();
       await expect
         .poll(async () => (await agentPicker.locator(".agent-select__label").textContent())?.trim())
         .toBe("Reviewer");
@@ -153,7 +181,15 @@ suite.define(() => {
         agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "tools.catalog",
+          "tools.effective",
+        ],
         heldMethods: ["tools.catalog", "tools.effective"],
+        operatorScopes: ["operator.read"],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "config.get": {
@@ -200,7 +236,6 @@ suite.define(() => {
       await historyToggle.click();
       await gateway.waitForRequest("openclaw.changes.list");
       await page.locator(".custodian__change-card").waitFor();
-
       const requestCount = (await gateway.getRequests("openclaw.changes.list")).length;
       await gateway.deferNext("openclaw.changes.list");
       await historyToggle.click();
@@ -305,10 +340,7 @@ suite.define(() => {
 
   it("renders the lazy Settings sidebar as navigation skeletons", async () => {
     await withPage(async (page) => {
-      let releaseSidebar: (() => void) | undefined;
-      const sidebarRelease = new Promise<void>((resolve) => {
-        releaseSidebar = resolve;
-      });
+      const { promise: sidebarRelease, resolve: releaseSidebar } = createDeferred();
       await page.route("**/src/components/settings-sidebar.ts*", async (route) => {
         await sidebarRelease;
         await route.continue();

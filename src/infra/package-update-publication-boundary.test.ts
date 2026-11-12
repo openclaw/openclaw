@@ -47,14 +47,42 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "openclaw.json"));
 });
-afterEach(async () => {
-  try {
-    await fixtures.lifetime.cleanup();
-  } finally {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  }
-});
+afterEach(async () => fixtures.cleanup());
+
+it.skipIf(process.platform === "win32")(
+  "keeps npm package content readable and executable across retain and restore",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const modes = [
+        ["", 0o755],
+        ["dist", 0o755],
+        ["package.json", 0o644],
+        ["dist/index.js", 0o755],
+      ] as const;
+      for (const [relative, mode] of modes) {
+        fs.chmodSync(path.join(f.packageRoot, relative), mode);
+      }
+      const expectModes = (packageRoot: string) => {
+        expect(
+          modes.map(([relative]) => fs.statSync(path.join(packageRoot, relative)).mode & 0o777),
+        ).toEqual(modes.map(([, mode]) => mode));
+      };
+      await withPublicationFence(f.packageRoot, async (fence) => {
+        const { result, transaction } = await runPublicationSwap(f, fence);
+        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+        const anchor = resolvePackageActivationAnchor(f.packageRoot);
+        expectModes(path.join(anchor, "previous"));
+        expect(fs.statSync(anchor).mode & 0o777).toBe(0o700);
+        await expect(transaction!.rollback(fence.assertCurrent)).resolves.toMatchObject({
+          exitCode: 0,
+        });
+        expectModes(f.packageRoot);
+        await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
+      });
+    }),
+);
 
 it.skipIf(process.platform === "win32")(
   "accepts present and temporarily missing npm roots through a canonical directory alias",

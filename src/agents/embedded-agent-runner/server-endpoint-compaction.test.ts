@@ -96,6 +96,16 @@ const compactionUsage = () => ({
   output_tokens: 200,
   dropped_message_count: 1,
 });
+// The transport prices endpoint compaction like a normal Responses call.
+const compactionModelUsage = () => ({
+  input: 1_000,
+  output: 200,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 1_200,
+  usageReport: { state: "available" },
+  cost: { input: 0.002, output: 0.0016, cacheRead: 0, cacheWrite: 0, total: 0.0036 },
+});
 function createCompactionResponse(responseModel: Model = model, userText = sourceText) {
   return {
     item: compactionItem(),
@@ -105,6 +115,7 @@ function createCompactionResponse(responseModel: Model = model, userText = sourc
     ],
     historyMode: "retained-users",
     usage: compactionUsage(),
+    modelUsage: compactionModelUsage(),
     model: responseModel,
     replayMetadata: testing.buildOpenAIResponsesReasoningReplayMetadata(responseModel, {
       sessionId: "session-1",
@@ -191,7 +202,7 @@ describe("attemptServerEndpointCompaction", () => {
         },
       });
       expect(owner.message.providerReplay).not.toHaveProperty("replayIndex");
-      expect(onUsage).toHaveBeenCalledExactlyOnceWith(compactionUsage());
+      expect(onUsage).toHaveBeenCalledExactlyOnceWith(compactionModelUsage());
       expect(warn).not.toHaveBeenCalled();
       expect(onCompactionCommitted).toHaveBeenCalledExactlyOnceWith(1_000);
       expect(committedOwner).toMatchObject({
@@ -272,12 +283,15 @@ describe("attemptServerEndpointCompaction", () => {
   });
 
   it("preserves the transcript for client recovery when the budget endpoint rejects", async () => {
-    requestPreparedCompactionMock.mockRejectedValueOnce(new Error("Context window exceeded"));
+    requestPreparedCompactionMock.mockRejectedValueOnce(
+      new Error("400 Your input exceeds the context window of this model."),
+    );
     const onCompactionCommitted = vi.fn();
     const { session, result } = attempt({ trigger: "budget", onCompactionCommitted });
     const before = structuredClone(session.sessionManager.getBranch());
 
-    await expect(result).resolves.toBeUndefined();
+    const outcome = await result;
+    expect(outcome, JSON.stringify(vi.mocked(log.warn).mock.calls)).toBe("context-overflow");
     expect(requestPreparedCompactionMock).toHaveBeenCalledOnce();
     expect(onCompactionCommitted).not.toHaveBeenCalled();
     expect(session.sessionManager.getBranch()).toEqual(before);
@@ -291,7 +305,7 @@ describe("attemptServerEndpointCompaction", () => {
   ] as const)(
     "admits a returned window iff it fits after charging %s",
     async (_name, fits, fixedTokens, pendingTokens, reserveTokens) => {
-      const userText = fits ? "old history ".repeat(4_000) : "source text ".repeat(400);
+      const userText = fits ? "old history ".repeat(100) : "source text ".repeat(400);
       const session = createSession(openAIModel, undefined, userText);
       const before = structuredClone(session.sessionManager.getBranch());
       const response = createCompactionResponse(openAIModel, fits ? sourceText : userText);

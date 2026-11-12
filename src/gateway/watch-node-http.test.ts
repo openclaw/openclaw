@@ -142,7 +142,7 @@ describe("watch node HTTP transport", () => {
         error: { message: "unsupported watch node identity or capability surface" },
       });
     }
-    runtime.close();
+    await runtime.close();
   });
 
   it("does not let attacker challenges evict another client nonce", async () => {
@@ -176,7 +176,7 @@ describe("watch node HTTP transport", () => {
       ),
     });
     expect(connectResponse.status).toBe(200);
-    runtime.close();
+    await runtime.close();
   });
 
   it("requires an authenticated disconnect and emits one lifecycle teardown", async () => {
@@ -213,6 +213,16 @@ describe("watch node HTTP transport", () => {
     expect(nodeRegistry.get(identity.deviceId)).toBeDefined();
 
     await waitForLastConnectedMetadata(baseDir, identity.deviceId);
+    const nodeSession = nodeRegistry.get(identity.deviceId)!;
+    const hostStats = { cpuCount: 2, memoryTotalBytes: 8192, memoryFreeBytes: 4096 };
+    expect(
+      nodeRegistry.updateHostStats({
+        nodeId: identity.deviceId,
+        connId: nodeSession.connId,
+        stats: hostStats,
+        observedAtMs: 1_250,
+      }),
+    ).toEqual({ ...hostStats, updatedAtMs: 1_250 });
     const pairingLockReady = createDeferred();
     const pairingLockPending = createDeferred();
     const pairingLock = withDevicePairingLock(async () => {
@@ -220,6 +230,7 @@ describe("watch node HTTP transport", () => {
       await pairingLockPending.promise;
     });
     await pairingLockReady.promise;
+    let closing: Promise<void> | undefined;
     try {
       const disconnectResponse = await fetch(`${baseUrl}/disconnect`, {
         method: "POST",
@@ -232,36 +243,39 @@ describe("watch node HTTP transport", () => {
       expect(disconnectedNodes).toEqual([
         { nodeId: identity.deviceId, reason: "watch disconnected" },
       ]);
+      const repeatedDisconnect = await fetch(`${baseUrl}/disconnect`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      expect(repeatedDisconnect.status).toBe(401);
+      let closed = false;
+      closing = runtime.close().then(() => {
+        closed = true;
+      });
+      await Promise.resolve();
+      expect(closed).toBe(false);
     } finally {
       pairingLockPending.resolve();
       await pairingLock;
+      await closing;
     }
-    await vi.waitFor(async () => {
-      const paired = (await listNodePairing(baseDir)).paired.find(
-        (entry) => entry.nodeId === identity.deviceId,
-      );
-      expect(paired?.lastDisconnectedAtMs).toEqual(expect.any(Number));
+    const paired = (await listNodePairing(baseDir)).paired.find(
+      (entry) => entry.nodeId === identity.deviceId,
+    );
+    expect(paired).toMatchObject({
+      lastDisconnectedAtMs: expect.any(Number),
+      lastHostStats: { ...hostStats, updatedAtMs: 1_250 },
     });
-
-    const repeatedDisconnect = await fetch(`${baseUrl}/disconnect`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${sessionToken}` },
-    });
-    expect(repeatedDisconnect.status).toBe(401);
-    runtime.close();
     expect(disconnectedNodes).toHaveLength(1);
   });
 
   it.each([{ destroyTarget: "socket", delivery: "raw" }] as const)(
     "rejects $delivery delivery when the active watch poll $destroyTarget is destroyed",
     async ({ destroyTarget, delivery }) => {
-      let resolvePollReady: (response: ServerResponse) => void = () => undefined;
-      const pollReady = new Promise<ServerResponse>((resolve) => {
-        resolvePollReady = resolve;
-      });
+      const pollReady = createDeferred<ServerResponse>();
       const { identity, issued, nodeRegistry, disconnectedNodes, runtime, baseUrl } =
         await createWatchNodeFixture("openclaw-watch-node-destroyed-poll-", {
-          onPollReady: resolvePollReady,
+          onPollReady: pollReady.resolve,
         });
       const connectResponse = await connectWatchNode({
         baseUrl,
@@ -286,7 +300,7 @@ describe("watch node HTTP transport", () => {
         request.end();
       });
       try {
-        const response = await pollReady;
+        const response = await pollReady.promise;
         const socket = response.socket;
         expect(socket).not.toBeNull();
         if (destroyTarget === "socket") {
@@ -320,7 +334,7 @@ describe("watch node HTTP transport", () => {
           false,
         );
       } finally {
-        runtime.close();
+        await runtime.close();
       }
       expect(disconnectedNodes).toHaveLength(1);
     },
@@ -358,7 +372,7 @@ describe("watch node HTTP transport", () => {
       nodeId: identity.deviceId,
       reason: "node pairing changed",
     });
-    runtime.close();
+    await runtime.close();
   });
 
   it("does not deliver queued work after a verified HTTP session is retired", async () => {
@@ -407,7 +421,7 @@ describe("watch node HTTP transport", () => {
       expect(response.status, JSON.stringify(body)).toBe(401);
       expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
     } finally {
-      runtime.close();
+      await runtime.close();
     }
   });
 
@@ -482,7 +496,7 @@ describe("watch node HTTP transport", () => {
         message: "node disconnected (device.info)",
       },
     });
-    runtime.close();
+    await runtime.close();
   });
 
   it("rejects empty shadow credentials without consuming the challenge", async () => {
@@ -514,7 +528,7 @@ describe("watch node HTTP transport", () => {
     expect(connectResponse.status).toBe(200);
     await readJson(connectResponse);
     await waitForLastConnectedMetadata(baseDir, identity.deviceId);
-    runtime.close();
+    await runtime.close();
   });
 
   it("keeps challenge throttling after abort and resets it after completion", async () => {
@@ -585,7 +599,7 @@ describe("watch node HTTP transport", () => {
       ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
       const stillLimited = await fetch(`${abortedRuntime.baseUrl}/challenge`);
       expect(stillLimited.status).toBe(429);
-      abortedRuntime.runtime.close();
+      await abortedRuntime.runtime.close();
     } finally {
       abortedLimiter.dispose();
     }
@@ -616,7 +630,7 @@ describe("watch node HTTP transport", () => {
       await waitForLastConnectedMetadata(completedBaseDir, completedIdentity.deviceId);
       const resetAfterCompletion = await fetch(`${completedRuntime.baseUrl}/challenge`);
       expect(resetAfterCompletion.status).toBe(200);
-      completedRuntime.runtime.close();
+      await completedRuntime.runtime.close();
     } finally {
       completedLimiter.dispose();
     }
@@ -657,7 +671,7 @@ describe("watch node HTTP transport", () => {
     expect(
       runtime.broadcasts.find((entry) => entry.event.startsWith("device.pair.setup.")),
     ).toBeUndefined();
-    runtime.runtime.close();
+    await runtime.runtime.close();
   });
 
   it("persists setup status before handing off the successful connect response", async () => {
@@ -707,7 +721,7 @@ describe("watch node HTTP transport", () => {
       access: "node",
       ts: expect.any(Number),
     });
-    fixture.runtime.close();
+    await fixture.runtime.close();
   });
 
   it.each([
@@ -792,7 +806,7 @@ describe("watch node HTTP transport", () => {
     expect((await readJson(reconnect)).deviceTokens).toBeUndefined();
     const replay = await connectWatchNode({ baseUrl, identity, bootstrapToken: issued.token });
     expect(replay.status).toBe(401);
-    runtime.close();
+    await runtime.close();
   });
 
   it.each([{ name: "limited mobile", profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }])(
@@ -805,7 +819,7 @@ describe("watch node HTTP transport", () => {
       const response = await connectWatchNode({ baseUrl, identity, bootstrapToken: issued.token });
       expect(response.status).toBe(401);
       expect(await getPairedDevice(identity.deviceId, baseDir)).toBeNull();
-      runtime.close();
+      await runtime.close();
     },
   );
 
@@ -998,7 +1012,7 @@ describe("watch node HTTP transport", () => {
       }),
     );
 
-    runtime.close();
+    await runtime.close();
     expect(nodeRegistry.get(identity.deviceId)).toBeUndefined();
   });
 });

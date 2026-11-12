@@ -4,7 +4,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { Type } from "typebox";
 import { ToolArgumentValidationError } from "../../packages/agent-core/src/errors.js";
-import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  BoardWidgetDeclared,
+  BoardWidgetPutResult,
+} from "../../packages/gateway-protocol/src/index.js";
+import { BoardWidgetDeclaredSchema } from "../../packages/gateway-protocol/src/schema/board.js";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
@@ -64,6 +68,8 @@ async function presentWidget(params: {
   presenter?: WidgetPresenter;
   document: WidgetPresenterDocument;
   title: string;
+  name: string;
+  state?: string;
   context: WidgetPresenterContext;
 }): Promise<WidgetPresentationAttempt> {
   const presenter = params.presenter;
@@ -85,6 +91,8 @@ async function presentWidget(params: {
     return await presenter.present({
       document: params.document,
       title: params.title,
+      name: params.name,
+      ...(params.state !== undefined ? { state: params.state } : {}),
       context: params.context,
     });
   } catch (error) {
@@ -112,6 +120,11 @@ export function resolveCurrentChannelWidgetPresenter(
     },
   );
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+// Advisory presenter findings: the widget was delivered, so the model may fix them in a follow-up.
+function presenterNotesText(notes: readonly string[] | undefined): string {
+  return notes?.length ? `\n${notes.map((note) => `- ${note}`).join("\n")}` : "";
 }
 
 function widgetPresentationFailureText(
@@ -207,6 +220,9 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         ? "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations."
         : "Inline previews are unavailable this turn; set pin=true to save to the session dashboard.";
   const capabilityGuidance = describeDashboardCapabilities(currentPluginRegistry());
+  // A channel with its own widget runtime replaces the browser-host authoring rules.
+  const channelGuidance = currentChannelPresenter?.capabilities.authoringGuidance;
+  const stateCapability = currentChannelPresenter?.capabilities.state;
   const presenterTargets = explicitPresenters.map((presenter) => presenter.target);
   const targets = ["assistant_message", ...presenterTargets] as const;
   const presenterDescriptions = explicitPresenters.map(
@@ -216,13 +232,17 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
     description:
       "Required HTML/SVG source. Send a fragment with optional style/script tags, not a full document or file path. Use fluid widths and wrap or stack narrow layouts; reserve horizontal scrolling for exact geometry.",
   });
+  const description = channelGuidance
+    ? `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} ${channelGuidance} \`title\` is host metadata; start directly with content.`
+    : `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins, capabilities.tools, or capabilities.queries; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`;
   return {
     label: "Show Widget",
     name: "show_widget",
-    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins or capabilities.tools; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`,
+    description,
     parameters: Type.Object({
       title: Type.String({ description: "Short host title; do not repeat it inside the widget" }),
-      widget_code: reportAvailable ? Type.Optional(widgetCodeSchema) : widgetCodeSchema,
+      widget_code:
+        reportAvailable || stateCapability ? Type.Optional(widgetCodeSchema) : widgetCodeSchema,
       ...(reportAvailable
         ? {
             report: Type.Optional(
@@ -235,6 +255,9 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       kind: optionalStringEnum(kinds, {
         description: `Widget source kind: ${kinds.join(", ")}`,
       }),
+      ...(stateCapability
+        ? { state: Type.Optional(Type.String({ description: stateCapability.description })) }
+        : {}),
       name: Type.Optional(
         Type.String({
           pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
@@ -248,8 +271,9 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           })
         : Type.Optional(
             Type.Boolean({
-              description:
-                "Pin only for an explicit dashboard request or multiple non-code visualizations",
+              description: channelGuidance
+                ? "Pin only report data here; widget code for this channel cannot be pinned"
+                : "Pin only for an explicit dashboard request or multiple non-code visualizations",
             }),
           ),
       tab: Type.Optional(
@@ -293,6 +317,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
               description: `Pinned widget host tools: prompt or cron.trigger:<jobId>; grant each read/action ID below unless a scoped grant is specified. ${capabilityGuidance}`,
             }),
           ),
+          queries: BoardWidgetDeclaredSchema.properties.queries,
         }),
       ),
     }),
@@ -327,7 +352,16 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         params.report !== null &&
         !(rawWidgetCode.trim() && rawReport && Object.keys(rawReport).length === 0);
       const title = readToolStringParam(params, "title", { required: true });
-      if (!isReport) {
+      const state = readToolStringParam(params, "state", { trim: false, allowEmpty: true });
+      if (state !== undefined) {
+        if (!stateCapability) {
+          throw new WidgetHtmlInputError("state is unavailable for this widget surface");
+        }
+        assertWidgetHtmlSize(state, stateCapability.maxBytes, { inputName: "state" });
+      }
+      // The channel keeps the widget code; a state-only call changes what that code shows.
+      const stateOnly = !isReport && !rawWidgetCode.trim() && state !== undefined;
+      if (!isReport && !stateOnly) {
         if (!rawWidgetCode.trim()) {
           throw new WidgetHtmlInputError("widget_code required");
         }
@@ -336,7 +370,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           unit: "bytes",
         });
         // Untrimmed so reported line/column match the widget_code the model sent.
-        const scriptError = findWidgetScriptSyntaxError(rawWidgetCode);
+        const scriptError = await findWidgetScriptSyntaxError(rawWidgetCode);
         if (scriptError) {
           throw new WidgetHtmlInputError(
             `widget_code has a JavaScript syntax error in inline script ${scriptError.scriptIndex} at line ${scriptError.line}, column ${scriptError.column}: ${scriptError.message}. Offending line: ${scriptError.snippet}. Fix the script and call show_widget again.`,
@@ -348,10 +382,17 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         throw new WidgetHtmlInputError("pin=true is required for this pinned-only widget surface");
       }
       const capabilities = normalizeBoardWidgetDeclared(
-        params.capabilities as { netOrigins?: string[]; tools?: string[] } | undefined,
+        // SAFETY: the tool's capabilities schema uses the shared declaration contract.
+        params.capabilities as BoardWidgetDeclared | undefined,
       );
       if (capabilities && !shouldPin) {
         throw new WidgetHtmlInputError("capabilities require pin=true");
+      }
+      // Code written for a channel's own widget runtime cannot run in the browser dashboard shell.
+      if (shouldPin && channelGuidance && rawWidgetCode.trim() && !isReport) {
+        throw new WidgetHtmlInputError(
+          "pin=true is unavailable for this channel's widgets: their code targets the channel's own runtime, not the dashboard. Send the widget without pin, or pin a report instead.",
+        );
       }
       const pinSessionKey = shouldPin ? options.agentSessionKey?.trim() : undefined;
       if (shouldPin && !pinSessionKey) {
@@ -390,6 +431,36 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             ? "no connected client can show inline widgets this turn; set pin=true to place the widget on the session dashboard"
             : "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
         );
+      }
+      if (stateOnly) {
+        if (!wantsCurrentChannel || !currentChannelPresenter || shouldPin || capabilities) {
+          throw new WidgetHtmlInputError(
+            "A state-only update needs the current channel presenter; send widget_code otherwise",
+          );
+        }
+        const updated = await presentWidget({
+          presenter: currentChannelPresenter,
+          document: { kind: "html", html: "", source: "" },
+          title,
+          name: readToolStringParam(params, "name") ?? slugWidgetName(title),
+          state,
+          context: presenterContext,
+        });
+        if (!updated.ok) {
+          throw new WidgetHtmlInputError(
+            `Widget update failed: ${widgetPresentationFailureText(updated.error, false)}`,
+          );
+        }
+        if (updated.value.kind !== "message") {
+          throw new WidgetHtmlInputError("Widget update returned no channel message");
+        }
+        const receipt = updated.value.receipt;
+        const messageId = receipt.primaryPlatformMessageId ?? receipt.platformMessageIds[0];
+        return jsonResult({
+          kind: "widget",
+          presentation: { target: "current_channel", title, receipt },
+          text: `Widget state updated in place${messageId ? ` on message ${messageId}` : ""}. The user sees it; do not restate it in text.${presenterNotesText(updated.value.notes)}`,
+        });
       }
       if (wantsCurrentChannel && currentChannelPresenter) {
         const { maxSourceBytes } = currentChannelPresenter.capabilities;
@@ -504,19 +575,28 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         }));
 
       let presentationAttempt: WidgetPresentationAttempt | undefined;
+      const widgetName = readToolStringParam(params, "name") ?? slugWidgetName(title);
       if (wantsCurrentChannel && currentChannelPresenter) {
         presentationAttempt = await presentWidget({
           presenter: currentChannelPresenter,
-          document: { kind: "html", html: wrappedDocument },
+          document: { kind: "html", html: wrappedDocument, source: widgetCode },
           title,
+          name: widgetName,
+          ...(state !== undefined ? { state } : {}),
           context: presenterContext,
         });
       } else if (wantsNodePanel) {
         const hosted = await hostDocument();
         presentationAttempt = await presentWidget({
           presenter: explicitPresenters.find((presenter) => presenter.target === "node_panel"),
-          document: { kind: "html", html: wrappedDocument, hostedUrl: hosted.entryUrl },
+          document: {
+            kind: "html",
+            html: wrappedDocument,
+            source: widgetCode,
+            hostedUrl: hosted.entryUrl,
+          },
           title,
+          name: widgetName,
           context: presenterContext,
         });
       }
@@ -533,7 +613,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           },
           ...(pinnedWidgetName ? { boardWidgetName: pinnedWidgetName } : {}),
           ...(capabilityState ? { capabilityState } : {}),
-          text: `Widget presented in the current channel${messageId ? ` as message ${messageId}` : ""}${pinnedText ? `; ${pinnedText}` : ""}`,
+          text: `Widget ${presentationAttempt.value.updated ? "updated in place in the current channel" : "presented in the current channel"}${messageId ? ` as message ${messageId}` : ""}${pinnedText ? `; ${pinnedText}` : ""}. The user sees it; do not restate its contents in text.${presenterNotesText(presentationAttempt.value.notes)}`,
         });
       }
 

@@ -23,14 +23,16 @@ type Input =
   | { kind: "echo"; value: number }
   | { kind: "progress"; gate: SharedArrayBuffer; callbacks: boolean; fail: boolean };
 type Result = { threadId: number; value?: number };
-export type NativeExchangeScenario =
-  | "close"
-  | "before-request"
-  | "reply-race"
-  | "stale-reply"
-  | "progress-reply"
-  | "progress-callbacks"
-  | "progress-failure";
+const scenarios = [
+  "close",
+  "before-request",
+  "reply-race",
+  "stale-reply",
+  "progress-reply",
+  "progress-callbacks",
+  "progress-failure",
+] as const;
+export type NativeExchangeScenario = (typeof scenarios)[number];
 
 async function waitFor(gate: Int32Array<SharedArrayBuffer>, index: number): Promise<void> {
   await Atomics.waitAsync(gate, index, 0, 10_000).value;
@@ -95,18 +97,7 @@ if (!isMainThread) {
   });
 } else {
   const scenario = process.argv[2];
-  assert.ok(
-    scenario &&
-      [
-        "close",
-        "before-request",
-        "reply-race",
-        "stale-reply",
-        "progress-reply",
-        "progress-callbacks",
-        "progress-failure",
-      ].includes(scenario),
-  );
+  assert.ok(scenario && scenarios.some((value) => value === scenario));
   if (scenario.startsWith("progress-")) {
     const gate = new Int32Array(new SharedArrayBuffer(20));
     const progress = new Int32Array(new SharedArrayBuffer(4));
@@ -148,10 +139,7 @@ if (!isMainThread) {
           : {}),
       },
     );
-    const settled = task.result.then(
-      () => {},
-      () => {},
-    );
+    const settled = task.result.catch(() => {});
     try {
       await waitFor(gate, 0);
       let observed = Atomics.load(progress, 0);
@@ -291,10 +279,6 @@ if (!isMainThread) {
     const worker = new Worker(new URL(import.meta.url));
     const native = createWorkerNativeSectionState();
     const gate = new Int32Array(new SharedArrayBuffer(32));
-    let exited = false;
-    worker.once("exit", () => {
-      exited = true;
-    });
     const sendTask = (taskId: number, input: Input, nativeSections = native.buffer) =>
       worker.postMessage(
         {
@@ -347,9 +331,7 @@ if (!isMainThread) {
       }
     } finally {
       release(gate, 3);
-      if (!exited) {
-        await worker.terminate();
-      }
+      await worker.terminate();
     }
   }
 }

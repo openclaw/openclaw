@@ -38,6 +38,7 @@ import type { PreparedProviderFailoverOwner } from "../failover/provider-pattern
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   OAUTH_REFRESH_CONTENTION_USER_TEXT,
+  TLS_CERTIFICATE_ERROR_USER_TEXT,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   isInvalidStreamingEventOrderError,
@@ -46,10 +47,12 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import {
   formatSandboxToolPolicyBlockedMessage,
   type resolveSandboxRuntimeStatus,
 } from "../sandbox/runtime-status.js";
+import { readRepeatedToolErrorSummary } from "../tool-error-summary.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
@@ -79,8 +82,7 @@ const RUNTIME_FAILURE_COPY: Partial<
     "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
   proxy:
     "Couldn't connect to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
-  tls_certificate:
-    "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  tls_certificate: TLS_CERTIFICATE_ERROR_USER_TEXT,
   model_not_found: MODEL_NOT_FOUND_USER_TEXT,
 };
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -319,7 +321,7 @@ export function formatUserFacingAssistantErrorText(
     return REPETITIVE_OUTPUT_ERROR_MESSAGE;
   }
   if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
-    return REPEATED_TOOL_ERROR_MESSAGE;
+    return readRepeatedToolErrorSummary(msg.errorMessage) ?? REPEATED_TOOL_ERROR_MESSAGE;
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {
@@ -331,6 +333,9 @@ export function formatUserFacingAssistantErrorText(
     return `⚠️ ${approvalMessage}`;
   }
   const facts = classifyAssistantErrorFacts(msg, opts);
+  if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
+    return MODEL_REQUEST_POLICY_DENIED_TEXT;
+  }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const schemaFriendlyError =

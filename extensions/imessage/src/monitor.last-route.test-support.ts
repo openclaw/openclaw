@@ -94,22 +94,7 @@ export function createIMessageTestRequest(
   };
 }
 
-export function createInboundMessage(
-  message: Pick<IMessagePayload, "id" | "guid" | "text"> &
-    Partial<
-      Pick<
-        IMessagePayload,
-        | "chat_id"
-        | "chat_guid"
-        | "chat_identifier"
-        | "sender"
-        | "is_from_me"
-        | "is_group"
-        | "created_at"
-        | "destination_caller_id"
-      >
-    >,
-): IMessagePayload {
+export function createInboundMessage(message: IMessagePayload): IMessagePayload {
   return {
     id: message.id,
     guid: message.guid,
@@ -126,32 +111,31 @@ export function createInboundMessage(
 }
 
 export function createAnchorlessDirectPair(id: number, text: string, isFromMe: boolean) {
+  const common = {
+    id,
+    guid: ANCHOR_REPAIR_GUID,
+    destination_caller_id: "+15550000001",
+    is_group: false,
+    service: "iMessage",
+  };
   return {
     notification: {
-      id,
-      guid: ANCHOR_REPAIR_GUID,
+      ...common,
       chat_id: 0,
       chat_guid: "",
       chat_identifier: "",
       sender: "+15550000001",
-      destination_caller_id: "+15550000001",
       is_from_me: false,
-      is_group: false,
-      service: "iMessage",
       text,
       created_at: new Date().toISOString(),
     },
     history: {
-      id,
-      guid: ANCHOR_REPAIR_GUID,
+      ...common,
       chat_id: 42,
       chat_guid: "iMessage;-;+15550000002",
       chat_identifier: "+15550000002",
       sender: "+15550000002",
-      destination_caller_id: "+15550000001",
       is_from_me: isFromMe,
-      is_group: false,
-      service: "iMessage",
     },
   };
 }

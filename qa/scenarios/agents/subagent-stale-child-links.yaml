@@ -1,4 +1,4 @@
-title: Subagent stale child links
+title: Durable native and stale non-native child links
 
 scenario:
   id: subagent-stale-child-links
@@ -8,10 +8,10 @@ scenario:
     primary:
       - gateway.session-apis-subagents
       - gateway.session-apis-sessions-list
-  objective: Verify restarted gateways hide stale persisted subagent child links without hiding live or fresh children.
+  objective: Verify restarted gateways preserve native child lineage and hide stale non-native child links.
   successCriteria:
-    - Old ended subagent run records are not exposed as current children.
-    - Old store-only spawnedBy and parentSessionKey rows are not exposed as current children.
+    - Old ended native subagent children remain visible after restart.
+    - Old non-native store-only parentSessionKey rows are not exposed as current children.
     - Child-side ACP store rows from sibling agents are not exposed as current children.
     - Live subagent runs and fresh dashboard children remain visible.
   docsRefs:
@@ -26,11 +26,11 @@ scenario:
     kind: flow
     suiteIsolation: isolated
     isolationReason: Seeds persisted gateway session/subagent state and restarts the gateway.
-    summary: Seed stale subagent session state on disk, restart the real gateway, then assert sessions.list filters only the stale child links.
+    summary: Seed native and non-native child session state, restart the real gateway, then assert sessions.list preserves native lineage and filters stale non-native links.
 
 flow:
   steps:
-    - name: restarted gateway filters stale subagent child links
+    - name: restarted gateway preserves native lineage and filters stale non-native links
       actions:
         - call: waitForGatewayHealthy
           args:
@@ -38,10 +38,10 @@ flow:
             - 60000
         - set: mainKey
           value: "agent:qa:main"
-        - set: staleRunKey
+        - set: retainedRunKey
           value: "agent:qa:subagent:qa-stale-ended"
         - set: staleOrphanKey
-          value: "agent:qa:subagent:qa-orphan"
+          value: "agent:qa:chat:qa-orphan"
         - set: staleAcpKey
           value: "agent:claude:acp:qa-stale-acp"
         - set: freshDashboardKey
@@ -66,11 +66,11 @@ flow:
                       runs: {
                         "run-stale-ended": {
                           runId: "run-stale-ended",
-                          childSessionKey: staleRunKey,
+                          childSessionKey: retainedRunKey,
                           controllerSessionKey: mainKey,
                           requesterSessionKey: mainKey,
                           requesterDisplayKey: "main",
-                          task: "old ended ghost",
+                          task: "old ended native child remains visible",
                           cleanup: "keep",
                           createdAt: old - 60000,
                           startedAt: old - 50000,
@@ -101,7 +101,7 @@ flow:
                       },
                       {
                         agentId: "qa",
-                        sessionKey: staleRunKey,
+                        sessionKey: retainedRunKey,
                         entry: {
                           sessionId: "sess-stale-run",
                           updatedAt: old,
@@ -165,7 +165,7 @@ flow:
             - ref: env
             - agentId: claude
         - assert:
-            expr: "[mainKey, staleRunKey, staleOrphanKey, freshDashboardKey, liveRunKey].every((key) => qaSessionStore[key]?.sessionId)"
+            expr: "[mainKey, retainedRunKey, staleOrphanKey, freshDashboardKey, liveRunKey].every((key) => qaSessionStore[key]?.sessionId)"
             message:
               expr: "`canonical QA session entries missing: ${JSON.stringify(Object.keys(qaSessionStore))}`"
         - assert:
@@ -207,6 +207,10 @@ flow:
           value:
             expr: "filtered.sessions.map((session) => session.key)"
         - assert:
+            expr: "mainChildren.includes(retainedRunKey) && filteredKeys.includes(retainedRunKey)"
+            message:
+              expr: "`ended native child missing after restart (main=${JSON.stringify(mainChildren)} filtered=${JSON.stringify(filteredKeys)})`"
+        - assert:
             expr: "mainChildren.includes(freshDashboardKey)"
             message:
               expr: "`fresh dashboard child missing from main children: ${JSON.stringify(mainChildren)}`"
@@ -219,7 +223,7 @@ flow:
             message:
               expr: "`spawnedBy filter dropped live/fresh children: ${JSON.stringify(filteredKeys)}`"
         - assert:
-            expr: "![staleRunKey, staleOrphanKey, staleAcpKey].some((key) => mainChildren.includes(key) || filteredKeys.includes(key))"
+            expr: "![staleOrphanKey, staleAcpKey].some((key) => mainChildren.includes(key) || filteredKeys.includes(key))"
             message:
               expr: "`stale child leaked through sessions.list (main=${JSON.stringify(mainChildren)} filtered=${JSON.stringify(filteredKeys)})`"
       detailsExpr: "({ persistedQaKeys: Object.keys(qaSessionStore), persistedClaudeKeys: Object.keys(claudeSessionStore), mainChildren, filteredKeys })"

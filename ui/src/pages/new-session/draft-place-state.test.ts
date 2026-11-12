@@ -1,7 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
@@ -82,6 +82,30 @@ const cloudProfile: DraftCloudProfile = {
   providerId: "crabbox",
   machines: [{ id: "fast", label: "Fast" }],
 };
+
+describe("DraftPlaceState agent selection", () => {
+  it("resolves the normalized selected workspace from the current non-system roster", () => {
+    const { state, context } = createRepositoryFixture();
+    const system: GatewayAgentRow = { id: "research", kind: "system", workspace: "/system" };
+    const original: GatewayAgentRow = { id: "Research", workspace: "/research" };
+    const roster = context.agents.state.agentsList!;
+    roster.agents = [system, original];
+    state.applyPendingPlacement({ agentId: " RESEARCH ", profileId: "" });
+
+    expect(state.selectedAgent()).toBe(original);
+    expect(state.workspacePath()).toBe("/research");
+    expect(state.agents()).toEqual([original]);
+
+    const replacement: GatewayAgentRow = { id: "research", workspace: "/new-research" };
+    context.agents.state.agentsList = { ...roster, agents: [system, replacement] };
+    expect(state.selectedAgent()).toBe(replacement);
+    expect(state.workspacePath()).toBe("/new-research");
+
+    context.agents.state.agentsList = { ...roster, agents: [system] };
+    expect(state.selectedAgent()).toBeUndefined();
+    expect(state.workspacePath()).toBe("");
+  });
+});
 
 describe("DraftPlaceState repository selection", () => {
   it.each([

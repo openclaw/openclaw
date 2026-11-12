@@ -1,7 +1,7 @@
-// Covers trusted safe-bin directory and path checks.
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
 import {
@@ -16,19 +16,40 @@ function swapAsciiCase(value: string): string {
     return char === lower ? char.toUpperCase() : lower;
   });
 }
+const trusts = (resolvedPath: string, trustedDirs: ReadonlySet<string>) =>
+  isTrustedSafeBinPath({ resolvedPath, trustedDirs });
 
 describe("exec safe bin trust", () => {
-  it("keeps default trusted dirs limited to immutable system paths", () => {
-    const dirs = getTrustedSafeBinDirs();
+  it("prepares and evaluates safe-bin trust without synchronous filesystem calls", async () => {
+    await withTestDir({ prefix: "openclaw-safe-bin-async-" }, async (dir) => {
+      await fs.writeFile(path.join(dir, "wc"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const calls = (["statSync", "accessSync", "realpathSync"] as const).map((name) =>
+        vi.spyOn(syncFs, name),
+      );
+      try {
+        const trustedDirs = await getTrustedSafeBinDirs({ extraDirs: [dir], safeBins: ["wc"] });
+        expect(
+          await isTrustedSafeBinPath({ resolvedPath: path.join(dir, "wc"), trustedDirs }),
+        ).toBe(true);
+        await listWritableExplicitTrustedSafeBinDirs([dir]);
+        expect(calls.map((call) => call.mock.calls.length)).toEqual([0, 0, 0]);
+      } finally {
+        calls.forEach((call) => call.mockRestore());
+      }
+    });
+  });
+  it("keeps default trusted dirs limited to immutable system paths", async () => {
+    const dirs = await getTrustedSafeBinDirs();
 
-    expect(dirs.has(path.resolve("/bin"))).toBe(true);
-    expect(dirs.has(path.resolve("/usr/bin"))).toBe(true);
-    expect(dirs.has(path.resolve("/usr/local/bin"))).toBe(false);
-    expect(dirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
+    expect(
+      ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"].map((dir) =>
+        dirs.has(path.resolve(dir)),
+      ),
+    ).toEqual([true, true, false, false]);
   });
 
-  it("builds trusted dirs from defaults and explicit extra dirs", () => {
-    const dirs = getTrustedSafeBinDirs({
+  it("builds trusted dirs from defaults and explicit extra dirs", async () => {
+    const dirs = await getTrustedSafeBinDirs({
       extraDirs: ["/custom/bin", "/alt/bin", "/custom/bin"],
     });
 
@@ -38,20 +59,10 @@ describe("exec safe bin trust", () => {
     expect(dirs.size).toBe(4);
   });
 
-  it("validates resolved paths using injected trusted dirs", () => {
+  it("validates resolved paths using injected trusted dirs", async () => {
     const trusted = new Set([path.resolve("/usr/bin")]);
-    expect(
-      isTrustedSafeBinPath({
-        resolvedPath: "/usr/bin/jq",
-        trustedDirs: trusted,
-      }),
-    ).toBe(true);
-    expect(
-      isTrustedSafeBinPath({
-        resolvedPath: "/tmp/evil/jq",
-        trustedDirs: trusted,
-      }),
-    ).toBe(false);
+    expect(await trusts("/usr/bin/jq", trusted)).toBe(true);
+    expect(await trusts("/tmp/evil/jq", trusted)).toBe(false);
   });
 
   it("matches trusted dirs through path-local case folding on case-insensitive filesystems", async () => {
@@ -71,15 +82,8 @@ describe("exec safe bin trust", () => {
         return;
       }
 
-      const dirs = getTrustedSafeBinDirs({
-        extraDirs: [swapped],
-      });
-
       expect(
-        isTrustedSafeBinPath({
-          resolvedPath: path.join(dir, "jq"),
-          trustedDirs: dirs,
-        }),
+        await trusts(path.join(dir, "jq"), await getTrustedSafeBinDirs({ extraDirs: [swapped] })),
       ).toBe(true);
     });
   });
@@ -95,24 +99,20 @@ describe("exec safe bin trust", () => {
         return;
       }
 
-      const dirs = getTrustedSafeBinDirs({
-        extraDirs: [trustedDir],
-      });
-
       expect(
-        isTrustedSafeBinPath({
-          resolvedPath: path.join(untrustedDir, "jq"),
-          trustedDirs: dirs,
-        }),
+        await trusts(
+          path.join(untrustedDir, "jq"),
+          await getTrustedSafeBinDirs({ extraDirs: [trustedDir] }),
+        ),
       ).toBe(false);
     });
   });
 
-  it("does not trust PATH entries by default", () => {
+  it("does not trust PATH entries by default", async () => {
     const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
 
-    withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, () => {
-      const refreshed = getTrustedSafeBinDirs();
+    await withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, async () => {
+      const refreshed = await getTrustedSafeBinDirs();
       expect(refreshed.has(path.resolve(injected))).toBe(false);
     });
   });
@@ -124,12 +124,8 @@ describe("exec safe bin trust", () => {
     await withTestDir({ prefix: "openclaw-safe-bin-trust-" }, async (dir) => {
       try {
         await fs.chmod(dir, 0o777);
-        const hits = listWritableExplicitTrustedSafeBinDirs([dir]);
-        expect(hits).toEqual([
-          {
-            dir: path.resolve(dir),
-            worldWritable: true,
-          },
+        expect(await listWritableExplicitTrustedSafeBinDirs([dir])).toEqual([
+          { dir: path.resolve(dir), worldWritable: true },
         ]);
       } finally {
         await fs.chmod(dir, 0o755).catch(() => undefined);

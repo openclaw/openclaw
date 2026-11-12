@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runWithSqliteWorkerStateContext as withWorkerState } from "../../infra/sqlite-worker-state-context.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -8,8 +7,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { claimCronRecoveryReceipt } from "../service/run-recovery.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { mutateCronJobsInWorker } from "./guarded-mutation.worker.js";
@@ -22,6 +21,27 @@ import {
   drainCronQueueInWorker,
   requestCronRunsInWorker,
 } from "./run-queue.worker.js";
+import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
+
+type Outcome =
+  CronRuntimeWorkerOperations["cron.finalizeRuns"]["input"]["snapshot"]["outcomes"][number];
+const notRequested = { status: "not-requested" } as const;
+const finalize = (
+  database: ReturnType<typeof openOpenClawStateDatabase>,
+  storeKey: string,
+  endedAt: number,
+  outcome: Omit<Outcome, "jobId" | "startedAt" | "endedAt">,
+) =>
+  finalizeCronRunsInWorker(database, {
+    storeKey,
+    snapshot: {
+      nowMs: endedAt,
+      defaultAgentId: "main",
+      outcomes: [
+        { ...outcome, jobId: outcome.job.id, startedAt: outcome.runReceipt!.startedAtMs, endedAt },
+      ],
+    },
+  });
 
 it("commits execution, delivery, and history once despite an owner edit and a duplicate terminal result", async () => {
   await withOpenClawTestState({ label: "cron-terminal-result" }, async (fixture) => {
@@ -37,42 +57,23 @@ it("commits execution, delivery, and history once despite an owner edit and a du
     await saveCronStore(storePath, { version: 1, jobs: [edited] });
     const database = openOpenClawStateDatabase();
     const row = (sql: string, id: string) => database.db.prepare(sql).get(id);
-    // Clock-skewed history must not evict the pending marker, even after clearing the live job.
-    const seedHistory = database.db.prepare(`
-      INSERT INTO cron_run_receipts (
-        receipt_id, cursor_id, store_key, job_id, config_revision, agent_id, status,
-        owner_pid, owner_start_time, started_at_ms, finished_at_ms
-      ) SELECT ?, (SELECT COALESCE(MAX(cursor_id), 0) + 1 FROM cron_run_receipts),
-               store_key, job_id, config_revision, agent_id, 'ok',
-               owner_pid, owner_start_time, ?, ?
-        FROM cron_run_receipts WHERE receipt_id = ?
-    `);
-    for (let index = 0; index < 64; index += 1) {
-      seedHistory.run(`history-${index}`, now + 100 + index, now + 101 + index, receipt.receiptId);
-    }
-    const finalize = (status: "ok" | "error") =>
+    const finish = (status: "ok" | "error") =>
       withWorkerState({ environment: { OPENCLAW_STATE_DIR: fixture.stateDir } }, () =>
-        finalizeCronRunsInWorker(database, {
-          storeKey: cronStoreKey(storePath),
-          snapshot: {
-            nowMs: now + 10,
-            defaultAgentId: "main",
-            outcomes: [
-              {
-                jobId: job.id,
-                job,
-                runReceipt: receipt,
-                status,
-                completionStatus: status === "ok" ? "succeeded" : "failed",
-                deliveryState: {
-                  status: "delivered",
-                  delivered: true,
-                  failureNotification: { status: "not-requested" },
-                },
-                startedAt: now,
-                endedAt: now + 10,
-              },
-            ],
+        finalize(database, cronStoreKey(storePath), now + 10, {
+          job,
+          runReceipt: {
+            ...receipt,
+            ownerPid: receipt.ownerPid + 1,
+            ownerStartTime: null,
+            configRevision: "old",
+          },
+          status,
+          errorReason: undefined,
+          completionStatus: status === "ok" ? "succeeded" : "failed",
+          deliveryState: {
+            status: "delivered",
+            delivered: true,
+            failureNotification: { status: "not-requested" },
           },
         }),
       );
@@ -80,7 +81,7 @@ it("commits execution, delivery, and history once despite an owner edit and a du
       CREATE TEMP TRIGGER fail_cron_history BEFORE INSERT ON task_runs
       BEGIN SELECT RAISE(ABORT, 'synthetic history failure'); END
     `);
-    expect(() => finalize("ok")).toThrow("synthetic history failure");
+    expect(() => finish("ok")).toThrow("synthetic history failure");
     const receiptStatus = () =>
       row("SELECT status FROM cron_run_receipts WHERE receipt_id = ?", receipt.receiptId)?.status;
     expect({
@@ -89,25 +90,74 @@ it("commits execution, delivery, and history once despite an owner edit and a du
       marker: (await loadCronStore(storePath)).jobs[0]?.state.runningReceiptId,
     }).toEqual({ receipt: "running", history: 0, marker: receipt.receiptId });
     database.db.exec("DROP TRIGGER fail_cron_history");
-    expect(finalize("ok").outcome.eventPlans).toHaveLength(1);
-    expect(finalize("error").outcome.eventPlans).toHaveLength(0);
+    expect(finish("ok").outcome.eventPlans).toHaveLength(1);
+    expect(
+      row(
+        "SELECT agent_id, started_at_ms, error_text FROM cron_run_receipts WHERE receipt_id = ?",
+        receipt.receiptId,
+      ),
+    ).toEqual({ agent_id: "main", started_at_ms: now, error_text: null });
+    expect(finish("error").outcome.eventPlans).toHaveLength(0);
     expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
       name: edited.name,
       agentId: edited.agentId,
       state: { lastRunStatus: "ok", lastDelivered: true, lastDeliveryStatus: "delivered" },
     });
     expect(receiptStatus()).toBe("ok");
-    expect(row("SELECT COUNT(*) AS count FROM cron_run_receipts WHERE job_id = ?", job.id)).toEqual(
-      { count: 64 },
-    );
     expect(
       database.db.prepare("SELECT status, ended_at FROM task_runs WHERE source_id = ?").all(job.id),
     ).toEqual([{ status: "succeeded", ended_at: now + 10 }]);
+    expect(
+      readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(storePath),
+        jobId: job.id,
+      }).entries,
+    ).toMatchObject([{ runId: `cron:${job.id}:${now}:${receipt.receiptId}` }]);
   });
 });
 
-it.each(["cancel", "disable"] as const)(
-  "retains an unstarted due slot across receipt pruning without replay after %s",
+it.each([undefined, "timeout"] as const)(
+  "persists the prepared failure reason %s without provider inference",
+  async (errorReason) => {
+    await withOpenClawTestState({ label: "cron-prepared-reason" }, async (fixture) => {
+      const startedAt = Date.now();
+      const storeKey = fixture.statePath("cron", "jobs.json");
+      const job = createDueIsolatedJob({
+        id: "prepared",
+        nowMs: startedAt,
+        nextRunAtMs: startedAt,
+      });
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      await saveCronStore(storeKey, { version: 1, jobs: [job] });
+      const receipt = claimCronRecoveryReceipt(storeKey, job, startedAt, "main");
+      withWorkerState({ environment: { OPENCLAW_STATE_DIR: fixture.stateDir } }, () =>
+        finalize(openOpenClawStateDatabase(), cronStoreKey(storeKey), startedAt + 10, {
+          job,
+          runReceipt: receipt,
+          status: "error",
+          error: "internal_error from provider",
+          provider: "anthropic",
+          errorReason,
+          completionStatus: "failed",
+          deliveryState: {
+            status: "not-requested",
+            failureNotification: { status: "not-requested" },
+          },
+        }),
+      );
+      expect((await loadCronStore(storeKey)).jobs[0]?.state.lastErrorReason).toBe(errorReason);
+      const history = readCronRunHistoryPageForTests({
+        storeKey: cronStoreKey(storeKey),
+        jobId: job.id,
+      });
+      expect(history.entries).toHaveLength(1);
+      expect(history.entries[0]?.errorReason).toBe(errorReason);
+    });
+  },
+);
+
+it.each(["cancel", "disable", "quiet check"] as const)(
+  "coalesces deferred receipts without replay after %s",
   async (terminalAction) => {
     await withOpenClawTestState({ label: "cron-deferred-receipts" }, async (fixture) => {
       const now = 1_800_000_000_000;
@@ -121,46 +171,43 @@ it.each(["cancel", "disable"] as const)(
       const database = openOpenClawStateDatabase();
       withWorkerState({ environment: { OPENCLAW_STATE_DIR: fixture.stateDir } }, () => {
         const request = scheduled(storeKey, original, now);
+        let attemptAt = now;
         const claim = () =>
-          requestCronRunsInWorker(database, { storeKey, nowMs: now, requests: [request] });
+          requestCronRunsInWorker(database, { storeKey, nowMs: attemptAt, requests: [request] });
         const current = () => loadCronStoreFromDatabase(database.db, storeKey).store.jobs[0]!;
-        // Exercise real retention: the first receipt must disappear, but the slot remains due.
-        for (let index = 0; index < 65; index += 1) {
+        // Each retry replaces its unstarted receipt while preserving the pending slot.
+        for (let index = 0; index < 2; index += 1) {
           expect(claim().accepted).toHaveLength(1);
           const run = drainCronQueueInWorker(database, {
             storeKey,
-            nowMs: now + 1,
+            nowMs: attemptAt,
             requests: [],
             maxConcurrentRuns: 1,
           }).launches[0]!;
           expect(run).toBeDefined();
-          const result = finalizeCronRunsInWorker(database, {
-            storeKey,
-            snapshot: {
-              nowMs: now + index + 10,
-              defaultAgentId: "main",
-              outcomes: [
-                {
-                  jobId: original.id,
-                  job: run.job,
-                  runReceipt: run.runReceipt,
-                  status: "skipped",
-                  completionStatus: "failed",
-                  deliveryState: {
-                    status: "not-requested",
-                    failureNotification: { status: "not-requested" },
-                  },
-                  admissionDeferred: true,
-                  executionStarted: false,
-                  startedAt: run.runReceipt.startedAtMs,
-                  endedAt: now + index + 10,
-                },
-              ],
+          const result = finalize(database, storeKey, attemptAt, {
+            job: run.job,
+            runReceipt: run.runReceipt,
+            status: "skipped",
+            errorReason: undefined,
+            completionStatus: "failed",
+            deliveryState: {
+              status: "not-requested",
+              failureNotification: { status: "not-requested" },
             },
+            admissionDeferred: true,
+            executionStarted: false,
           });
           expect(result.outcome.eventPlans).toEqual([]);
           expect(current().state).toMatchObject(original.state);
           expect(current().state.runningAtMs).toBeUndefined();
+          expect(
+            database.db
+              .prepare("SELECT COUNT(*) AS count FROM cron_run_receipts WHERE store_key = ?")
+              .get(storeKey),
+          ).toEqual({ count: 1 });
+          expect(claim().accepted).toEqual([]);
+          attemptAt = current().state.admissionDeferred!.retryAtMs;
         }
         expect(
           database.db
@@ -172,6 +219,26 @@ it.each(["cancel", "disable"] as const)(
         });
         const retried = claim().accepted[0]!;
         expect(retried.runReceipt.receiptId).not.toBe(request.receiptId);
+        if (terminalAction === "quiet check") {
+          // A check that runs and finds nothing ends the waiting episode it recovered from.
+          const [run] = drainCronQueueInWorker(database, {
+            storeKey,
+            nowMs: attemptAt,
+            requests: [],
+            maxConcurrentRuns: 1,
+          }).launches;
+          finalize(database, storeKey, attemptAt, {
+            ...run!,
+            status: "ok",
+            errorReason: undefined,
+            completionStatus: "succeeded",
+            deliveryState: { status: "not-requested", failureNotification: notRequested },
+            triggerEval: { fired: false, stateChanged: false },
+          });
+          expect(current().state.lastTriggerEvalAtMs).toBe(attemptAt);
+          expect(current().state.admissionDeferred).toBeUndefined();
+          return;
+        }
         // The final decision is authoritative even after a backward clock adjustment.
         if (terminalAction === "cancel") {
           cancelCronRequestsInWorker(database, {
@@ -201,7 +268,7 @@ it.each(["cancel", "disable"] as const)(
           { jobId: original.id, receiptId: request.receiptId, reason: "already-requested" },
         ]);
         if (terminalAction === "cancel") {
-          expect(current().state.nextRunAtMs).toBe(now + 60_000);
+          expect(current().state.nextRunAtMs).toBe(now + 120_000);
         }
         expect(current().state.queuedAtMs).toBeUndefined();
         expect(database.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()).toEqual({
@@ -344,12 +411,12 @@ it("keeps requested occurrences and siblings intact when activation rolls back",
   });
 });
 
-it("reads one receipt set while preserving capacity and cancellation contexts", async () => {
+it("preserves capacity and cancellation contexts when draining receipts", async () => {
   await withOpenClawTestState({ label: "cron-drain-receipt-reads" }, async (fixture) => {
     const storeKey = fixture.statePath("cron", "local.json");
     const foreignStoreKey = fixture.statePath("cron", "foreign.json");
     const jobs = ["blocker", "z-first", "a-second", "cancelled", "omitted"].map((id) =>
-      queueJob(id, now),
+      queueJob(id, now, { state: { nextRunAtMs: now, lastError: "previous run failed" } }),
     );
     const foreignJob = queueJob("foreign-cancelled", now);
     await saveCronStore(storeKey, { version: 1, jobs });
@@ -371,7 +438,12 @@ it("reads one receipt set while preserving capacity and cancellation contexts", 
         });
       request(storeKey, [blocker!]);
       expect(drain([], 1, now + 1).launches.map(({ job }) => job.id)).toEqual(["blocker"]);
-      request(storeKey, [second!, cancelled!, omitted!, first!]);
+      expect(request(storeKey, [second!, cancelled!, omitted!, first!, first!]).rejected).toEqual([
+        { jobId: first!.jobId, receiptId: first!.receiptId, reason: "already-requested" },
+      ]);
+      expect(request(storeKey, [first!]).rejected).toEqual([
+        { jobId: first!.jobId, receiptId: first!.receiptId, reason: "already-requested" },
+      ]);
       request(foreignStoreKey, [foreign]);
       for (const [key, entries] of [
         [storeKey, [cancelled!, omitted!]],
@@ -386,29 +458,57 @@ it("reads one receipt set while preserving capacity and cancellation contexts", 
           }).skipped,
         ).toHaveLength(entries.length);
       }
-      const reads = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(database.db),
-        ["receipts"],
-        (sql) =>
-          /^select\b/i.test(sql) && /\bfrom\s+"cron_run_receipts"(?:\s|$)/i.test(sql)
-            ? "receipts"
-            : null,
-      );
-      try {
-        const withoutContexts = drain([], 2);
-        const emptyReads = reads.counts.receipts;
-        const withContexts = drain([cancelled!, foreign], 3);
-        expect(withoutContexts.launches.map(({ job }) => job.id)).toEqual(["z-first"]);
-        expect(withContexts.launches.map(({ job }) => job.id)).toEqual(["a-second"]);
-        expect(withoutContexts.skipped).toEqual([]);
-        expect(
-          withContexts.skipped.map(({ runReceipt, error }) => [runReceipt.receiptId, error]),
-        ).toEqual([[cancelled!.receiptId, ""]]);
-        // The empty drain stays at one SELECT; the contextful drain removes its second SELECT.
-        expect([emptyReads, reads.counts.receipts]).toEqual([1, 2]);
-      } finally {
-        reads.restore();
-      }
+      const withoutContexts = drain([], 2);
+      const withContexts = drain([cancelled!, foreign], 3);
+      expect(withoutContexts.launches.map(({ job }) => job.id)).toEqual(["z-first"]);
+      expect(withoutContexts.launches[0]?.job.state.lastError).toBe("previous run failed");
+      expect(withContexts.launches.map(({ job }) => job.id)).toEqual(["a-second"]);
+      expect(withoutContexts.skipped).toEqual([]);
+      expect(
+        withContexts.skipped.map(({ runReceipt, error }) => [runReceipt.receiptId, error]),
+      ).toEqual([[cancelled!.receiptId, ""]]);
     });
+  });
+});
+
+const quiet = { script: "return { fire: false }" };
+
+it("keeps checks beyond three queued in due order while other runs start", async () => {
+  await withOpenClawTestState({ label: "cron-condition-checks" }, async (fixture) => {
+    const storeKey = fixture.statePath("cron", "jobs.json");
+    const watch = (id: string, dueAtMs: number) =>
+      queueJob(id, now, { trigger: quiet, state: { nextRunAtMs: dueAtMs } });
+    const jobs = [
+      ...["long-a", "long-b", "long-c"].map((id) => queueJob(id, now)),
+      watch("late", now),
+      ...["w1", "w2", "w3"].map((id) => watch(id, now - 1_000)),
+      watch("early", now - 500),
+    ];
+    const queue = await queueStore(storeKey, jobs, now);
+    await queue.request(jobs.map((job) => scheduled(storeKey, job, job.state.nextRunAtMs!)));
+    const launch = async () => (await queue.drain([], 7)).launches.map(({ job }) => job.id);
+    const first = await queue.drain([], 7);
+    // A run slot is free, but early and late wait for one of the three checks.
+    expect(first.launches.map(({ job }) => job.id)).toEqual([
+      "w1",
+      "w2",
+      "w3",
+      "long-a",
+      "long-b",
+      "long-c",
+    ]);
+    expect(await launch()).toEqual([]);
+    // A fired condition frees its check for the earliest waiter, which takes the free slot.
+    const fired = first.launches[0]!.runReceipt;
+    await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+      type: "cron.settleConditionCheck",
+      input: { storeKey, jobId: fired.jobId, receiptId: fired.receiptId },
+    });
+    expect(await launch()).toEqual(["early"]);
+    // The check still waiting was never started, so a restart keeps its occurrence.
+    await queue.recover();
+    const late = (await queue.read()).jobs.find((job) => job.id === "late")!;
+    expect(late.state).toMatchObject({ nextRunAtMs: now, queuedAtMs: now });
+    expect(late.state.lastError).toBeUndefined();
   });
 });

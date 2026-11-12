@@ -15,7 +15,9 @@ export function predatesCurrentBoot(
 export function createManagedHandoffBootIdentityReader(serviceManagerEnv: NodeJS.ProcessEnv) {
   return function bootIdentity() {
     let value: string | undefined;
-    if (process.platform === "linux") {
+    // Android (Termux) runs the Linux kernel and records that kernel's boot.
+    const platform = process.platform === "android" ? "linux" : process.platform;
+    if (platform === "linux") {
       value = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
     } else if (["freebsd", "darwin", "win32"].includes(process.platform)) {
       const freebsd = process.platform === "freebsd";
@@ -51,10 +53,7 @@ export function createManagedHandoffBootIdentityReader(serviceManagerEnv: NodeJS
       }
     }
     // Unknown boot identities cannot be replaced with uptime or a wall-clock guess.
-    const boot = {
-      platform: process.platform,
-      identity: process.platform === "win32" ? value : value?.toLowerCase(),
-    };
+    const boot = { platform, identity: platform === "win32" ? value : value?.toLowerCase() };
     const parsed = managedHandoffBootSchema.safeParse(boot);
     if (!parsed.success) {
       throw new Error("OS boot identity unavailable; run openclaw triage manually");

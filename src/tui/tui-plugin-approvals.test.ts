@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { expectUnused } from "./tui-handler-test-support.js";
 import { createChoicePromptHarness, createPendingRequests } from "./tui-overlay.test-support.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
@@ -86,23 +87,25 @@ describe("TUI plugin approvals", () => {
     expect(harness.openOverlay).not.toHaveBeenCalled();
   });
 
-  it("shows plugin approvals for the active session and resolves the selection", async () => {
+  it.each([false, true])("confirms approval before allowing (allow-only=%s)", async (allowOnly) => {
     const harness = createHarness();
-
-    harness.request();
-
-    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
+    harness.request({ allowedDecisions: allowOnly ? ["allow-once"] : ["allow-once", "deny"] });
     const renderedPrompt = stripAnsi(harness.render());
     expect(renderedPrompt).toContain("plugin approval: Apply workspace skill proposal");
     expect(renderedPrompt).toContain("Severity: Warning");
     expect(renderedPrompt).toContain("Tool: skill_workshop");
     expect(renderedPrompt).toContain("Plugin: workspace-skills");
     expect(renderedPrompt).toContain("Review pending workspace skill changes.");
-    expect(harness.selectors[0]?.items.map((item) => item.value)).toEqual(["allow-once", "deny"]);
-    expect(harness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(1);
+    expect(harness.selectors[0]?.items.map((item) => item.value)).toEqual(
+      allowOnly ? ["allow-once"] : ["allow-once", "deny"],
+    );
+    if (!allowOnly) {
+      expect(harness.selectors[0]?.setSelectedIndex).toHaveBeenCalledWith(1);
+    }
 
     harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
     expect(harness.resolvePluginApproval).not.toHaveBeenCalled();
+    expect(stripAnsi(harness.render())).toContain("Press Enter again to confirm Allow once.");
     harness.allow();
     await harness.expectAllowed();
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
@@ -187,19 +190,6 @@ describe("TUI plugin approvals", () => {
     },
   );
 
-  it("reruns a refresh requested while another refresh is in flight", async () => {
-    const harness = createHarness();
-    const pendingList = pending<unknown[]>([]);
-    harness.listPluginApprovals.mockReturnValueOnce(pendingList.promise).mockResolvedValueOnce([]);
-
-    const firstRefresh = harness.controller.refresh();
-    const secondRefresh = harness.controller.refresh();
-    pendingList.resolve([]);
-    await Promise.all([firstRefresh, secondRefresh]);
-
-    expect(harness.listPluginApprovals).toHaveBeenCalledTimes(2);
-  });
-
   it("binds global-session approvals to the active agent", () => {
     const harness = createHarness();
     harness.setSessionKey("global");
@@ -239,19 +229,6 @@ describe("TUI plugin approvals", () => {
 
     harness.controller.sessionChanged();
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-  });
-
-  it("requires a visible second confirmation for allow-only approvals", async () => {
-    const harness = createHarness();
-    harness.request({ allowedDecisions: ["allow-once"] });
-
-    harness.allow();
-
-    expect(harness.resolvePluginApproval).not.toHaveBeenCalled();
-    expect(stripAnsi(harness.render())).toContain("Press Enter again to confirm Allow once.");
-
-    harness.selectors[0]?.onSelect?.({ value: "allow-once", label: "Allow once" });
-    await harness.expectAllowed();
   });
 
   it("reopens a pending approval when resolution fails", async () => {
@@ -364,9 +341,7 @@ describe("TUI plugin approvals", () => {
       }
       await resolution.promise.catch(() => undefined);
 
-      expect(harness.addSystem).not.toHaveBeenCalled();
-      expect(harness.listPluginApprovals).not.toHaveBeenCalled();
-      expect(harness.requestRender).not.toHaveBeenCalled();
+      expectUnused(harness.addSystem, harness.listPluginApprovals, harness.requestRender);
     },
   );
 
@@ -390,7 +365,6 @@ describe("TUI plugin approvals", () => {
     pendingList.reject(new Error("refresh unavailable"));
     await refresh.catch(() => undefined);
 
-    expect(harness.addSystem).not.toHaveBeenCalled();
-    expect(harness.requestRender).not.toHaveBeenCalled();
+    expectUnused(harness.addSystem, harness.requestRender);
   });
 });

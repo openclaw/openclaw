@@ -120,20 +120,6 @@ export function resolveLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string
   );
 }
 
-function readLegacyOAuthSecretKeyFiles(env: NodeJS.ProcessEnv): string[] {
-  return normalizeUniqueTrimmedStringList(
-    resolveLegacyOAuthSecretKeyFiles(env).flatMap((keyPath) => {
-      let bytes: Buffer;
-      try {
-        bytes = fs.readFileSync(keyPath);
-      } catch {
-        return [];
-      }
-      return [decodeUtf8Input(bytes, `Legacy OAuth key ${keyPath}`)];
-    }),
-  );
-}
-
 function readLegacyMacOAuthSecretKeychainKey(params: {
   allowKeychainPrompt?: boolean;
   env: NodeJS.ProcessEnv;
@@ -222,7 +208,17 @@ function loadLegacyOAuthSidecarMaterial(params: {
         return null;
       }
     };
-    const seeds = readLegacyOAuthSecretKeyFiles(env);
+    const seeds = normalizeUniqueTrimmedStringList(
+      resolveLegacyOAuthSecretKeyFiles(env).flatMap((keyPath) => {
+        let bytes: Buffer;
+        try {
+          bytes = fs.readFileSync(keyPath);
+        } catch {
+          return [];
+        }
+        return [decodeUtf8Input(bytes, `Legacy OAuth key ${keyPath}`)];
+      }),
+    );
     for (const seed of seeds) {
       const material = decryptLegacyOAuthSecretMaterialWithSeed(seed);
       if (material) {

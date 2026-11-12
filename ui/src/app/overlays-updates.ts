@@ -6,7 +6,7 @@ import {
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";

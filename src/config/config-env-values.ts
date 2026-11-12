@@ -18,8 +18,10 @@ export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolea
     upperKey !== ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV &&
     upperKey !== "OPENCLAW_INCLUDE_ROOTS" &&
     upperKey !== "OPENCLAW_CONFIG_READONLY" &&
+    upperKey !== "OPENCLAW_CONFIG_READONLY_NOTICE" &&
     upperKey !== "OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS" &&
     upperKey !== "OPENCLAW_DISABLE_CRON_HOST_EXECUTION" &&
+    upperKey !== "OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS" &&
     !isDangerousHostEnvVarName(key) &&
     !isDangerousHostEnvOverrideVarName(key) &&
     !containsEnvVarReference(value)

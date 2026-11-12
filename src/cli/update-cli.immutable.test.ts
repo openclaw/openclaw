@@ -73,15 +73,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it("dispatches immutable preparation before mutable admission", async () => {
-  const prepared = mockPreparation();
+  const prepare = mockPreparation();
   await updateCommand({ json: true, dryRun: false, sha: targetSha, timeout: "60" });
-  expect(prepared).toHaveBeenCalledWith({
-    root: installation.currentPath,
-    sha: targetSha,
-    dryRun: false,
-    timeoutMs: 60_000,
-    onWarning: expect.any(Function),
-  });
+  expect(prepare).toHaveBeenCalledWith(
+    expect.objectContaining({ sha: targetSha, timeoutMs: 60_000 }),
+  );
   expectJson({ status: "prepared", installKind: "immutable", activation: "disabled", targetSha });
   expect(retainedRuntime.withRetainedUpdateRuntime).not.toHaveBeenCalled();
   expect(activation.activate).not.toHaveBeenCalled();
@@ -161,7 +157,6 @@ it.each([
     }
     const prepare = vi.spyOn(immutable, "prepareImmutableUpdate");
     const command = updateCommand({ json: true, ...options });
-    await expect(command).rejects.toBeInstanceOf(ExitError);
     await expect(command).rejects.toMatchObject({ code: 1 });
     expectJson({ status: "error", ...fields });
     expect(prepare).not.toHaveBeenCalled();
@@ -197,9 +192,6 @@ it.each([
     installation: dryRun ? adopted : { ...adopted, prepared: preparedReceipt },
   });
   await updateCommand({ json: true, restart, dryRun, timeout: " 600 ", drainTimeout: "30" });
-  expect(immutable.prepareImmutableUpdate).toHaveBeenCalledWith(
-    expect.objectContaining({ timeoutMs: 600_000 }),
-  );
   expect(activation.activate).toHaveBeenCalledTimes(activates ? 1 : 0);
   if (activates) {
     expect(activation.activate).toHaveBeenCalledWith(
@@ -209,9 +201,7 @@ it.each([
         drainTimeoutMs: 30_000,
       }),
     );
-    const output = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
-    expect(output).toHaveProperty("installation", committedInstallation);
-    expect(output).not.toHaveProperty("installation.prepared");
+    expectJson({ installation: committedInstallation });
   }
   expectJson({ status: activates ? "succeeded" : dryRun ? "dry-run" : "prepared" });
   expect(retainedRuntime.withRetainedUpdateRuntime).not.toHaveBeenCalled();

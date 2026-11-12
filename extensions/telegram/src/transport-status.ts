@@ -11,8 +11,20 @@ export function createTelegramStatusPublisher(
   setStatus?: TelegramStatusSink,
 ) {
   const disconnected = { mode, connected: false };
+  let lastDisconnect: { at: number; error?: string } | undefined;
+  const disconnectPatch = (error?: string) => {
+    // Retries share one outage window; only readiness or a new account run
+    // resets it. Renewing the timestamp would indefinitely defer host recovery.
+    lastDisconnect = {
+      ...lastDisconnect,
+      at: lastDisconnect?.at ?? Date.now(),
+      ...(error !== undefined ? { error } : {}),
+    };
+    return { ...disconnected, lastDisconnect };
+  };
   return {
     noteStart() {
+      lastDisconnect = undefined;
       setStatus?.({
         ...disconnected,
         lastConnectedAt: null,
@@ -21,6 +33,7 @@ export function createTelegramStatusPublisher(
       });
     },
     noteReady(at = Date.now()) {
+      lastDisconnect = undefined;
       setStatus?.(
         channelReadyPatch({
           lastConnectedAt: at,
@@ -36,11 +49,11 @@ export function createTelegramStatusPublisher(
       setStatus?.({ lastEventAt: at });
     },
     noteRecovery() {
-      setStatus?.({ lifecycle: "recovering" });
+      setStatus?.({ ...disconnectPatch(), lifecycle: "recovering" });
     },
     noteError(error: string, lifecycle?: "recovering" | "blocked") {
       setStatus?.({
-        ...disconnected,
+        ...disconnectPatch(error),
         ...(lifecycle ? { lifecycle } : {}),
         ...(lifecycle === "blocked" ? { terminalDisconnect: true } : {}),
         lastError: error,

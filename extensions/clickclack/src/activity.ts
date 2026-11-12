@@ -158,7 +158,7 @@ export function createClickClackActivityPublisher(params: {
       ...payload,
       event: "item",
       itemKind: payload.kind,
-    })?.trim();
+    });
     if (!body) {
       const head = payload.name?.trim() || payload.title?.trim();
       const text = payload.progressText?.trim() || payload.summary?.trim();

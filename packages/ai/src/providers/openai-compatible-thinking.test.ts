@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../transports/openai-completions-transport.js";
 import { createOpenAIResponsesTransportStreamFn } from "../transports/openai-responses-transport.js";
+import { completedResponse } from "../transports/openai-stream-cases.test-support.js";
 import type { Context, Model, ModelThinkingLevel } from "../types.js";
 import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
 import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
@@ -110,6 +111,23 @@ const mappingCases: ReasoningCase[] = [
 ];
 
 const adapterCases: ReasoningCase[] = [
+  mapped("compat off mapping without an effort list", "off", "none", {
+    compat: { reasoningEffortMap: { off: "none" } },
+  }),
+  mapped("model off mapping without an effort list", "off", "none", {
+    thinkingLevelMap: { off: "none" },
+  }),
+  mapped("advertised ladder rejects a mapped disable", "off", undefined, {
+    compat: efforts(["low", "high"], { off: "none" }),
+  }),
+  mapped("proxy model name cannot declare a disable control", "off", undefined, {
+    modelId: "gpt-5.4",
+  }),
+  mapped("unknown off contract omits scalar effort", "off", undefined),
+  mapped("unknown native none omits scalar effort", "none", undefined),
+  mapped("off without disable support", "off", undefined, {
+    compat: efforts(["low", "medium", "high"]),
+  }),
   mapped("known model API max default", "max", "xhigh", {
     modelId: "gpt-5.6-sol",
     expectedResponses: "max",
@@ -215,10 +233,7 @@ describe.each([
                   },
                 ],
               }
-            : {
-                type: "response.completed",
-                response: { id: "reply", status: "completed", output: [] },
-              };
+            : completedResponse("reply", []);
         return new Response(`data: ${JSON.stringify(event)}\n\ndata: [DONE]\n\n`, {
           headers: { "content-type": "text/event-stream" },
         });

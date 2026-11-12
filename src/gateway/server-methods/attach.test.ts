@@ -6,7 +6,7 @@ import { attachHandlers } from "./attach.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const loadSessionEntryMock = vi.hoisted(() =>
-  vi.fn((_sessionKey: string) => ({ entry: undefined as Record<string, unknown> | undefined })),
+  vi.fn<(_sessionKey: string) => Record<string, unknown> | undefined>(),
 );
 
 vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal) => {
@@ -15,12 +15,16 @@ vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal
   return {
     ...actual,
     readResolvedSessionEntryInWorker: async (params: { sessionKey: string }) =>
-      loadSessionEntryMock(params.sessionKey).entry,
+      loadSessionEntryMock(params.sessionKey),
   };
 });
 
 const grant = expectDefined(attachHandlers["attach.grant"], "attach.grant handler");
 const revoke = expectDefined(attachHandlers["attach.revoke"], "attach.revoke handler");
+type Grant = NonNullable<ReturnType<typeof resolveAttachGrant>> & {
+  mcpConfig: unknown;
+  env: Record<string, string>;
+};
 
 async function request(params: Record<string, unknown>, handler = grant, config = {}) {
   const respond = vi.fn<RespondFn>();
@@ -33,30 +37,26 @@ async function request(params: Record<string, unknown>, handler = grant, config 
   return expectDefined(respond.mock.calls[0], "attach response");
 }
 
-beforeEach(() => {
-  loadSessionEntryMock.mockReset();
-  loadSessionEntryMock.mockReturnValue({ entry: undefined });
-});
+beforeEach(() => loadSessionEntryMock.mockReset());
 afterEach(closeMcpLoopbackServer);
 
-it("attach.grant mints a session-bound grant and returns loopback config + token env", async () => {
-  const [ok, payload] = await request({ sessionKey: "agent:main:attach-method" });
+it.each([30_000, -5])("attach.grant binds its config and token with ttlMs=%s", async (ttlMs) => {
+  const [ok, payload] = await request({ sessionKey: "agent:main:attach-method", ttlMs });
   expect(ok).toBe(true);
-  const body = payload as {
-    token: string;
-    sessionKey: string;
-    mcpConfig: unknown;
-    env: Record<string, string>;
-  };
+  const body = payload as Grant;
   expect(body.sessionKey).toBe("agent:main:attach-method");
   expect(body.token).toMatch(/^[0-9a-f]{64}$/);
-  expect(body.mcpConfig).toBeTruthy();
   expect(body.env).toEqual({ OPENCLAW_MCP_TOKEN: body.token });
   const placeholders = [...JSON.stringify(body.mcpConfig).matchAll(/\$\{([A-Z0-9_]+)\}/gu)].map(
     (match) => match[1],
   );
   expect(new Set(placeholders)).toEqual(new Set(Object.keys(body.env)));
   expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
+  const now = Date.now();
+  expect(body.expiresAtMs).toBeGreaterThan(now + (ttlMs > 0 ? 20_000 : 50 * 60_000));
+  if (ttlMs > 0) {
+    expect(body.expiresAtMs).toBeLessThan(now + 40_000);
+  }
 });
 
 it("uses an explicit agent for an omitted session key", async () => {
@@ -64,8 +64,7 @@ it("uses an explicit agent for an omitted session key", async () => {
     agents: { ownership: "explicit", entries: { research: {}, other: {} } },
   });
   expect(ok).toBe(true);
-  const result = payload as { sessionKey?: string } | undefined;
-  expect(result?.sessionKey).toBe("agent:research:main");
+  expect(payload).toMatchObject({ sessionKey: "agent:research:main" });
 });
 it.each([
   ["reserved", undefined, false],
@@ -76,16 +75,15 @@ it.each([
   ],
   ["legacy", { sessionId: "legacy-session", modelSelectionLocked: false }, true],
 ] as const)("enforces attach authority for %s harness sessions", async (_name, entry, allowed) => {
-  loadSessionEntryMock.mockReturnValue({ entry });
+  loadSessionEntryMock.mockReturnValue(entry);
   const sessionKey = allowed
     ? "agent:main:harness:legacy-notes"
     : "agent:main:harness:codex:supervision:native-thread";
   const [ok, payload, error] = await request({ sessionKey });
   expect(ok).toBe(allowed);
   if (allowed) {
-    const response = payload as { token: string } | undefined;
-    expect(response).toBeDefined();
-    expect(resolveAttachGrant(response?.token ?? "")?.sessionKey).toBe(sessionKey);
+    const response = expectDefined(payload, "attach grant") as Grant;
+    expect(resolveAttachGrant(response.token)?.sessionKey).toBe(sessionKey);
   } else {
     expect(error).toMatchObject({
       code: "INVALID_REQUEST",
@@ -102,17 +100,5 @@ it("attach.revoke removes a grant; missing token is an INVALID_REQUEST", async (
 
   const [errOk, , err] = await request({}, revoke);
   expect(errOk).toBe(false);
-  expect((err as { code: string }).code).toBe("INVALID_REQUEST");
-});
-
-it("applies a positive ttlMs and falls back to the default for an invalid one", async () => {
-  const [, first] = await request({ sessionKey: "agent:main:ttl", ttlMs: 30_000 });
-  const b1 = first as { expiresAtMs: number };
-  const now1 = Date.now();
-  expect(b1.expiresAtMs).toBeGreaterThan(now1 + 20_000);
-  expect(b1.expiresAtMs).toBeLessThan(now1 + 40_000); // honored 30s ttl, not the 1h default
-
-  const [, second] = await request({ sessionKey: "agent:main:ttl2", ttlMs: -5 });
-  const b2 = second as { expiresAtMs: number };
-  expect(b2.expiresAtMs).toBeGreaterThan(Date.now() + 50 * 60_000);
+  expect(err).toMatchObject({ code: "INVALID_REQUEST" });
 });

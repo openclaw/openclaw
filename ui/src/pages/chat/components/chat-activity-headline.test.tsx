@@ -238,7 +238,8 @@ it.each([
   ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
   ["web_search", { query: "new plugin APIs" }, "start", 'for "new plugin APIs"…'],
   ["lookup_record", { query: "release notes" }, "start", "release notes…"],
-  ["exec", { title: "Inspect source", code: "return null" }, "result", "Outcome unknown"],
+  ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
+  ["exec", {}, "result", "Exec"],
   ["session_status", {}, "result", "1 other operation"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
   const activity = projectAgentToolActivity({
@@ -256,7 +257,8 @@ it.each([
   const summary = query("summary")!;
   const icon = summary.querySelector('.chat-activity-group__icon[role="img"]');
   expect(label()).toBe(expected);
-  expect([icon?.getAttribute("aria-label"), icon?.getAttribute("title")]).toEqual([name, name]);
+  expect(icon?.getAttribute("aria-label")).toBe(name);
+  expect(icon?.hasAttribute("title")).toBe(false);
   expect(icon?.querySelector("svg")).not.toBeNull();
   if (phase === "start") {
     expect(summary.textContent?.trim()).toBe(expected);
@@ -304,8 +306,7 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
       onToggleToolMessageExpanded: onToggle,
     });
   draw([prepared("first")]);
-  const summary = query("summary")!;
-  const body = query("body")!;
+  const [summary, body, headline] = [query("summary")!, query("body")!, query("label")!];
   expect(summary.getAttribute("aria-expanded")).toBe("false");
   expect(summary.getAttribute("aria-controls")).toBe(body.id);
   expect(body.hidden).toBe(true);
@@ -319,9 +320,9 @@ it("keeps the headline and its dwell across disclosure toggles with accessible c
   expect(label()).toBe("Read first");
   expect(summary.getAttribute("aria-expanded")).toBe("true");
   expect(body.hidden).toBe(false);
-  expect(query("summary")).toBe(summary);
   expectAfter(1_999, "Read first");
   expectAfter(1, "Read next…");
+  expect(query("label")).toBe(headline);
   expanded = false;
   draw([prepared("first", "completed"), prepared("next", "completed")]);
   expect(label()).toBe("Read next");
@@ -388,9 +389,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
   expect(label()).toBe("in /repo/src/a.ts…");
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
-  expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-    "1 read · 1 edit 1 failed",
-  );
+  expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe("1 read · 1 edit");
 });
 
 it.each(["failed", "blocked"] as const)(
@@ -402,7 +401,13 @@ it.each(["failed", "blocked"] as const)(
     await renderActivityFixture([nested], liveOptions);
     expect(label()).toBe("Build the snake game");
     expect(vi.getTimerCount()).toBe(0);
-    expect(query("summary")?.textContent).toContain("1 " + status);
+    // A reviewer's block is a decision worth surfacing; a failed attempt mid-run is not.
+    const summary = query("summary")?.textContent;
+    if (status === "blocked") {
+      expect(summary).toContain("1 blocked");
+    } else {
+      expect(summary).not.toContain("failed");
+    }
   },
 );
 
@@ -438,7 +443,7 @@ it.each([false, true])(
       expect(label()).toBe("Read first");
     }
     activityRoot.render([group("current", [...settled, prepared("next")])], liveOptions);
-    expect(label()).toBe("Read first");
+    expect(container.querySelector(".text-shimmer")?.textContent).toBe("Read first");
     expectAfter(2_800, "Read next…");
   },
 );

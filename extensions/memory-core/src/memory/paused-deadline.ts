@@ -2,6 +2,11 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchDeadlineControl } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
+export const EMBEDDING_TIMEOUTS_MS = {
+  query: { remote: 60_000, local: 5 * 60_000 },
+  batch: { remote: 2 * 60_000, local: 10 * 60_000 },
+};
+
 export function createPausedDeadline(params: {
   kind: "corpus" | "embedding";
   timeoutMs: number;
@@ -9,7 +14,8 @@ export function createPausedDeadline(params: {
   control?: MemorySearchDeadlineControl;
   expire: () => void;
 }) {
-  const now = params.kind === "corpus" ? () => performance.now() : () => Date.now();
+  // setTimeout is monotonic. A wall-clock jump must not consume or invent pause budget.
+  const now = () => performance.now();
   let remainingMs = params.timeoutMs;
   let segmentStartedAt = now();
   let paused = false;

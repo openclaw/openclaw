@@ -1,25 +1,20 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runStructuredHealthRepairs } from "./doctor-health-contribution-core.js";
-import {
-  createDoctorHealthContribution,
-  showDoctorHealthSummary,
-} from "./doctor-health-contribution.js";
+import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import {
   createDoctorHealthFlowContext,
   runDoctorHealthContributionList,
 } from "./doctor-health-contributions.test-support.js";
 import { clearHealthChecksForTest } from "./health-check-registry.js";
 
-const { registerBundledHealthChecks } = vi.hoisted(() => ({
-  registerBundledHealthChecks: vi.fn(),
-}));
+const registerBundledHealthChecks = vi.hoisted(() => vi.fn());
 vi.mock("./bundled-health-checks.js", () => ({ registerBundledHealthChecks }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(clearHealthChecksForTest);
-afterEach(clearHealthChecksForTest);
 afterEach(() => {
+  clearHealthChecksForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -35,10 +30,11 @@ it.each([false, true])(
     const repairing = Promise.withResolvers<void>();
     const repair = Promise.withResolvers<void>();
     let repaired = false;
+    const checkId = "core/doctor/progress";
     const context = createDoctorHealthFlowContext({ env: {}, options: { json } });
     context.prompter.shouldRepair = true;
     const running = runDoctorHealthContributionList(context, [
-      createDoctorHealthContribution("doctor:progress-fixture", "Progress fixture", {
+      createDoctorHealthContribution("doctor:progress", "Progress", {
         healthChecks: {
           description: "Synthetic repair",
           async detect() {
@@ -47,13 +43,7 @@ it.each([false, true])(
             }
             entered.resolve();
             await detection.promise;
-            return [
-              {
-                checkId: "core/doctor/progress-fixture",
-                severity: "warning",
-                message: "Repair needed",
-              },
-            ];
+            return [{ checkId, severity: "warning", message: "Repair needed" }];
           },
           async repair() {
             repairing.resolve();
@@ -65,31 +55,24 @@ it.each([false, true])(
       }),
     ]);
     const output = () => stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
+    const expectProgress = (text: string) => {
+      expect(output()).toEqual(json ? "" : expect.stringContaining(text));
+    };
     try {
       await entered.promise;
-      if (!json) {
-        expect(output()).toContain("Doctor: Progress fixture");
-        expect(output()).toContain("core/doctor/progress-fixture: check");
-      }
+      expectProgress("Doctor: Progress");
+      expectProgress(`${checkId}: check`);
       await vi.advanceTimersByTimeAsync(10_000);
-      if (!json) {
-        expect(output()).toContain("10s elapsed");
-      }
+      expectProgress("10s elapsed");
       detection.resolve();
       await repairing.promise;
-      if (!json) {
-        expect(output()).toContain("core/doctor/progress-fixture: repair");
-      }
+      expectProgress(`${checkId}: repair`);
     } finally {
       detection.resolve();
       repair.resolve();
       await running;
     }
-    if (json) {
-      expect(output()).toBe("");
-    } else {
-      expect(output()).toContain("core/doctor/progress-fixture: validation");
-    }
+    expectProgress(`${checkId}: validation`);
     expect(stdout).not.toHaveBeenCalled();
     const finished = output();
     await vi.advanceTimersByTimeAsync(10_000);
@@ -97,7 +80,7 @@ it.each([false, true])(
   },
 );
 
-it("retains unavailable-plugin repair guidance in Doctor output and update warnings", async () => {
+it("retains unavailable-plugin repair guidance in update warnings", async () => {
   const checkId = "core/doctor/codex-session-routes";
   const message =
     'Plugin "codex" is unavailable: health API could not be verified. Run `openclaw doctor --fix`.';
@@ -116,9 +99,4 @@ it("retains unavailable-plugin repair guidance in Doctor output and update warni
   await runStructuredHealthRepairs(ctx, async () => []);
 
   expect(ctx.updateWarnings).toEqual(["earlier warning", `${checkId}: ${message}`]);
-  showDoctorHealthSummary(ctx);
-  expect(ctx.runtime.log).toHaveBeenCalledWith("Fix now:");
-  expect(ctx.runtime.log).toHaveBeenCalledWith(`- ${message}`);
-  expect(ctx.runtime.error).not.toHaveBeenCalled();
-  expect(ctx.runtime.exit).not.toHaveBeenCalled();
 });

@@ -52,15 +52,84 @@ import {
 import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
+import type { PluginLogger } from "./types.js";
 
-export function detailPluginStartupTrace(
-  startupTrace: PluginLoadOptions["startupTrace"] | undefined,
-  pluginId: string,
-  metrics: ReadonlyArray<readonly [string, number | string]>,
+export type PreparedPluginConfig = {
+  input: string | undefined;
+  validation?: ReturnType<typeof validatePluginConfig>;
+};
+
+export function prepareRuntimePluginConfig(params: {
+  candidate: PluginCandidate;
+  manifestRecord: PluginManifestRecord;
+  context: PluginLoadCacheContext;
+  preparedConfig: PreparedPluginConfig;
+}) {
+  const { candidate, manifestRecord, context, preparedConfig } = params;
+  if (!preparedConfig.validation) {
+    const policyId = normalizePluginPolicyId(manifestRecord.id);
+    preparedConfig.validation = validatePluginConfig({
+      origin: candidate.origin,
+      schema: manifestRecord.configSchema,
+      cacheKey: manifestRecord.schemaCacheKey,
+      value: context.normalized.entries[policyId]?.config,
+      sourceValue: manifestRecord.configContracts?.secretInputs
+        ? context.activationSource.plugins.entries[policyId]?.config
+        : undefined,
+    });
+    // Snapshot before plugin code can mutate the settings passed through its API.
+    preparedConfig.input = JSON.stringify(preparedConfig.validation);
+  }
+  return preparedConfig.validation;
+}
+
+export function recordPluginStartupDiagnostics(
+  params: {
+    logger: PluginLogger;
+    options: Pick<PluginLoadOptions, "startupTrace">;
+    registryBuilder: { registry: PluginRegistry };
+  },
+  record: PluginRecord,
+  timing: {
+    beforeModuleLoad: number;
+    beforeRegister?: number;
+    configValidationMs: number;
+    artifactPreparationMs: number;
+    moduleLoadMs: number;
+    modulePreparationMs: number;
+    failed: boolean;
+  },
 ): void {
-  startupTrace?.detail(
-    `plugins.gateway-load.plugin.${encodeStartupTraceSegment(pluginId)}`,
-    metrics,
+  const { beforeRegister, failed } = timing;
+  const elapsed = performance.now() - timing.beforeModuleLoad;
+  const registerMs = beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
+  if (!failed && registerMs !== undefined && registerMs > 5_000) {
+    // Count registrations without invoking lazy factories, which may expose several or unnamed tools.
+    const count = params.registryBuilder.registry.tools.filter(
+      (tool) => tool.pluginId === record.id,
+    ).length;
+    params.logger.warn(
+      `[plugins] ${record.id} plugin registration took ${registerMs.toFixed(1)}ms (>5000ms); ` +
+        `${count} tool registrations; ${new Set(record.toolNames).size} registered tool names. ` +
+        "Registration completed (advisory only).",
+    );
+  }
+  params.options.startupTrace?.detail(
+    `plugins.gateway-load.plugin.${encodeStartupTraceSegment(record.id)}`,
+    [
+      ["configValidationMs", timing.configValidationMs],
+      ["artifactPreparationMs", timing.artifactPreparationMs],
+      ["loadMs", timing.moduleLoadMs || elapsed],
+      ["modulePreparationMs", timing.modulePreparationMs],
+      ["loadFailedCount", failed && beforeRegister === undefined ? 1 : 0],
+      ...(registerMs === undefined
+        ? []
+        : ([
+            ["registerMs", registerMs],
+            ["loadAndRegisterMs", elapsed],
+            ["registerFailedCount", failed ? 1 : 0],
+          ] as const)),
+    ],
   );
 }
 
@@ -170,6 +239,8 @@ export function createPluginCandidatesFromManifestRegistry(
 
 export class PluginLoadFailureError extends Error {
   readonly registry: PluginRegistry;
+  /** Every failure is a plugin held back until Doctor runs its pending state migration. */
+  readonly onlyPendingStateMigrations: boolean;
 
   constructor(registry: PluginRegistry, failedPlugins: readonly PluginRecord[]) {
     const summary = failedPlugins
@@ -178,6 +249,12 @@ export class PluginLoadFailureError extends Error {
     super(`plugin load failed: ${summary}`);
     this.name = "PluginLoadFailureError";
     this.registry = registry;
+    this.onlyPendingStateMigrations = failedPlugins.every((entry) =>
+      registry.diagnostics.some(
+        (diagnostic) =>
+          diagnostic.pluginId === entry.id && diagnostic.code === "plugin-state-migration",
+      ),
+    );
   }
 }
 
@@ -281,6 +358,7 @@ function createManifestPluginRecord(params: {
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
     declaredContextEngineIds: manifestRecord.contextEngineIds,
+    turnHandover: manifestRecord.reload?.turnHandover === true,
     configSchema: Boolean(manifestRecord.configSchema),
   });
   if (!params.shouldLoadModules) {

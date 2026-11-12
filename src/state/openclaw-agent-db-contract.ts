@@ -7,6 +7,9 @@ import type {
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
 export { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+export const AGENT_COLD_NAVIGATION_SCHEMA_VERSION = 39;
+export const AGENT_TEXT_SEARCH_SCHEMA_VERSION = 38;
+export const AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION = 37;
 export const AGENT_VECTOR_SEARCH_SCHEMA_VERSION = 33;
 export const AGENT_VECTOR_DECODER_SCHEMA_VERSION = 32;
 export const AGENT_MEMORY_REVISION_SCHEMA_VERSION = 31;
@@ -31,6 +34,12 @@ export type OpenClawAgentDatabase = {
   db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
+  closeTiming?: {
+    startedAt: number;
+    walStopMs?: number;
+    checkpointMs?: number;
+    nativeCloseMs?: number;
+  };
 };
 
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {

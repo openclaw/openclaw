@@ -15,6 +15,8 @@ export function PrivateComposerRecoveryDialog(
   let keepButton!: HTMLButtonElement;
   const [error, setError] = createSignal<"copyFailed" | "attachmentUnavailable">();
   const current = () => !props.signal.aborted && props.isCurrent();
+  const title = () => props.labels?.title ?? t("chat.privateDraftReload.title");
+  const description = () => props.labels?.description ?? t("chat.privateDraftReload.description");
   const copyText = async () => {
     if (!current()) {
       props.finish(false);
@@ -29,21 +31,21 @@ export function PrivateComposerRecoveryDialog(
   return (
     <openclaw-modal-dialog
       prop:initialFocus={() => keepButton}
-      label={t("chat.privateDraftReload.title")}
-      description={t("chat.privateDraftReload.description")}
+      label={title()}
+      description={description()}
       onModal-cancel={() => props.finish(false)}
     >
       <section class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
-            <div class="exec-approval-title">{t("chat.privateDraftReload.title")}</div>
-            <div class="exec-approval-sub">{t("chat.privateDraftReload.description")}</div>
+            <div class="exec-approval-title">{title()}</div>
+            <div class="exec-approval-sub">{description()}</div>
           </div>
         </div>
         {props.text && (
           <>
             <label class="field">
-              <span>{t("chat.privateDraftReload.text")}</span>
+              <span>{props.labels?.text ?? t("chat.privateDraftReload.text")}</span>
               <textarea readonly rows="6" value={props.text} />
             </label>
             <button type="button" class="btn" onClick={() => void copyText()}>
@@ -94,7 +96,7 @@ export function PrivateComposerRecoveryDialog(
             {t("chat.privateDraftReload.keep")}
           </button>
           <button type="button" class="btn danger" onClick={() => props.finish(current())}>
-            {t("chat.privateDraftReload.discard")}
+            {props.labels?.discard ?? t("chat.privateDraftReload.discard")}
           </button>
         </openclaw-modal-actions>
       </section>

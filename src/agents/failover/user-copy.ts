@@ -15,10 +15,15 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
-import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
+import {
+  API_KEY_EXPIRED_ERROR_CODE,
+  ERROR_DETAILS_HINT,
+  ERROR_PREFIX_RE,
+} from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+  CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
   type CliTimeoutContext,
   type FallbackAttemptRecord,
 } from "./error.js";
@@ -37,6 +42,8 @@ const RATE_LIMIT_ERROR_USER_MESSAGE =
   "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
   "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+export const TLS_CERTIFICATE_ERROR_USER_TEXT =
+  "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 export const OAUTH_REFRESH_CONTENTION_USER_TEXT =
   "Another sign-in is still in progress. Wait a moment, then try again.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
@@ -48,14 +55,16 @@ export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
       ? RATE_LIMIT_ERROR_USER_MESSAGE
       : code === "refresh_contention"
         ? OAUTH_REFRESH_CONTENTION_USER_TEXT
-        : undefined;
+        : code === CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE
+          ? "⚠️ This host is low on memory, so it could not start another session. Try again after active conversations finish."
+          : undefined;
 const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
+  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again (?:in|at)\b|\bresets?\b|\bplan\b|\bquota\b|重置|分钟|小时|秒后|额度|配额/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context (?:length|window) exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const PROVIDER_PROMPT_SIZE_LIMIT_RE =
@@ -136,6 +145,14 @@ export function renderRateLimitRetryExhaustion(
   return retries === 0
     ? `Automatic rate-limit recovery is disabled${scope} for this session (retry.provider.maxRetries: 0).`
     : `Rate-limit recovery stopped${scope} after ${retries} automatic ${retries === 1 ? "retry" : "retries"} without a completed model response. Check completed work before trying again.`;
+}
+
+/** A watchdog stop mid-backoff interrupted recovery; zero retries never means it was disabled. */
+export function renderRateLimitRecoveryStopped(retries: number): string {
+  return (
+    (retries > 0 && renderRateLimitRetryExhaustion(retries)) ||
+    "Rate-limit recovery stopped without a completed model response. Check completed work before trying again."
+  );
 }
 
 /** Render rate-limit versus overload copy from the canonical classified reason. */
@@ -343,11 +360,13 @@ function resolveProviderRequestFailureCode(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }): ProviderRequestErrorCode | undefined {
   const reason =
     params.classification?.kind === "reason" ? params.classification.reason : undefined;
   if (reason === "auth" && params.status === 401) {
-    return "provider_authentication_error";
+    // An expired key cannot be fixed by signing in; its copy is rendered from the provider code.
+    return params.code === API_KEY_EXPIRED_ERROR_CODE ? undefined : "provider_authentication_error";
   }
   if (reason === "model_not_found") {
     return "provider_model_unavailable";
@@ -369,6 +388,7 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
+  code?: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {
@@ -395,6 +415,13 @@ export function renderRateLimitReplyCopy(params: {
   sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
+  // Host-authored failures keep their own copy; cooldown copy below adds expiry detail.
+  const code = params.code ?? attempts.at(-1)?.code;
+  const codeCopy =
+    code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ? undefined : renderFailoverCodeUserCopy(code);
+  if (codeCopy) {
+    return codeCopy;
+  }
   // Local cooldown diagnostics name the operator's saved login; only provider text becomes copy.
   const providerMessage = params.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE ? "" : params.message;
   if (params.reason === "rate_limit") {
@@ -610,6 +637,8 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
     `${provider} rejected the request — looks like a billing issue on the account.`,
   server_error: (provider: string) =>
     `${provider} is having issues right now. Please wait a moment before trying again.`,
+  route_unavailable: (provider: string) =>
+    `${provider} cannot serve this model right now. Choose another model.`,
   timeout: (provider: string) =>
     `${provider} hasn't been responding. Please wait a moment before trying again.`,
   tls_certificate: authProfileUnavailableCopy,

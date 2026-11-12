@@ -1,8 +1,21 @@
 import { expect, it } from "vitest";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../state/openclaw-database-preflight.messages.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "./failure-output.js";
+
+it("preserves a worker migration refusal and its recovery command", () => {
+  const cause = new StartupMaintenanceRequiredError(
+    "state-migrations",
+    "this CLI is 2026.10.8 but the Gateway service runs 2026.10.3 from /old; run openclaw update (or the CLI from /old)",
+  );
+  const error = new Error("config health failed", { cause });
+  expect(formatCliFailureLines({ title: "Command failed", error, env: {} })).toEqual([
+    "[openclaw] Command failed",
+    `[openclaw] Reason: ${cause.message}`,
+  ]);
+});
 
 it.each([
   new DoctorUnreadableStateDatabaseError("/state/openclaw.sqlite", "unreadable"),

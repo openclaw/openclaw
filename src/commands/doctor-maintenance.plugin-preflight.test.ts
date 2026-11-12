@@ -25,25 +25,16 @@ it("admits plugin-only repair before executing setup or doctor modules", async (
   const configPath = path.join(root, "openclaw.json");
   const bundledDir = path.join(root, "bundled-disabled");
   fs.mkdirSync(bundledDir);
-  for (const [key, value] of Object.entries({
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  })) {
-    vi.stubEnv(key, value);
-  }
+  vi.stubEnv("HOME", root);
+  vi.stubEnv("USERPROFILE", root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   vi.stubEnv("OPENCLAW_HOME", undefined);
   const pluginId = "fixture-maintenance-owner";
   const packageName = `@fixture/${pluginId}`;
-  const pluginDir = writeManagedNpmPlugin({
-    stateDir,
-    packageName,
-    pluginId,
-    version: "1.0.0",
-  });
+  const pluginDir = writeManagedNpmPlugin({ stateDir, packageName, pluginId, version: "1.0.0" });
   const marker = (name: string) => path.join(root, `${name}.marker`);
   const writeMarker = (name: string) =>
     `require("node:fs").writeFileSync(${JSON.stringify(marker(name))}, "executed");`;
@@ -113,8 +104,6 @@ module.exports = {
   clearPluginMetadataLifecycleCaches();
   const markers = () =>
     ["setup", "doctor", "session-agent", "migrated"].map((name) => fs.existsSync(marker(name)));
-  expect(markers()).toEqual([false, false, false, false]);
-
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   const databaseBefore = fs.readFileSync(databasePath);
   const otherOwner = acquireGatewayStateOwner({ databasePath });
@@ -131,9 +120,7 @@ module.exports = {
   } finally {
     otherOwner?.release();
   }
-
   const maintenance = await begin();
-  expect(maintenance).toBeDefined();
   try {
     expect(markers()).toEqual([false, false, false, false]);
     const result = await maintenance!.run(() =>

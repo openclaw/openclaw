@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, constants } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sqliteQueries from "../../../infra/kysely-sync.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import {
@@ -20,6 +21,7 @@ import {
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import * as subagentCodec from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   isReleasedSubagentRunRecord,
@@ -296,6 +298,35 @@ describe("subagent registry sqlite store", () => {
       writePayload(run.runId, JSON.stringify({ parentCompletion }));
       expect(loadSubagentRegistryFromSqlite().size).toBe(0);
       expect(readCompact().size).toBe(0);
+    }
+  });
+
+  it("decodes owned compact rows without copying while preserving stored identities", () => {
+    const run = createRun();
+    saveRuns(run);
+    const database = openOpenClawStateDatabase();
+    database.db
+      .prepare(
+        "UPDATE subagent_runs SET run_id = ?, child_session_key = ?, requester_session_key = ? WHERE run_id = ?",
+      )
+      .run(` ${run.runId} `, ` ${run.childSessionKey} `, ` ${run.requesterSessionKey} `, run.runId);
+    const storedBefore = database.db.prepare("SELECT * FROM subagent_runs").get();
+    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    const decode = vi.spyOn(subagentCodec, "rowToSubagentRunRecord");
+    try {
+      const compact = loadSubagentSessionListRunsFromSqlite(undefined, database);
+      expect([...compact.keys()]).toEqual([run.runId]);
+      expect(compact.get(run.runId)).toMatchObject({
+        runId: run.runId,
+        childSessionKey: run.childSessionKey,
+        requesterSessionKey: run.requesterSessionKey,
+      });
+      // A compact query owns its rows; a second row allocation adds no isolation.
+      expect(decode.mock.calls[0]?.[0]).toBe(queries.mock.results.at(-1)?.value.rows[0]);
+      expect(database.db.prepare("SELECT * FROM subagent_runs").get()).toEqual(storedBefore);
+    } finally {
+      decode.mockRestore();
+      queries.mockRestore();
     }
   });
 

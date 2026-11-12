@@ -30,7 +30,7 @@ describe("selected plugin package composition", () => {
       {
         name: "openclaw",
         version: "2026.10.6",
-        dependencies: { "chrome-devtools-mcp": "1.11.0" },
+        dependencies: { "chrome-devtools-mcp": "1.12.0" },
         bundleDependencies: ["chrome-devtools-mcp"],
       },
       [
@@ -48,7 +48,7 @@ describe("selected plugin package composition", () => {
           packageJson: {
             name: "@openclaw/qa-lab",
             version: "2026.10.6",
-            dependencies: { "@openclaw/crabline": "0.1.30" },
+            dependencies: { "@openclaw/crabline": "0.1.31" },
             bundledDependencies: ["@openclaw/crabline"],
           },
         },
@@ -60,10 +60,10 @@ describe("selected plugin package composition", () => {
       "chrome-devtools-mcp",
     ]);
     expect(result.dependencies).toEqual({
-      "chrome-devtools-mcp": "1.11.0",
+      "chrome-devtools-mcp": "1.12.0",
       "@shinyoshiaki/binary-data": "0.6.1",
       werift: "0.25.0",
-      "@openclaw/crabline": "0.1.30",
+      "@openclaw/crabline": "0.1.31",
     });
   });
 });

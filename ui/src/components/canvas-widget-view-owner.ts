@@ -2,10 +2,12 @@ import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
   resolveSafeTimeoutDelayMs,
+  type GatewaySessionMessageSubscription,
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
@@ -15,15 +17,100 @@ import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { observeWindowMessage } from "../lib/reactive/window-message.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
+import {
+  WidgetSandboxHost,
+  WIDGET_LOAD_NOTICE_MS,
+  WIDGET_LOAD_TIMEOUT_MS,
+} from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
-import {
-  createCanvasWidgetViewLoader,
-  isCanvasWidgetLoadRetryEvent,
-  type CanvasWidgetViewBinding,
-} from "./canvas-widget-view-loader.ts";
+import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
+
+type WidgetClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+
+type CanvasWidgetViewBinding = {
+  client: WidgetClient;
+  generation: number;
+  docId: string;
+  sessionKey: string;
+  operatorRead: boolean;
+};
+
+function isCanvasWidgetLoadRetryEvent(
+  event: GatewayEventFrame,
+  binding: CanvasWidgetViewBinding,
+): boolean {
+  const payload = asOptionalRecord(event.payload);
+  if (binding.operatorRead || payload?.sessionKey !== binding.sessionKey) {
+    return false;
+  }
+  const message = asOptionalRecord(payload.message);
+  return (
+    (event.event === "session.message" &&
+      message?.role === "toolResult" &&
+      message.toolName === "show_widget") ||
+    (event.event === "chat" &&
+      (payload.state === "final" || payload.state === "aborted" || payload.state === "error"))
+  );
+}
+
+const pendingViews = new WeakMap<
+  WidgetClient,
+  {
+    generation: number;
+    requests: Map<string, Promise<CanvasDocumentViewResult>>;
+  }
+>();
+
+function canvasViewRequestKey(binding: CanvasWidgetViewBinding): string {
+  return `${binding.sessionKey}\0${binding.docId}\0${binding.operatorRead}`;
+}
+
+function forgetPendingCanvasView(binding: CanvasWidgetViewBinding | undefined): void {
+  if (!binding) {
+    return;
+  }
+  const pending = pendingViews.get(binding.client);
+  if (pending?.generation === binding.generation) {
+    pending.requests.delete(canvasViewRequestKey(binding));
+  }
+}
+
+function loadCanvasView(binding: CanvasWidgetViewBinding): Promise<CanvasDocumentViewResult> {
+  let pending = pendingViews.get(binding.client);
+  if (!pending || pending.generation !== binding.generation) {
+    pending = { generation: binding.generation, requests: new Map() };
+    pendingViews.set(binding.client, pending);
+  }
+  const requestKey = canvasViewRequestKey(binding);
+  const existing = pending.requests.get(requestKey);
+  if (existing) {
+    return existing;
+  }
+  const request = binding.client.request<CanvasDocumentViewResult>(
+    "canvas.document.view",
+    {
+      docId: binding.docId,
+      ...(!binding.operatorRead && binding.sessionKey ? { sessionKey: binding.sessionKey } : {}),
+    },
+    { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
+  );
+  // Canvas also supports replacing a named document. Share concurrent reads,
+  // but only the mounted view retains bytes; a remount revalidates the source.
+  if (pending.requests.size < 32) {
+    const requests = pending.requests;
+    requests.set(requestKey, request);
+    void request
+      .finally(() => {
+        if (requests.get(requestKey) === request) {
+          requests.delete(requestKey);
+        }
+      })
+      .catch(() => {});
+  }
+  return request;
+}
 
 type ViewBinding = CanvasWidgetViewBinding & {
   connectionRevision: number;
@@ -36,25 +123,62 @@ const reportedRuntimeErrors = new Set<string>();
 // Fresh renders ping the agent; old restored history only shows the notice.
 const WIDGET_RUNTIME_ERROR_REPORT_WINDOW_MS = 10 * 60_000;
 
-export type CanvasWidgetViewProps = {
-  docId: string;
-  sessionKey: string;
-  messageTimestamp?: number;
-  title: string;
-  preferredHeight?: number;
-  onHeightChange?: (height: number) => void;
-  connectionGeneration: number;
-  presentationActive: boolean;
-  allowScripts: boolean;
-};
-
 export function createCanvasWidget(
   props: CanvasWidgetViewProps,
   element: HTMLElement,
   context: ApplicationContext,
   notify: () => void,
 ) {
-  const loader = createCanvasWidgetViewLoader(context.sessions);
+  const sessions = context.sessions;
+  let interest:
+    | { binding: CanvasWidgetViewBinding; ready: Promise<GatewaySessionMessageSubscription> }
+    | undefined;
+
+  function releaseCanvasViewInterest(): void {
+    const previous = interest;
+    interest = undefined;
+    if (previous) {
+      void previous.ready
+        .then(
+          (subscription) => sessions.unsubscribeMessages(subscription),
+          () => undefined,
+        )
+        .catch((error: unknown) => {
+          console.warn("[canvas] Failed to release message subscription:", formatUiError(error));
+        });
+    }
+  }
+
+  async function loadCanvasWidgetView(
+    binding: CanvasWidgetViewBinding,
+    isLoadCurrent: () => boolean,
+  ) {
+    if (!binding.operatorRead && binding.sessionKey) {
+      if (
+        interest &&
+        (interest.binding.client !== binding.client ||
+          interest.binding.generation !== binding.generation ||
+          interest.binding.sessionKey !== binding.sessionKey)
+      ) {
+        releaseCanvasViewInterest();
+      }
+      // Admission precedes the lookup; an unloaded widget keeps its own exact
+      // interest across retries and parking, independently of its chat pane.
+      const current = (interest ??= {
+        binding,
+        ready: sessions.subscribeMessages(binding.sessionKey),
+      });
+      try {
+        await current.ready;
+      } catch (error) {
+        if (interest === current) {
+          interest = undefined;
+        }
+        throw error;
+      }
+    }
+    return isLoadCurrent() ? loadCanvasView(binding) : undefined;
+  }
   // Document identity and private-port authority stay synchronous; the view reads a projection.
   const state: {
     view?: CanvasDocumentViewResult;
@@ -65,6 +189,7 @@ export function createCanvasWidget(
     resourceError: boolean;
     contentHeight?: number;
     sandboxGeneration: number;
+    scriptFrameAdmitted: boolean;
     pending: boolean;
   } = {
     error: "",
@@ -73,8 +198,10 @@ export function createCanvasWidget(
     runtimeError: "",
     resourceError: false,
     sandboxGeneration: 0,
+    scriptFrameAdmitted: false,
     pending: false,
   };
+  let reportedHeight: number | undefined;
   let activeBinding: ViewBinding | undefined;
   let sandboxHost: WidgetSandboxHost | undefined;
   let promptPort: MessagePort | undefined;
@@ -90,6 +217,7 @@ export function createCanvasWidget(
   let retryTimer: number | undefined;
   let slowTimer: number | undefined;
   let retryDelayMs = 1_000;
+  let cancelFrameAdmission: (() => void) | undefined;
   Object.defineProperties(element, {
     documentHtml: {
       configurable: true,
@@ -121,7 +249,7 @@ export function createCanvasWidget(
         return;
       }
       // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
-      loader.forget(binding);
+      forgetPendingCanvasView(binding);
       releaseRetryEvents();
       activeBinding = undefined;
       reconcile();
@@ -159,8 +287,8 @@ export function createCanvasWidget(
 
   function clearView(): void {
     releaseRetryEvents();
-    loader.forget(activeBinding);
-    loader.release();
+    forgetPendingCanvasView(activeBinding);
+    releaseCanvasViewInterest();
     clearRetry();
     state.awaitingResult = false;
     validatedBinding = undefined;
@@ -174,6 +302,9 @@ export function createCanvasWidget(
   }
 
   function clearSandbox(): void {
+    cancelFrameAdmission?.();
+    cancelFrameAdmission = undefined;
+    state.scriptFrameAdmitted = false;
     scrollNonce = "";
     sandboxHost?.dispose();
     sandboxHost = undefined;
@@ -185,7 +316,7 @@ export function createCanvasWidget(
     promptPort = undefined;
     releaseTheme?.();
     releaseTheme = undefined;
-    state.contentHeight = undefined;
+    reportedHeight = state.contentHeight = undefined;
   }
 
   function sameOwner(binding: ViewBinding | undefined): binding is ViewBinding {
@@ -240,7 +371,7 @@ export function createCanvasWidget(
     if (!isGatewayAvailable(gateway.snapshot)) {
       releaseRetryEvents();
       activeBinding = undefined;
-      loader.release();
+      releaseCanvasViewInterest();
       clearRetry();
       validatedBinding = undefined;
       sandboxHost?.setActive(false);
@@ -249,6 +380,7 @@ export function createCanvasWidget(
       return;
     }
     if (!hasOperatorSelfReadAccess(gateway.snapshot.hello?.auth ?? null)) {
+      props.onHeightChange?.(null, true);
       state.accessDenied = true;
       state.error = t("board.widget.accessDenied");
       return;
@@ -293,13 +425,12 @@ export function createCanvasWidget(
         notify();
       }
     }, WIDGET_LOAD_NOTICE_MS);
-    void loader
-      .load(binding, () => isCurrent(binding))
+    void loadCanvasWidgetView(binding, () => isCurrent(binding))
       .then((view) => {
         if (!view || !isCurrent(binding)) {
           return;
         }
-        loader.release();
+        releaseCanvasViewInterest();
         clearRetry();
         const previous = state.view;
         if (
@@ -309,6 +440,7 @@ export function createCanvasWidget(
             previous.sandboxPort !== view.sandboxPort ||
             previous.sandboxOrigin !== view.sandboxOrigin)
         ) {
+          props.onHeightChange?.(null, true);
           clearSandbox();
           state.runtimeError = "";
           state.resourceError = false;
@@ -345,6 +477,7 @@ export function createCanvasWidget(
           return;
         }
         // A definitive denial or missing document retires cached content and its ports.
+        props.onHeightChange?.(null, true);
         state.view = undefined;
         clearSandbox();
         state.pending = false;
@@ -359,6 +492,14 @@ export function createCanvasWidget(
   function syncSandbox(): void {
     const active = props.presentationActive && isCurrent(validatedBinding);
     sandboxHost?.setActive(active);
+    if (!active) {
+      cancelFrameAdmission?.();
+      cancelFrameAdmission = undefined;
+    }
+    if (active && props.allowScripts && state.view && !state.error && !state.scriptFrameAdmitted) {
+      scheduleFrameAdmission();
+      return;
+    }
     const frame = frameElement;
     const view = state.view;
     const binding = activeBinding;
@@ -368,7 +509,7 @@ export function createCanvasWidget(
     sandboxOrigin = new URL(frame.src).origin;
     releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin);
     scrollNonce = generateUUID();
-    releaseMessages = observeWindowMessage(window, frame.contentWindow!, handleMessage);
+    releaseMessages = observeWindowMessage(window, frame, handleMessage);
     sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxOrigin,
@@ -384,6 +525,7 @@ export function createCanvasWidget(
       onError: (error) => {
         clearSandbox();
         state.error = formatUiError(error);
+        props.onHeightChange?.(null, true);
         notify();
       },
       onReadyTimeout: () => {
@@ -398,6 +540,50 @@ export function createCanvasWidget(
     sandboxHost.setActive(active);
   }
 
+  function scheduleFrameAdmission(): void {
+    if (cancelFrameAdmission) {
+      return;
+    }
+    if (typeof requestIdleCallback !== "function") {
+      // Preserve eager admission where the browser has no idle scheduler.
+      state.scriptFrameAdmitted = true;
+      notify();
+      return;
+    }
+    const binding = validatedBinding;
+    let idleHandle = 0;
+    let quietTimer: number;
+    const admit = () => {
+      cancelFrameAdmission?.();
+      cancelFrameAdmission = undefined;
+      if (!isCurrent(binding) || !props.allowScripts || !props.presentationActive) {
+        return;
+      }
+      state.scriptFrameAdmitted = true;
+      notify();
+    };
+    // Browsing-context creation takes ~30 ms. Wait for the transcript to stop
+    // scrolling, then mount with its ready listener in one task. Idle deadlines
+    // can stay short indefinitely, so bound the wait after scrolling settles.
+    const cancelScheduled = () => {
+      window.clearTimeout(quietTimer);
+      cancelIdleCallback(idleHandle);
+    };
+    const waitForQuiet = () => {
+      cancelScheduled();
+      quietTimer = window.setTimeout(() => {
+        idleHandle = requestIdleCallback(admit, { timeout: 250 });
+      }, 120);
+    };
+    const roots = new Set([element.ownerDocument, element.getRootNode()]);
+    const releaseScroll = [...roots].map((root) => listen(root, "scroll", waitForQuiet, true));
+    cancelFrameAdmission = () => {
+      releaseScroll.forEach((release) => release());
+      cancelScheduled();
+    };
+    waitForQuiet();
+  }
+
   function syncFrameError(): void {
     sandboxHost?.handleFrameError();
   }
@@ -408,12 +594,18 @@ export function createCanvasWidget(
       return;
     }
     postWidgetTheme(frame, sandboxOrigin);
-    frame.contentWindow?.postMessage({ type: "openclaw:widget-chat-host" }, sandboxOrigin);
+    const hostState = { type: "openclaw:widget-chat-host", measure: reportedHeight !== undefined };
+    frame.contentWindow?.postMessage(hostState, sandboxOrigin);
     // Saved widget documents use this bridge for unconsumed wheel input.
     frame.contentWindow?.postMessage(
       { type: "openclaw:widget-board-host", nonce: scrollNonce },
       sandboxOrigin,
     );
+  }
+
+  function reportHeight(height: number): void {
+    reportedHeight = height;
+    state.contentHeight = props.onHeightChange?.(height, sandboxHost?.rendered) ?? height;
   }
 
   const handleMessage = (event: Event): void => {
@@ -448,6 +640,8 @@ export function createCanvasWidget(
       if (!props.presentationActive || !props.sessionKey || typeof data.message !== "string") {
         return;
       }
+      state.contentHeight = reportedHeight;
+      props.onHeightChange?.(null, true);
       // Download/rejection failures are not evidence that agent-authored code is
       // broken. Keep a local recovery action, never wake the agent to rewrite it.
       const validated = validatedBinding;
@@ -502,8 +696,7 @@ export function createCanvasWidget(
       Number.isFinite(data.height) &&
       data.height > 0
     ) {
-      state.contentHeight = Math.min(8000, Math.max(48, Math.trunc(data.height)));
-      props.onHeightChange?.(state.contentHeight);
+      reportHeight(Math.min(8000, Math.max(48, Math.trunc(data.height))));
       notify();
     }
     if (data?.type === "openclaw:widget-bridge-ready") {
@@ -550,8 +743,6 @@ export function createCanvasWidget(
     clearView,
     syncSandbox,
     syncFrameError,
-    setFrame: (frame: HTMLIFrameElement) => {
-      frameElement = frame;
-    },
+    setFrame: (frame: HTMLIFrameElement) => (frameElement = frame),
   };
 }

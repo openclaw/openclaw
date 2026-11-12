@@ -101,6 +101,16 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
     profiles: [
       photo,
       { ...photo, id: "absent", hasAvatar: false },
+      {
+        ...photo,
+        id: "github",
+        hasAvatar: false,
+        githubIdentity: {
+          login: "octocat",
+          profileUrl: "https://github.com/octocat",
+          avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
+        },
+      },
       { ...photo, id: "gravatar", hasAvatar: false, emails: ["vince@example.com"] },
       { ...photo, id: "old", mergedInto: "photo", hasAvatar: false },
       { ...photo, id: "cycle", mergedInto: "cycle" },
@@ -109,7 +119,8 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
   await directory.load();
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
   expect(profileAvatarUrl(directory.get("old"))).toBe("/api/users/photo/avatar?v=7");
-  expect(profileAvatarUrl(directory.get("absent"))).toBeUndefined();
+  expect(profileAvatarUrl(directory.get("absent"))).toBe("/api/users/absent/avatar?v=7");
+  expect(profileAvatarUrl(directory.get("github"))).toBe("/api/users/github/avatar?v=7");
   expect(profileAvatarUrl(directory.get("gravatar"))).toBe("/api/users/gravatar/avatar?v=7");
   expect(profileAvatarUrl(directory.get("unknown"))).toBeUndefined();
   expect(directory.get("cycle")).toBeUndefined();

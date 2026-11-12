@@ -16,12 +16,14 @@ import {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
+  resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import type { InternalSessionEffectsTarget } from "../internal-session-effects.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import type { RunEmbeddedAgentAttemptParams } from "./run-embedded-attempt.types.js";
-import type { AgentCommandOpts } from "./types.js";
+import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 export function prepareCommandUserTurnTranscript(
   params: Pick<
@@ -30,6 +32,7 @@ export function prepareCommandUserTurnTranscript(
   >,
   internalSessionTarget: InternalSessionEffectsTarget | undefined,
   sessionEntry: SessionEntry | undefined,
+  runContext: AgentRunContext,
 ) {
   const {
     cfg,
@@ -48,6 +51,23 @@ export function prepareCommandUserTurnTranscript(
     params.opts.suppressPromptPersistence === true ||
     (params.opts.transcriptMessage === "" && !hasTranscriptMedia);
   const recorderTranscriptText = transcriptBody || undefined;
+  // The same requester facts the turn's tool policy resolves against (see
+  // buildCommandAttemptToolContext), so a later fork of this turn can check them again.
+  const messageChannel = resolveMessageChannel(
+    runContext.messageChannel,
+    params.opts.replyChannel ?? params.opts.channel,
+  );
+  const requesterOrigin = captureRequesterOrigin({
+    requesterOrigin: params.opts.requesterOrigin,
+    sessionKey,
+    messageProvider: params.opts.messageProvider ?? messageChannel,
+    agentAccountId: runContext.accountId,
+    conversationId: runContext.chatId,
+    groupId: runContext.groupId,
+    groupChannel: runContext.groupChannel,
+    groupSpace: runContext.groupSpace,
+    senderId: runContext.senderId,
+  });
   const userTurnTranscriptRecorder =
     (internalSessionTarget ? undefined : params.opts.userTurnTranscriptRecorder) ??
     createUserTurnTranscriptRecorder({
@@ -57,6 +77,7 @@ export function prepareCommandUserTurnTranscript(
               text: recorderTranscriptText,
               ...(hasTranscriptMedia ? { media: transcriptMedia } : {}),
               senderIsOwner: params.opts.senderIsOwner,
+              ...(requesterOrigin ? { requesterOrigin } : {}),
               ...(params.opts.inputProvenance ? { provenance: params.opts.inputProvenance } : {}),
             },
           }
@@ -84,10 +105,6 @@ export function clearPendingFinalDelivery(entry: SessionEntry, updatedAt: number
   return {
     ...entry,
     pendingFinalDelivery: undefined,
-    restartRecoveryForceSafeTools: undefined,
-    restartRecoveryDeliveryMediaUrls: undefined,
-    restartRecoveryDisableMessageTool: undefined,
-    restartRecoverySuppressTextDelivery: undefined,
     updatedAt,
   };
 }

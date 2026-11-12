@@ -1,5 +1,32 @@
 # Provider admission retention proof
 
+Run the native-stream probe with `node --expose-gc --import ./scripts/tsx.mjs
+scripts/perf/provider-rate-limit-retention.ts --turns 1100`. It reports retained
+callback bytes for 100 turns each of eleven scenarios: consumed success and 429,
+result-only 429, rejected result, early-consumer abort, unread success, bare end,
+abandoned 429, queued abort, 429 retry, and completed 429 async-context cleanup.
+Streams stay reachable during collection except in the async-context scenario,
+which drops completed streams and keeps the real recovery timers enabled.
+Result reads happen afterward for abandoned consumers; a delayed 429 must still
+gate the next same-account request. Admission observation needs only account scope
+and identity, not request options or callbacks after the provider starts. Shared
+recovery timers must not inherit the request's async context.
+
+Corroborate transport behavior with `OPENCLAW_STATE_DIR=.local/rate-limit-http timeout 120s node
+--expose-gc --import ./scripts/tsx.mjs scripts/perf/provider-rate-limit-http-retention.ts
+--turns 100 --scenario abort`. Repeat with `--scenario success` and `--scenario retry`.
+This uses a synthetic loopback HTTP provider and the real Responses transport;
+retry turns receive a 429 with `retry-after-ms: 1` before succeeding. Aborted
+consumers close iteration first, wait for native producer completion, and only
+read `result()` after collection. Each scenario reports physical requests and
+retained callback bytes. It does not sample allocation or exercise Gateway RPCs.
+
+An allocation stack below admission is not a retaining path. In particular,
+Responses continuation deliberately keeps its latest request input between turns.
+Distinguish that session-owned baseline from abandoned-stream callback retention
+with a heap snapshot and session-resource cleanup; do not erase continuation state
+just to make a stream-lifetime probe report zero.
+
 Use the retention owner probe alongside the existing built-Gateway soak. Generate
 separate, deterministic synthetic fixtures for baseline and candidate. Preserve the
 baseline build before editing source; use identical workload and probe files for

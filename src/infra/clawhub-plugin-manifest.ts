@@ -6,7 +6,10 @@ import {
   type PluginUiCapability,
 } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { PluginDiscoveryDetail } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
+import {
+  validatePluginRecommendedPrompts,
+  type ExternalPluginCompatibility,
+} from "../../packages/plugin-package-contract/src/index.js";
 import {
   readClawHubNonEmptyStringFields,
   readClawHubStringArrayField,
@@ -20,12 +23,17 @@ export type ClawHubPluginCapabilities = {
   providers?: string[];
   channels?: string[];
   uiCapabilities?: PluginUiCapability[];
+  recommendedPrompts?: string[];
 };
 
 export function parseClawHubPluginCapabilities(
   summary: Record<string, unknown>,
 ): ClawHubPluginCapabilities {
   const result: ClawHubPluginCapabilities = {};
+  const prompts = validatePluginRecommendedPrompts(summary.recommendedPrompts);
+  if (prompts.ok && prompts.recommendedPrompts !== undefined) {
+    result.recommendedPrompts = prompts.recommendedPrompts;
+  }
   const ui = validatePluginUiCapabilities(summary.uiCapabilities);
   // Older readers ignored this advisory field; invalid UI metadata must not hide the package.
   if (ui.ok && ui.capabilities !== undefined) {

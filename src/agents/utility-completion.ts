@@ -14,6 +14,7 @@ import {
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
 import { createModelCatalogSnapshotView } from "./model-catalog-view.js";
+import type { ModelFallbackResultClassifier } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -74,10 +75,13 @@ export async function runUtilityCompletion(
   params: Parameters<typeof runIsolatedCompletion>[0] & {
     useUtilityModel?: boolean;
     onAttempt?: (attempt: UtilityCompletionAttempt) => void;
+    classifyResult?: ModelFallbackResultClassifier<
+      Awaited<ReturnType<typeof runIsolatedCompletion>>
+    >;
   },
   run?: typeof runIsolatedCompletion,
 ) {
-  const { onAttempt, ...request } = params;
+  const { onAttempt, classifyResult, ...request } = params;
   const complete = run ?? (await import("./isolated-completion.js")).runIsolatedCompletion;
   const attempt = (candidate: Parameters<typeof runIsolatedCompletion>[0]) => {
     onAttempt?.(candidate);
@@ -113,6 +117,7 @@ export async function runUtilityCompletion(
         : undefined,
     // Isolated completion already owns credential selection and profile rotation.
     skipAuthProfileRuntime: true,
+    classifyResult,
     run: (provider, model, options) =>
       attempt({
         ...request,
@@ -241,39 +246,41 @@ export async function hasAvailableUtilityCompletionAuth(
   params: Awaited<ReturnType<typeof prepareUtilityCompletionForAgent>>,
 ) {
   await using lease = await acquirePreparedModelRuntimeSnapshot(params);
-  const snapshot = materializePreparedModelCatalogOwner(lease.snapshot);
-  const setting = readUtilityModelSetting(params.config, params.agentId);
-  const candidates = resolveModelCandidateChain({
-    ...params,
-    cfg: params.config,
-    fallbacksOverride: setting.kind === "disabled" ? [] : setting.fallbacks,
-    requestedRouteResolution: "resolved",
-    manifestPlugins: snapshot.metadataSnapshot,
-    allowPluginNormalization: false,
-  });
-  const preparedAuthStore = getPreparedModelRuntimeAuthStore(snapshot);
-  if (!preparedAuthStore) {
-    return true;
-  }
-  const runtimeParams = {
-    ...snapshot,
-    cfg: snapshot.config,
-    agentId: params.agentId,
-    snapshot: snapshot.modelCatalog,
-    preparedAuthStore,
-    preparedRuntimeAuthModes: snapshot.authModes,
-    preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
-  };
-  for (const [index, candidate] of candidates.entries()) {
-    const prepared = {
+  return await lease.run(async () => {
+    const snapshot = materializePreparedModelCatalogOwner(lease.snapshot);
+    const setting = readUtilityModelSetting(params.config, params.agentId);
+    const candidates = resolveModelCandidateChain({
       ...params,
-      ...candidate,
-      authProfileId: candidate.provider === params.provider ? params.authProfileId : undefined,
-      agentHarnessRuntimeOverride: index === 0 ? params.agentHarnessRuntimeOverride : undefined,
-    };
-    if (await resolveUtilityCompletionRuntimeForAgent(runtimeParams, prepared)) {
+      cfg: params.config,
+      fallbacksOverride: setting.kind === "disabled" ? [] : setting.fallbacks,
+      requestedRouteResolution: "resolved",
+      manifestPlugins: snapshot.metadataSnapshot,
+      allowPluginNormalization: false,
+    });
+    const preparedAuthStore = getPreparedModelRuntimeAuthStore(snapshot);
+    if (!preparedAuthStore) {
       return true;
     }
-  }
-  return !snapshot.isCurrent();
+    const runtimeParams = {
+      ...snapshot,
+      cfg: snapshot.config,
+      agentId: params.agentId,
+      snapshot: snapshot.modelCatalog,
+      preparedAuthStore,
+      preparedRuntimeAuthModes: snapshot.authModes,
+      preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(snapshot),
+    };
+    for (const [index, candidate] of candidates.entries()) {
+      const prepared = {
+        ...params,
+        ...candidate,
+        authProfileId: candidate.provider === params.provider ? params.authProfileId : undefined,
+        agentHarnessRuntimeOverride: index === 0 ? params.agentHarnessRuntimeOverride : undefined,
+      };
+      if (await resolveUtilityCompletionRuntimeForAgent(runtimeParams, prepared)) {
+        return true;
+      }
+    }
+    return !snapshot.isCurrent();
+  });
 }

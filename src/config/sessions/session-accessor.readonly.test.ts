@@ -27,9 +27,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import {
   listSessionEntriesCore as listEntries,
   listSessionEntriesReadOnly as listReadOnly,
-  loadExactSessionEntry as readExactWritable,
   loadExactSessionEntryReadOnly as readExact,
-  loadSessionEntry,
   readSessionTranscriptWatermark,
   readSessionIdentityEvidenceBatch as readEvidence,
   replaceSessionEntrySync as writeEntry,
@@ -37,7 +35,6 @@ import {
   upsertSessionEntryCore as upsertEntry,
   withSessionEntryReadOnlyScope,
 } from "./session-accessor.js";
-import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { readSessionStoreSummaryReadOnly as readSummary } from "./session-accessor.sqlite-summary.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { promptReport } from "./system-prompt-report.test-support.js";
@@ -72,10 +69,19 @@ function makeScope(name: string, agentId = "worker-1") {
   return { agentId, env };
 }
 
+function seedEntry(
+  scope: Omit<Parameters<typeof upsertEntry>[0], "sessionKey">,
+  sessionKey: string,
+  sessionId: string,
+  updatedAt = 1,
+) {
+  return upsertEntry({ ...scope, sessionKey }, { sessionId, updatedAt });
+}
+
 async function seedIdentity(name: string, sessionId = "session-1", key = "main") {
   const scope = makeScope(name);
   const sessionKey = `agent:worker-1:${key}`;
-  await upsertEntry({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
+  await seedEntry(scope, sessionKey, sessionId);
   const database = openOpenClawAgentDatabase(scope);
   const probe = { ...scope, sessionId, sessionKey, storePath: database.path };
   return { scope, database, probe, sessionId, sessionKey };
@@ -141,16 +147,8 @@ describe("session accessor readonly listing", () => {
       { sessionId: "mixed-session", updatedAt: 10, skillsSnapshot },
     );
     const entry = readExact({ ...scope, sessionKey: mixedKey })?.entry;
-    const aliasedScope = { ...scope, sessionKey: mixedKey.replace("agent:main", "AGENT:MAIN") };
-
     expect(entry?.sessionId).toBe("mixed-session");
     expect(entry?.skillsSnapshot).toEqual(skillsSnapshot);
-    expect(loadSessionEntry(aliasedScope)).toEqual(entry);
-    expect(readExactWritable(aliasedScope)).toBeUndefined();
-    expect(readExactWritable({ ...scope, sessionKey: mixedKey })).toEqual({
-      sessionKey: mixedKey,
-      entry,
-    });
     // Exact reads never resolve folded aliases or canonical-key alternatives.
     expect(readExact({ ...scope, sessionKey: mixedKey.toLowerCase() })).toBeUndefined();
     expect(listEntries(scope)).toEqual([
@@ -232,14 +230,8 @@ describe("session accessor readonly listing", () => {
     const listScope = makeScope("readonly-populated");
     const { env } = listScope;
 
-    await upsertEntry(
-      { ...listScope, sessionKey: "agent:worker-1:main" },
-      { sessionId: "session-1", updatedAt: 10 },
-    );
-    await upsertEntry(
-      { ...listScope, sessionKey: "agent:worker-1:telegram:dm:42" },
-      { sessionId: "session-2", updatedAt: 20 },
-    );
+    await seedEntry(listScope, "agent:worker-1:main", "session-1", 10);
+    await seedEntry(listScope, "agent:worker-1:telegram:dm:42", "session-2", 20);
     const writableEntries = listEntries(listScope);
     const database = expectDefined(getOpenClawAgentDatabaseIfOpen(listScope), "held agent store");
     const handle = database.db;
@@ -478,10 +470,7 @@ describe("session accessor readonly listing", () => {
     );
     const { env } = scope;
     const invalidSessionKey = "agent:worker-1:invalid";
-    await upsertEntry(
-      { ...scope, sessionKey: invalidSessionKey },
-      { sessionId: "invalid-session", updatedAt: 1 },
-    );
+    await seedEntry(scope, invalidSessionKey, "invalid-session");
     expect(
       readEvidence([
         probe,
@@ -494,7 +483,7 @@ describe("session accessor readonly listing", () => {
       env,
       sessionKey: "agent:migration-invalid:main",
     };
-    await upsertEntry(migration, { sessionId: "migration-invalid-session", updatedAt: 1 });
+    await seedEntry(migration, migration.sessionKey, "migration-invalid-session");
     const invalidDatabase = openOpenClawAgentDatabase(migration);
     invalidDatabase.db.exec("PRAGMA user_version = 999;");
     const invalidStorePath = invalidDatabase.path;
@@ -536,7 +525,7 @@ describe("session accessor readonly listing", () => {
     const mainKey = "agent:worker-1:main";
     const otherKey = "agent:worker-1:other";
     for (const sessionKey of [mainKey, otherKey]) {
-      await upsertEntry({ ...scope, sessionKey }, { sessionId, updatedAt: 1 });
+      await seedEntry(scope, sessionKey, sessionId);
     }
     const probe = { ...scope, sessionId, storePath: resolveOpenClawAgentSqlitePath(scope) };
 
@@ -545,45 +534,22 @@ describe("session accessor readonly listing", () => {
     ).toEqual([ambiguous, current(mainKey), current(otherKey)]);
   });
 
-  it.each(["identity", "timestamp", "json", "nul", "participant", "participant-integer"])(
-    "rejects stale valid %s evidence without relying on a fallback read",
-    async (corruption) => {
-      const { scope, database, probe, sessionId, sessionKey } = await seedIdentity(
-        "readonly-stale-valid-evidence",
+  it.each([
+    ["identity", '{"sessionId":"mismatched-session","updatedAt":1}'],
+    ["timestamp", '{"sessionId":"session-1","updatedAt":2}'],
+    ["json", "{"],
+    ["nul", '{"sessionId":"session-1","updatedAt":1}\0'],
+  ] as const)(
+    "keeps uncertified %s evidence unknown without relying on a fallback read",
+    async (_corruption, value) => {
+      const { scope, database, probe, sessionKey } = await seedIdentity(
+        "readonly-uncertified-evidence",
       );
       const readableSessionId = "session-2";
       const readableSessionKey = "agent:worker-1:readable";
-      await upsertEntry(
-        { ...scope, sessionKey: readableSessionKey },
-        { sessionId: readableSessionId, updatedAt: 1 },
-      );
+      await seedEntry(scope, readableSessionKey, readableSessionId);
       expect(readEvidence([probe])).toEqual([current(sessionKey)]);
-      if (corruption === "participant" || corruption === "participant-integer") {
-        recordSessionParticipant(
-          { ...scope, sessionKey },
-          { identity: { type: "agent", id: "peer" }, promptedAt: 1 },
-        );
-        const column = corruption === "participant" ? "identity_namespace" : "contribution_count";
-        const value = corruption === "participant" ? "{}" : 9007199254740992n;
-        database.db
-          .prepare(`UPDATE session_participants SET ${column} = ? WHERE session_key = ?`)
-          .run(value, sessionKey);
-      } else {
-        const entryJson =
-          corruption === "json"
-            ? "{"
-            : JSON.stringify({
-                sessionId: corruption === "identity" ? "mismatched-session" : sessionId,
-                updatedAt: corruption === "timestamp" ? 2 : 1,
-              });
-        updateNode(
-          database.db,
-          sessionKey,
-          "entry_json = ?",
-          corruption === "nul" ? entryJson + "\0" : entryJson,
-        );
-      }
-      updateNode(database.db, sessionKey, "entry_valid = 1");
+      updateNode(database.db, sessionKey, "entry_json = ?, entry_valid = 0", value);
 
       expect(readEvidence([probe])).toEqual([rowInvalid]);
 
@@ -609,7 +575,7 @@ describe("session accessor readonly listing", () => {
     expect(readEvidence([probe])).toEqual([absent]);
 
     const currentKey = "agent:worker-1:current";
-    await upsertEntry({ ...scope, sessionKey: currentKey }, { sessionId, updatedAt: 1 });
+    await seedEntry(scope, currentKey, sessionId);
 
     expect(
       readEvidence([
@@ -620,7 +586,7 @@ describe("session accessor readonly listing", () => {
     ).toEqual([ambiguous, current(currentKey), ambiguous]);
   });
 
-  it("validates a later required fallback row after another connection commits", async () => {
+  it("uses the later validity fact when an identity-only probe requires a fallback", async () => {
     const {
       database,
       sessionId,
@@ -660,7 +626,7 @@ describe("session accessor readonly listing", () => {
               JSON.stringify({ sessionId, updatedAt: 2 }),
               3,
             );
-            updateNode(external, sessionKey, "entry_valid = 1");
+            updateNode(external, sessionKey, "entry_valid = 0");
           });
           events.push("external-commit");
         }

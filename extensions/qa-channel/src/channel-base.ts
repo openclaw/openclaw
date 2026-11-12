@@ -1,5 +1,6 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
+import { patchScopedAccountConfig } from "openclaw/plugin-sdk/setup";
 import {
   listQaChannelAccountIds,
   resolveDefaultQaChannelAccountId,
@@ -7,7 +8,6 @@ import {
   type ResolvedQaChannelAccount,
 } from "./accounts.js";
 import { qaChannelPluginConfigSchema } from "./config-schema.js";
-import { applyQaSetup, type QaChannelSetupInput } from "./setup.js";
 import type { CoreConfig } from "./types.js";
 
 export const QA_CHANNEL_ID = "qa-channel" as const;
@@ -52,8 +52,22 @@ export function createQaChannelPluginBase(): QaChannelPluginBase {
         },
       },
       adapter: {
-        applyAccountConfig: ({ cfg, accountId, input }) =>
-          applyQaSetup({ cfg, accountId, input: input as QaChannelSetupInput }),
+        applyAccountConfig: ({ cfg, accountId, input }) => {
+          const patch: Record<string, unknown> = {};
+          for (const key of ["baseUrl", "botUserId", "botDisplayName"] as const) {
+            if (typeof input[key] === "string") {
+              patch[key] = input[key];
+            }
+          }
+          return patchScopedAccountConfig({
+            cfg,
+            channelKey: "qa-channel",
+            accountId,
+            patch,
+            ensureChannelEnabled: false,
+            ensureAccountEnabled: false,
+          });
+        },
       },
     }),
     config: {

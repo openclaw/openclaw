@@ -2,97 +2,88 @@ import { expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../../test/helpers/source-import-closure.js";
 import type { SessionTranscriptWorkerRequest } from "./session-transcript-worker.types.js";
 
-function expectIndependent(...args: Parameters<typeof findSourceImportBackedges>) {
-  expect(findSourceImportBackedges(...args)).toEqual([]);
-}
-const files = (prefix: string, groups: string[]) =>
-  groups
-    .join(" ")
-    .split(" ")
-    .map((name) => `${prefix}${name}.ts`);
-const sessionFiles = (...groups: string[]) => files("src/config/sessions/session-", groups);
-const gatewayFiles = (...groups: string[]) => files("src/gateway/", groups);
-const configIO = ["src/config/io.ts", "src/config/io.runtime.ts"];
+const paths = (prefix: string, names: string) =>
+  names.split(" ").map((name) => `${prefix}${name}.ts`);
+const sessions = (names: string) => paths("src/config/sessions/session-", names);
+const gateway = (names: string) => paths("src/gateway/", names);
+const configIO = paths("src/config/", "io io.runtime");
+const aiTransports = "packages/ai/src/transports.ts";
 
-it("keeps history worker transport independent of host config loading", () => {
-  expectIndependent(sessionFiles("transcript-worker-runtime"), configIO);
-});
-
-it("keeps transcript title and topology workers independent of host config loading", () => {
-  expectIndependent(
+it.each([
+  ["transport", sessions("transcript-worker-runtime"), configIO],
+  [
+    "title and topology",
     [
-      ...gatewayFiles("session-transcript-title-reader.worker"),
+      ...gateway("session-transcript-title-reader.worker"),
       "src/config/sessions/combined-store-topology.worker.ts",
     ],
-    [...configIO, ...sessionFiles("accessor")],
-  );
-});
-
-const readOwners = [
-  ...sessionFiles("transcript.worker accessor.sqlite-branches"),
-  ...gatewayFiles(
-    "session-history-readonly-reader session-transcript-preview-reader",
-    "chat-history-page-kernel session-history-snapshot",
-  ),
-];
-
-it("keeps history readers independent of host acquisition and decoration", () => {
-  expectIndependent(readOwners, [
-    ...sessionFiles(
-      "accessor.sqlite-scope accessor.sqlite-active-projection accessor.sqlite-delta",
-      "accessor.sqlite-history-events transcript-reconcile",
-    ),
-    "src/state/openclaw-agent-db.ts",
-    "src/state/openclaw-agent-db-lifecycle.ts",
-    "src/state/openclaw-agent-db-readonly.ts",
-    "src/state/openclaw-state-db.ts",
-    ...gatewayFiles("current-user-profile-display session-transcript-message session-utils.fs"),
-  ]);
-});
-
-it("keeps lazy readers independent of unrelated runtime barrels", () => {
-  expectIndependent(gatewayFiles("session-history-worker-reader"), [
-    ...gatewayFiles("session-utils-store-sources"),
-    ...sessionFiles("store-target-inventory"),
-    "src/config/runtime-source-projection.ts",
-    "src/agents/bash-tools.process-schema.ts",
-    "packages/tool-call-repair/src/stream-normalizer.ts",
-  ]);
-  expectIndependent(
+    [...configIO, ...sessions("accessor")],
+  ],
+  [
+    "history acquisition and decoration",
     [
-      ...gatewayFiles("session-history-worker-reader"),
-      ...sessionFiles("store-target-inventory entry-read.worker accessor.sqlite-model-context"),
+      ...sessions("transcript.worker accessor.sqlite-branches"),
+      ...gateway(
+        "session-history-readonly-reader session-transcript-preview-reader chat-history-page-kernel session-history-snapshot",
+      ),
+    ],
+    [
+      ...sessions(
+        "accessor.sqlite-scope accessor.sqlite-active-projection accessor.sqlite-delta accessor.sqlite-history-events transcript-reconcile",
+      ),
+      ...paths(
+        "src/state/",
+        "openclaw-agent-db openclaw-agent-db-lifecycle openclaw-agent-db-readonly openclaw-state-db",
+      ),
+      ...gateway("current-user-profile-display session-transcript-message session-utils.fs"),
+    ],
+  ],
+  [
+    "lazy runtime",
+    gateway("session-history-worker-reader"),
+    [
+      ...gateway("session-utils-store-sources"),
+      ...sessions("store-target-inventory"),
+      "src/config/runtime-source-projection.ts",
+      "src/agents/bash-tools.process-schema.ts",
+      "packages/tool-call-repair/src/stream-normalizer.ts",
+    ],
+  ],
+  [
+    "lazy entry readers",
+    [
+      ...gateway("session-history-worker-reader"),
+      ...sessions("store-target-inventory entry-read.worker accessor.sqlite-model-context"),
     ],
     [
       "src/config/sessions/lifecycle.ts",
-      ...sessionFiles(
+      ...sessions(
         "accessor accessor.sqlite-entry-store accessor.sqlite-read accessor.sqlite-exact-read",
       ),
-      "packages/ai/src/transports.ts",
+      aiTransports,
       "packages/ai/src/internal/default-runtime.ts",
       "packages/gateway-protocol/src/schema/users.ts",
     ],
-  );
-  expectIndependent("src/infra/session-cost-usage-worker.ts", [
-    ...configIO,
-    ...sessionFiles("accessor"),
-    "packages/ai/src/transports.ts",
-  ]);
-});
-
-it("keeps transcript target and exact-entry readers independent of entry mutation facades", () => {
-  expect(
-    findSourceImportBackedges(
-      [
-        "src/config/sessions/session-accessor.transcript-target.ts",
-        "src/config/sessions/session-entry-read-result.worker.ts",
-      ],
-      [
-        "src/config/sessions/session-accessor.entry.ts",
-        "src/config/sessions/session-accessor.sqlite-entry.ts",
-      ],
+  ],
+  [
+    "usage",
+    ["src/infra/session-cost-usage-worker.ts"],
+    [...configIO, ...sessions("accessor"), aiTransports],
+  ],
+  [
+    "exact entry mutation",
+    sessions("accessor.transcript-target entry-read-result.worker"),
+    sessions("accessor.entry accessor.sqlite-entry"),
+  ],
+  [
+    "entry patch publication",
+    sessions("entry-patch.worker"),
+    sessions(
+      "accessor.sqlite-maintenance-store accessor.sqlite-archive-store-kernel accessor.sqlite-transcript-store",
     ),
-  ).toEqual([]);
+  ],
+] as const)("keeps the %s import boundary", (_name, roots, forbidden) => {
+  expect(findSourceImportBackedges(roots, forbidden)).toEqual([]);
 });
 
 const prewarm = vi.hoisted(() => ({
@@ -100,6 +91,7 @@ const prewarm = vi.hoisted(() => ({
   modules: Array.from({ length: 4 }, () => vi.fn(() => ({}))),
   startup: undefined as { prewarmHistory: true } | undefined,
   loadsAtRegistration: [] as number[],
+  broadEntryLoads: 0,
   open: vi.fn(() => ({ found: false, reason: "database-missing" })),
 }));
 
@@ -129,6 +121,39 @@ vi.mock("./session-transcript-worker-scopes.js", () => ({
 vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({
   withOpenClawAgentDatabaseReadOnly: prewarm.open,
 }));
+
+it("dispatches private entry and runtime-target reads without the broad entry worker", async () => {
+  vi.resetModules();
+  prewarm.startup = undefined;
+  prewarm.broadEntryLoads = 0;
+  vi.doMock("./session-entry-read.worker.js", async (importOriginal) => {
+    prewarm.broadEntryLoads++;
+    return importOriginal();
+  });
+  await import("./session-transcript.worker.js");
+  const database = { agentId: "main", path: "/synthetic/missing/openclaw-agent.sqlite" };
+  const scope = {
+    agentId: "main",
+    databaseAgentId: "main",
+    sessionKey: "agent:main:missing",
+    storePath: database.path,
+    env: {},
+  };
+  await expect(
+    prewarm.read({ kind: "session-entry-read", database, scope }),
+  ).resolves.toMatchObject({ ok: true, value: { kind: "session-entry-read", entry: undefined } });
+  await expect(
+    prewarm.read({
+      kind: "session-runtime-target",
+      database,
+      scope: { ...scope, sessionId: "missing" },
+    }),
+  ).resolves.toMatchObject({
+    ok: true,
+    value: { kind: "session-runtime-target", target: { sessionKey: scope.sessionKey } },
+  });
+  expect(prewarm.broadEntryLoads).toBe(0);
+});
 
 it.each([false, true])(
   "prepares presentation before serving only for foreground history workers (foreground=%s)",

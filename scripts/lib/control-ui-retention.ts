@@ -8,6 +8,8 @@ export async function installRetentionTimers(page: Page) {
     const browserWindow: Window = window;
     const timeouts = new Set<number>();
     const intervals = new Set<number>();
+    let timeoutCallbacks = 0;
+    let intervalCallbacks = 0;
     const setTimeout = browserWindow.setTimeout.bind(browserWindow);
     const setInterval = browserWindow.setInterval.bind(browserWindow);
     const clearTimeout = browserWindow.clearTimeout.bind(browserWindow);
@@ -15,6 +17,7 @@ export async function installRetentionTimers(page: Page) {
     browserWindow.setTimeout = (handler, delay, ...args) => {
       const id = setTimeout(() => {
         timeouts.delete(id);
+        timeoutCallbacks++;
         if (typeof handler === "function") {
           handler.apply(window, args);
         } else {
@@ -25,7 +28,14 @@ export async function installRetentionTimers(page: Page) {
       return id;
     };
     browserWindow.setInterval = (handler, delay, ...args) => {
-      const id = setInterval(handler, delay, ...args);
+      const id = setInterval(() => {
+        intervalCallbacks++;
+        if (typeof handler === "function") {
+          handler.apply(window, args);
+        } else {
+          window.eval(handler);
+        }
+      }, delay);
       intervals.add(id);
       return id;
     };
@@ -44,12 +54,20 @@ export async function installRetentionTimers(page: Page) {
       clearInterval(id);
     };
     Object.defineProperty(window, "__retentionTimers", {
-      value: () => ({ timeouts: timeouts.size, intervals: intervals.size }),
+      value: () => ({
+        timeouts: timeouts.size,
+        intervals: intervals.size,
+        timeoutCallbacks,
+        intervalCallbacks,
+      }),
     });
   });
 }
 
 export async function settleRetention(page: Page) {
+  if (await page.evaluate(() => document.visibilityState === "hidden")) {
+    return;
+  }
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
@@ -97,9 +115,11 @@ export function summarizeRetentionHeap(heap: HeapSnapshot) {
   const edgeNameAt = edgeFields.indexOf("name_or_index");
   const edgeTargetAt = edgeFields.indexOf("to_node");
   const property = edgeTypeNames.indexOf("property");
+  const edgeOffsets = new Map<number, number>();
   const numericValues = new Map<number, number>();
   let numericEdge = 0;
   for (let node = 0; node < heap.nodes.length; node += fields.length) {
+    edgeOffsets.set(node, numericEdge);
     const end = numericEdge + heap.nodes[node + edgesAt]! * edgeFields.length;
     if (typeNames[heap.nodes[node + typeAt]!] === "number") {
       // captureNumericValue represents SMIs by an internal `value` edge to
@@ -123,6 +143,7 @@ export function summarizeRetentionHeap(heap: HeapSnapshot) {
   let solidUnknownStateOwners = 0;
   let solidAllocationTemplates = 0;
   let edge = 0;
+  const caches: Record<string, Array<{ keys: number; keyBytes: number; tableBytes: number }>> = {};
   const detached: Record<string, { count: number; bytes: number }> = {};
   for (let node = 0; node < heap.nodes.length; node += fields.length) {
     const type = typeNames[heap.nodes[node + typeAt]!];
@@ -148,6 +169,41 @@ export function summarizeRetentionHeap(heap: HeapSnapshot) {
         continue;
       }
       const key = heap.strings[heap.edges[edge + edgeNameAt]!];
+      if (
+        key === "lastAttemptAt" ||
+        key === "revisions" ||
+        key === "readScopes" ||
+        key === "hydratedSnapshots"
+      ) {
+        const map = heap.edges[edge + edgeTargetAt]!;
+        if (heap.strings[heap.nodes[map + nameAt]!] === "Map") {
+          const mapOffset = edgeOffsets.get(map)!;
+          const mapEnd = mapOffset + heap.nodes[map + edgesAt]! * edgeFields.length;
+          for (let slot = mapOffset; slot < mapEnd; slot += edgeFields.length) {
+            if (heap.strings[heap.edges[slot + edgeNameAt]!] !== "table") {
+              continue;
+            }
+            const table = heap.edges[slot + edgeTargetAt]!;
+            const tableOffset = edgeOffsets.get(table)!;
+            const tableEnd = tableOffset + heap.nodes[table + edgesAt]! * edgeFields.length;
+            let keys = 0;
+            let keyBytes = 0;
+            for (let entry = tableOffset; entry < tableEnd; entry += edgeFields.length) {
+              const target = heap.edges[entry + edgeTargetAt]!;
+              const entryType = typeNames[heap.nodes[target + typeAt]!];
+              if (
+                entryType === "string" ||
+                entryType === "concatenated string" ||
+                entryType === "sliced string"
+              ) {
+                keys++;
+                keyBytes += heap.nodes[target + sizeAt]!;
+              }
+            }
+            (caches[key] ??= []).push({ keys, keyBytes, tableBytes: heap.nodes[table + sizeAt]! });
+          }
+        }
+      }
       if (key === "_parent") {
         parent = true;
       }
@@ -192,24 +248,34 @@ export function summarizeRetentionHeap(heap: HeapSnapshot) {
     solidUnknownStateOwners,
     solidAllocationTemplates,
     solidLiveOwners: solidUnknownStateOwners ? null : solidOwners - solidDisposedOwners,
+    caches,
   };
 }
 
-export async function captureRetention(page: Page, cdp: CDPSession, file: string) {
+export async function captureRetention(
+  page: Page,
+  cdp: CDPSession,
+  file: string,
+  options: { preserveFixtureRequests?: boolean } = {},
+) {
   await settleRetention(page);
-  const requests = await cdp.send("Runtime.evaluate", {
-    expression: `(() => { const requests = window.openclawControlUiE2eGateway.requests; const count = requests.length; requests.length = 0; return count; })()`,
-    returnByValue: true,
-  });
-  if (requests.exceptionDetails) {
-    throw new Error(requests.exceptionDetails.text);
+  let clearedFixtureRequests = 0;
+  if (!options.preserveFixtureRequests) {
+    const requests = await cdp.send("Runtime.evaluate", {
+      expression: `(() => { const requests = window.openclawControlUiE2eGateway.requests; const count = requests.length; requests.length = 0; return count; })()`,
+      returnByValue: true,
+    });
+    if (requests.exceptionDetails) {
+      throw new Error(requests.exceptionDetails.text);
+    }
+    clearedFixtureRequests = requests.result.value;
   }
   await cdp.send("HeapProfiler.collectGarbage");
   await cdp.send("HeapProfiler.collectGarbage");
   const { metrics } = await cdp.send("Performance.getMetrics");
   const dom = await cdp.send("Memory.getDOMCounters");
   const globals = await cdp.send("Runtime.evaluate", {
-    expression: `JSON.stringify({fontStatus: document.fonts.status, timers: window.__retentionTimers(), listeners: Object.fromEntries(
+    expression: `JSON.stringify({visibility: document.visibilityState, fontStatus: document.fonts.status, timers: window.__retentionTimers(), listeners: Object.fromEntries(
       [["window", window], ["document", document], ["body", document.body]].map(([name, target]) =>
         [name, Object.fromEntries(Object.entries(getEventListeners(target)).map(([type, listeners]) => [type, listeners.length]))]))})`,
     includeCommandLineAPI: true,
@@ -233,13 +299,28 @@ export async function captureRetention(page: Page, cdp: CDPSession, file: string
   }
   const heap = summarizeRetentionHeap(JSON.parse(await readFile(file, "utf8")));
   const counts: {
+    visibility: DocumentVisibilityState;
     fontStatus: string;
-    timers: { timeouts: number; intervals: number };
+    timers: {
+      timeouts: number;
+      intervals: number;
+      timeoutCallbacks: number;
+      intervalCallbacks: number;
+    };
     listeners: Record<string, Record<string, number>>;
   } = JSON.parse(globals.result.value);
   return {
-    clearedFixtureRequests: requests.result.value,
+    clearedFixtureRequests,
     heapUsedBytes: metrics.find((metric) => metric.name === "JSHeapUsedSize")!.value,
+    durations: Object.fromEntries(
+      metrics
+        .filter(({ name }) =>
+          ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].includes(
+            name,
+          ),
+        )
+        .map(({ name, value }) => [name, value]),
+    ),
     ...dom,
     ...heap,
     ...counts,

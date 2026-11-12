@@ -24,6 +24,7 @@ extension ChatTranscriptRow {
             guard role == "user" || role == "assistant" else { return }
             if role == "assistant" {
                 guard first.workPhase != "commentary" || first.isForwardedTurnBoundary,
+                      !last.stoppedForToolUse,
                       group.contains(where: { ChatMessageVisibleText.hasVisibleText(in: $0) ||
                               $0.content.contains { $0.isInlineAttachment || $0.preview?.inlineWidgetPath != nil }
                       }),

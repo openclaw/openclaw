@@ -195,14 +195,14 @@ export async function runGatewayConversationList(params: {
   const normalizedQuery = query?.toLowerCase() ?? "";
   const searchQuery =
     normalizedQuery.startsWith("@") && normalizedQuery.length > 1
-      ? normalizedQuery.slice(1)
-      : normalizedQuery;
+      ? normalizedQuery.slice(1).normalize("NFC")
+      : normalizedQuery.normalize("NFC");
   const candidates = conversations.filter(
     (entry) =>
       !query ||
       discoveredConversationRefs.has(entry.conversationRef) ||
       [entry.conversationRef, entry.target, entry.label].some((value) =>
-        value?.toLowerCase().includes(searchQuery),
+        value?.toLowerCase().normalize("NFC").includes(searchQuery),
       ),
   );
   const eligibility = await resolveConversationRouteEligibilitiesForAgent({

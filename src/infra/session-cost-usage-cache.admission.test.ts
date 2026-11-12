@@ -21,6 +21,7 @@ import {
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -31,6 +32,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import * as writerAdmission from "../state/openclaw-agent-write-admission.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -53,7 +55,6 @@ import {
 import { readSessionCostUsageRollupRows as readRows } from "./session-cost-usage-cache.test-support.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { withSessionCostUsageWorkerDatabases as withUsageDatabases } from "./session-cost-usage-worker-scope.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
@@ -136,11 +137,11 @@ it.each(["rollup", "prune"] as const)(
       const before = readRows(agentId, databasePath);
       const { entered, release, reservation } = holdWriter({ agentId, path: databasePath });
       await entered.promise;
+      const rows = [rollupRow("session.jsonl", '{"totalTokens":2}', 2)];
+      const clone = vi.spyOn(globalThis, "structuredClone");
       let settled = false;
       const writing = (
-        operation === "rollup"
-          ? owner.writeRollup([rollupRow("session.jsonl", '{"totalTokens":2}', 2)])
-          : owner.pruneRows(before)
+        operation === "rollup" ? owner.writeRollup(rows) : owner.pruneRows(before)
       ).finally(() => {
         settled = true;
       });
@@ -149,6 +150,10 @@ it.each(["rollup", "prune"] as const)(
         await setImmediate();
         expect(readRows(agentId, databasePath)).toEqual(before);
         expect(settled).toBe(false);
+        // Worker-delivered rows stay owned until the awaited write completes.
+        expect(
+          clone.mock.calls.filter(([value]) => value === (operation === "rollup" ? rows : before)),
+        ).toHaveLength(0);
       } finally {
         release.resolve();
         await reservation;
@@ -170,14 +175,15 @@ it.each([
   "joins pending native admission before a usage write (closing=$closing, retarget=$retarget, refresh=$refresh)",
   async ({ closing, retarget, refresh }) => {
     const root = tempDirs.make("openclaw-usage-admission-");
+    const originalCwd = process.cwd();
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       const agentId = "usage-test";
       const databasePath = openOpenClawAgentDatabase({ agentId }).path;
       closeOpenClawAgentDatabasesForTest();
-      revokeSqliteDatabaseAdmissionsForPath(databasePath);
-      const cwd = retarget
-        ? vi.spyOn(process, "cwd").mockReturnValue(path.dirname(databasePath))
-        : undefined;
+      invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(databasePath);
+      if (retarget) {
+        process.chdir(path.dirname(databasePath));
+      }
       const retargeted = path.join(root, "other-cwd");
       if (retarget) {
         fs.mkdirSync(retargeted);
@@ -207,9 +213,10 @@ it.each([
           }
         },
       );
-      const opening = withOpenClawAgentDatabaseAsync(
-        { agentId, path: databasePath },
-        () => undefined,
+      // Hold an actual verification admission; runtime lease revocation no longer scans.
+      const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+      const opening = maintenance.run(() =>
+        withOpenClawAgentDatabaseAsync({ agentId, path: databasePath }, () => undefined),
       );
       const opened = Promise.allSettled([opening]);
       const lock = refresh ? undefined : prepareLock(agentId, cachePath);
@@ -238,11 +245,17 @@ it.each([
       let drain: Promise<void> | undefined;
       let drained = false;
       try {
-        await nativeFinished.promise;
+        await awaitGateBeforeSettlement(
+          nativeFinished.promise,
+          opening,
+          "Native verification admission did not reach the usage-write gate",
+        );
         await setImmediate();
         expect(writeSettled).toBe(false);
         expect(readRows(agentId, databasePath)).toEqual([]);
-        cwd?.mockReturnValue(retargeted);
+        if (retarget) {
+          process.chdir(retargeted);
+        }
         if (closing) {
           drain = closeOpenClawAgentDatabasesAsync(root).then(() => {
             drained = true;
@@ -272,8 +285,9 @@ it.each([
         await opened;
         await written;
         await drain;
+        await maintenance.close();
       }
-    });
+    }).finally(() => process.chdir(originalCwd));
   },
 );
 

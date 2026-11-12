@@ -12,6 +12,7 @@ export type SessionEntryCurrentFacts = {
   agentHarnessId?: SessionEntry["agentHarnessId"];
   agentRuntimeOverride?: SessionEntry["agentRuntimeOverride"];
   initializationPending?: SessionEntry["initializationPending"];
+  templateInitialization?: SessionEntry["templateInitialization"];
   execHost?: SessionEntry["execHost"];
   execNode?: SessionEntry["execNode"];
   deviceFolder?: SessionEntry["deviceFolder"];
@@ -46,10 +47,6 @@ export type SessionEntryCurrentFacts = {
   delegatedToolPolicy?: unknown;
   skillLibrarySelections?: unknown;
   executionPolicy?: unknown;
-  subagentRecovery?: {
-    lastRunId?: unknown;
-    sessionLifecycleRunId?: unknown;
-  };
 };
 
 export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &

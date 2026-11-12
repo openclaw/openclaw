@@ -3,7 +3,7 @@ import {
   sessionMutationRefreshOutcome,
   type SessionRefreshAttempt,
 } from "./session-list-query.ts";
-import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
+import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import type { SessionRefreshOptions, SessionRefreshOutcome } from "./session-types.ts";
 
 type MutationRefreshOperations = {

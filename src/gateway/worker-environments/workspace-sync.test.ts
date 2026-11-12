@@ -68,13 +68,15 @@ it.each(retries)("rejects stale %s authority after preparation", async (transpor
   expect(run).not.toHaveBeenCalled();
 });
 
-it.each(retries)("bounds %s retry and selected ports", async (transportRetry) => {
+it.each(retries)("bounds %s retry by monotonic time and selected ports", async (transportRetry) => {
   let now = 1_000;
   vi.spyOn(performance, "now").mockImplementation(() => now);
+  const wall = vi.spyOn(Date, "now").mockReturnValue(1_000);
   const run = vi
     .fn<(argv: string[], options: CommandOptions) => Promise<SpawnResult>>()
     .mockResolvedValue(createCommandResult())
     .mockImplementationOnce(async () => {
+      wall.mockReturnValue(-300_000);
       now += transportRetry === "idempotent" ? 175 : 0;
       return createCommandResult({ code: 255 });
     });

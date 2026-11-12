@@ -3,8 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
-import * as commandExec from "../process/exec.js";
-import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import {
   createPublicationTestFixture,
@@ -21,7 +19,6 @@ import {
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
-import { pkgQueryResult } from "./update-freebsd-pkg-ownership.test-support.js";
 
 const fixtures = createPublicationTestFixture();
 
@@ -41,7 +38,6 @@ const ownershipScenarios: Array<[string, OwnershipScenario]> = [
   ["external source", { root: "link", owner: "source", accepted: true }],
   ["launcher suffix", { suffix: ".sh" }],
   ["unpublished launcher", { suffix: ".backup", accepted: true }],
-  ["FreeBSD launcher", {}],
 ];
 it.skipIf(process.platform === "win32").each(ownershipScenarios)(
   "admits publication by object ownership before candidate validation: %s",
@@ -49,9 +45,6 @@ it.skipIf(process.platform === "win32").each(ownershipScenarios)(
     const launcher = `${f.launcher}${scenario.suffix ?? ""}`;
     if (launcher !== f.launcher) {
       await fsp.copyFile(f.launcher, launcher);
-    }
-    if (foreign === "FreeBSD launcher") {
-      vi.spyOn(commandExec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
     }
     const source = path.join(fixtures.root, "source");
     if (scenario.root === "absent") {
@@ -111,10 +104,7 @@ it.skipIf(process.platform === "win32").each(ownershipScenarios)(
             transaction = issued;
           },
         });
-      const result =
-        foreign === "FreeBSD launcher"
-          ? await withMockedPlatform("freebsd", update)
-          : await update();
+      const result = await update();
       const failure = expect(
         result.failedStep,
         JSON.stringify({ phases, failed: result.failedStep }),

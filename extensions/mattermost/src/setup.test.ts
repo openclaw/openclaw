@@ -20,33 +20,22 @@ const secretToken = { source: "env", provider: "default", id: "MATTERMOST_BOT_TO
 const config = (mattermost: MattermostConfig = {}): OpenClawConfig => ({
   channels: { mattermost },
 });
+const wizardConfigured = (mattermost: MattermostConfig) =>
+  mattermostSetupWizard.status.resolveConfigured({ cfg: config(mattermost) });
 
 describe("mattermost setup", () => {
   afterEach(() => {
-    normalizeMattermostBaseUrl.mockReset();
-    normalizeMattermostBaseUrl.mockImplementation((value: string | undefined) => value);
+    normalizeMattermostBaseUrl.mockReset().mockImplementation((value: string | undefined) => value);
     vi.unstubAllEnvs();
   });
 
   it("reports configuration with and without credential status metadata", () => {
     const account = inspectMattermostAccount({ cfg: config({ botToken: "bot-token", baseUrl }) });
-    expect(isMattermostConfigured({ ...account, botTokenStatus: undefined })).toBe(true);
-    expect(
-      isMattermostConfigured({
-        ...account,
-        botToken: "",
-        botTokenStatus: "configured_unavailable",
-        config: { botToken: { ...secretToken, id: "MISSING_MATTERMOST_TOKEN" } },
-      }),
-    ).toBe(true);
-    expect(
-      isMattermostConfigured({
-        ...account,
-        botToken: "",
-        botTokenStatus: undefined,
-        baseUrl: "",
-      }),
-    ).toBe(false);
+    const configured = (overrides: Partial<typeof account>) =>
+      isMattermostConfigured({ ...account, ...overrides });
+    expect(configured({ botTokenStatus: undefined })).toBe(true);
+    expect(configured({ botToken: "", botTokenStatus: "configured_unavailable" })).toBe(true);
+    expect(configured({ botToken: "", botTokenStatus: undefined, baseUrl: "" })).toBe(false);
   });
 
   it("validates env and explicit credential requirements", () => {
@@ -89,26 +78,12 @@ describe("mattermost setup", () => {
   });
 
   it("treats secret-ref tokens plus base url as configured", async () => {
-    expect(
-      await mattermostSetupWizard.status.resolveConfigured({
-        cfg: config({ baseUrl, botToken: secretToken }),
-      }),
-    ).toBe(true);
+    expect(await wizardConfigured({ baseUrl, botToken: secretToken })).toBe(true);
   });
 
   it("does not inherit configured state from a sibling when defaultAccount is named", async () => {
-    expect(
-      await mattermostSetupWizard.status.resolveConfigured({
-        cfg: config({
-          defaultAccount: "work",
-          accounts: {
-            alerts: { baseUrl, botToken: secretToken },
-            work: {},
-          },
-        }),
-        accountId: undefined,
-      }),
-    ).toBe(false);
+    const accounts = { alerts: { baseUrl, botToken: secretToken }, work: {} };
+    expect(await wizardConfigured({ defaultAccount: "work", accounts })).toBe(false);
   });
 
   it("offers env shortcut only for the default account when env is present and config is empty", () => {
@@ -121,12 +96,10 @@ describe("mattermost setup", () => {
   });
 
   it("keeps env shortcut as a no-op patch for the selected account", () => {
-    expect(
-      mattermostSetupWizard.envShortcut?.apply?.({
-        cfg: config({ enabled: false }),
-        accountId: "default",
-      } as never),
-    ).toEqual(config({ enabled: true }));
+    const params = { cfg: config({ enabled: false }), accountId: "default" };
+    expect(mattermostSetupWizard.envShortcut?.apply?.(params as never)).toEqual(
+      config({ enabled: true }),
+    );
   });
 
   it("prompts for bot token and server URL before validating wizard setup", async () => {

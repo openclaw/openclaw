@@ -5,21 +5,29 @@ import {
 } from "../../../../test/helpers/openai-transport-request-policy.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
-import type { AssistantMessage, SimpleStreamOptions } from "../types.js";
-import { replyContext, withServer } from "./openai-completions-suite.test-support.js";
+import type { SimpleStreamOptions } from "../types.js";
+import {
+  collectStream,
+  replyContext,
+  withServer,
+} from "./openai-completions-suite.test-support.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
 
+const toolCalls = [
+  { name: "weather", arguments: { city: "Vienna" } },
+  { name: "time", arguments: { zone: "UTC" } },
+];
+
 describe("openai completions transport requests", () => {
-  it.each([
-    {
-      api: "openai-completions" as const,
-      provider: "openai",
-      createStream: createOpenAICompletionsTransportStreamFn,
-    },
-  ])(
-    "honors turn timeout and pinned SDK retries over real $api HTTP",
-    expectOpenAITransportRequestPolicy,
+  it(
+    "honors turn timeout and pinned SDK retries over real completions HTTP",
+    () =>
+      expectOpenAITransportRequestPolicy({
+        api: "openai-completions" as const,
+        provider: "openai",
+        createStream: createOpenAICompletionsTransportStreamFn,
+      }),
     COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   );
   it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
@@ -40,26 +48,14 @@ describe("openai completions transport requests", () => {
         );
       },
       async (baseUrl) => {
-        const model = makeCompletionsModel({
-          id: "gpt-5.4-mini",
-          name: "GPT-5.4 Mini",
-          baseUrl,
-        });
-        const stream = createOpenAICompletionsTransportStreamFn()(
-          model,
-          replyContext() as never,
-          { apiKey: "test-key" } as never,
+        const { terminal } = await collectStream(
+          createOpenAICompletionsTransportStreamFn()(
+            makeCompletionsModel({ id: "gpt-5.4-mini", baseUrl }),
+            replyContext(),
+            { apiKey: "test-key" },
+          ),
         );
-
-        let errorPayload: Record<string, unknown> | undefined;
-        for await (const event of stream as AsyncIterable<{
-          type: string;
-          error?: Record<string, unknown>;
-        }>) {
-          if (event.type === "error") {
-            errorPayload = event.error;
-          }
-        }
+        const errorPayload = terminal?.type === "error" ? terminal.error : undefined;
 
         expect(errorPayload).toMatchObject({
           stopReason: "error",
@@ -75,22 +71,18 @@ describe("openai completions transport requests", () => {
   it.each(["managed", "direct"] as const)(
     "preserves JSON completions and honors streaming controls (%s)",
     async (mode) => {
-      const capturedRequests: Array<Record<string, unknown>> = [];
+      let request: Record<string, unknown> | undefined;
       let includeTools = false;
       let oversized = false;
       let releaseBody: (() => void) | undefined;
       await withServer(
         (_req, res, body) => {
-          capturedRequests.push(JSON.parse(body) as Record<string, unknown>);
-          res.writeHead(200, {
-            "content-type": "application/json; charset=utf-8",
-          });
+          request = JSON.parse(body) as Record<string, unknown>;
+          res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
           const responseBody = oversized
             ? " ".repeat(16 * 1024 * 1024 + 1)
             : JSON.stringify({
                 id: "chatcmpl-json-fallback",
-                object: "chat.completion",
-                model: "moonshotai/kimi-k2.6",
                 choices: [
                   {
                     index: 0,
@@ -98,29 +90,20 @@ describe("openai completions transport requests", () => {
                       role: "assistant",
                       reasoning_content: "Need a direct answer.",
                       content: "live-ok",
-                      ...(includeTools
-                        ? {
-                            tool_calls: [
-                              {
-                                id: "call_weather",
-                                type: "function",
-                                function: { name: "weather", arguments: '{"city":"Vienna"}' },
-                              },
-                              {
-                                id: "call_time",
-                                type: "function",
-                                function: { name: "time", arguments: '{"zone":"UTC"}' },
-                              },
-                            ],
-                          }
-                        : {}),
+                      tool_calls: includeTools
+                        ? toolCalls.map(({ name, arguments: args }) => ({
+                            id: `call_${name}`,
+                            type: "function",
+                            function: { name, arguments: JSON.stringify(args) },
+                          }))
+                        : undefined,
                     },
                     finish_reason: includeTools ? "tool_calls" : "stop",
                   },
                 ],
                 usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
               });
-          if (capturedRequests.at(-1)?.stream === false) {
+          if (request.stream === false) {
             releaseBody = () => res.end(responseBody);
             res.flushHeaders();
           } else {
@@ -131,59 +114,36 @@ describe("openai completions transport requests", () => {
         async (baseUrl) => {
           const model = makeCompletionsModel({
             id: "moonshotai/kimi-k2.6",
-            name: "Kimi K2.6",
             provider: "openrouter",
             baseUrl,
-            contextWindow: 256_000,
-            maxTokens: 16_384,
-            compat: {
-              supportsReasoningEffort: true,
-            },
+            compat: { supportsReasoningEffort: true },
           });
           const createStream =
             mode === "managed"
               ? createOpenAICompletionsTransportStreamFn()
               : streamSimpleOpenAICompletions;
-          for (const scenario of [
-            { params: {}, options: {}, expected: true, tools: false },
-            { params: { streaming: false }, options: {}, expected: false, tools: false },
-            { params: {}, options: { streaming: false }, expected: false, tools: true },
-            {
-              params: { streaming: false },
-              options: { streaming: true },
-              expected: true,
-              tools: true,
-            },
-          ]) {
-            includeTools = scenario.tools;
-            const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
-              apiKey: "test-key",
-              reasoning: "high",
-              ...scenario.options,
-              onResponse: () => {
-                releaseBody?.();
-              },
-            };
+          const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
+            apiKey: "test-key",
+            reasoning: "high",
+            onResponse: () => releaseBody?.(),
+          };
+          for (const [param, option, expected, tools] of [
+            [undefined, undefined, true, false],
+            [false, undefined, false, false],
+            [undefined, false, false, true],
+            [false, true, true, true],
+          ] as const) {
+            includeTools = tools;
+            options.streaming = option;
             const stream = await createStream(
-              { ...model, params: scenario.params },
-              {
-                systemPrompt: "system",
-                messages: [{ role: "user", content: "Reply live-ok", timestamp: 1 }],
-                tools: [],
-              },
+              { ...model, params: { streaming: param } },
+              replyContext("Reply live-ok"),
               options,
             );
-            let final: AssistantMessage | undefined;
-            const eventTypes: string[] = [];
-            for await (const event of stream) {
-              eventTypes.push(event.type);
-              if (event.type === "done") {
-                final = event.message;
-              }
-            }
-            const request = capturedRequests.at(-1);
-            expect(request?.stream).toBe(scenario.expected);
-            if (scenario.expected) {
+            const { result: final, events } = await collectStream(stream);
+            const eventTypes = events.map((event) => event.type);
+            expect(request?.stream).toBe(expected);
+            if (expected) {
               expect(request?.stream_options).toEqual({ include_usage: true });
             } else {
               expect(request).not.toHaveProperty("stream_options");
@@ -197,28 +157,20 @@ describe("openai completions transport requests", () => {
               stopReason: includeTools ? "toolUse" : "stop",
               usage: { input: 2, output: 3, totalTokens: 5 },
             });
-            expect(final?.content).toEqual([
-              expect.objectContaining({
+            expect(final.content).toMatchObject([
+              {
                 type: "thinking",
                 thinking: "Need a direct answer.",
                 thinkingSignature: "reasoning_content",
-              }),
-              expect.objectContaining({ type: "text", text: "live-ok" }),
+              },
+              { type: "text", text: "live-ok" },
               ...(includeTools
-                ? [
-                    expect.objectContaining({
-                      type: "toolCall",
-                      id: "call_weather",
-                      name: "weather",
-                      arguments: { city: "Vienna" },
-                    }),
-                    expect.objectContaining({
-                      type: "toolCall",
-                      id: "call_time",
-                      name: "time",
-                      arguments: { zone: "UTC" },
-                    }),
-                  ]
+                ? toolCalls.map(({ name, arguments: args }) => ({
+                    type: "toolCall",
+                    id: `call_${name}`,
+                    name,
+                    arguments: args,
+                  }))
                 : []),
             ]);
             expect(eventTypes.filter((type) => type === "toolcall_end")).toHaveLength(
@@ -226,18 +178,10 @@ describe("openai completions transport requests", () => {
             );
           }
           oversized = true;
-          const options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "streaming"> = {
-            apiKey: "test-key",
-            streaming: false,
-            onResponse: () => {
-              releaseBody?.();
-            },
-          };
+          options.streaming = false;
           const oversizedStream = await createStream(
             model,
-            {
-              messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
-            },
+            { messages: replyContext().messages },
             options,
           );
           expect(await oversizedStream.result()).toMatchObject({

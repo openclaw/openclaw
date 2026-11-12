@@ -5,7 +5,7 @@ import type { PreparedTranscriptMessageAppend } from "../../config/sessions/sess
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+} from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { cloneTranscriptView } from "../../config/sessions/transcript-snapshot.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
@@ -42,7 +42,7 @@ export class SessionManagerNativePersistence extends SessionManagerCore {
   protected recordTranscriptNavigationChange(): void {
     this.#navigationEpoch++;
     this.cacheTtlProjectionPrefixes = this.cacheTtlProjectionPrefixes?.filter(
-      (prefix) => prefix.anchorIds.length > 0,
+      (prefix) => prefix.anchorIds.length,
     );
   }
 

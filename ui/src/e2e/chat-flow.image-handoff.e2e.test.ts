@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
@@ -47,11 +48,7 @@ suite.define(() => {
       await route.fulfill(
         metadata
           ? {
-              json: {
-                available: true,
-                mediaTicket: "stable-image-ticket",
-                mediaTicketExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-              },
+              json: mediaTicketPayload("stable-image-ticket", 5 * 60_000),
             }
           : { contentType: "image/png", body: imageBytes },
       );
@@ -76,7 +73,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "stable-preview.png",

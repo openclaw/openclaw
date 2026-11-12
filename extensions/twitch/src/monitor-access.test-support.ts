@@ -1,62 +1,95 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterAll, vi } from "vitest";
+import { vi } from "vitest";
 import { monitorTwitchProvider } from "./monitor.js";
 import { setTwitchRuntime } from "./runtime.js";
-import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import type { TwitchClientManager as Manager } from "./twitch-client.js";
+import type { TwitchChatMessage } from "./types.js";
 
-const createIngress = vi.hoisted(() =>
-  vi.fn<typeof import("./twitch-ingress.js").createTwitchIngress>(),
-);
-
-// mock-isolation: admission fixtures use the real monitor and policy without a Twitch socket or drain.
+const mocks = vi.hoisted(() => ({
+  createIngress: vi.fn<typeof import("./twitch-ingress.js").createTwitchIngress>(),
+  manager: vi.fn(),
+}));
+// mock-isolation: Exercise the real monitor without Twitch sockets or a second durable drain.
 vi.mock("./client-manager-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client-manager-registry.js")>()),
-  getOrCreateClientManager: () => ({
-    getClient: async () => ({}),
-    onMessage: () => () => {},
-  }),
+  getOrCreateClientManager: mocks.manager,
 }));
 vi.mock("./twitch-ingress.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./twitch-ingress.js")>()),
-  createTwitchIngress: createIngress,
+  createTwitchIngress: mocks.createIngress,
 }));
-
-afterAll(() => {
-  vi.doUnmock("./client-manager-registry.js");
-  vi.doUnmock("./twitch-ingress.js");
-  vi.resetModules();
-});
-
-export async function checkTwitchMessageThroughMonitor(params: {
-  account: TwitchAccountConfig;
-  accountId: string;
-  message: TwitchChatMessage;
-}) {
-  const core = createPluginRuntimeMock();
-  setTwitchRuntime(core);
-  createIngress.mockReturnValue({ accept: async () => {}, start: () => {}, stop: async () => {} });
+function fixture() {
+  const pending: Promise<void>[] = [];
+  const f = {
+    core: createPluginRuntimeMock(),
+    send: vi.fn<Manager["sendMessage"]>().mockResolvedValue({ ok: true, messageId: "message-id" }),
+    error: vi.fn(),
+    unregister: vi.fn(),
+    ingressStop: vi.fn(async () => {
+      await Promise.allSettled(pending);
+    }),
+  };
+  let handler: ((message: TwitchChatMessage) => void) | undefined;
+  mocks.manager.mockReturnValue({
+    getClient: async () => ({}),
+    sendMessage: f.send,
+    onMessage: (callback: typeof handler) => {
+      handler = callback;
+      return f.unregister;
+    },
+  });
+  mocks.createIngress.mockImplementation((options) => ({
+    accept: async (message) => {
+      const delivery = options.deliver(message, {
+        admission: "exclusive",
+        abortSignal: new AbortController().signal,
+        onAdopted: async () => {},
+        onDeferred: () => {},
+        onAbandoned: async () => {},
+      });
+      pending.push(delivery);
+      await delivery;
+      return undefined;
+    },
+    start: () => {},
+    stop: f.ingressStop,
+  }));
+  return {
+    ...f,
+    dispatch: async (message: TwitchChatMessage) => {
+      expectDefined(handler, "Expected Twitch message handler")(message);
+      await Promise.all(pending);
+    },
+  };
+}
+type Params = Pick<
+  Parameters<typeof monitorTwitchProvider>[0],
+  "account" | "accountId" | "config" | "statusSink"
+>;
+export async function withTwitchMonitor<T>(
+  params: Params,
+  run: (f: ReturnType<typeof fixture>) => Promise<T>,
+) {
+  const f = fixture();
+  setTwitchRuntime(f.core);
   const monitor = await monitorTwitchProvider({
-    account: params.account,
-    accountId: params.accountId,
-    config: {},
-    channelRuntime: core.channel,
-    runtime: { log: vi.fn(), error: vi.fn() },
+    ...params,
+    channelRuntime: f.core.channel,
+    runtime: { error: f.error },
     abortSignal: new AbortController().signal,
   });
   try {
-    const deliver = createIngress.mock.lastCall?.[0].deliver;
-    if (!deliver) {
-      throw new Error("Expected Twitch monitor delivery");
-    }
-    await deliver(params.message, {
-      admission: "exclusive",
-      abortSignal: new AbortController().signal,
-      onAdopted: async () => {},
-      onDeferred: () => {},
-      onAbandoned: async () => {},
-    });
-    return { allowed: vi.mocked(core.channel.inbound.run).mock.calls.length > 0 };
+    return await run(f);
   } finally {
     await monitor.stop();
   }
 }
+
+export const checkTwitchMessageThroughMonitor = (
+  params: Pick<Params, "account" | "accountId"> & { message: TwitchChatMessage },
+) =>
+  withTwitchMonitor({ ...params, config: {} }, async ({ core, dispatch }) => {
+    await dispatch(params.message);
+    return { allowed: vi.mocked(core.channel.inbound.run).mock.calls.length > 0 };
+  });

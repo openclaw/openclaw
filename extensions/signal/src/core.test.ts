@@ -176,14 +176,24 @@ describe("probeSignal", () => {
   ] as const)(
     "probes $transport versions without an initialized runtime",
     async ({ transport, version, expected }) => {
-      checkResult();
-      vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce(version);
+      const signalCheck = checkResult();
+      const signalRpcRequest = vi
+        .spyOn(clientModule, "signalRpcRequest")
+        .mockResolvedValueOnce(version);
       const result =
         transport === "container"
           ? await probeSignal(baseUrl, 1000, { transportKind: "container" })
           : await probeConfigured("managed-native");
 
       expect(result).toMatchObject({ ok: true, status: 200, error: null, version: expected });
+      expect(signalCheck).toHaveBeenCalledExactlyOnceWith(baseUrl, 1000, {
+        transportKind: transport,
+      });
+      expect(signalRpcRequest).toHaveBeenCalledExactlyOnceWith("version", undefined, {
+        baseUrl,
+        timeoutMs: 1000,
+        transportKind: transport,
+      });
     },
   );
 

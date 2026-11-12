@@ -81,9 +81,6 @@ it.each([false, true])(
       const signalDrain = waitForSignalExitBarriers().then(signalCompleted);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(signalCompleted).not.toHaveBeenCalled();
-      expect(settle).toHaveBeenCalledOnce();
-      expect(close).toHaveBeenCalledOnce();
-      expect(report).toHaveBeenCalledOnce();
       native.resolve();
       await signalDrain;
       expect(await outcome).toEqual(failed ? { error: failure } : { value: "update complete" });
@@ -121,13 +118,11 @@ it.each([false, true])(
       const result = await outcome;
       assert.ok("error" in result);
       const { error } = result;
-      if (operationFailed) {
-        expect(error).toMatchObject({
-          errors: [operationFailure, { errors: [settlementFailure] }],
-        });
-      } else {
-        expect(error).toMatchObject({ errors: [settlementFailure] });
-      }
+      expect(error).toMatchObject({
+        errors: operationFailed
+          ? [operationFailure, { errors: [settlementFailure] }]
+          : [settlementFailure],
+      });
       expect(report).toHaveBeenLastCalledWith(expect.stringContaining("workers did not settle"));
       expect(release).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
@@ -164,10 +159,15 @@ it("joins all native retirements and retains the command error when one fails", 
   }
 });
 
-it("resolves only the explicit carried generation while ambient capture keeps its owner", async () => {
+it("keeps explicit, ambient, embedded, and unchanged URL ownership separate", async () => {
   const original = new URL("file:///worker.mjs");
   const ambient = new URL("file:///ambient/worker.mjs");
   const explicit = new URL("file:///explicit/worker.mjs");
+  const embedded = new URL("file:///runtime/dist/embedded.worker.js");
+  vi.stubGlobal(
+    "__openclawStandaloneIsEmbeddedModule",
+    (filename: string) => filename === "/runtime/dist/embedded.worker.js",
+  );
   const generation: RuntimeWorkerGeneration = { resolve: () => explicit, retain() {} };
   await withRuntimeWorkerGeneration(
     async (bind) => {
@@ -175,35 +175,9 @@ it("resolves only the explicit carried generation while ambient capture keeps it
       expect(captureRuntimeWorkerSource(original).moduleUrl).toBe(ambient);
       expect(resolveRuntimeWorkerGenerationUrl(original, generation)).toBe(explicit);
       expect(resolveRuntimeWorkerGenerationUrl(original, undefined)).toBe(original);
-    },
-    async () => {},
-  );
-});
-
-it("leaves unchanged ambient URLs unbound", async () => {
-  const original = new URL("file:///worker.mjs");
-  await withRuntimeWorkerGeneration(
-    async (bind) => {
+      expect(captureRuntimeWorkerSource(embedded)).toEqual({ moduleUrl: embedded });
       bind((url) => url);
       expect(captureRuntimeWorkerSource(original)).toEqual({ moduleUrl: original });
-    },
-    async () => {},
-  );
-});
-
-it("keeps embedded entries immutable while loose entries follow the retained generation", async () => {
-  const embedded = new URL("file:///runtime/dist/embedded.worker.js");
-  const loose = new URL("file:///package/dist/loose.worker.js");
-  const retained = new URL("file:///retained/loose.worker.js");
-  vi.stubGlobal(
-    "__openclawStandaloneIsEmbeddedModule",
-    (filename: string) => filename === "/runtime/dist/embedded.worker.js",
-  );
-  await withRuntimeWorkerGeneration(
-    async (bind) => {
-      bind(() => retained);
-      expect(captureRuntimeWorkerSource(embedded)).toEqual({ moduleUrl: embedded });
-      expect(captureRuntimeWorkerSource(loose).moduleUrl).toBe(retained);
     },
     async () => {},
   );

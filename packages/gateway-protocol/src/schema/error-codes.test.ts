@@ -5,7 +5,7 @@ import {
   ErrorCodes,
   CronJobNotFoundErrorDetailsSchema,
   ClawHubRiskAcknowledgementRequiredErrorDetailsSchema,
-  ClawReviewRequiredErrorDetailsSchema,
+  TemplateReviewRequiredErrorDetailsSchema,
   GatewayErrorDetailCodes,
   GatewayErrorDetailsSchema,
   GitHubPublicationSelectionRejectedErrorDetailsSchema,
@@ -20,7 +20,7 @@ import {
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
   readClawHubRiskAcknowledgementRequiredError,
-  readClawReviewRequiredError,
+  readTemplateReviewRequiredError,
   readGitHubPublicationSelectionRejectedError,
   UnknownAgentIdErrorDetailsSchema,
 } from "./error-codes.js";
@@ -51,17 +51,19 @@ describe("gateway error details", () => {
 
   it("distinguishes plugin and skill review requests from ordinary errors", () => {
     for (const kind of ["plugin", "skill"] as const) {
-      const details = { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind };
+      const details = { code: GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED, kind };
       const error = { code: ErrorCodes.INVALID_REQUEST, message: "Review required", details };
-      expect(Value.Check(ClawReviewRequiredErrorDetailsSchema, details)).toBe(true);
+      expect(Value.Check(TemplateReviewRequiredErrorDetailsSchema, details)).toBe(true);
       expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
-      expect(readClawReviewRequiredError(error)).toEqual(details);
-      expect(readClawReviewRequiredError({ ...error, code: ErrorCodes.UNAVAILABLE })).toBeNull();
+      expect(readTemplateReviewRequiredError(error)).toEqual(details);
+      expect(
+        readTemplateReviewRequiredError({ ...error, code: ErrorCodes.UNAVAILABLE }),
+      ).toBeNull();
     }
     expect(
-      readClawReviewRequiredError({
+      readTemplateReviewRequiredError({
         code: ErrorCodes.INVALID_REQUEST,
-        details: { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind: "unknown" },
+        details: { code: GatewayErrorDetailCodes.TEMPLATE_REVIEW_REQUIRED, kind: "unknown" },
       }),
     ).toBeNull();
   });
