@@ -37,6 +37,8 @@ export type SettingsSaveIndicatorProps = {
   onSave: () => Promise<unknown>;
   onReload: () => Promise<unknown>;
   onApply: () => Promise<unknown>;
+  /** Requests a Gateway restart; null when this connection cannot restart the Gateway. */
+  onRestart: (() => Promise<unknown>) | null;
 };
 
 function IndicatorAction(props: { label: string; busy: boolean; onClick: () => void }) {
@@ -59,7 +61,7 @@ const isFailure = (state: string | undefined): state is FailureKind =>
   state === "error" || state === "rejected" || state === "recovery" || state === "deferred";
 
 export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
-  type Command = "retry" | "save" | "reload" | "apply";
+  type Command = "retry" | "save" | "reload" | "apply" | "restart";
   const lifetime = createMemo(() => ({ retired: props.presentationRetired() }), {
     equals: (previous, next) => previous.retired === next.retired,
   });
@@ -120,7 +122,9 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
           ? props.onSave()
           : command === "reload"
             ? props.onReload()
-            : props.onApply();
+            : command === "restart" && props.onRestart
+              ? props.onRestart()
+              : props.onApply();
     // Reload publishes its editor lock after draining writes. Keep that read
     // outside the write action so the lock can land before the read finishes.
     void setCompletion(
@@ -278,11 +282,11 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
               </Match>
               <Match when={state() === "restart-required"}>
                 <span>{t("configView.autoSaveRestartRequired")}</span>
-                <Show when={props.needsApply}>
+                <Show when={props.onRestart !== null}>
                   <IndicatorAction
                     label={t("configView.restartNow")}
-                    busy={busy() || props.applyDisabled}
-                    onClick={() => submit("apply")}
+                    busy={busy()}
+                    onClick={() => submit("restart")}
                   />
                 </Show>
               </Match>

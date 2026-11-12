@@ -84,16 +84,18 @@ describe("settings save indicator", () => {
   });
 
   it("reports a write that needs a restart as saved and offers Restart now", async () => {
-    const { onApply } = await update({ status: "restart-required", needsApply: true });
+    const { onRestart, onApply } = await update({ status: "restart-required", needsApply: true });
     expect(indicator.textContent).toContain(
       "Saved. Restart OpenClaw to finish applying this change.",
     );
     expect(part("title")).toBeNull();
     expect(button("Retry")).toBeUndefined();
     expect(button("Discard changes")).toBeUndefined();
+    expect(button("Restart now")).toBeDefined();
     button("Restart now")?.click();
-    await waitForSolid(() => expect(onApply).toHaveBeenCalledOnce());
-    await update({ status: "restart-required", needsApply: false });
+    await waitForSolid(() => expect(onRestart).toHaveBeenCalledOnce());
+    expect(onApply).not.toHaveBeenCalled();
+    await update({ status: "restart-required", needsApply: true, onRestart: null });
     expect(button("Restart now")).toBeUndefined();
   });
 
