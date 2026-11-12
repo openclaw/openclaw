@@ -1,18 +1,27 @@
 // A linked owner device (OCF-510) is the Gateway owner attributed to a person. Retained work,
 // resumed access grants and personal skill-library permissions derive from its owner
 // certificate, not the person's named role, and only while that certificate is current.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSkillLibraryActorFromProfile } from "../../skills/library/store.js";
 import { resumeGatewayOperatorAccessGrant } from "../operator-access-policy.js";
 import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
+import { currentPersonalProfileClient } from "../server-methods/personal-profile-authorization.js";
+import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import {
   currentOwnerDevicePrincipal,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./tunnel-principal.js";
+
+const seed = vi.hoisted(() => vi.fn(async () => []));
+vi.mock("../../skills/library/selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/library/selection.js")>()),
+  seedSkillLibrarySelection: seed,
+}));
 
 const OWNER: OpenClawIdTunnelPrincipal = { kind: "owner", peerKey: `iroh:${"2b".repeat(32)}` };
 const cfg: OpenClawConfig = {
@@ -108,5 +117,45 @@ describe("linked owner device authority", () => {
     ).toBeUndefined();
     ownerCurrent = false;
     expect(currentOwnerDevicePrincipal(socket)).toBeUndefined();
+  });
+
+  it("seeds a new session's library skills with the owner device's permissions", async () => {
+    const socket = {
+      connId: "c1",
+      connect: { role: "operator", scopes: ["operator.admin"] },
+      authenticatedUserProfile: { profileId: "person" },
+      internal: { openclawIdPrincipal: OWNER },
+    } as unknown as Parameters<typeof prepareSkillLibrarySessionCreation>[0];
+    await prepareSkillLibrarySessionCreation(socket, cfg, { via: "create" } as never);
+    const [authority] = seed.mock.calls.at(-1) as unknown as [
+      { ownerDevice?: boolean; assertCurrent: () => void },
+    ];
+    expect(authority.ownerDevice).toBe(true);
+    expect(() => authority.assertCurrent()).not.toThrow();
+    ownerCurrent = false;
+    expect(() => authority.assertCurrent()).toThrow("OpenClaw ID owner authority changed");
+  });
+
+  it("lifts the person's role in personal APIs only while the owner certificate is current", () => {
+    const socket = {
+      connId: "c1",
+      connect: { role: "operator", scopes: ["operator.admin"] },
+      authenticatedUserProfile: { profileId: "person" },
+      internal: { openclawIdPrincipal: OWNER },
+    };
+    const request = {
+      client: socket,
+      context: {
+        getRuntimeConfig: () => cfg,
+        getClientConnIds: (match: (candidate: unknown) => boolean) =>
+          new Set(match(socket) ? [socket.connId] : []),
+      },
+    } as unknown as GatewayRequestHandlerOptions;
+    const owner = { profileId: "person", role: null };
+    expect(() => currentPersonalProfileClient(request, "operator.read", owner)).not.toThrow();
+    ownerCurrent = false;
+    expect(() => currentPersonalProfileClient(request, "operator.read", owner)).toThrow(
+      "Personal profile requires current operator.read permission.",
+    );
   });
 });
