@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { ExpectedCliError } from "../cli/expected-cli-error.js";
@@ -373,6 +374,37 @@ describe("sessionsTailCommand", () => {
     if (mode === "explicit store" || mode === "explicit key") {
       expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
     }
+  });
+
+  it("cancels a pending Gateway selection without fallback or progress output", async () => {
+    const work = new AsyncWorkScope();
+    const started = Promise.withResolvers<void>();
+    const request = Promise.withResolvers<never>();
+    storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeSessionEntry();
+    await appendEvents([toolResult("unwanted")]);
+    mocks.callGatewayFromCliWithTransport.mockImplementation((_method, _opts, _params, extra) => {
+      extra.signal?.addEventListener("abort", () => request.reject(extra.signal.reason), {
+        once: true,
+      });
+      started.resolve();
+      return request.promise;
+    });
+    const selection = work.run(() => tail({ agent: "main" }));
+    onTestFinished(async () => {
+      request.reject(work.signal.reason);
+      await selection.catch(() => {});
+    });
+    const completed = selection.then(
+      () => true,
+      () => false,
+    );
+    await started.promise;
+    work.beginClose();
+    expect(await Promise.race([completed, nextTurn(false)])).toBe(true);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("isolates trajectory rows by session id", async () => {
