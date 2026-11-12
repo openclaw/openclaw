@@ -5,11 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForEffectPreparation } from "../../../test-support/effect-preparation.test-support.js";
 
 let prepareRequest: (() => Promise<void>) | undefined;
-const fetchImpl = vi.hoisted(() => vi.fn<typeof fetch>());
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const fetchFixture = await vi.hoisted(async () => {
+  const { createMattermostFetchFixture } = await import("./fetch.test-support.js");
+  return createMattermostFetchFixture(() => prepareRequest?.());
+});
+const fetchImpl = vi.mocked(fetchFixture.current);
+const fetchWithSsrFGuardMock = fetchFixture.fetchWithSsrFGuard;
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return { ...actual, fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args) };
+  return { ...actual, fetchWithSsrFGuard: fetchFixture.fetchWithSsrFGuard };
 });
 
 import {
@@ -91,18 +95,6 @@ beforeEach(() => {
   prepareRequest = undefined;
   fetchImpl.mockReset();
   fetchWithSsrFGuardMock.mockReset();
-  fetchWithSsrFGuardMock.mockImplementation(
-    async (
-      params: Parameters<typeof import("openclaw/plugin-sdk/ssrf-runtime").fetchWithSsrFGuard>[0],
-    ) => {
-      await prepareRequest?.();
-      params.beforeRequest?.();
-      return {
-        response: await fetchImpl(params.url, params.init),
-        release: async () => {},
-      };
-    },
-  );
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -243,7 +235,7 @@ describe("Mattermost response diagnostics", () => {
         `Mattermost API ${status} ${statusText}: ${detail}`,
       );
       expect(
-        new Headers(fetchWithSsrFGuardMock.mock.calls[0]?.[0].init.headers).get("Authorization"),
+        new Headers(fetchWithSsrFGuardMock.mock.calls[0]?.[0].init?.headers).get("Authorization"),
       ).toBe(`Bearer ${botToken}`);
       expect(json).not.toHaveBeenCalled();
       expect(text).not.toHaveBeenCalled();
