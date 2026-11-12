@@ -513,7 +513,10 @@ it("preserves exact preparation replay and cache compatibility across reopen", a
     id: "cbx_compatible",
     preparation: { ...source.preparation, key: "c".repeat(64), purpose: "session" as const },
   };
-  expect(await restarted.allocate(compatible)).toEqual(checkpointChoice);
+  expect(await restarted.allocate(compatible)).toEqual({
+    ...checkpointChoice,
+    baseCommit: "a".repeat(40),
+  });
   expect(
     await restarted.allocate({
       ...compatible,

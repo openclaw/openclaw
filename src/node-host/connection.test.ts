@@ -524,7 +524,10 @@ it.each([
       GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
       GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
     ],
-    prepared: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH],
+    prepared: [
+      GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
+      GATEWAY_SERVER_CAPS.NODE_WORKER_PREPARED_WORKSPACE_DEFERRED_VERIFICATION,
+    ],
     folders: [GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS],
   };
   try {
@@ -556,7 +559,7 @@ it.each([
                 ? { workspaceQuiescence: 1 }
                 : {}),
             },
-            prepared: {},
+            prepared: { preparedWorkspaceDeferredVerification: true },
             folders: folders ? { deviceFolders: true } : {},
           }[kind];
       expect(declaration).toEqual({

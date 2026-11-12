@@ -305,13 +305,17 @@ it("composes node desktop control into the worker environment runtime", async ()
   });
 });
 it.each([false, true])(
-  "verifies the actual checkout before adopting it (source changed: %s)",
+  "verifies the actual checkout before first binding (source changed: %s)",
   async (changed) => {
     await withPreparedNodeAcknowledgement(await preparedRoot("ack"), async (f) => {
       if (changed) {
         await fs.writeFile(path.join(f.prepared.workspaceDir, "source.txt"), "changed source\n");
-        await expect(f.register()).rejects.toThrow("source does not match its manifest");
-        expect(await f.preparedStore.find(f.record.environmentId)).toBeUndefined();
+        await f.register();
+        await f.attach();
+        await expect(f.bind()).rejects.toThrow("source does not match its manifest");
+        const unclaimed = await f.preparedStore.find(f.record.environmentId);
+        expect(unclaimed?.state).toBe("available");
+        expect(unclaimed?.session_id).toBeNull();
         return;
       }
       await f.register();
@@ -408,9 +412,9 @@ it("cancels a register before its node commits after the caller aborts", async (
   await withPreparedNodeAcknowledgement(await preparedRoot("abort"), async (f) => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const capture = workspaceCommands.captureManifest;
-    vi.spyOn(workspaceCommands, "captureManifest").mockImplementation(async (params) => {
-      const result = await capture(params);
+    const read = workspaceCommands.readWorkspaceManifest;
+    vi.spyOn(workspaceCommands, "readWorkspaceManifest").mockImplementation(async (...args) => {
+      const result = await read(...args);
       entered.resolve();
       await release.promise;
       return result;

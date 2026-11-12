@@ -87,6 +87,10 @@ describe("worker node enrollment", () => {
     enabledPluginIds: ["runtime-plugin"],
   });
   const bundle = () => ({
+    install: "bundle" as const,
+    bundleHash: "a".repeat(64),
+    openclawVersion: "2026.8.1",
+    protocolFeatures: [],
     tarballPath: path.join(root, "worker-bundle.tgz"),
     tarballSha256: "b".repeat(64),
     tarballBytes: 6,

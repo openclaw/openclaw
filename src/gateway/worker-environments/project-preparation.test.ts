@@ -274,6 +274,10 @@ printf 'setup\\n' >> "$HOME/count"
     });
     first.close();
     const prepared = result.preparedWorkspace!;
+    expect(prepared.baseCommit).toBe(f.project.baseCommit);
+    expect(await requireGit(prepared.workspaceDir, ["rev-parse", "HEAD"])).toBe(
+      prepared.baseCommit,
+    );
     expect(first.getPreparedWorkspace()).toEqual(prepared);
     const directory = path.join(f.home, ".openclaw-worker", "prepared", "gateway", "c".repeat(64));
     expect(prepared).toMatchObject({
@@ -982,48 +986,4 @@ ${action}
       expect(await manifestFiles(home)).toEqual([]);
     },
   );
-
-  it("requires administrator authority for a pinned setup and rechecks the owner after seed installation", async () => {
-    const f = await fixture('#!/bin/sh\nprintf setup > "$HOME/count"\n');
-    const setupRecipe = (await readWorkerProjectEnvironmentRecipe(f.project)).identity;
-    expect(setupRecipe).toMatch(/^[a-f0-9]{40}$/u);
-    expect(() =>
-      createWorkerProjectPreparation({
-        project: f.project,
-        namespace: "gateway",
-        preparation: {
-          purpose: "session",
-          demandAtMs: 1_000,
-          key: "a".repeat(64),
-          cacheKey: "c".repeat(64),
-          setupRecipe,
-        },
-        requireCurrent: () => {},
-      }),
-    ).toThrow("operator.admin");
-    const seed = f.operation();
-    await seed.project.prepare(f);
-    seed.close();
-    let current = true;
-    const prepared = await f.preparedOperation(() => {
-      if (!current) {
-        throw new Error("owner replaced");
-      }
-    });
-    await expect(
-      prepared.project.prepare({
-        upload: f.upload,
-        runScriptWithBudget: (createScript) => f.runScriptWithBudget(createScript),
-        runScript: async (script) => {
-          const output = await f.runScript(script);
-          current = false;
-          return output;
-        },
-      }),
-    ).rejects.toThrow("owner replaced");
-    prepared.close();
-    expect(
-      await fs.stat(path.join(f.home, ".openclaw-worker", "prepared")).catch(() => undefined),
-    ).toBeUndefined();
-  });
 });

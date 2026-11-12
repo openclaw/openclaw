@@ -99,6 +99,12 @@ class ControlUiGitHubTransportError extends ControlUiGitHubError {
   }
 }
 
+export class GitHubResponseTooLargeError extends ControlUiGitHubError {
+  constructor() {
+    super(502, "GitHub response exceeded the size limit");
+  }
+}
+
 export class GitHubGraphQLUnavailableError extends ControlUiGitHubError {
   constructor(upstreamStatus: number) {
     super(403, "GitHub GraphQL access is unavailable for the selected credential", {
@@ -395,7 +401,7 @@ export async function discardResponse(response: Response): Promise<void> {
 export async function readBoundedResponse(response: Response, maxBytes: number): Promise<Buffer> {
   try {
     return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: () => new ControlUiGitHubError(502, "GitHub response exceeded the size limit"),
+      onOverflow: () => new GitHubResponseTooLargeError(),
     });
   } finally {
     await discardResponse(response);

@@ -170,9 +170,13 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     readIdentity: typeof identity,
     assertOwner: () => void,
     signal?: AbortSignal,
-    graphql?: { query: string; variables: Record<string, string> },
+    options?: {
+      graphql?: { query: string; variables: Record<string, string> };
+      comparison?: true;
+    },
   ): Promise<unknown> => {
     assertOwner();
+    const graphql = options?.graphql;
     const response = await gitHubPublicApi.fetchGitHubApi(
       graphql ? gitHubPublicApi.GITHUB_GRAPHQL_URL : endpoint + suffix,
       fetch,
@@ -186,15 +190,30 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     let value: unknown;
     try {
       assertOwner();
-      value =
+      value = await (
         graphql && readIdentity.token
-          ? await gitHubPublicApi.readGitHubGraphQLResponse(
+          ? gitHubPublicApi.readGitHubGraphQLResponse(
               response,
               fetch,
               readIdentity.token,
               METADATA_MAX_BYTES,
             )
-          : await gitHubPublicApi.readGitHubJsonResponse(response, METADATA_MAX_BYTES);
+          : gitHubPublicApi.readGitHubJsonResponse(response, METADATA_MAX_BYTES)
+      ).catch((error: unknown) => {
+        // Only this comparison response can be a lineage miss, never a failure
+        // from fetch/identity revalidation or another repository metadata read.
+        if (
+          options?.comparison &&
+          ((response.status === 404 &&
+            error instanceof gitHubPublicApi.ControlUiGitHubError &&
+            error.statusCode === 404 &&
+            error.upstreamStatus === 404) ||
+            (response.ok && error instanceof gitHubPublicApi.GitHubResponseTooLargeError))
+        ) {
+          return undefined;
+        }
+        throw error;
+      });
     } finally {
       await gitHubPublicApi.discardResponse(response);
     }
@@ -238,8 +257,10 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     let value: unknown;
     try {
       value = await read("", readIdentity, assertOwner, signal, {
-        query: PINNED_REPOSITORY_QUERY,
-        variables: { repositoryId, commit: baseCommit },
+        graphql: {
+          query: PINNED_REPOSITORY_QUERY,
+          variables: { repositoryId, commit: baseCommit },
+        },
       });
     } catch (error) {
       // Native classic tokens can read public REST metadata without the
@@ -480,8 +501,46 @@ export async function prepareRepositoryWorkerProjectSource(params: AdmissionRequ
     assertSource();
     identity = current;
   };
+  const snapshotStart =
+    !expected &&
+    !request.baseCommit &&
+    typeof metadata.defaultBranch === "string" &&
+    [metadata.defaultBranch, `heads/${metadata.defaultBranch}`].includes(requestedRef);
   return {
     project,
+    // Only fresh default-branch requests can reuse a snapshot's completed revision.
+    ...(snapshotStart ? { snapshotStart: true as const } : {}),
+    isSnapshotBaseAncestor: async (candidate: string, signal: AbortSignal) => {
+      if (!snapshotStart || !GitObject.test(candidate)) {
+        return false;
+      }
+      await revalidate(signal);
+      const readIdentity = identity;
+      const assertSource = () => {
+        signal.throwIfAborted();
+        assertAdmission();
+        readIdentity.assertSelected();
+      };
+      // Compare immutable Git objects through the same repository/account owner
+      // that resolved the default ref. A cache key or branch label is not lineage.
+      const comparison = await read(
+        `/compare/${candidate}...${baseCommit}?per_page=1`,
+        readIdentity,
+        assertSource,
+        signal,
+        { comparison: true },
+      );
+      // Missing candidates, orphaned history, and oversized patches cannot prove
+      // lineage. Recheck actual repository/account access before a cache miss.
+      await revalidate(signal);
+      assertSource();
+      return (
+        isRecord(comparison) &&
+        ["ahead", "identical"].includes(String(comparison.status)) &&
+        objectSha(comparison.base_commit) === candidate &&
+        objectSha(comparison.merge_base_commit) === candidate
+      );
+    },
     setupRecipe,
     recipe,
     assertCurrent,

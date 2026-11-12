@@ -194,6 +194,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...options,
     store,
     readStartStatus: providerLifecycle.readStartStatus,
+    preparedRepositorySource: providerLifecycle.preparedRepositorySource,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,

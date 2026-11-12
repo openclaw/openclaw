@@ -1,0 +1,4 @@
+# Exact own fixture-contract growth for prepared snapshot reuse.
+# Three required ancestry predicate fixture lines and one eligible-mode subprocess fixture line.
+# No extraction-bookkeeping or inherited-debt credit; existing grants/scalar unchanged.
+4
