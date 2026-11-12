@@ -198,6 +198,8 @@ it.skipIf(!connection)(
           env: {
             ...process.env,
             ...state.envVars,
+            // Real CLI startup rejects test-only bundle roots; use production discovery.
+            OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
             NODE_ENV: undefined,
             NODE_OPTIONS: undefined,
             VITEST: undefined,
