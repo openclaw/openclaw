@@ -348,12 +348,16 @@ async function plan() {
       latest +
       ") p LEFT JOIN manifest_items c ON c.role='current' AND c.id=p.id WHERE c.id IS NULL ORDER BY p.id";
     for (const row of database.prepare(missing).iterate()) {
+      if (
+        row.occurred_at &&
+        (compareInstants(row.occurred_at, current.coverage.start) < 0 ||
+          compareInstants(row.occurred_at, current.coverage.end) >= 0)
+      ) {
+        continue;
+      }
       if (!row.occurred_at || current.coverage.completeness !== "complete") {
         unresolvedMissing.push(row.id);
-      } else if (
-        compareInstants(row.occurred_at, current.coverage.start) >= 0 &&
-        compareInstants(row.occurred_at, current.coverage.end) < 0
-      ) {
+      } else {
         deleted.push(row.id);
       }
     }

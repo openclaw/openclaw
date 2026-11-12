@@ -10,9 +10,12 @@ export type OpenClawIdPublication =
 /** The parts of `openclawId.status` the account menu needs. */
 export type OpenClawIdStatusResult = {
   status: {
-    state: "off" | "unconfigured" | "on" | "failed";
+    state: "off" | "unconfigured" | "on" | "keys_refused" | "failed";
     /** The tunnel child while on; `relayOnline` once its outbound relay connection is up. */
     tunnel?: { state: string; relayOnline?: boolean };
+    /** While `keys_refused`: which bound key no file on this computer holds, and why. */
+    key?: "endpoint" | "gateway";
+    reason?: "keys_missing" | "key_mismatch";
   };
   /** The same public summary for every client; owner data is in `openclawId.people`. */
   link: {
@@ -66,6 +69,8 @@ export type OpenClawIdPeopleLink = OpenClawIdStatusResult["link"] & {
   seq?: number;
   /** Active owner devices only; removed and expired ones are not listed. */
   ownerDevices?: OpenClawIdOwnerDevice[];
+  /** The last publication to Discovery, while one was attempted. */
+  publication?: OpenClawIdPublication;
 };
 
 /** An active owner device as `openclawId.people` lists it. */
