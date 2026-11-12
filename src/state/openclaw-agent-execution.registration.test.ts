@@ -123,6 +123,7 @@ vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) 
 vi.mock("../infra/sqlite-worker-broker-admission.js", () => ({
   prepareSqliteWorkerActorContext: edge.forbidden,
 }));
+// mock-isolation: Native agent opening stays synthetic; the worker reads only this handle and its open state.
 vi.mock("./openclaw-agent-db.js", () => ({
   openOpenClawAgentDatabase: edge.open,
   getOpenClawAgentDatabaseIfOpen: () => edge.database,
