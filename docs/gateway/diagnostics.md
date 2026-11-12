@@ -923,8 +923,10 @@ include that delay; coverage and heap counters describe acquisition. These field
 are not an atomic process snapshot.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
-including when diagnostic event collection is disabled. Warnings do not retire
-workers. Retirement requests are asynchronous, skip active work, and keep native
+including when diagnostic event collection is disabled. On constrained Node/Linux
+hosts, process memory usage at 80% of the limit also triggers retirement without
+changing diagnostic severity. Other warnings do not retire workers.
+Retirement requests are asynchronous, skip active work, and keep native
 close/checkpoint operations off the main thread. Active operations keep their
 custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
