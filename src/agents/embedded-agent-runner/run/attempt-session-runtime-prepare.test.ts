@@ -127,7 +127,10 @@ function createCheckpointWriter(entries: SessionEntry[], prefix: string) {
 
 function createHistoryFixture(messages?: ReturnType<typeof buildSystemUpdateMessage>[]) {
   const fixture = createFixture();
-  fixture.transcriptPolicy.inHistorySystemUpdates = true;
+  Object.assign(fixture.transcriptPolicy, {
+    inHistorySystemUpdates: true,
+    pinnedSystemPrompt: true,
+  });
   const entries: SessionEntry[] = [];
   const appendCustomEntryAsync = createCheckpointWriter(entries, "marker");
   Object.assign(fixture.sessionManager, {
