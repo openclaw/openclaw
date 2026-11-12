@@ -434,7 +434,6 @@ export function buildAgentSystemPrompt(params: {
   const reasoningLevel = params.reasoningLevel ?? "off";
   const skillsPrompt = params.skillsPrompt?.trim();
   const runtimeChannel = normalizeOptionalLowercaseString(runtimeInfo?.channel);
-  const runtimeChatType = normalizeChatType(runtimeInfo?.chatType);
   const runtimeCapabilities = runtimeInfo?.capabilities ?? [];
   const runtimeCapabilitiesLower = new Set(normalizeStringEntriesLower(runtimeCapabilities));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
@@ -593,6 +592,7 @@ export function buildAgentSystemPrompt(params: {
       ...directorySection,
       workspaceOnlyGuidance,
       ...workspaceNotes,
+      "Repos already in the workspace: reuse the checkout, including multi-PR batches. For another checkout, use the repo's checkout workflow or `git worktree add` from the existing repo to share its object store. Do not clone the same repo into task scratch or copy/hardlink its Git objects. If shared paths are inaccessible, report the scope blocker before creating an independent clone.",
       "",
       ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
@@ -822,7 +822,7 @@ export function buildAgentSystemPrompt(params: {
       inlineButtonsEnabled,
       customInlineButtonHint: params.runtimeInfo?.customInlineButtonHint,
       runtimeChannel,
-      runtimeChatType,
+      runtimeChatType: normalizeChatType(runtimeInfo?.chatType),
       messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
