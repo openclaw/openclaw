@@ -207,7 +207,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: primaryActionTitle)",
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
-    'String(localized: "Connecting...")',
     "status: .disconnected",
   ],
   "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
