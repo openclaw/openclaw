@@ -296,7 +296,6 @@ function boundedCatchup(
         deps: { nowMs: () => nowMs, log: createCronMutationLogger(result.logs) },
       };
       const missed: CronJob[] = [];
-      const skippedSlots: string[] = [];
       for (const job of jobs.values()) {
         if (
           !isJobEnabled(job) ||
