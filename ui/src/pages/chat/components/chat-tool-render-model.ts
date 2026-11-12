@@ -40,6 +40,9 @@ export type ToolRenderOptions = {
   messageKey: string;
   sessionKey?: string;
   agentId?: string;
+  assistantName?: string;
+  assistantAvatar?: string | null;
+  assistantTextAvatar?: string | null;
   presented?: boolean;
   mediaReadAllowed?: boolean;
   runActive?: boolean;

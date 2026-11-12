@@ -2,6 +2,237 @@
    Tool rows deliberately carry no card chrome (border/background/shadow) so
    dense agent activity stays scannable; detail surfaces appear only on expand. */
 
+/* Questions to OpenClaw keep their request and reply in one filled surface. */
+.chat-ask-card {
+  --chat-ask-surface: color-mix(in srgb, var(--text) 3%, var(--bg-content));
+
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: calc(var(--radius-md) * 1.6);
+  background: var(--chat-ask-surface);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 1.45;
+}
+
+.chat-ask-card__header {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.chat-ask-card__header:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.chat-ask-card__layer {
+  position: relative;
+  width: 36px;
+  height: 34px;
+}
+
+.chat-ask-card__mark {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 30px;
+  height: 30px;
+}
+
+.chat-ask-card__mark img,
+.chat-ask-card__mark svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.chat-ask-card__layer .chat-ask-card__avatar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--chat-ask-surface);
+}
+
+.chat-ask-card__text {
+  min-width: 0;
+}
+
+.chat-ask-card__title,
+.chat-ask-card__subtitle {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-ask-card__title {
+  color: var(--text-strong);
+  font-size: calc(13.5px * var(--control-ui-text-scale));
+  font-weight: var(--control-ui-font-weight-semibold);
+  line-height: calc(19px * var(--control-ui-text-scale));
+}
+
+.chat-ask-card__subtitle {
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: calc(12.5px * var(--control-ui-text-scale));
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: calc(17px * var(--control-ui-text-scale));
+}
+
+.chat-ask-card__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-ask-card__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+  font-size: calc(11.5px * var(--control-ui-text-scale));
+  font-weight: var(--control-ui-font-weight-semibold);
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
+.chat-ask-card__chevron {
+  display: flex;
+  color: color-mix(in oklab, var(--text) 42%, transparent);
+  transition: transform 150ms;
+}
+
+.chat-ask-card__chevron svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+}
+
+.chat-ask-card__header[aria-expanded="true"] .chat-ask-card__chevron {
+  transform: rotate(90deg);
+}
+
+.chat-ask-card__body {
+  display: grid;
+  gap: 10px;
+  margin: 10px 0 2px 46px;
+  overflow-wrap: anywhere;
+  font-size: calc(13.5px * var(--control-ui-text-scale));
+  font-weight: var(--control-ui-font-weight-normal);
+  line-height: 1.55;
+  animation: chat-ask-reveal 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.chat-ask-card__label {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+}
+
+.chat-ask-card__request {
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+.chat-ask-card__reply p {
+  margin: 0;
+}
+
+.chat-ask-card__reply p + p {
+  margin-top: 0.6em;
+}
+
+.chat-ask-card__reply strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.chat-ask-card__reply code {
+  padding: 1px 4px;
+  border-radius: calc(var(--radius-md) * 0.5);
+  background: var(--inline-code-bg);
+  font-family: var(--mono);
+  font-size: 0.84em;
+}
+
+.chat-ask-card__error {
+  color: var(--danger);
+}
+
+.chat-ask-card__shimmer {
+  --chat-ask-activity: color-mix(in oklab, var(--text) 60%, transparent);
+
+  background: linear-gradient(
+    90deg,
+    var(--chat-ask-activity) 0%,
+    var(--chat-ask-activity) 40%,
+    color-mix(in oklab, var(--text) 18%, transparent) 50%,
+    var(--chat-ask-activity) 60%,
+    var(--chat-ask-activity) 100%
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: chat-ask-shimmer 1.8s linear infinite;
+}
+
+@keyframes chat-ask-shimmer {
+  from {
+    background-position: 110% 0;
+  }
+  to {
+    background-position: -110% 0;
+  }
+}
+
+@keyframes chat-ask-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-ask-card__shimmer {
+    animation: none;
+    background: none;
+    color: var(--chat-ask-activity);
+  }
+
+  .chat-ask-card__body {
+    animation: none;
+  }
+
+  .chat-ask-card__chevron {
+    transition: none;
+  }
+}
+
 /* Compact text disclosure shared by activity rollups, tool rows, and raw
    details. The button hugs its label while the expanded body keeps its own
    full-width layout. */

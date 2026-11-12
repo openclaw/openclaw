@@ -58,6 +58,57 @@ function mountTool(
   return mountCard({ id: name, name, ...card }, options, container);
 }
 
+it("keeps an OpenClaw question expanded as its reply arrives", async () => {
+  const card: ToolCard = {
+    id: "ask",
+    name: "openclaw",
+    args: { message: "Check the workspace setting." },
+    live: true,
+    completed: false,
+  };
+  const onToggleExpanded = vi.fn();
+  const options = { assistantName: "Workspace helper", runActive: true, onToggleExpanded };
+  const container = await mountCard(card, { ...options, expanded: false });
+  await waitForSolid(() => expect(container.textContent).toContain("Asking OpenClaw"));
+  query(container, ".chat-ask-card__header")!.click();
+  expect(onToggleExpanded).toHaveBeenCalledWith("ask");
+  await mountCard(card, { ...options, expanded: true }, container);
+  expect(textOf(container, ".chat-ask-card__request")).toBe("Check the workspace setting.");
+
+  const reply = "The **workspace** setting matches.\n\nNo change was needed.";
+  await mountCard({ ...card, completed: true, details: { reply } }, options, container);
+  await waitForSolid(() =>
+    expect(textOf(container, ".chat-ask-card__title")).toBe("The workspace setting matches."),
+  );
+  expect(textOf(container, ".chat-ask-card__subtitle")).toBe("Workspace helper asked OpenClaw");
+  expect(textOf(container, ".chat-ask-card__reply strong")).toBe("workspace");
+  expect(textOf(container, ".chat-ask-card__reply")).toContain("No change was needed.");
+  expect(query(container, ".chat-ask-card__header")?.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("reads saved OpenClaw replies and exposes the original failure in place", async () => {
+  const card: ToolCard = {
+    id: "saved-ask",
+    name: "openclaw",
+    args: { message: "Check the workspace setting." },
+    completed: true,
+    outputText: JSON.stringify({ reply: "No change needed." }),
+  };
+  const container = await mountCard(card);
+  await waitForSolid(() =>
+    expect(textOf(container, ".chat-ask-card__reply")).toContain("No change needed."),
+  );
+  await mountCard(
+    { ...card, isError: true, outputText: "Inference service unavailable." },
+    {},
+    container,
+  );
+  expect(textOf(container, ".chat-ask-card__title")).toBe("Couldn’t reach OpenClaw");
+  expect(textOf(container, ".chat-ask-card__pill")).toBe("Failed");
+  expect(textOf(container, ".chat-ask-card__body")).toContain("Inference service unavailable.");
+  expect(query(container, ".chat-ask-card__reply")).toBeNull();
+});
+
 it("does not render MCP App previews on the tool surface", () => {
   const container = document.createElement("div");
   const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;

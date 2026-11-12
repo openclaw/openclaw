@@ -15,6 +15,10 @@ const enChatToolLabels = {
       summary: "Summary",
       toolInput: "Tool input",
       toolOutput: "Tool output",
+      askingOpenclaw: "Asking OpenClaw",
+      askedOpenclaw: "{agent} asked OpenClaw",
+      openclawRequest: "Request",
+      openclawUnreachable: "Couldn’t reach OpenClaw",
       rawDetails: "Raw details",
       activity: {
         titleOne: "1 operation",
