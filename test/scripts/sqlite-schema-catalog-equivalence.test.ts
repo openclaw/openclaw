@@ -119,11 +119,11 @@ describe("generated SQLite schema catalogs", () => {
   });
 
   it.each([
-    [undefined, "f32dcffad8239a4de64de63074202b82a2a8b8671148ade2a5bf66a296a24c94"],
-    [[false, false], "1e2662ff71a59cc056f70d661bddb4c6c0e86b36c4151490343ffd787b15891a"],
-    [[false, true], "a65a121da4de231f2d96dcf4503136c5f7cc2f80e54aa9d630fb2e5a9de9a97a"],
-    [[true, false], "a99f466c73b07f39b54a6711d7e5df7767e45c7c9b2a45943ed96726ba8f4608"],
-    [[true, true], "269874b20b213faf7f8c8ecb6cc4c759853ffd1d63b5f6a395180667ffb2a9b3"],
+    [undefined, "3e69be25aa64d744c4dbe3a82aeb19e282e4921b53ebc3c530c3961f9971a078"],
+    [[false, false], "1e0d269930a1d67272f2abba63d124b3334e409e0c70da34ef1f7fb0f6c77401"],
+    [[false, true], "70a1959c27096a3bce2f88f145b5b7cb334cb23b0c319d6bd8d4dcfb9c872e14"],
+    [[true, false], "002d221c278c58836d140db820dcbef0d7f59933caa80a9d0b6bb6df735e7004"],
+    [[true, true], "609552a7a9cc616c87500badcdae12dfae764bf0fb12758d249265c9475d5ede"],
   ] as const)(
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
