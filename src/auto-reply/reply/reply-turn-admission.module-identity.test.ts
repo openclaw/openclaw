@@ -62,7 +62,8 @@ it("keeps admitted session ownership when transformed plugins import the native 
               filename ===
                 path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts") ||
               filename === path.join(repo, "src/infra/temp-artifact-cleanup.ts") ||
-              filename === path.join(repo, "src/logging/logger-file-worker.ts")
+              filename === path.join(repo, "src/logging/logger-file-worker.ts") ||
+              filename === path.join(repo, "src/state/openclaw-state-db-cache.ts")
             ) {
               return resolved;
             }
