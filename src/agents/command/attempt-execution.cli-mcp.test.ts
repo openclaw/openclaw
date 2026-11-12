@@ -143,4 +143,41 @@ describe("CLI attempt session MCP overrides", () => {
       }
     },
   );
+
+  it("carries host tool bindings into the prepared CLI run, as into an embedded run", async () => {
+    const toolBindings = { voice_call: { kind: "active-call", callId: "call-1" } };
+    executePreparedCliRun.mockImplementation(async (context: PreparedCliRunContext) => {
+      expect(context.params.toolBindings).toEqual(toolBindings);
+      return { text: "bound" };
+    });
+    const cfg = {
+      agents: { defaults: { skipBootstrap: true } },
+      skills: { load: { watch: false } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const params = makeRunAgentAttemptParams({
+      agentDir: state.agentDir(),
+      workspaceDir: state.stateDir,
+      sessionEntry: makeSessionEntry("session-bindings"),
+      sessionKey: "agent:main:main",
+      providerOverride: "claude-cli",
+      modelOverride: "sonnet",
+      cfg,
+      opts: { message: "end the call", toolBindings },
+      skillsSnapshot: { prompt: "", skills: [] },
+      preparedRunAdmission: prepareSystemAgentRunAdmission(
+        cfg,
+        "run-session-bindings",
+        "main",
+        "cli-tool-bindings-test",
+      ),
+    });
+    try {
+      const result = await runAgentAttempt(params);
+      expect(result.payloads).toEqual([expect.objectContaining({ text: "bound" })]);
+      expect(executePreparedCliRun).toHaveBeenCalledOnce();
+    } finally {
+      params.preparedRunAdmission?.close();
+    }
+  });
 });

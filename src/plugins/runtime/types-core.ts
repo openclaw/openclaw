@@ -149,9 +149,13 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    /**
+     * Admit a turn for this exact trusted channel plugin and its authenticated sender. Without
+     * `messageChannel`, any active plugin may admit a guest turn. `toolBindings` may scope only
+     * tools the calling plugin declares.
+     */
     runCommandFromIngress: (
-      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      opts: import("../../agents/command/types.js").AgentCommandPluginIngressOpts,
       runtime: import("../../runtime.js").RuntimeEnv,
     ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: (

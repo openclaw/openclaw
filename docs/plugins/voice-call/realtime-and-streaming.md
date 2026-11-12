@@ -36,6 +36,7 @@ Runtime behavior:
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
+- Each consult runs as an ordinary agent turn of that session, the way a channel message does. The agent's configured runtime applies, including a CLI runtime such as `agentRuntime: { id: "claude-cli" }`, so a subscription-backed agent needs no provider API key, and the session keeps the call's earlier consults. The caller is a guest: owner-only tools stay unavailable.
 
 GPT-Live uses agent delegation instead of native function tools. The delegated
 agent can end only the active call through a call-scoped `voice_call` binding.

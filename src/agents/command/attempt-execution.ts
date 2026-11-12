@@ -525,6 +525,8 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
             images: params.opts.images,
             imageOrder: params.opts.imageOrder,
             ...toolContext,
+            // Host-bound tool scopes reach the loopback grant, as they reach embedded tools.
+            toolBindings: params.opts.toolBindings,
             // Completion relays can carry the trusted source only in their
             // delivery target; the restricted CLI grant must retain that owner.
             currentChannelId:

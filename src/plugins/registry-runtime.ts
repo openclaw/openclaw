@@ -27,6 +27,7 @@ import {
   createRegisteredChannelRuntimeResolver,
   createScopedPluginChannelRuntime,
 } from "./registry-runtime-channel.js";
+import { admitPluginCommandIngress } from "./registry-runtime-command-ingress.js";
 import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
 import { runPluginForkedTurnAsOwner } from "./registry-runtime-forked-turn.js";
 import { createPluginSystemRuntime } from "./registry-runtime-system.js";
@@ -587,25 +588,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             params,
             commandRuntime,
           ) => {
-            const { senderIsOwner: claimedOwner, messageChannel, ...remainingParams } = params;
-            const senderIsOwner = claimedOwner === true;
-            // Validate and dispatch the same host-owned values; never re-read plugin-owned authority.
-            const ingressParams = { ...remainingParams, senderIsOwner, messageChannel };
-            if (
-              // Community channels may admit guests; trusted provenance is required only for owner elevation.
-              (senderIsOwner &&
-                record.origin !== "bundled" &&
-                record.trustedOfficialInstall !== true) ||
-              currentRegistry().plugins.find((entry) => entry.id === pluginId) !== record ||
-              !isPluginRecordActive(registry, record) ||
-              !currentRegistry().channels.some(
-                (channel) => channel.pluginId === pluginId && channel.plugin.id === messageChannel,
-              )
-            ) {
-              throw new Error(
-                `Plugin "${pluginId}" cannot admit authenticated owner authority for channel "${messageChannel ?? "unknown"}".`,
-              );
-            }
+            const ingressParams = admitPluginCommandIngress({
+              pluginId,
+              record,
+              opts: params,
+              isRecordCurrent: () =>
+                currentRegistry().plugins.find((entry) => entry.id === pluginId) === record &&
+                isPluginRecordActive(registry, record),
+              ownsChannel: (channelId) =>
+                currentRegistry().channels.some(
+                  (channel) => channel.pluginId === pluginId && channel.plugin.id === channelId,
+                ),
+            });
             return await runWithPluginScope(() =>
               agent.runCommandFromIngress(ingressParams, commandRuntime),
             );

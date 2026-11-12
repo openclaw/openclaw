@@ -352,8 +352,12 @@ supplemental diagnostic at its terminal result boundary.
 Channel plugins must admit authenticated agent turns through their injected
 `api.runtime.agent.runCommandFromIngress(options, runtime)` capability. The host
 accepts owner authority only from the exact active, trusted plugin registered for
-`options.messageChannel`; guest turns retain their non-owner identity. The public
-`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim.
+`options.messageChannel`; guest turns retain their non-owner identity. A plugin that
+owns no channel, such as a phone bridge, may omit `messageChannel` to admit a guest
+turn; it can never claim owner authority that way. `options.toolBindings` may scope
+only tools the calling plugin declares in `contracts.tools`. The public
+`agentCommandFromIngress` SDK helper never accepts a caller-supplied owner claim or
+tool bindings.
 
 Model-picker integrations use two focused runtime subpaths. Import the typed
 `ModelPickerAction` and `ModelPickerCapabilityProfile` contracts from

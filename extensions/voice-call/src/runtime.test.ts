@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -128,7 +129,7 @@ function setConsultCall(overrides: Record<string, unknown> = {}) {
   });
 }
 
-function createConsultRuntime<T>(runEmbeddedAgent: T, sessionStore: Record<string, unknown> = {}) {
+function createConsultRuntime<T>(runAgentTurn: T, sessionStore: Record<string, unknown> = {}) {
   return {
     defaults: { provider: "openai", model: "gpt-5.4" },
     resolveAgentDir: vi.fn(() => "/tmp/agent"),
@@ -138,12 +139,18 @@ function createConsultRuntime<T>(runEmbeddedAgent: T, sessionStore: Record<strin
     resolveAgentTimeoutMs: vi.fn(() => 30_000),
     ensureAgentWorkspace: vi.fn(async () => {}),
     session: createMockSessionRuntime(sessionStore),
-    runEmbeddedAgent,
+    // Realtime consults run as ordinary agent turns, never as raw embedded runs.
+    runEmbeddedAgent: vi.fn(() => {
+      throw new Error("realtime consults must run as agent turns");
+    }),
+    runCommandFromIngress: runAgentTurn,
   };
 }
 
 function answeringAgent(text: string) {
-  type Agent = Parameters<typeof createVoiceCallRuntime>[0]["agentRuntime"]["runEmbeddedAgent"];
+  type Agent = Parameters<
+    typeof createVoiceCallRuntime
+  >[0]["agentRuntime"]["runCommandFromIngress"];
   return vi.fn(async (_params: Parameters<Agent>[0]) => ({ payloads: [{ text }], meta: {} }));
 }
 
@@ -182,8 +189,9 @@ async function startConsult(
   config: VoiceCallConfig,
   agentRuntime: ReturnType<typeof createConsultRuntime>,
   coreConfig: OpenClawConfig = {},
+  options: Partial<Parameters<typeof createVoiceCallRuntime>[0]> = {},
 ) {
-  await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig });
+  await createRuntime({ config, agentRuntime: agentRuntime as never, coreConfig, ...options });
   const [name, handler] = expectDefined(
     mocks.realtimeHandlerRegisterToolHandler.mock.calls.at(0),
     "realtime tool handler registration call",
@@ -458,8 +466,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
       agentId: "inbound-route",
       responseModel: "openai/gpt-5.5",
     };
-    const runEmbeddedAgent = answeringAgent("Use the shipment status.");
-    const agentRuntime = createConsultRuntime(runEmbeddedAgent);
+    const runAgentTurn = answeringAgent("Use the shipment status.");
+    const agentRuntime = createConsultRuntime(runAgentTurn);
     setConsultCall({
       agentId: "support",
       direction: "outbound",
@@ -485,19 +493,22 @@ describe("createVoiceCallRuntime lifecycle", () => {
       text: "Use the shipment status.",
     });
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    const consultParams = consultParamsFrom(runEmbeddedAgent);
+    expect(runAgentTurn).toHaveBeenCalledOnce();
+    const consultParams = consultParamsFrom(runAgentTurn);
     expect(consultParams).toMatchObject({
       agentId: "support",
       sessionKey: "agent:support:voice:15550009999",
-      spawnedBy: "agent:main:discord:channel:general",
       messageProvider: "voice",
       lane: "voice",
       provider: "anthropic",
       model: "claude-opus-5-5",
-      thinkLevel: "ultra",
+      thinkingOnce: "ultra",
       fastMode: true,
+      senderIsOwner: false,
+      deliver: false,
     });
+    expect(consultParams).not.toHaveProperty("messageChannel");
+    expect(agentRuntime.runEmbeddedAgent).not.toHaveBeenCalled();
     expect(consultParams.toolsAllow).toEqual([
       "read",
       "web_search",
@@ -518,7 +529,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       "Ask for tomorrow delivery",
     );
     expectIncludes(
-      consultParams.prompt,
+      consultParams.message,
       "Caller: Can you check shipment status?",
       "Caller: Also check the ETA.",
     );
@@ -553,7 +564,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
   it.each(["aborted", "model-locked"] as const)(
     "rejects %s consults before context or dispatch",
     async (state) => {
-      const runEmbeddedAgent = vi.fn();
+      const runAgentTurn = vi.fn();
       const sessionStore: Record<string, unknown> = {};
       if (state === "model-locked") {
         sessionStore["agent:main:voice:15550001234"] = {
@@ -566,7 +577,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       setConsultCall();
       const handler = await startConsult(
         createRealtimeConfig(),
-        createConsultRuntime(runEmbeddedAgent, sessionStore),
+        createConsultRuntime(runAgentTurn, sessionStore),
       );
       const controller = new AbortController();
       if (state === "aborted") {
@@ -582,17 +593,86 @@ describe("createVoiceCallRuntime lifecycle", () => {
           : "Model selection is locked for this session.",
       );
       expect(mocks.resolveRealtimeFastContextConsult).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(runAgentTurn).not.toHaveBeenCalled();
     },
   );
+
+  it("runs realtime consults in the service context that carries the Gateway", async () => {
+    const serviceContext = new AsyncLocalStorage<"voice-call-service">();
+    const contexts: Array<string | undefined> = [];
+    const runAgentTurn = answeringAgent("Relayed.");
+    runAgentTurn.mockImplementationOnce(async () => {
+      contexts.push(serviceContext.getStore());
+      return { payloads: [{ text: "Relayed." }], meta: {} };
+    });
+    setConsultCall();
+    const handler = await startConsult(
+      createRealtimeConfig({ toolPolicy: "owner" }),
+      createConsultRuntime(runAgentTurn),
+      {},
+      { runInServiceContext: (run) => serviceContext.run("voice-call-service", run) },
+    );
+
+    await expect(handler({ question: "Tell the engineer." }, "call-1", {})).resolves.toEqual({
+      text: "Relayed.",
+    });
+    expect(contexts).toEqual(["voice-call-service"]);
+    expect(consultParamsFrom(runAgentTurn).toolsAllow).toBeUndefined();
+  });
+
+  it("runs host-forced consults (consultPolicy always) as cancellable agent turns", async () => {
+    const runAgentTurn = answeringAgent("Forced answer.");
+    let turnSignal: AbortSignal | undefined;
+    const turnStarted = createDeferred<void>();
+    runAgentTurn.mockImplementationOnce(async (params) => {
+      turnSignal = params.abortSignal;
+      turnStarted.resolve();
+      await new Promise<void>((resolve) => {
+        params.abortSignal?.addEventListener("abort", () => resolve());
+      });
+      throw params.abortSignal?.reason;
+    });
+    const agentRuntime = createConsultRuntime(runAgentTurn);
+    setConsultCall();
+    const handler = await startConsult(
+      createRealtimeConfig({ consultPolicy: "always", toolPolicy: "safe-read-only" }),
+      agentRuntime,
+    );
+
+    // The forced path passes only the caller's transcript and the forced owner's abort signal.
+    const forcedOwner = new AbortController();
+    const pending = handler({ question: "Is the slab poured?" }, "call-1", {
+      abortSignal: forcedOwner.signal,
+    });
+    // Without the agent-turn runner the consult rejects here instead of starting a turn.
+    await Promise.race([turnStarted.promise, pending]);
+    expect(agentRuntime.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(consultParamsFrom(runAgentTurn)).toMatchObject({
+      senderIsOwner: false,
+      deliver: false,
+      toolsAllow: [
+        "read",
+        "web_search",
+        "web_fetch",
+        "x_search",
+        "memory_search",
+        "memory_get",
+        "voice_call",
+      ],
+    });
+    expect(turnSignal?.aborted).toBe(false);
+    forcedOwner.abort(new Error("forced owner cancelled"));
+    await expect(pending).rejects.toThrow();
+    expect(turnSignal?.aborted).toBe(true);
+  });
 
   it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createRealtimeConfig(
       {},
       { inboundPolicy: "allowlist", sessionScope: "per-call" },
     );
-    const runEmbeddedAgent = answeringAgent("Per-call consult answer.");
-    const agentRuntime = createConsultRuntime(runEmbeddedAgent);
+    const runAgentTurn = answeringAgent("Per-call consult answer.");
+    const agentRuntime = createConsultRuntime(runAgentTurn);
     setConsultCall({ sessionKey: "voice:call:call-1" });
 
     const handler = await startConsult(config, agentRuntime);
@@ -600,8 +680,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await expect(handler({ question: "What should I say?" }, "call-1", {})).resolves.toEqual({
       text: "Per-call consult answer.",
     });
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(consultParamsFrom(runEmbeddedAgent).sessionKey).toBe("agent:main:voice:call:call-1");
+    expect(runAgentTurn).toHaveBeenCalledOnce();
+    expect(consultParamsFrom(runAgentTurn).sessionKey).toBe("agent:main:voice:call:call-1");
   });
 
   it.each(["live", "consult-aborted", "call-ended"])(
@@ -613,10 +693,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
         expectDefined(mocks.actualRealtimeFastContextConsult, "actual fast context consult"),
       );
       setConsultCall({ state: "active" });
-      const runEmbeddedAgent = vi.fn();
+      const runAgentTurn = vi.fn();
       const handler = await startConsult(
         createRealtimeConfig({ fastContext: fastContextConfig(1_000) }),
-        { session: createMockSessionRuntime({}), runEmbeddedAgent } as never,
+        { session: createMockSessionRuntime({}), runCommandFromIngress: runAgentTurn } as never,
       );
       const consult = new AbortController();
       const pending = handler({ question: "Are the lights on?" }, "call-1", {
@@ -639,7 +719,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       }
       expect(open).toHaveBeenCalledTimes(state === "live" ? 1 : 0);
       expect(search).toHaveBeenCalledTimes(state === "live" ? 1 : 0);
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(runAgentTurn).not.toHaveBeenCalled();
     },
   );
 });
