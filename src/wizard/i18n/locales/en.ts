@@ -434,6 +434,9 @@ export const en = {
       authChoiceFailedRetry: "Pick another provider or auth method, or choose Skip for now.",
       authChoiceFailedTitle: "Provider setup failed",
       authChoiceRequired: "auth choice is required",
+      utilityNeedsPrimary:
+        "This model handles setup and utility tasks. Choose another provider for regular agent chat.",
+      utilityNeedsPrimaryTitle: "Choose a primary model",
       channelsTitle: "Channels",
       configHandling: "Config handling",
       durationNote:

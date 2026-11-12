@@ -419,6 +419,8 @@ export const zh_CN = {
       authChoiceFailedRetry: "请选择其他提供商或认证方式，或选择暂时跳过。",
       authChoiceFailedTitle: "提供商设置失败",
       authChoiceRequired: "必须选择认证方式",
+      utilityNeedsPrimary: "此模型用于设置和辅助任务。请选择另一个供应商，用于常规智能体对话。",
+      utilityNeedsPrimaryTitle: "选择主模型",
       channelsTitle: "频道",
       configHandling: "配置处理",
       durationNote:
