@@ -301,6 +301,7 @@ export async function verifyGatewayMemoryWatcherRestart(
   const restarted = createDeferredCore();
   const releaseStartup = createDeferredCore();
   let reloading: Promise<unknown> | undefined;
+  let reloadFailure: { error: unknown } | undefined;
   let independent: ReturnType<typeof createPluginRegistry> | undefined;
   const recoveryFailure = new Error("memory reload checkpoint failed");
   const registerProvider = (api: OpenClawPluginApi, current: number) =>
@@ -432,7 +433,10 @@ export async function verifyGatewayMemoryWatcherRestart(
     });
     reloading = fixture
       .reload(config, [recovery?.owner === "replaced" ? "sibling" : "first"])
-      .catch((error: unknown) => error);
+      .catch((error: unknown) => {
+        reloadFailure = { error };
+        return error;
+      });
     if (recovery?.failure === "before-drain") {
       releaseStartup.resolve();
     } else {
@@ -505,6 +509,14 @@ export async function verifyGatewayMemoryWatcherRestart(
     subscriptions.at(-1)!.notify();
     expect(await withinTest(indexed.promise, signal)).toBeGreaterThan(0);
     expect(embeddings).toEqual([generation]);
+  } catch (error) {
+    // A recovery startup can reach the gate before its original reload failure settles.
+    releaseStartup.resolve();
+    await Promise.allSettled([reloading]);
+    if (reloadFailure && reloadFailure.error !== error) {
+      throw new AggregateError([error, reloadFailure.error], "Memory watcher reload assertion failed");
+    }
+    throw error;
   } finally {
     releaseStartup.resolve();
     await Promise.allSettled([reloading]);
