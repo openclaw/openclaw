@@ -286,6 +286,10 @@
   inset-inline-end: calc(anchor(--chat-reaction-edge start, 100%) - 14px);
 }
 
+.chat:not(.chat--bubbles) .chat-group.assistant:not(.chat-group--forwarded) > .chat-group-messages {
+  container-type: inline-size;
+}
+
 /* Flat assistant text has no edge to hang from: its tab shares the row of the
    hover-only footer under the text, at the end of the text. Under a short reply
    it starts past the footer's usual contents (sender, time, actions) instead.
@@ -301,7 +305,7 @@
   justify-content: flex-end;
   inline-size: 100%;
   min-inline-size: max-content;
-  padding-inline-start: 240px;
+  padding-inline-start: min(240px, 50cqi);
   translate: none;
 }
 

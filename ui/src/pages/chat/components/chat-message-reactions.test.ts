@@ -111,7 +111,7 @@ describe("transcript message reactions", () => {
     [{ streaming: true }, "ineligible"],
     [{ role: "system" }, "ineligible"],
   ] as const)("renders %j reactions as %s", async (options, access) => {
-    const { onReact, pickers } = show(options);
+    const { onReact, pickers, render } = show(options);
     if (access === "ineligible") {
       expect(pickers).toHaveLength(0);
       expect(host.querySelector(".chat-message-reactions")).toBeNull();
@@ -129,9 +129,25 @@ describe("transcript message reactions", () => {
       "🎉Ana, Ben, Cy and 2 others👍You, Riley",
     );
     if (access === "readonly") {
-      expect(tab().disabled).toBe(true);
+      const allReactions = [
+        ...reactions,
+        ...["👀", "🚀", "😂", "🙏", "🔥", "✅", "🦞"].map((emoji, index) => ({
+          emoji,
+          count: index + 1,
+          identities: [{ id: "peer" }],
+        })),
+      ];
+      render(new Map([["message-1", allReactions]]));
+      expect(tab().disabled).toBe(false);
       tab().click();
-      flush();
+      await waitForSolid(() =>
+        expect(summary.querySelectorAll(".chat-reaction-chip")).toHaveLength(9),
+      );
+      for (const reaction of allReactions) {
+        const chip = pickerButton(pickers[0]!, `${reaction.emoji} ${reaction.count}`)!;
+        expect(chip.disabled).toBe(true);
+        chip.click();
+      }
       expect(summary.querySelector(".palette")).toBeNull();
       expect(onReact).not.toHaveBeenCalled();
       return;
@@ -170,8 +186,9 @@ describe("transcript message reactions", () => {
     expect(host.querySelector(".chat-message-reactions--own")).toBeNull();
   });
 
-  it("keeps the toolbar picker in place before and after the first reaction", () => {
-    const { render } = show({ role: "assistant" }, new Map());
+  it("keeps the toolbar picker stable and disables open reactions when write access ends", async () => {
+    const access = { role: "assistant", writable: true };
+    const { render, onReact } = show(access, new Map());
     const locations = (messageReactions: Map<string, MessageReactionSummary[]>) =>
       render(messageReactions).map((picker) =>
         picker.closest(".chat-message-reactions") ? "tab" : "actions",
@@ -180,7 +197,15 @@ describe("transcript message reactions", () => {
     const toolbar = host.querySelector(".chat-reaction-action");
     expect(locations(new Map([["message-1", reactions]]))).toEqual(["tab", "actions"]);
     expect(host.querySelector(".chat-reaction-action")).toBe(toolbar);
-    expect(locations(new Map([["message-1", []]]))).toEqual(["actions"]);
+    const picker = await openTab();
+    const chip = picker.querySelector<HTMLButtonElement>(".chat-reaction-chip")!;
+    access.writable = false;
+    render(new Map([["message-1", reactions]]));
+    expect(chip.disabled).toBe(true);
+    expect(picker.querySelector(".palette")).toBeNull();
+    chip.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onReact).not.toHaveBeenCalled();
+    expect(locations(new Map([["message-1", []]]))).toEqual([]);
   });
 
   it("keeps reactions actionable on the bubble through an active continuation", async () => {

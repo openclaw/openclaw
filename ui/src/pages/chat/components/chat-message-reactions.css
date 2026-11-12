@@ -196,6 +196,11 @@ openclaw-message-reaction-picker .current {
   margin-bottom: 4px;
   border-bottom: 1px solid var(--border);
 }
+openclaw-message-reaction-picker .current:last-child {
+  padding-bottom: 2px;
+  margin-bottom: 0;
+  border-bottom: 0;
+}
 openclaw-message-reaction-picker .chat-reaction-picker:has(> .current) {
   border-radius: 18px;
 }
