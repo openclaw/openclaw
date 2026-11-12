@@ -7,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptBoundedActiveContext,
@@ -235,20 +236,39 @@ function readIndexedLogicalParents(
   );
 }
 
+type ActiveContextReadOptions = SessionTranscriptContextSelection & {
+  ignoreReadFence?: boolean;
+  readOnly?: boolean;
+  resolvedScope?: ResolvedTranscriptReadScope;
+  transaction?: CurrentTranscriptProjection["database"];
+  onRead?: (
+    projection: CurrentTranscriptProjection,
+    rows: Array<{ rawSeq: number; serializedBytes: number }>,
+    messagePresence: true | undefined,
+  ) => void;
+};
+
 /** Read an active branch bounded by replay limits or the complete compaction window. */
 export function readSessionTranscriptBoundedActiveContextCore(
   scope: SessionTranscriptReadScope,
-  options: SessionTranscriptContextSelection & {
-    ignoreReadFence?: boolean;
-    readOnly?: boolean;
-    resolvedScope?: ResolvedTranscriptReadScope;
-    transaction?: CurrentTranscriptProjection["database"];
-    onRead?: (
-      projection: CurrentTranscriptProjection,
-      rows: Array<{ rawSeq: number; serializedBytes: number }>,
-      messagePresence: true | undefined,
-    ) => void;
-  },
+  options: ActiveContextReadOptions,
+): SessionTranscriptBoundedActiveContext {
+  return readActiveContext(scope, options, true);
+}
+
+/** Plan the same window without retaining message bodies in the hydration worker. */
+export function readSessionTranscriptCompactionPlan(
+  scope: SessionTranscriptReadScope,
+  options: ActiveContextReadOptions,
+): Omit<SessionTranscriptBoundedActiveContext, "events"> {
+  const { events: _events, ...metadata } = readActiveContext(scope, options, false);
+  return metadata;
+}
+
+function readActiveContext(
+  scope: SessionTranscriptReadScope,
+  options: ActiveContextReadOptions,
+  materializeEvents: boolean,
 ): SessionTranscriptBoundedActiveContext {
   const limits = normalizeBoundedContextLimits(options);
   const read = (projection: CurrentTranscriptProjection): SessionTranscriptBoundedActiveContext => {
@@ -447,24 +467,86 @@ export function readSessionTranscriptBoundedActiveContextCore(
       }
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
-    // One payload read follows all byte decisions; header-first ordering also supports migrated mirrors.
+    const selectedBySeq = new Map(selectedRows.map((row) => [row.event_seq, row]));
     const payloads = new Map<number, TranscriptEvent>();
-    if (payloadSequences.length > 0) {
-      for (const row of iterateSqliteQuerySync(
-        projection.database.db,
-        transcript
-          .select(["seq", "event_json", "event_zstd", "event_utf8_bytes"])
-          .where("seq", "in", transcriptPositionSet(projection, payloadSequences)),
-      )) {
-        payloads.set(row.seq, JSON.parse(readTranscriptPayload(row)));
+    let firstSelected: (typeof selectedRows)[number] | undefined;
+    let anchorEntry: Record<string, unknown> | undefined;
+    let injectedEntry: Record<string, unknown> | undefined;
+    const payloadQuery = transcript.select(["seq", "event_json", "event_zstd", "event_utf8_bytes"]);
+    function* readPayloads() {
+      if (!isPostgresSqlConnection(projection.database.db) || materializeEvents) {
+        if (payloadSequences.length > 0) {
+          yield* iterateSqliteQuerySync(
+            projection.database.db,
+            payloadQuery.where("seq", "in", transcriptPositionSet(projection, payloadSequences)),
+          );
+        }
+        return;
+      }
+      // The PostgreSQL bridge buffers each result. Bound payload planning by both
+      // rows and bytes; one oversized event remains intact, never truncated.
+      for (let start = 0; start < payloadSequences.length;) {
+        let end = start;
+        let bytes = 0;
+        do {
+          const seq = payloadSequences[end++]!;
+          bytes +=
+            seq === header?.seq
+              ? headerBytes
+              : seq === boundary?.seq
+                ? boundary.serialized_bytes
+                : selectedBySeq.get(seq)!.serialized_bytes;
+        } while (end < payloadSequences.length && end - start < 64 && bytes < 4 * 1024 * 1024);
+        yield* iterateSqliteQuerySync(
+          projection.database.db,
+          payloadQuery.where(
+            "seq",
+            "in",
+            transcriptPositionSet(projection, payloadSequences.slice(start, end)),
+          ),
+        );
+        start = end;
       }
     }
-    // Retain logical ancestry across the byte cutoff without loading parent payloads.
-    // Raw parent_id can point into an abandoned branch after a leaf control.
+    {
+      for (const row of readPayloads()) {
+        const event: TranscriptEvent = JSON.parse(readTranscriptPayload(row));
+        const entry = asOptionalRecord(event);
+        const selected = selectedBySeq.get(row.seq);
+        // Preserve only the two full anchors needed by cache-TTL projection; all
+        // other payloads can be released as this cursor advances. Selection is
+        // newest-first, independently of the payload cursor order.
+        if (
+          selected &&
+          typeof entry?.id === "string" &&
+          (!firstSelected || selected.active_position < firstSelected.active_position)
+        ) {
+          firstSelected = selected;
+          anchorEntry = entry;
+        }
+        if (row.seq === injectedBoundarySeq) {
+          injectedEntry = entry;
+        }
+        // Keep only facts used by ancestry and retention. In particular, do not retain
+        // message content or compaction summaries beside the acknowledged byte stream.
+        payloads.set(
+          row.seq,
+          materializeEvents || !entry
+            ? event
+            : {
+                type: entry.type,
+                ...("id" in entry ? { id: entry.id } : {}),
+                ...("parentId" in entry ? { parentId: entry.parentId } : {}),
+                firstKeptEntryId: entry.firstKeptEntryId,
+              },
+        );
+      }
+    }
+    // Raw parent_id can enter an abandoned branch; retain logical parents across the cutoff.
     const parents = projection.hasUnindexedPrefix
       ? readUnindexedLogicalParents(projection, contextSequences, payloads)
       : readIndexedLogicalParents(projection, contextSequences);
-    const events: TranscriptEvent[] = header ? [payloads.get(header.seq)!] : [];
+    const events = materializeEvents && header ? [payloads.get(header.seq)!] : [];
     const rows = contextSequences.map((seq) => ({ event: payloads.get(seq)!, seq }));
     const opaqueParents = new Map<string, string | null>();
     let previousId: unknown;
@@ -483,18 +565,11 @@ export function readSessionTranscriptBoundedActiveContextCore(
         }
         previousId = entry.id;
       }
-      events.push(event);
+      if (materializeEvents) {
+        events.push(event);
+      }
     }
-    const firstSelected = selectedRows.findLast(
-      (row) => typeof asOptionalRecord(payloads.get(row.event_seq))?.id === "string",
-    );
-    const anchorEntry = firstSelected
-      ? asOptionalRecord(payloads.get(firstSelected.event_seq))
-      : undefined;
-    const injectedEntry =
-      injectedBoundarySeq === undefined
-        ? undefined
-        : asOptionalRecord(payloads.get(injectedBoundarySeq));
+
     const anchors = [
       ...(boundary && isIndexedSessionEntry(injectedEntry) && injectedEntry.type === "compaction"
         ? [{ activePosition: boundary.active_position, id: injectedEntry.id, entry: injectedEntry }]
@@ -535,7 +610,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
         ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),
         ...contextSequences.map((rawSeq) => ({ rawSeq, serializedBytes: sizes.get(rawSeq)! })),
       ],
-      events.some((event) => asOptionalRecord(event)?.type === "message") ? true : undefined,
+      rows.some(({ event }) => asOptionalRecord(event)?.type === "message") ? true : undefined,
     );
     return {
       version,
