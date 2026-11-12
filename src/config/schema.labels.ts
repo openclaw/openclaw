@@ -412,6 +412,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.maxSummaryChars": "Compaction Summary Max Characters",
   "agents.entries.*.compaction": "Agent Compaction",
   "agents.entries.*.compaction.maxSummaryChars": "Agent Compaction Summary Max Characters",
+  "agents.entries.*.compaction.model": "Agent Compaction Model Override",
   "agents.defaults.compaction.identifierPolicy": "Compaction Identifier Policy",
   "agents.defaults.compaction.recentTurnsPreserve": "Compaction Preserve Recent Turns",
   "agents.defaults.compaction.qualityGuard": "Compaction Quality Guard",

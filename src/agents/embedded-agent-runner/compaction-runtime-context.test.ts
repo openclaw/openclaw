@@ -338,6 +338,28 @@ describe("compaction runtime context", () => {
     });
   });
 
+  it("prefers the session agent's compaction model to the shared default", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { compaction: { model: "anthropic/claude-sonnet-4-6" } },
+        entries: { main: {}, support: { compaction: { model: "ollama/llama3.1:8b" } } },
+      },
+    };
+    checkTarget({ config: cfg, sessionKey: "agent:support:session" }, "ollama", "llama3.1:8b");
+    checkTarget({ config: cfg, agentId: "support" }, "ollama", "llama3.1:8b");
+    checkTarget(
+      { config: cfg, sessionKey: "agent:main:session" },
+      "anthropic",
+      "claude-sonnet-4-6",
+    );
+    checkTarget(
+      { config: cfg, agentId: "support", authProfileId: "openai:p1", modelSelectionLocked: true },
+      "openai",
+      "gpt-5.5",
+      "openai:p1",
+    );
+  });
+
   it("forwards only target-matching prepared auth plans", () => {
     const runtimeAuthPlan = {
       providerForAuth: "openai",

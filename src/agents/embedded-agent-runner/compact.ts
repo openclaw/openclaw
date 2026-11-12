@@ -50,7 +50,10 @@ import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
 } from "./compact.types.js";
-import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import {
+  resolveConfiguredCompactionModel,
+  resolveEmbeddedCompactionTarget,
+} from "./compaction-runtime-context.js";
 import { resolveCompactionRuntimeSelection } from "./compaction-runtime-preparation.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
@@ -451,7 +454,7 @@ export async function compactEmbeddedAgentSessionDirect(
       const compactPrepared = async () => {
         if (
           seedCompaction ||
-          params.config?.agents?.defaults?.compaction?.model?.trim() ||
+          resolveConfiguredCompactionModel(params) ||
           (
             resolveCompactionFallbacksOverride(params) ??
             resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model)
@@ -461,6 +464,8 @@ export async function compactEmbeddedAgentSessionDirect(
         }
         const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
           config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
           provider: params.provider,
           modelId: params.model,
           authProfileId: params.authProfileId,
