@@ -19,6 +19,11 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
         channel,
         () => {
           switch (command.type) {
+            case "github.profile-token":
+              return import("../agents/github-tool-profile-files.js").then(
+                ({ readManagedGitHubProfileToken }) =>
+                  readManagedGitHubProfileToken(command.input.profileDir),
+              );
             case "workspace.inventory.select":
             case "workspace.inventory.existing":
             case "workspace.inventory.paths":

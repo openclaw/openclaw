@@ -20,6 +20,7 @@ export type GitWorkerOperations = Omit<
   GitReadOperations,
   "pull-request.branch-facts" | "checkout.diff" | "repository.branches"
 > & {
+  "github.profile-token": { input: { profileDir: string }; output: string | undefined };
   "repository.branches": {
     input: GitReadOperations["repository.branches"]["input"];
     output: GitReadOperations["repository.branches"]["output"] & {

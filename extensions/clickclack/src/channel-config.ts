@@ -2,8 +2,10 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   DEFAULT_ACCOUNT_ID,
+  inspectClickClackAccount,
   listClickClackAccountIds,
   resolveClickClackAccount,
+  resolveClickClackAccountConfig,
   resolveDefaultClickClackAccountId,
 } from "./accounts.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
@@ -15,12 +17,15 @@ export const clickClackConfigAdapter = {
   listAccountIds: (cfg) => listClickClackAccountIds(cfg as CoreConfig),
   resolveAccount: (cfg, accountId) =>
     resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }),
+  // SAFETY: ClickClack configuration has passed the registered channel schema.
+  inspectAccount: (cfg, accountId) => inspectClickClackAccount(cfg as CoreConfig, accountId),
   defaultAccountId: (cfg) => resolveDefaultClickClackAccountId(cfg as CoreConfig),
   isConfigured: (account) => account.configured,
   resolveAllowFrom: ({ cfg, accountId }) =>
-    resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).allowFrom,
+    resolveClickClackAccountConfig(cfg as CoreConfig, accountId).allowFrom ?? ["*"],
   resolveDefaultTo: ({ cfg, accountId }) =>
-    resolveClickClackAccount({ cfg: cfg as CoreConfig, accountId }).defaultTo,
+    resolveClickClackAccountConfig(cfg as CoreConfig, accountId).defaultTo?.trim() ||
+    "channel:general",
 } satisfies ChannelPlugin<ResolvedClickClackAccount>["config"];
 
 export { DEFAULT_ACCOUNT_ID };
