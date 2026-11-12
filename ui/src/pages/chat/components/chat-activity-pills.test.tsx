@@ -84,12 +84,12 @@ it("preserves Markdown-only progress refresh outcomes and clears them after reco
     const status =
       refresh === "pending"
         ? "Updating saved progress"
-        : "Progress update unavailable; last plan preserved";
+        : "Couldn’t update progress. Try again; your last plan is saved.";
     expect(view.button(`Task progress, ${status}`)).toBeTruthy();
   }
   view.update({ progress });
   const button = view.button("Task progress");
-  expect(view.queryByRole("button", { name: /Progress update unavailable/ })).toBeNull();
+  expect(view.queryByRole("button", { name: /Couldn’t update progress/ })).toBeNull();
   button.click();
   expect(onOpen).toHaveBeenCalledExactlyOnceWith(button);
 });

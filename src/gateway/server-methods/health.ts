@@ -3,6 +3,7 @@ import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public
 import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
+import { getGatewayRecentCrashes } from "../../infra/gateway-crash.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
@@ -19,6 +20,11 @@ import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
+
+function readPublishedChildRuntime(includeSensitive: boolean) {
+  const viability = readChildRuntimeViability();
+  return includeSensitive ? viability : { execPath: "[redacted]", available: viability.available };
+}
 
 function cachedLifecycleDiffersFromRuntime(
   cached: ChannelHealthSummary | undefined,
@@ -105,7 +111,8 @@ export const healthHandlers: GatewayRequestHandlers = {
             ? { configReload: { hotReloadStatus: configReloadHotReloadStatus } }
             : {}),
           // Live check. The cache must not keep a path that disappeared after it was stored.
-          childRuntime: readChildRuntimeViability(),
+          childRuntime: readPublishedChildRuntime(includeSensitive),
+          recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
         { cached: true },
@@ -125,7 +132,8 @@ export const healthHandlers: GatewayRequestHandlers = {
           ...snap,
           coreReady: context.getReadiness?.().coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
-          childRuntime: readChildRuntimeViability(),
+          childRuntime: readPublishedChildRuntime(includeSensitive),
+          recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
       );
@@ -133,9 +141,10 @@ export const healthHandlers: GatewayRequestHandlers = {
   },
   status: async ({ respond, client, params, context }) => {
     const scopes = client?.connect.scopes ?? [];
+    const includeSensitive = scopes.includes(ADMIN_SCOPE);
     const hostDesktopStatus = await context.hostDesktopService?.status();
     const prepared = await prepareStatusSummary({
-      includeSensitive: scopes.includes(ADMIN_SCOPE),
+      includeSensitive,
       includeChannelSummary: params.includeChannelSummary !== false,
       includeCliProjection: params.includeCliProjection === true,
       sessionRowProjection: getSessionRowProjection(context),
@@ -164,7 +173,8 @@ export const healthHandlers: GatewayRequestHandlers = {
         workerPools,
         pid: process.pid,
         shutdownBudget: shutdownStatus,
-        childRuntime: readChildRuntimeViability(),
+        childRuntime: readPublishedChildRuntime(includeSensitive),
+        recentCrashes: getGatewayRecentCrashes(),
         pluginReload: context.getPluginReloadStatus?.(),
       },
       undefined,

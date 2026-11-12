@@ -82,6 +82,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     respond,
     context,
     client,
+    signal,
     sessionMutationCommitGuard,
   }) => {
     if (!assertValidParams(request, validateMessageActionParams, "message.action", respond)) {
@@ -282,9 +283,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                 replyToIsExplicit: request.reply?.source === "explicit",
                 idempotencyKey: request.idempotencyKey,
                 toolCallId: trustedContext.sourceReplyToolCallId,
-                ...(trustedContext.sourceReplyFinal !== undefined
-                  ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
-                  : {}),
+                sourceReplyFinal: trustedContext.sourceReplyFinal,
+                runId: client?.internal?.agentRuntimeIdentity?.operationalRunInstance.runId,
               };
               // Attachment preparation can outlive the admitted run.
               if (!authorize()) {
@@ -298,6 +298,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 action: request.action as never,
                 cfg,
                 params: request.params,
+                abortSignal: signal,
                 reply: request.reply,
                 accountId,
                 // Only the model's message tool mints an agent-runtime turn context, and

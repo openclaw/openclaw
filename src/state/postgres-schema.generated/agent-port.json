@@ -176,6 +176,10 @@
       "identities": []
     },
     {
+      "name": "session_transcript_active_event_facts",
+      "identities": []
+    },
+    {
       "name": "session_transcript_active_events",
       "identities": []
     },
@@ -470,8 +474,8 @@
       "name": "session_transcript_fts_rows_after_delete",
       "table": "session_transcript_fts_rows",
       "range": [
-        32813,
-        32996
+        33249,
+        33432
       ]
     },
     {
@@ -501,10 +505,10 @@
   ],
   "preData": [
     0,
-    30807
+    31102
   ],
   "postData": [
-    30807,
-    46945
+    31102,
+    47459
   ]
 }

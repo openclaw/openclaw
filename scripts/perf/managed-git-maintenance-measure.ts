@@ -28,6 +28,7 @@ const { values } = parseArgs({
     "promisor-packs": { type: "string", default: "0" },
     passes: { type: "string", default: "1" },
     "blobs-per-pack": { type: "string", default: "128" },
+    "revision-bytes": { type: "string" },
     consolidate: { type: "boolean" },
     help: { type: "boolean" },
   },
@@ -46,6 +47,10 @@ For repeated bounded convergence use --packs 1536 --blobs-per-pack 1 at prepare
 time and --passes 3 at measure time (48 MiB payload).
 Add --promisor-packs 1257 at prepare time for mixed promisor/ordinary pack groups;
 markers are added only after generation, to the first N packs in filename order.
+To model separately fetched versions of one large file, prepare with
+--revision-bytes 4194304 --packs 32 --blobs-per-pack 1. Each pack contains the same
+deterministic incompressible payload with eight revision bytes changed. The
+128 MiB payload cap still applies; measure reports pack bytes before and after.
 Use --policy baseline or --policy candidate (default) at prepare time to compare
 the existing owner with and without the managed project repository policy.
 Use a fresh fixture for each run; measurement consumes its fragmented layout.
@@ -120,7 +125,13 @@ assert(
     registrationDelayMs <= 60_000,
   "--registration-delay-ms must be an integer between 0 and 60000",
 );
-const blobBytes = nativeMidx || backlog ? 16 : 32 * 1024;
+const revisionBytes = Number(values["revision-bytes"] ?? 0);
+assert(
+  Number.isSafeInteger(revisionBytes) &&
+    (revisionBytes === 0 || (revisionBytes >= 8 && !nativeMidx && !backlog)),
+  "--revision-bytes must be an integer >=8 for the ordinary owner fixture",
+);
+const blobBytes = nativeMidx || backlog ? 16 : revisionBytes || 32 * 1024;
 const payloadBytes = (backlog ? blobsPerPack + packCount : packCount * blobsPerPack) * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
 assert(
@@ -178,6 +189,16 @@ const promisorPacks = async () =>
   (await fs.readdir(path.join(repo, ".git", "objects", "pack"))).filter((name) =>
     name.endsWith(".promisor"),
   ).length;
+async function packBytes() {
+  const directory = path.join(repo, ".git", "objects", "pack");
+  let bytes = 0;
+  for (const name of await fs.readdir(directory)) {
+    if (name.endsWith(".pack")) {
+      bytes += (await fs.stat(path.join(directory, name))).size;
+    }
+  }
+  return bytes;
+}
 async function checkDirty() {
   if (process.platform !== "linux") {
     return;
@@ -217,11 +238,14 @@ if (values.mode === "prepare-backlog") {
     for (let blob = 0; blob < blobsPerPack; blob++) {
       // Deterministic incompressible data gives paired fixtures identical bytes.
       const nonce = Buffer.alloc(16);
-      nonce.writeUInt32LE(index, 0);
+      nonce.writeUInt32LE(revisionBytes ? 0 : index, 0);
       nonce.writeUInt32LE(blob, 4);
       const bytes = nativeMidx
         ? nonce
         : createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(Buffer.alloc(blobBytes));
+      if (revisionBytes) {
+        bytes.writeBigUInt64LE(BigInt(index));
+      }
       commands.push(
         Buffer.from(`blob\n${nativeMidx ? "" : `mark :${blob + 1}\n`}data ${blobBytes}\n`),
         bytes,
@@ -291,6 +315,7 @@ if (values.mode === "prepare-backlog") {
     promisorPacks: promisorPackCount,
     blobBytes,
     payloadBytes,
+    ...(revisionBytes ? { revisionBytes } : {}),
     ...(nativeMidx ? { nativeMidx: true, objectCount: packCount * blobsPerPack } : {}),
     objects,
   };
@@ -518,6 +543,7 @@ if (values.mode === "prepare-backlog") {
       for (let pass = 1; pass <= passCount; pass++) {
         await checkDirty();
         const packsBefore = await packs();
+        const packBytesBefore = await packBytes();
         const promisorPacksBefore = await promisorPacks();
         const progress = new WorktreeGcProgress();
         const passStarted = performance.now();
@@ -529,6 +555,7 @@ if (values.mode === "prepare-backlog") {
         assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
         assert.equal(progress.result.gitMaintenance?.stage, "completed");
         const packsAfter = await packs();
+        const packBytesAfter = await packBytes();
         const promisorPacksAfter = await promisorPacks();
         assert(packsAfter <= packsBefore, `Pass ${pass} increased the synthetic pack count`);
         assert(promisorPacksAfter <= promisorPacksBefore, `Pass ${pass} increased promisor packs`);
@@ -538,6 +565,8 @@ if (values.mode === "prepare-backlog") {
           hostLoad: loadavg(),
           packsBefore,
           packsAfter,
+          packBytesBefore,
+          packBytesAfter,
           promisorPacksBefore,
           promisorPacksAfter,
           registrations,

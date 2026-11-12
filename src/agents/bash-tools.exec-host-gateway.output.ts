@@ -7,11 +7,11 @@ import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-ap
 import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
 import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
 import type {
-  ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
   ExecToolApprovalReview,
-} from "./bash-tools.exec-types.js";
+} from "./bash-tools.exec-result.types.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { formatExecDeniedReasonMessage } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 

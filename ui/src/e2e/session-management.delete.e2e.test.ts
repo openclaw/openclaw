@@ -97,7 +97,7 @@ suite.define(() => {
           });
           const recovery = await support.waitForConfirmModal(page);
           await ui.button(recovery, `Discard changes and ${action}`, false).waitFor();
-          await ui.expectText(recovery, "Reconnect it to keep those changes");
+          await ui.expectText(recovery, "Reconnect it to keep them");
           return recovery;
         };
 

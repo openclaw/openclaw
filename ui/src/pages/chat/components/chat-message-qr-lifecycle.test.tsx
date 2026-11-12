@@ -82,7 +82,7 @@ it("keeps another pane's QR expiry alive when one message retires", async () => 
     expect(current?.refresh).toBeDefined();
     await vi.advanceTimersByTimeAsync(1_000);
     flush();
-    expect(second.container.textContent).toContain("Pairing QR expired");
+    expect(second.container.textContent).toContain("Pairing code expired");
     expect(media.readChatMediaResource("pairing-qr", messageKey)).toBeUndefined();
     expect(current?.refresh).toBeUndefined();
   } finally {

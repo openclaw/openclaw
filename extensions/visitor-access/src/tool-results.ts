@@ -143,7 +143,14 @@ export const visitorListDetailsSchema = Type.Object(
         },
       ),
     ),
-    omitted: Type.Integer({ description: "Rows omitted by the text output limits." }),
+    omitted: Type.Integer({
+      minimum: 0,
+      description: "Rows remaining after this page; counts describe the whole inventory.",
+    }),
+    nextCursor: Type.Union([Type.String(), Type.Null()], {
+      description:
+        "Pass as cursor to visitor_list for the next page. Null means complete. A changed inventory requires restarting without cursor; access and metadata are read fresh on each page.",
+    }),
   },
   { additionalProperties: false },
 );

@@ -54,6 +54,71 @@ const scenario = {
 };
 
 suite.define(() => {
+  it("shows saved-but-deferred settings until the Gateway confirms application", () =>
+    withPage(async ({ page }) => {
+      await page.clock.install();
+      const gateway = await installMockGateway(page, {
+        methodResponses: {
+          ...scenario.methodResponses,
+          "config.get": {
+            ...snapshot,
+            configRevisionHash: "initial",
+            appliedConfigHash: "initial",
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/communications`);
+      const prefix = page.getByRole("textbox", { name: prefixName });
+      await prefix.waitFor();
+      await gateway.deferNext("config.set");
+      await edit(prefix, "saved setting");
+      await gateway.waitForRequest("config.set");
+      const saved = { ...config, messages: { responsePrefix: "saved setting" } };
+      const application = {
+        status: "deferred",
+        reason: "Plugin advisor has retained work.",
+        appliesWhen: "After that work finishes, or after a Gateway restart.",
+      };
+      const message = `config.set saved but deferred: ${application.reason} ${application.appliesWhen}`;
+      await gateway.setMethodResponse("config.get", {
+        ...snapshot,
+        config: saved,
+        raw: JSON.stringify(saved),
+        hash: "saved",
+        configRevisionHash: "saved",
+        appliedConfigHash: "initial",
+      });
+      await gateway.rejectDeferred("config.set", {
+        code: "UNAVAILABLE",
+        message,
+        details: { persistedConfig: { config: saved, hash: "saved" }, application },
+      });
+      const indicator = page.locator("openclaw-settings-save-indicator");
+      await expect.poll(() => indicator.textContent()).toContain("Saved; waiting to apply");
+      expect(await indicator.textContent()).toContain(message);
+      expect(await indicator.textContent()).not.toContain("Couldn’t save");
+      expect(await indicator.getByRole("button", { name: "Discard changes" }).count()).toBe(0);
+      await page.clock.runFor(1200);
+      expect(await gateway.getRequests("config.set")).toHaveLength(1);
+      expect(await prefix.inputValue()).toBe("saved setting");
+      expect(await indicator.textContent()).toContain(message);
+      const reads = (await gateway.getRequests("config.get")).length;
+      await gateway.deferNext("config.get");
+      await page.clock.runFor(6000);
+      await gateway.waitForRequest("config.get", { after: reads });
+      await gateway.resolveDeferred("config.get", {
+        ...snapshot,
+        config: saved,
+        raw: JSON.stringify(saved),
+        hash: "saved",
+        configRevisionHash: "saved",
+        appliedConfigHash: "saved",
+      });
+      await expect.poll(() => indicator.textContent()).not.toContain("waiting to apply");
+      expect(await prefix.inputValue()).toBe("saved setting");
+      await page.clock.resume();
+    }));
+
   it.each(["unknown", "not-restored", "restored"])(
     "Settings config.set preserves the full draft after partial publication (%s)",
     (rollbackStatus) =>
@@ -72,7 +137,7 @@ suite.define(() => {
         const indicator = page.locator("openclaw-settings-save-indicator");
         await expect
           .poll(() => indicator.textContent())
-          .toContain(restored ? "Save failed" : "Your draft is kept");
+          .toContain(restored ? "Couldn’t save settings. Try again." : "Your draft is kept");
         expect(await indicator.getByRole("button", { name: "Reload", exact: true }).count()).toBe(
           0,
         );

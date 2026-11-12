@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayErrorDetailCodes } from "../../../../packages/gateway-protocol/src/gateway-error-details.js";
+import { TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE } from "../../../../packages/gateway-protocol/src/gateway-error-codes.js";
 import type {
   ProjectsListResult,
   TaskSuggestion,
@@ -284,6 +284,11 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
       canAcceptTaskSuggestions:
         canAdmin && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.accept") === true,
+      taskSuggestionBlockedReason: !connected
+        ? t("chat.taskSuggestions.reconnectRequired")
+        : !canAdmin
+          ? t("chat.taskSuggestions.adminRequired")
+          : t("chat.taskSuggestions.unavailable"),
       canDismissTaskSuggestions:
         canWrite && isGatewayMethodAdvertised(gatewaySnapshot, "taskSuggestions.dismiss") === true,
       taskSuggestionCopiedIds: this.tasks.copiedIds,
@@ -440,7 +445,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
           details &&
           typeof details === "object" &&
           "code" in details &&
-          details.code === GatewayErrorDetailCodes.TASK_WORKTREE_SOURCE_REQUIRED;
+          details.code === TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE;
         const repository: Extract<TaskSuggestionAcceptance, { phase: "failed" }>["repository"] =
           repositoryRequired
             ? { cwd: operation.cwd ?? operation.suggestion.cwd, open: true, projects: [] }

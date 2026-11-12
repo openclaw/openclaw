@@ -71,6 +71,7 @@ export type McpLoopbackRequestContext = {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
+  webSearchModelSelection?: import("../plugins/web-provider-types.js").WebSearchProviderToolExecutionContext["modelSelection"];
   /** Prepared current-turn identity supplied only by the Gateway-launched run owner. */
   requesterModel?: ProviderModelRef;
   modelHasVision?: boolean;
@@ -104,6 +105,11 @@ export type McpLoopbackRequestContext = {
   webSearchDisabled?: true;
   /** Canonical observed native authority; null awaits this turn's initialization. */
   nativeCronCreatorToolAllowlist?: string[] | null;
+  /**
+   * Host-minted for native control operations (manual compaction): the grant lists the
+   * session's tools so the request prefix matches its turns, but no tool call runs.
+   */
+  toolCallsRefused?: true;
   /**
    * Attempt-local authority to start or redirect delegated work, stamped into
    * the grant so a fallback completion-report turn running on a CLI backend

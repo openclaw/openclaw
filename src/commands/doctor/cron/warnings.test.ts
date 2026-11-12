@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
@@ -14,21 +15,25 @@ const mocks = vi.hoisted(() => ({
 
 // mock-isolation: advisory tests use a fixed channel inventory without loading plugin runtimes.
 vi.mock("../../../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.plugins,
+  listReadOnlyChannelPluginsForConfigAsync: mocks.plugins,
 }));
 vi.mock("../../../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 vi.mock("../../../process/exec.js", () => ({ runExec: mocks.runExec }));
 
 afterEach(() => vi.clearAllMocks());
 
-function advisory(jobs: Array<Record<string, unknown>>, channels: string[] = []): string | null {
+async function advisory(
+  jobs: Array<Record<string, unknown>>,
+  channels: string[] = [],
+  cfg: OpenClawConfig = {},
+): Promise<string | null> {
   mocks.plugins.mockReturnValue(channels.map((id) => ({ id })));
-  noteCronDeliveryTargetAdvisory({ cfg: {}, jobs });
+  await noteCronDeliveryTargetAdvisory({ cfg, jobs });
   return mocks.note.mock.calls.at(-1)?.[0] ?? null;
 }
 
-it("reports unavailable channels with id/name/unnamed examples and ignores unpinned delivery", () => {
-  const message = advisory([
+it("reports unavailable channels with id/name/unnamed examples and ignores unpinned delivery", async () => {
+  const message = await advisory([
     { id: "needs-doctor", delivery: { channel: "slack" } },
     { id: "report", delivery: { mode: "announce", channel: "missing-channel" } },
     ...["Nightly digest", undefined].map((name) => ({
@@ -42,9 +47,43 @@ it("reports unavailable channels with id/name/unnamed examples and ignores unpin
   );
 });
 
-it("treats a channel alias as active when its canonical id is available", () => {
+it("treats a channel alias as active when its canonical id is available", async () => {
   expect(
-    advisory([{ delivery: { mode: "announce", channel: "gchat" } }], ["googlechat"]),
+    await advisory([{ delivery: { mode: "announce", channel: "gchat" } }], ["googlechat"]),
+  ).toBeNull();
+});
+
+it("reports configured default destinations on unavailable channels", async () => {
+  const cfg: OpenClawConfig = {
+    cron: {
+      delivery: { channel: "ghost", to: "1" },
+      failureAlert: { channel: "telegram", to: "1" },
+      agents: { ops: { delivery: { channel: "last", to: "1" } } },
+      creators: {
+        alice: {
+          failureAlert: { channel: "missing-channel", to: "1" },
+          delivery: { channel: "gchat", to: "spaces/a" },
+        },
+      },
+    },
+  };
+  const message = await advisory(
+    [{ id: "routeless", delivery: { mode: "announce" } }],
+    ["googlechat", "telegram"],
+    cfg,
+  );
+  expect(message?.split("\n")).toEqual([
+    "Automation delivery targets unavailable channels.",
+    "- Default destinations on a channel whose plugin is not active: cron.delivery.channel -> ghost, cron.creators.alice.failureAlert.channel -> missing-channel; automations that fall back to them will fail to deliver",
+    expect.stringContaining("or the listed `cron` default after reviewing"),
+  ]);
+});
+
+it("stays quiet when every default destination channel is available", async () => {
+  expect(
+    await advisory([{ id: "routeless", delivery: { mode: "announce" } }], ["telegram"], {
+      cron: { delivery: { channel: "telegram", to: "1" } },
+    }),
   ).toBeNull();
 });
 

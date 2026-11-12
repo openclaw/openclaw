@@ -107,9 +107,10 @@ export async function changeSessionPlacement(params: {
   try {
     if (abandonSource) {
       const confirmed = await showConfirmDialog({
-        message: t("sessionsView.continueOnGatewayConfirm", {
+        title: t("sessionsView.continueOnGatewayTitle", {
           session: params.row.label || params.row.key,
         }),
+        message: t("sessionsView.continueOnGatewayConfirm"),
         confirmLabel: t("sessionsView.continueOnGatewayAction"),
         danger: true,
       });

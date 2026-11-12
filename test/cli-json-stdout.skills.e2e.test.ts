@@ -52,17 +52,16 @@ describe("cli json stdout contract", () => {
       if ("remoteMissing" in testCase) {
         await writeJson(configPath, { gateway: { mode: "remote" } });
       }
-      const source = [
-        'globalThis.fetch = Object.assign(async () => new Response("offline fixture", { status: 400 }), { mock: {} });',
-        ...("explicitGateway" in testCase
-          ? [
-              'import net from "node:net";',
-              'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_SELECTED_GATEWAY_FAILURE"); };',
-            ]
-          : []),
-      ];
       const result = runIsolatedCli(tempHome, testCase.args, {
-        source,
+        source: [
+          'globalThis.fetch = Object.assign(async () => new Response("offline fixture", { status: 400 }), { mock: {} });',
+          ...("explicitGateway" in testCase
+            ? [
+                'import net from "node:net";',
+                'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_SELECTED_GATEWAY_FAILURE"); };',
+              ]
+            : []),
+        ],
         env: {
           OPENCLAW_GATEWAY_PORT: "1",
           ...("explicitGateway" in testCase
@@ -84,8 +83,9 @@ describe("cli json stdout contract", () => {
 
       expect(result.status, result.stderr).toBe(1);
       expectCliError(result.stdout, message);
-      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-      expect(result.stderr).not.toContain(message);
+      const workshop = testCase.args.includes("workshop");
+      expect(result.stderr.includes(message)).toBe(workshop);
+      expect(result.stderr.includes("[openclaw] The CLI command failed.")).toBe(!workshop);
       expect(result.stderr.length).toBeLessThan(2_048);
     });
   });

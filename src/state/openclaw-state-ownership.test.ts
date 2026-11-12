@@ -673,14 +673,20 @@ describe("external shared-state ownership", () => {
     ).toBeDefined();
   });
 
-  it.each(["SDK sync", "Doctor async"] as const)(
-    "fences a claim made immediately before dangling Workshop index repair (%s)",
-    async (reader) => {
+  it.each(
+    (["SDK sync", "Doctor async"] as const).flatMap((reader) =>
+      [false, true].map((dangling) => ({ reader, dangling })),
+    ),
+  )(
+    "fences a claim after schema preparation ($reader, dangling: $dangling)",
+    async ({ reader, dangling }) => {
       const env = createEnv();
       const databasePath = openOpenClawStateDatabase({ env }).path;
       closeOpenClawStateDatabaseForTest();
       const { DatabaseSync } = requireNodeSqlite();
-      createDanglingSkillWorkshopReviewIndex(databasePath);
+      if (dangling) {
+        createDanglingSkillWorkshopReviewIndex(databasePath);
+      }
 
       const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")
         ?.value as ((this: import("node:sqlite").DatabaseSync, sql: string) => void) | undefined;
@@ -693,28 +699,24 @@ describe("external shared-state ownership", () => {
         sql: string,
       ) {
         if (sql === "BEGIN IMMEDIATE" && ++immediateTransactionCount === 1) {
-          const claimant = new DatabaseSync(databasePath);
-          try {
-            claimant.enableDefensive?.(false);
-            claimant.exec("PRAGMA writable_schema = ON;");
-            claimant
-              .prepare(
-                `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+          using claimant = new DatabaseSync(databasePath);
+          claimant.enableDefensive?.(false);
+          claimant.exec("PRAGMA writable_schema = ON;");
+          claimant
+            .prepare(
+              `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
                VALUES (?, ?, ?)`,
-              )
-              .run(
-                STATE_SUPERVISION_KEY,
-                JSON.stringify({
-                  version: 1,
-                  mode: "external",
-                  managerId: "race-manager",
-                  claimedAt: 1,
-                }),
-                1,
-              );
-          } finally {
-            claimant.close();
-          }
+            )
+            .run(
+              STATE_SUPERVISION_KEY,
+              JSON.stringify({
+                version: 1,
+                mode: "external",
+                managerId: "race-manager",
+                claimedAt: 1,
+              }),
+              1,
+            );
         }
         return originalExec.call(this, sql);
       });
@@ -734,18 +736,13 @@ describe("external shared-state ownership", () => {
       }
       expect(immediateTransactionCount).toBe(1);
 
-      const verify = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        verify.enableDefensive?.(false);
-        verify.exec("PRAGMA writable_schema = ON;");
-        expect(
-          verify
-            .prepare("SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?")
-            .get("idx_skill_workshop_collection_reviews_workspace_time"),
-        ).toBeDefined();
-      } finally {
-        verify.close();
-      }
+      using verify = new DatabaseSync(databasePath, { readOnly: true });
+      verify.enableDefensive?.(false);
+      verify.exec("PRAGMA writable_schema = ON;");
+      const index = verify
+        .prepare("SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?")
+        .get("idx_skill_workshop_collection_reviews_workspace_time");
+      expect(Boolean(index)).toBe(dangling);
     },
   );
 

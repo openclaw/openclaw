@@ -56,6 +56,7 @@ import {
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-setup.js";
+import { logEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -262,6 +263,10 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          if (options?.terminal) {
+            runAbortController.abort(options.terminal);
+            abortTerminalYield?.(options.terminal);
+          }
         },
         runAbortController,
         runTrace,
@@ -300,6 +305,7 @@ async function runEmbeddedAttemptOwned(
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
     let yieldAbortSettled: Promise<void> | null = null;
+    let abortTerminalYield: ((reason: unknown) => void) | undefined;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepStages.measure("bundle-tools", () =>
         prepareEmbeddedAttemptBundleTools({
@@ -331,6 +337,14 @@ async function runEmbeddedAttemptOwned(
     );
     // Close the inclusive checkpoint; the owner spans exclude preparation admission.
     prepStages.mark("tool-preparation");
+    corePluginToolStages.mark("bootstrap-bundle-catalog");
+    logEmbeddedRunStageSummary(
+      corePluginToolStages.snapshot(),
+      log,
+      () =>
+        `[trace:embedded-run] tool preparation completed: runId=${params.runId} sessionId=${params.sessionId}`,
+      { totalThresholdMs: 5_001, stageThresholdMs: Number.POSITIVE_INFINITY },
+    );
     const { effectiveTools, toolSearch, toolSearchRunPlan, deferredDirectoryToolsCallable } =
       preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
@@ -378,6 +392,9 @@ async function runEmbeddedAttemptOwned(
           externalAbortController,
           resources: sessionResources.resources,
           onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
+            abortTerminalYield = (reason) => {
+              yieldAbortSettled = abortActiveSession(reason);
+            };
             unsubscribeYieldTurnEnd = activeSession.agent.subscribe((event) => {
               if (
                 event.type !== "turn_end" ||
@@ -428,6 +445,11 @@ async function runEmbeddedAttemptOwned(
         }),
       );
       const promptToolPolicy = createPromptBuildToolPolicy({
+        diagnosticIdentity: {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+        },
         session: preparedSessionRuntime.agentSession.activeSession,
         effectiveTools,
         uncompactedEffectiveTools,

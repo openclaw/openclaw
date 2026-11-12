@@ -118,7 +118,7 @@ describeControlUiE2e("Plugin overview", () => {
       const config = pluginEntries({
         enabled: true,
         config: { timeZone: "Europe/Paris" },
-        hooks: { allowPromptInjection: false },
+        hooks: { allowPromptModification: false },
       });
       const { page, gateway } = await setup(
         {
@@ -143,7 +143,7 @@ describeControlUiE2e("Plugin overview", () => {
                     config: objectSchema({ timeZone: { type: "string", title: "Time zone" } }),
                     hooks: {
                       ...objectSchema({
-                        allowPromptInjection: { type: "boolean", title: "Allow prompt changes" },
+                        allowPromptModification: { type: "boolean", title: "Allow prompt changes" },
                       }),
                       additionalProperties: false,
                     },
@@ -175,15 +175,36 @@ describeControlUiE2e("Plugin overview", () => {
       await timeZone.waitFor();
       expect(await timeZone.inputValue()).toBe("Europe/Paris");
       expect(await timeZone.isEnabled()).toBe(true);
-      const permission = role(page, "checkbox", "Add context to prompts");
+      const permission = role(page, "checkbox", "Modify prompts");
       expect(await permission.isEnabled()).toBe(true);
       expect(await gateway.getRequests("config.set")).toEqual([]);
+      if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1" && entry === "fresh") {
+        const dir = createControlUiE2eArtifactDir("prompt-permission-settings");
+        for (const width of [1440, 393]) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".plugin-editor"),
+            [permission],
+            {
+              animations: "disabled",
+              viewport: { width, height: 1000 },
+              scrollTo: permission,
+            },
+          );
+          writeFileSync(path.join(dir, `settings-${width}.png`), frame.png);
+        }
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      }
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
       await permission.press("Space");
       await expect.poll(() => permission.isChecked()).toBe(true);
       await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
       await gateway.waitForRequest("plugins.inspect", { after: inspections });
+      const grantWrite = (await gateway.getRequests("config.set"))[0]!.params as { raw: string };
+      expect(JSON.parse(grantWrite.raw).plugins.entries[plugin.id].hooks).toEqual({
+        allowPromptModification: true,
+      });
       expect(await permission.isVisible()).toBe(true);
       await captureScreenshot(page, `direct-settings-${entry}-refresh.png`, "viewport");
       await gateway.resolveDeferred("plugins.inspect");
@@ -191,9 +212,9 @@ describeControlUiE2e("Plugin overview", () => {
       await page.reload();
       await role(page, "textbox", "Time zone").waitFor();
       await expect.poll(() => permission.isChecked()).toBe(true);
-      const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
+      const permissionRow = page.locator('[data-setting="hooks.allowPromptModification"]');
       await permissionRow.hover();
-      await role(permissionRow, "button", "Actions for Add context to prompts").click();
+      await role(permissionRow, "button", "Actions for Modify prompts").click();
       const resetInspections = (await gateway.getRequests("plugins.inspect")).length;
       await role(permissionRow, "menuitem", "Reset value").click();
       await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
@@ -224,6 +245,7 @@ describeControlUiE2e("Plugin overview", () => {
     const linear = {
       ...calendarPlugin,
       id: "linear",
+      catalogId: "ch_bGluZWFy",
       name: "Linear",
       packageName: "@openclaw/linear",
       description: summary,
@@ -348,7 +370,7 @@ describeControlUiE2e("Plugin overview", () => {
     };
     const { page } = await setup(
       {
-        "plugins.list": inventory([calendarPlugin]),
+        "plugins.list": inventory([plugin]),
         "plugins.catalog.get": catalog,
         "plugins.inspect": {
           ...calendarInspection,
@@ -404,7 +426,7 @@ describeControlUiE2e("Plugin overview", () => {
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
       "Skills",
       "Tools",
-      "MCP Server",
+      "MCP server",
     ]);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();

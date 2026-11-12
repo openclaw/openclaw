@@ -286,7 +286,8 @@ it.each(["transient-timeout", "mixed"])(
       })(opts),
     );
     await listen();
-    const onVerified = vi.fn();
+    using clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onVerified = vi.fn(() => clock.mockReturnValue(2_000));
     const verification = await verifyGateway({
       opts: withRun("collection-timeout"),
       expectedVersion: "2026.9.8",
@@ -298,7 +299,7 @@ it.each(["transient-timeout", "mixed"])(
     expect(verification.summary).toContain("channel warnings need attention");
     expect(verification.pluginWarnings).toBeUndefined();
     expect(onVerified).toHaveBeenCalledOnce();
-    expect(result.steps[0]?.exitCode).toBe(0);
+    expect(result.steps[0]).toMatchObject({ exitCode: 0, durationMs: 0 });
     const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
     expect(facts).toMatchObject({
       serviceRunning: true,
@@ -638,9 +639,7 @@ it.each(["unchanged", "readiness-at-deadline", "readyz-error"] as const)(
     if (deadlineExpired || transition === "readyz-error") {
       expect(validation.summary).toBe(deadlineExpired ? "timeout" : "readyz-unhealthy");
       expect(validation.stopReason).toBeUndefined();
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "gateway verification", exitCode: 1 }),
-      );
+      expect(result.steps[0]).toMatchObject({ name: "gateway verification", exitCode: 1 });
     }
     if (deadlineExpired) {
       expect(result.steps[0]?.failureFacts).toContainEqual(

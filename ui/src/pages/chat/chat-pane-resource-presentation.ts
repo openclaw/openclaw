@@ -1,4 +1,3 @@
-import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { markdownSessionPublicOrigin } from "../../components/markdown-session-links.ts";
@@ -24,7 +23,22 @@ export function createChatPaneResourceProps() {
     if (artifactDownload?.state !== state) {
       artifactDownload = {
         state,
-        resolve: (params, signal) => resolveArtifactDownloadSource(state, params, signal),
+        resolve: async (params, signal) => {
+          const { client, connectionEpoch } = state;
+          if (!state.connected || !client || signal?.aborted) {
+            return null;
+          }
+          const { resolveArtifactDownloadSource } = await import("../../api/artifact-download.ts");
+          if (
+            !state.connected ||
+            state.client !== client ||
+            state.connectionEpoch !== connectionEpoch ||
+            signal?.aborted
+          ) {
+            return null;
+          }
+          return resolveArtifactDownloadSource(state, params, signal);
+        },
       };
     }
     const mediaReadAllowed = state.connected && !state.isRouteSessionPending?.();

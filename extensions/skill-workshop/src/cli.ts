@@ -57,7 +57,7 @@ function parseStrictPositiveIntOption(value: string, flag: string): number {
   return parsed;
 }
 
-export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
+function formatSkillsWorkshopList(result: SkillsWorkshopListResult): string {
   const lines = [
     `${theme.muted("Agent:")} ${terminalText`${result.agentId}`}  ${theme.muted("Mode:")} ${terminalText`${result.mode}`}`,
     `${theme.muted("Root:")} ${displayPath(result.root)}`,
@@ -89,7 +89,7 @@ export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): stri
   return `${lines.join("\n")}\n`;
 }
 
-export function formatSkillsWorkshopChanges(result: SkillsWorkshopChangesResult): string {
+function formatSkillsWorkshopChanges(result: SkillsWorkshopChangesResult): string {
   if (result.changes.length === 0) {
     return "No Workshop changes.\n";
   }
@@ -117,7 +117,7 @@ function callSkillsWorkshop<T>(
 }
 
 /** Builds `skills workshop` under the core `skills` command. */
-export function registerSkillsWorkshopCommands(skills: Command): void {
+function registerSkillsWorkshopCommands(skills: Command): void {
   // `openclaw skills --json workshop ...` keeps working like the core skills subcommands.
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || skills.opts<{ json?: boolean }>().json);

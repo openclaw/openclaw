@@ -94,11 +94,12 @@ const loadVisibleSpawnModule = createLazyPromise(() => import("./sessions-spawn-
 function recordAcceptedSessionSpawn(
   result: Record<string, unknown>,
   context: "fork" | "isolated" | undefined,
+  collector = false,
 ): void {
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const accepted = normalizeAcceptedSessionSpawnResult({ details: result });
   if (instance && accepted) {
-    mergeAcceptedSessionSpawnsForRun(instance, [accepted]);
+    mergeAcceptedSessionSpawnsForRun(instance, [collector ? { ...accepted, collector } : accepted]);
   }
   const childSessionKey =
     typeof result.childSessionKey === "string" ? result.childSessionKey.trim() : "";
@@ -244,7 +245,11 @@ export function createSessionsSpawnTool(
             `sessions_spawn does not support "${unsupportedTimeoutParam}". Use "runTimeoutSeconds" for a per-run timeout.`,
           );
         }
-        const task = readToolStringParam(params, "task", { required: true });
+        const task =
+          readToolStringParam(params, "task", {
+            required: !opts?.independent,
+            trim: !opts?.independent,
+          }) ?? "";
         const runTimeoutSeconds = readNonNegativeIntegerParam(params, "runTimeoutSeconds");
         const taskNameResult = normalizeSubagentTaskName(params.taskName);
         if (taskNameResult.error) {
@@ -533,7 +538,7 @@ export function createSessionsSpawnTool(
           ),
         );
 
-        recordAcceptedSessionSpawn(result, result.context);
+        recordAcceptedSessionSpawn(result, result.context, collect);
         return spawnResult(result);
       }),
     ),

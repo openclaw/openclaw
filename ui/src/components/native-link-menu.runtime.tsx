@@ -146,7 +146,7 @@ export function mountNativeLinkMenu(options: {
     if (action === "copy") {
       void copyToClipboard(options.url.href).then((copied) => {
         showToast({
-          severity: copied ? undefined : "error",
+          severity: copied ? "success" : "error",
           message: t(copied ? "common.copied" : "common.copyFailed"),
         });
       });

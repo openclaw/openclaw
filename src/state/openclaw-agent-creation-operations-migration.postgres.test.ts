@@ -22,6 +22,7 @@ describe.skipIf(!connection)("PostgreSQL creation receipt migration", () => {
         version: 39,
         postgresMigrations: [],
       };
+      const target = { ...agentEngineSchema, ...migration.schema, version: 40 };
       using fixture = createPostgresEngineTestFixture({
         directory: dirs.make("creation-receipt-upgrade-"),
         connection: connection!,
@@ -56,7 +57,7 @@ describe.skipIf(!connection)("PostgreSQL creation receipt migration", () => {
       ).toEqual([]);
       const before = original.prepare("SELECT entry_json FROM session_nodes").all();
       fixture.invalidate();
-      const upgraded = fixture.open(agentEngineSchema);
+      const upgraded = fixture.open(target);
       expect(
         upgraded.prepare("SELECT version FROM openclaw_schema_meta WHERE store='agent'").get(),
       ).toEqual({ version: 40 });
@@ -87,7 +88,7 @@ describe.skipIf(!connection)("PostgreSQL creation receipt migration", () => {
           Date.now() + 300000,
         );
       fixture.invalidate();
-      const reopened = fixture.open(agentEngineSchema);
+      const reopened = fixture.open(target);
       expect(
         reopened
           .prepare("SELECT session_id,lifecycle_revision FROM session_creation_operations")

@@ -1,2 +1,0 @@
-34
-# Source comparison must preserve independent invocation keys, narrowed copies, and completion batches.

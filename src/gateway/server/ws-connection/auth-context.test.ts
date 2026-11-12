@@ -18,6 +18,42 @@ const CLIENT_IP = "203.0.113.20";
 const BOOTSTRAP_TOKEN = "bootstrap-token";
 const DEVICE_TOKEN = "device-token";
 
+it.each(["member", "removed"])(
+  "keeps %s tunnel auth terminal despite valid bootstrap/device credentials",
+  async (kind) => {
+    const authResult =
+      kind === "member"
+        ? {
+            ok: true,
+            method: "trusted-proxy" as const,
+            openclawId: {
+              kind: "member" as const,
+              peerKey: "iroh:test",
+              accountId: "viewer",
+              role: "viewer" as const,
+            },
+          }
+        : { ok: false, reason: "openclaw_id_not_admitted" };
+    const verifyBootstrapToken = createVerifyBootstrapToken({ ok: true });
+    const verifyDeviceToken = createVerifyDeviceToken({ ok: true });
+    const result = await resolveDeviceTokenDecision({
+      stateOverrides: {
+        authResult,
+        authOk: authResult.ok,
+        authMethod: "trusted-proxy",
+        bootstrapTokenCandidate: BOOTSTRAP_TOKEN,
+      },
+      verifyBootstrapToken,
+      verifyDeviceToken,
+    });
+    expect(result.authResult).toEqual(authResult);
+    expect(result.authOk).toBe(authResult.ok);
+    expect(result.authMethod).toBe("trusted-proxy");
+    expect(verifyBootstrapToken).not.toHaveBeenCalled();
+    expect(verifyDeviceToken).not.toHaveBeenCalled();
+  },
+);
+
 function createTokenBucketRateLimiter(
   scopes: Partial<Record<TokenBucketScope, { allowed: boolean; retryAfterMs?: number }>> = {},
 ) {

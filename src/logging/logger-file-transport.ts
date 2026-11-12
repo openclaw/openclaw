@@ -1,18 +1,57 @@
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
-import path from "node:path";
-import { appendRegularFile, appendRegularFileSync } from "@openclaw/fs-safe/advanced";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
+import { prepareFileLogTarget, rotateLogFile } from "./logger-file-io.js";
+import type { FileLogIORequest, FileLogIOResults } from "./logger-file-io.js";
 import { redactSensitiveText } from "./redact.js";
 import { formatTimestamp } from "./timestamps.js";
+
+async function runFileLogIO<Request extends FileLogIORequest>(
+  request: Request,
+): Promise<FileLogIOResults[Request["type"]]> {
+  const { runFileLogIOInWorker } = await import("./logger-file-worker.js");
+  return runFileLogIOInWorker(request);
+}
+
+type FileLogTargetPreparation = {
+  ready?: Promise<void>;
+  prepared: boolean;
+  file: string;
+  rolling: boolean;
+};
+
+function prepareTarget(target: FileLogTargetPreparation, synchronous: true): void;
+function prepareTarget(target: FileLogTargetPreparation, synchronous: false): Promise<void>;
+function prepareTarget(
+  target: FileLogTargetPreparation,
+  synchronous: boolean,
+): void | Promise<void> {
+  if (target.prepared) {
+    return synchronous ? undefined : Promise.resolve();
+  }
+  if (synchronous) {
+    try {
+      prepareFileLogTarget(target.file, target.rolling);
+      target.prepared = true;
+    } catch {}
+    return;
+  }
+  return (target.ready ??= runFileLogIO({
+    type: "prepare",
+    file: target.file,
+    rolling: target.rolling,
+  })
+    .then(() => {
+      target.prepared = true;
+    })
+    .catch(() => undefined));
+}
 
 // Keep burst memory bounded while one equally bounded batch is in flight.
 const DEFAULT_MAX_QUEUED_RECORDS = 4_096;
 const MAX_APPEND_BATCH_BYTES = 64 * 1024;
-const MAX_ROTATED_LOG_FILES = 5;
 // A failing path stays armed until recovery; cap retained paths so target churn cannot leak memory.
 const MAX_TRACKED_APPEND_FAILURE_FILES = 64;
 
@@ -21,6 +60,7 @@ type FileLogQueueEntry = {
   hostname: string;
   maxFileBytes: number;
   payload: string;
+  targetPreparation?: FileLogTargetPreparation;
 };
 
 type FileCursor = {
@@ -40,63 +80,6 @@ let processHooksInstalled = false;
 const warnedRotationFiles = new Map<string, number>();
 const warnedAppendFiles = new Set<string>();
 let appendFailureTrackingSaturated = false;
-
-function rotatedLogPath(file: string, index: number): string {
-  const ext = path.extname(file);
-  const base = file.slice(0, file.length - ext.length);
-  return `${base}.${index}${ext}`;
-}
-
-/**
- * Creates a log directory and its missing parents with a bounded number of mkdir calls.
- * Node's recursive mkdirSync retries forever when a parent exists but refuses new
- * children (a deleted directory that is still mounted, such as a stale systemd
- * PrivateTmp), which would block the event loop inside the logger.
- */
-export function ensureLogDirectorySync(dir: string, createParents = true): void {
-  try {
-    fs.mkdirSync(dir);
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "EEXIST" && fs.statSync(dir).isDirectory()) {
-      return;
-    }
-    const parent = path.dirname(dir);
-    if (!createParents || code !== "ENOENT" || parent === dir) {
-      throw error;
-    }
-    ensureLogDirectorySync(parent);
-    // One retry once the parents exist; a second ENOENT is final.
-    ensureLogDirectorySync(dir, false);
-  }
-}
-
-function rotateLogFile(file: string): boolean {
-  try {
-    ensureLogDirectorySync(path.dirname(file));
-    fs.rmSync(rotatedLogPath(file, MAX_ROTATED_LOG_FILES), { force: true });
-    for (let index = MAX_ROTATED_LOG_FILES - 1; index >= 1; index -= 1) {
-      const from = rotatedLogPath(file, index);
-      if (fs.existsSync(from)) {
-        fs.renameSync(from, rotatedLogPath(file, index + 1));
-      }
-    }
-    if (fs.existsSync(file)) {
-      fs.renameSync(file, rotatedLogPath(file, 1));
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function getCurrentLogFileBytes(file: string): Promise<number> {
-  try {
-    return (await fsPromises.stat(file)).size;
-  } catch {
-    return 0;
-  }
-}
 
 function getCurrentLogFileBytesSync(file: string): number {
   try {
@@ -195,20 +178,12 @@ function claimQueuedEntries(): FileLogQueueEntry[] {
 
 function prepareWrite(
   entry: FileLogQueueEntry,
-  cursor: FileCursor,
+  currentBytes: number,
   synchronous: boolean,
   entries: FileLogQueueEntry[],
   index: number,
 ): { payload: string; payloadBytes: number; nextIndex: number } {
   let payloadBytes = Buffer.byteLength(entry.payload, "utf8");
-  if (cursor.bytes > 0 && cursor.bytes + payloadBytes > entry.maxFileBytes) {
-    if (rotateLogFile(entry.file)) {
-      cursor.bytes = 0;
-      warnedRotationFiles.delete(entry.file);
-    } else {
-      warnAboutRotationFailure(entry, synchronous);
-    }
-  }
   let nextIndex = index + 1;
   // fs-safe's synchronous helper can short-write, so keep exit rescue per record.
   if (synchronous) {
@@ -225,7 +200,7 @@ function prepareWrite(
     const nextBytes = Buffer.byteLength(next.payload, "utf8");
     if (
       payloadBytes + nextBytes > MAX_APPEND_BATCH_BYTES ||
-      cursor.bytes + payloadBytes + nextBytes > entry.maxFileBytes
+      currentBytes + payloadBytes + nextBytes > entry.maxFileBytes
     ) {
       break;
     }
@@ -245,23 +220,44 @@ async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
     if (!entry) {
       return;
     }
+    if (entry.targetPreparation) {
+      await prepareTarget(entry.targetPreparation, false);
+    }
     let cursor = cursors.get(entry.file);
     if (!cursor) {
-      cursor = { bytes: await getCurrentLogFileBytes(entry.file) };
+      cursor = { bytes: await runFileLogIO({ type: "size", file: entry.file }).catch(() => 0) };
       if (processExiting) {
         return;
       }
       cursors.set(entry.file, cursor);
     }
-    const batch = prepareWrite(entry, cursor, false, entries, index);
+    const rotate =
+      cursor.bytes > 0 && cursor.bytes + Buffer.byteLength(entry.payload) > entry.maxFileBytes;
+    const batch = prepareWrite(entry, rotate ? 0 : cursor.bytes, false, entries, index);
     // Forced drains must skip the whole issued append, which cannot be safely replayed.
     activeIndex = batch.nextIndex;
     try {
-      await appendRegularFile({ filePath: entry.file, content: batch.payload });
-      cursor.bytes += batch.payloadBytes;
-      clearAppendFailure(entry);
+      const result = await runFileLogIO({
+        type: "append",
+        file: entry.file,
+        payload: batch.payload,
+        rotate,
+      });
+      if (result.rotation === "rotated") {
+        cursor.bytes = 0;
+        warnedRotationFiles.delete(entry.file);
+      } else if (result.rotation === "failed") {
+        warnAboutRotationFailure(entry, false);
+      }
+      if (result.appended) {
+        cursor.bytes += batch.payloadBytes;
+        clearAppendFailure(entry);
+      } else {
+        warnAboutAppendFailure(entry, false);
+      }
     } catch {
-      // Match the old best-effort transport: a failed append must not stop later records.
+      // A lost worker result leaves the file size unknown; the next batch observes it once.
+      cursors.delete(entry.file);
       warnAboutAppendFailure(entry, false);
     } finally {
       // Drains share entries; release settled text even while a later append is still pending.
@@ -285,7 +281,18 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
       cursor = { bytes: getCurrentLogFileBytesSync(entry.file) };
       cursors.set(entry.file, cursor);
     }
-    const batch = prepareWrite(entry, cursor, true, entries, index);
+    if (entry.targetPreparation) {
+      prepareTarget(entry.targetPreparation, true);
+    }
+    if (cursor.bytes > 0 && cursor.bytes + Buffer.byteLength(entry.payload) > entry.maxFileBytes) {
+      if (rotateLogFile(entry.file)) {
+        cursor.bytes = 0;
+        warnedRotationFiles.delete(entry.file);
+      } else {
+        warnAboutRotationFailure(entry, true);
+      }
+    }
+    const batch = prepareWrite(entry, cursor.bytes, true, entries, index);
     try {
       appendRegularFileSync({ filePath: entry.file, content: batch.payload });
       cursor.bytes += batch.payloadBytes;
@@ -424,6 +431,11 @@ export const fileLogTransport = resolveGlobalSingleton(
       installProcessHooks();
     }
     return {
+      prepareTarget: (file: string, rolling: boolean): FileLogTargetPreparation => ({
+        file,
+        rolling,
+        prepared: false,
+      }),
       drainSync: drainFileLogQueueSync,
       enqueue: enqueueFileLog,
       flush: flushFileLogQueue,
