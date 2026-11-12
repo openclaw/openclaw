@@ -87,9 +87,13 @@ export class CronService implements CronServiceContract {
     }
   }
 
+  stop() {
+    lifecycleOps.stop(this.state);
+  }
+
   /** A reload handover stops scheduling; runs already executing finish and publish their results. */
-  stop(handover = false) {
-    lifecycleOps.stop(this.state, handover);
+  handOver() {
+    lifecycleOps.handOver(this.state);
   }
 
   /** Joins stopped timer generations from outside their callbacks. */

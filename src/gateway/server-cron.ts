@@ -851,13 +851,14 @@ export function buildGatewayCronService(params: {
     schedulingResume = undefined;
     settleExitWatcherHandoff(false);
     try {
-      stopCron(handover);
       if (handover) {
+        cron.handOver();
         // A committed replacement owns these children; fence this scheduler
         // without terminating the adopted manager.
         exitWatchersStopped = true;
         exitWatcherMutationRevision += 1;
       } else {
+        stopCron();
         stopExitWatchers();
       }
       void stopStreamWatchers().catch((err: unknown) => {
@@ -872,9 +873,7 @@ export function buildGatewayCronService(params: {
       unregisterSessionAutomationSource(automationSource);
     }
   };
-  cron.stop = () => {
-    stopCronLifecycle();
-  };
+  cron.stop = () => stopCronLifecycle();
   cron.stopAndDrain = async () => {
     stopCronLifecycle();
     await drainGatewayCron({
@@ -1000,8 +999,7 @@ export function buildGatewayCronService(params: {
         exitWatchers = watchers;
         return watchers.updateHandlers(exitWatcherHandlers);
       },
-      // The replacement adopts the exit watchers and starts around runs still
-      // active here, so a reload lets them finish instead of aborting them.
+      // A reload lets runs still executing here finish instead of aborting them.
       stopOwner: async () => {
         stopCronLifecycle(true);
         await Promise.all([startPromise, stopStreamWatchers()]);
