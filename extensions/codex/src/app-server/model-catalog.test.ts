@@ -92,6 +92,42 @@ describe("Codex app-server model catalog", () => {
     owner = createCodexAppServerModelCatalog("codex");
   });
 
+  it("keeps selected-account discovery and latest published readiness together", async () => {
+    profiles.store = {
+      version: 1,
+      profiles: {
+        "openai:inventory": { type: "api_key", provider: "openai", key: "synthetic-key" },
+        "openai:subscription": {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: { openai: ["openai:inventory", "openai:subscription"] },
+    };
+    listModelsMock.mockResolvedValue(opaqueCatalog());
+    const selected = { ...catalogParams, authProfileId: "openai:subscription" };
+    rpc.request.mockResolvedValue({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
+    await owner.load(selected, undefined);
+    expect(withCodexAppServerJsonClient).toHaveBeenLastCalledWith(
+      expect.objectContaining({ authProfileId: "openai:subscription" }),
+      expect.any(Function),
+    );
+    expect(read({ authProfileId: selected.authProfileId })).toEqual({ accountType: "chatgpt" });
+    expect(listModelsMock).toHaveBeenCalledTimes(1);
+    expect(read()).toBeUndefined();
+
+    rpc.request.mockResolvedValue({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
+    await owner.load({ ...catalogParams, authProfileId: "openai:inventory" }, undefined);
+    expect(read({ authProfileId: selected.authProfileId })).toBeUndefined();
+    expect(read({ authProfileId: "openai:inventory" })).toBeDefined();
+    expect(listModelsMock).toHaveBeenCalledTimes(2);
+    rpc.epoch += 1;
+    expect(read({ authProfileId: "openai:inventory" })).toBeUndefined();
+  });
+
   it.each(["chatgpt", "apiKey"])(
     "publishes only explicit caller program metadata for %s discovery",
     async (type) => {

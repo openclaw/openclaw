@@ -55,6 +55,7 @@ import {
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
+import { resolveCommandAuthProfileSelection } from "./attempt-auth-selection.js";
 import {
   createAgentAttemptLifecycleCallbacks,
   resetAgentAttemptLifecycle,
@@ -426,6 +427,13 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
                 provider: providerOverride,
                 model: modelOverride,
                 agentRuntime: candidateRuntime,
+                authProfileId: resolveCommandAuthProfileSelection({
+                  sessionEntry:
+                    providerOverride === providerForAuthProfileValidation
+                      ? attemptSessionEntry
+                      : undefined,
+                  configuredAuthProfileId: runOptions.authProfileId ?? configuredAuthProfileId,
+                })?.id,
                 agentId: sessionAgentId,
                 workspaceDir,
               }),

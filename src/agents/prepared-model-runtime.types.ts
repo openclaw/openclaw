@@ -47,6 +47,7 @@ export type PreparedNativeModelSelection = {
   provider: string;
   modelId: string;
   runtime: string;
+  authProfileId?: string;
 };
 
 export type PreparedModelRuntimeResourceClaim = { release: () => Promise<void> };

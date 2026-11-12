@@ -17,6 +17,7 @@ import { resolveCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { isExecCompletionInputProvenance } from "../../sessions/input-provenance.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
@@ -140,6 +141,7 @@ export async function resolveRunModelHasVision(params: {
     config: run.config,
     provider,
     model,
+    authProfileId: resolveRunAuthProfile(run, provider).authProfileId,
     agentId: run.agentId,
     agentDir: run.agentDir,
     workspaceDir: run.workspaceDir,
