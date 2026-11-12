@@ -72,6 +72,7 @@ import {
   listOwnedEntries,
   listNodeWorkerWorkspaceSessions,
   removeIfEmpty,
+  retainNodeWorkerWorkspaceOperation,
 } from "./node-worker-workspace-retention.js";
 import { runNodeWorkerWorkspaceSeed } from "./node-worker-workspace-seeds.js";
 
@@ -92,6 +93,7 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly retainQueue = new KeyedAsyncQueue();
   private readonly acceptedSnapshots = new Map<string, NodeWorkerWorkspaceRetainSnapshot>();
   private readonly activeWorkspaceOperations = new Map<string, number>();
+  private readonly publicationQueue = new KeyedAsyncQueue();
   private readonly latestTransferredManifest = new Map<string, string>();
   // Per-generation capture hash memo; lets upload captures skip re-hashing unchanged trees.
   private readonly workspaceHashMemos = new Map<string, Map<string, string>>();
@@ -221,24 +223,11 @@ export class NodeWorkerWorkspaceRuntime {
   }
 
   private beginWorkspaceOperation(gatewayNamespace: string, generationKey: string): () => void {
-    this.activeWorkspaceOperations.set(
+    return retainNodeWorkerWorkspaceOperation(
+      this.activeWorkspaceOperations,
+      this.activeRetainProtections.get(gatewayNamespace),
       generationKey,
-      (this.activeWorkspaceOperations.get(generationKey) ?? 0) + 1,
     );
-    this.activeRetainProtections.get(gatewayNamespace)?.add(generationKey);
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      const count = this.activeWorkspaceOperations.get(generationKey) ?? 0;
-      if (count <= 1) {
-        this.activeWorkspaceOperations.delete(generationKey);
-      } else {
-        this.activeWorkspaceOperations.set(generationKey, count - 1);
-      }
-    };
   }
 
   private currentLocalProtection(
@@ -542,13 +531,13 @@ export class NodeWorkerWorkspaceRuntime {
         // Drain proves prior queued work settled, including an interrupted prepared
         // mutation whose durable row is now retiring; it does not reopen that workspace.
         if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
-          return projectWorkspaceOperationResult(
-            deviceFolder
-              ? deviceFolder
-              : (prepared?.workspace_dir ??
-                  path.join(sessionRootCandidate, String(input.generation))),
-            "drained\n",
-          );
+          await this.publicationQueue.enqueue(sessionRootCandidate, async () => {});
+          signal?.throwIfAborted();
+          const workspaceDir =
+            deviceFolder ??
+            prepared?.workspace_dir ??
+            path.join(sessionRootCandidate, String(input.generation));
+          return projectWorkspaceOperationResult(workspaceDir, "drained\n");
         }
         let sessionRoot: string;
         let workspacePath: string;
@@ -643,8 +632,13 @@ export class NodeWorkerWorkspaceRuntime {
             }
             return projectWorkspaceOperationResult(workspacePath, `${stdout}\n`);
           };
-          // Private integration keeps operation custody without blocking later editing commands.
-          return selectedTransfer.direction === "publication" ? runTransfer : await runTransfer();
+          if (selectedTransfer.direction !== "publication") {
+            return await runTransfer();
+          }
+          // Register before releasing editing serialization so a queued drain joins
+          // the entire transfer, including its finally cleanup, without serializing edits.
+          const operation = this.publicationQueue.enqueue(sessionRootCandidate, runTransfer);
+          return () => operation;
         }
         if (isWorkspaceInspectionCommand(input.argv)) {
           const stat = fs.lstatSync(workspacePath, { throwIfNoEntry: false });
