@@ -2438,7 +2438,13 @@ describe("prepared Windows handoff", () => {
           prepared_plugins: request.inputs.prepared_plugins,
           publish_openclaw_npm: true,
         },
-        needs: { publish: { result: "success" }, publish_docker: { result: "success" } },
+        needs: {
+          resolve_release_target: {
+            outputs: { prepared_plugins: request.inputs.prepared_plugins },
+          },
+          publish: { result: "success" },
+          publish_docker: { result: "success" },
+        },
       });
       expect(finalizesParent).toBe(false);
       expect(parent.jobs.publish_windows.if).toContain(
