@@ -6,6 +6,7 @@ import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   assertLocalWorkspaceDirectory,
@@ -474,18 +475,22 @@ export function projectionOperations(
     sandbox: SandboxConfig;
     allocation: WorktreeAllocationGuard;
   }) => {
+    const phase = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+    using phases = observeDiagnosticsTimelinePhases(`${phase}.head`);
     if (!row) {
       const baseCommit = await requireGit(
         owner.worktree.path,
         ["rev-parse", "--verify", "HEAD^{commit}"],
         { signal, beforeRun: owner.assertCurrent },
       );
+      phases.mark(`${phase}.sources`);
       const sourcePaths = await admitLocalWorkspaceSourcePaths({
         root: owner.worktree.path,
         signal,
         assertCurrent: owner.assertCurrent,
       });
       owner.assertCurrent();
+      phases.mark(`${phase}.reservation`);
       row = await store.create(
         {
           worktree_id: owner.worktree.id,
@@ -515,6 +520,7 @@ export function projectionOperations(
     }
     const selected = current();
     if (!selected.baseline_ref) {
+      phases.mark(`${phase}.initialization`);
       const initial = await initializeLocalWorkspaceProjection({
         owner,
         projectionPath: selected.projection_path,
@@ -524,8 +530,10 @@ export function projectionOperations(
         buildCacheInputs,
         dependencies,
       });
+      phases.mark(`${phase}.baseline`);
       await replaceBaseline(initial.rawManifest, initial.manifestRef);
     }
+    phases.mark(`${phase}.checkpoint`);
     return await prepareLocalWorkspaceCheckpoint({
       baselineRef: selected.baseline_ref,
       synchronize,
