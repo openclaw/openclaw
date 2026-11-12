@@ -302,6 +302,73 @@ test("publishes a web conversation privately without visual Draft", async () => 
   expect(described.payload?.session?.key).not.toBe(key);
 });
 
+test.each([
+  { label: "unrestricted", access: { mode: "unrestricted" as const } },
+  {
+    label: "wider named audience",
+    access: { mode: "audience" as const, profileIds: ["outside-profile"] },
+  },
+  { label: "implicit creator", access: undefined },
+])(
+  "blocks a participant from forking restricted history with $label",
+  async ({ access, label }) => {
+    const parent = await seedGroup(1201);
+    const selected = await client("selected");
+    expect((await describeSession(selected, parent.sessionKey)).payload?.session?.key).toBe(
+      parent.sessionKey,
+    );
+    const target = "agent:main:dashboard:fork-deny-" + label.replaceAll(" ", "-");
+    const response = await rpcReq(selected, "sessions.create", {
+      key: target,
+      parentSessionKey: parent.sessionKey,
+      fork: true,
+      ...(access ? { access } : {}),
+    });
+    expect(response).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
+    if (!access) {
+      expect(response.error?.message).toBe(
+        "Only the session creator or an admin can fork restricted history.",
+      );
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: target })).toBeUndefined();
+  },
+);
+
+test.each(["creator", "admin"] as const)(
+  "lets the original %s fork restricted history",
+  async (actor) => {
+    const parent = await seedGroup(1202);
+    await appendTranscriptMessage(parent, {
+      eventId: "fork-owner-assistant-" + actor,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "completed response" }],
+        timestamp: Date.now(),
+      },
+    });
+    const owner = await client(actor);
+    const target = "agent:main:dashboard:fork-authorized-" + actor;
+    const response = await rpcReq(owner, "sessions.create", {
+      key: target,
+      parentSessionKey: parent.sessionKey,
+      fork: true,
+      access: { mode: "unrestricted" },
+    });
+    expect(response.ok, JSON.stringify(response.error)).toBe(true);
+    const entry = loadSessionEntry({ agentId: "main", sessionKey: target });
+    expect(entry?.access).toEqual({ mode: "unrestricted" });
+    expect(
+      JSON.stringify(
+        loadTranscriptEventsSync({
+          agentId: "main",
+          sessionKey: target,
+          sessionId: entry!.sessionId,
+        }),
+      ),
+    ).toContain(text);
+  },
+);
+
 test.each(["creator", "selected", "outsider", "admin", "legacy"] as const)(
   "enforces discovery, reads and writes for %s with independent confidential access",
   async (actor) => {

@@ -108,6 +108,7 @@ import {
   validateSessionCreateIncognitoTarget,
 } from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
+import { resolveSessionForkParentError } from "./session-fork-access.js";
 import {
   prepareGatewaySessionLifecycleTargets,
   projectPreparedSessionWorkspace,
@@ -118,7 +119,6 @@ import {
 } from "./session-lifecycle-preparation.js";
 import { loadSessionLifecycleRuntime } from "./session-lifecycle-runtime-loader.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
-import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { prepareSessionPublicShareGrant } from "./session-publication-grant.js";
 import * as sessionAgent from "./session-request-agent.js";
 import {
@@ -468,14 +468,13 @@ async function createGatewaySessionInScope(
         );
       }
       currentParentSessionEntry = currentParentEntry;
-      const parentOwnershipError = resolvePluginSessionOwnershipError({
-        action: params.fork === true ? "fork" : "link",
-        entry: currentParentEntry,
-        key: canonicalParentSessionKey,
-        pluginOwnerId: params.authorizedPluginId,
-      });
-      if (parentOwnershipError) {
-        return { ok: false, error: parentOwnershipError };
+      const parentError = resolveSessionForkParentError(
+        params,
+        canonicalParentSessionKey,
+        currentParentEntry,
+      );
+      if (parentError) {
+        return { ok: false, error: parentError };
       }
       if (
         (params.emitCommandHooks === true || params.fork === true) &&
