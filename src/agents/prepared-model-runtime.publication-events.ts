@@ -143,15 +143,15 @@ export function createCatalogAttemptReporter(
         get: () => {
           // Undefined entries record failures before a provider scope starts;
           // they cannot be attributed to a provider outcome.
-          const failed = [
+          const attributedFailed = [
             ...attempt.failedProviders.provider,
             ...attempt.failedProviders.native,
           ].filter((provider): provider is string => provider !== undefined);
-          if (!failed.length) {
+          if (!attributedFailed.length) {
             return ownOutcomes;
           }
           const covered = new Set((ownOutcomes ?? []).map((o) => o.provider));
-          const synthesized = failed
+          const synthesized = attributedFailed
             .filter((provider) => !covered.has(provider))
             .map((provider) => ({ provider, status: "unavailable" as const }));
           return synthesized.length ? [...(ownOutcomes ?? []), ...synthesized] : ownOutcomes;
