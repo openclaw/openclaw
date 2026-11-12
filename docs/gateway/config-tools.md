@@ -14,7 +14,7 @@ sidebarTitle: "Tools and custom providers"
 
 - [Configuration — tool policy](/gateway/config-tools/tool-policy) — tool profiles, tool groups, the sandbox tool gate, `tools.codeMode`, and the `allow`/`deny`, `byProvider`, `toolsBySender`, and `elevated` layers.
 - [Configuration — GitHub identity for agent tools](/gateway/config-tools/github-identity) — `tools.github`: the shared managed `gh` identity, token refresh, and the execution boundaries that receive it.
-- [Configuration — built-in tool settings](/gateway/config-tools/built-in-tools) — `tools.exec`, `tools.loopDetection`, `tools.web`, `tools.media`, and `tools.updatePlan`.
+- [Configuration — built-in tool settings](/gateway/config-tools/built-in-tools) — `tools.exec`, `tools.openclaw` delegation approvals, `tools.loopDetection`, `tools.web`, `tools.media`, and `tools.updatePlan`.
 - [Configuration — cross-agent, session, and subagent tools](/gateway/config-tools/sessions-and-subagents) — `tools.agentToAgent`, `tools.sessions` visibility, `tools.sessions_spawn` attachments, and `agents.defaults.subagents`.
 - [Configuration — custom providers and base URLs](/gateway/config-tools/custom-providers) — `models.providers` registration, base-URL trust, and the provider field reference.
 - [Configuration — provider examples](/gateway/config-tools/provider-examples) — worked configurations for Cerebras, Kimi, llama.cpp, LM Studio, MiniMax, Moonshot, OpenCode, Synthetic, and Z.AI.

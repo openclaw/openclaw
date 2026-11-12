@@ -29,6 +29,7 @@ import {
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
+import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import { resolveCoreToolFactoryFamily } from "../agents/tool-catalog.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
@@ -374,6 +375,11 @@ export async function resolveGatewayScopedTools(
     wrapBeforeToolCallHook: false,
     agentAccountId: params.accountId,
   });
+  const delegatedExecPolicy = projectEffectiveExecPolicy({
+    base: resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId }),
+    overrides: params.execOverrides,
+    permissionPolicy: sessionPermissionPolicy,
+  });
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
@@ -409,7 +415,9 @@ export async function resolveGatewayScopedTools(
         }
       : {}),
     execSession: params.execSession,
-    execOverrides: params.execOverrides,
+    execOverrides: { ...params.execOverrides, ...delegatedExecPolicy },
+    // Exported MCP tools do not certify the client's effective execution policy.
+    // Explicit OpenClaw Full Access and standing delegation grants remain independent.
     approvalReviewerDeviceIds: params.approvalReviewerDeviceId
       ? [params.approvalReviewerDeviceId]
       : undefined,
