@@ -2330,6 +2330,7 @@ src/config/sessions/session-actor-memory-pending.ts
 src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
 src/config/sessions/session-actor-memory-recovery.ts
+src/config/sessions/session-actor-memory-replay-groups.ts
 src/config/sessions/session-actor-memory-reports.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
@@ -2375,6 +2376,7 @@ src/config/sessions/session-transcript-accounting.types.ts
 src/config/sessions/session-transcript-execution-read.ts
 src/config/sessions/session-transcript-lock-settlement.ts
 src/config/sessions/session-transcript-raw-cursor.ts
+src/config/sessions/session-transcript-replay.types.ts
 src/config/sessions/session-transcript-report-policy.ts
 src/config/sessions/session-transcript-rewrite-effects.ts
 src/config/sessions/session-transcript-search-policy.ts

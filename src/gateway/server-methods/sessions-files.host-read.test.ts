@@ -50,6 +50,9 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
   withSessionTranscriptDeltaReader: ((scope, consume) =>
     consume({
       visible: async (limits) => hoisted.readDelta(scope, limits),
+      replayGroups: async () => {
+        throw new Error("File browsing must consume visible transcript pages");
+      },
       raw: async () => {
         throw new Error("File browsing must consume visible transcript pages");
       },

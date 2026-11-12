@@ -13,8 +13,21 @@ import { isSessionTranscriptProjectionUnavailableError } from "./session-transcr
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import {
+  validateSessionTranscriptReplaySelection,
+  type SessionTranscriptReplayGroup,
+  type SessionTranscriptReplaySelection,
+} from "./session-transcript-replay.types.js";
+
+function prepareReplaySelection(selection: SessionTranscriptReplaySelection) {
+  const maxBytes = validateSessionTranscriptReplaySelection(selection);
+  return { entryIds: [...selection.entryIds], maxBytes };
+}
 
 type SessionTranscriptDeltaReader = {
+  replayGroups: (
+    selection: SessionTranscriptReplaySelection,
+  ) => Promise<SessionTranscriptReplayGroup[]>;
   raw: (limits: SessionTranscriptRawDeltaLimits) => Promise<SessionTranscriptRawDeltaResult>;
   visible: (
     limits: SessionTranscriptVisibleMessageDeltaLimits,
@@ -45,6 +58,15 @@ export async function withSessionTranscriptDeltaReader<T>(
     };
     try {
       const result = await consume({
+        replayGroups: async (selection) => {
+          assertActive();
+          selection = prepareReplaySelection(selection);
+          if (memory.missing) {
+            memory.assertCurrent();
+            throw new Error("Canonical session transcript is unavailable");
+          }
+          return memory.read("session.history.replay-groups", { selection });
+        },
         raw: async (limits) => {
           assertActive();
           if (memory.missing) {
@@ -95,6 +117,11 @@ export async function withSessionTranscriptDeltaReader<T>(
         };
         if (!source.expectedIdentity) {
           return consume({
+            replayGroups: async (selection) => {
+              assertCurrent();
+              prepareReplaySelection(selection);
+              throw new Error("Canonical session transcript is unavailable");
+            },
             raw: async () => {
               assertCurrent();
               return { kind: "missing" };
@@ -112,6 +139,23 @@ export async function withSessionTranscriptDeltaReader<T>(
           expectedIdentity: source.expectedIdentity,
         };
         return consume({
+          replayGroups: (input) => {
+            const selection = prepareReplaySelection(input);
+            return read(async () => {
+              try {
+                return await reader.readReplayGroups({ ...request, selection }, signal);
+              } catch (error) {
+                if (isSessionTranscriptProjectionUnavailableError(error)) {
+                  assertCurrent();
+                  startSessionTranscriptIndexReconcile({
+                    ...toDatabaseOptions(source.resolved),
+                    preferredSessionId: source.resolved.sessionId,
+                  });
+                }
+                throw error;
+              }
+            });
+          },
           raw: (limits) =>
             read(() => reader.readRawDelta({ ...request, limits: { ...limits } }, signal)),
           visible: (limits) =>

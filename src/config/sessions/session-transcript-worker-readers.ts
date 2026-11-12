@@ -81,6 +81,7 @@ export function createSessionHistoryWorkerReaders(
     readRawDelta: reader("transcript-raw-delta", (value) => value.result),
     readLatestAssistant: reader("transcript-latest-assistant", (value) => value.result),
     readVisibleDelta: reader("transcript-visible-delta", (value) => value.result),
+    readReplayGroups: reader("transcript-replay-groups", (value) => value.result),
     readSessionMemoryCapture: reader("session-memory-capture", (value) => value.result),
     readBoardSnapshot: reader("board-snapshot", (result) => result.value),
     readBoardWidgetDocument: reader("board-widget-document", (result) => result.value),

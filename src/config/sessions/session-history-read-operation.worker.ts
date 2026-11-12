@@ -25,6 +25,7 @@ const historyReadKinds = [
   "transcript-anchors",
   "transcript-raw-delta",
   "transcript-visible-delta",
+  "transcript-replay-groups",
   "transcript-latest-assistant",
   "session-memory-capture",
   "session-pending-input-receipts",
@@ -144,6 +145,17 @@ async function prepareHistoryRead(
         { snapshot: true, admission: request.admission },
       );
       return () => ({ kind: request.kind, result: read() });
+    }
+    case "transcript-replay-groups": {
+      const { readSessionTranscriptReplayGroupsCore } =
+        await import("./session-transcript-replay.kernel.js");
+      return () =>
+        runWithSessionTranscriptReadFence(request.admission, () => ({
+          kind: request.kind,
+          result: readSessionTranscriptReplayGroupsCore(request.scope, request.selection, {
+            resolvedScope: request.resolved,
+          }),
+        }));
     }
     case "transcript-visible-delta": {
       const { readSessionTranscriptVisibleMessageDeltaCore } =

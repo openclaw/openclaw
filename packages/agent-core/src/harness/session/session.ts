@@ -1,6 +1,8 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripCompactionReplayCheckpoint } from "../../../../ai/src/transports/provider-compaction-checkpoint.js";
-import { getOpenClawSystemUpdateKind } from "../../operator-messages.js";
+import {
+  getOpenClawSystemUpdateKind,
+  isSystemPromptUpdateBoundary,
+} from "../../operator-messages.js";
 import type { AgentMessage } from "../../types.js";
 import {
   createBranchSummaryMessage,
@@ -68,15 +70,7 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
 ): Generator<{ entry: T; context: "current" | "retained" | "reset-retained" }> {
   const { boundaryIndex, firstKeptIndex } = resolveSessionContextWindow(pathEntries);
   // A rebuilt prefix retires prompt overrides; retained turns still own their runtime facts.
-  const operatorBoundaryIndex = Math.max(
-    boundaryIndex,
-    pathEntries.findLastIndex(
-      (entry) =>
-        entry.type === "custom" &&
-        entry.customType === "openclaw.system-prompt" &&
-        asOptionalRecord(entry.data)?.restart === true,
-    ),
-  );
+  const operatorBoundaryIndex = pathEntries.findLastIndex(isSystemPromptUpdateBoundary);
   const boundary = pathEntries[boundaryIndex];
   const resetKept =
     boundary?.type === "reset"

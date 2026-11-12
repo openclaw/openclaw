@@ -21,10 +21,6 @@ import {
   sanitizeProviderReplayHistoryWithPluginAsync,
   validateProviderReplayTurnsWithPlugin,
 } from "../../plugins/provider-runtime.js";
-import {
-  annotateInterSessionPromptText,
-  normalizeInputProvenance,
-} from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import {
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -132,51 +128,6 @@ function createProviderReplayPluginParams(params: ProviderReplayHookParams & { p
   };
   const { provider, config, workspaceDir, env } = context;
   return { provider, config, workspaceDir, env, context };
-}
-
-function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out = messages.map((message) => {
-    if (message?.role !== "user") {
-      return message;
-    }
-    const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
-    if (provenance?.kind !== "inter_session") {
-      return message;
-    }
-    if (typeof message.content === "string") {
-      const content = annotateInterSessionPromptText(message.content, provenance);
-      if (content === message.content) {
-        return message;
-      }
-      touched = true;
-      return { ...message, content };
-    }
-    if (!Array.isArray(message.content)) {
-      return message;
-    }
-    const content = [...message.content];
-    const textIndex = content.findIndex((block) => {
-      const record = asOptionalObjectRecord(block);
-      return record?.type === "text" && typeof record.text === "string";
-    });
-    if (textIndex < 0) {
-      content.unshift({
-        type: "text",
-        text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
-      });
-    } else {
-      const existing = content[textIndex] as { type: "text"; text: string };
-      const text = annotateInterSessionPromptText(existing.text, provenance);
-      if (text === existing.text) {
-        return message;
-      }
-      content[textIndex] = { ...existing, text };
-    }
-    touched = true;
-    return { ...message, content };
-  });
-  return touched ? out : messages;
 }
 
 function sanitizeUserReplayContent(
@@ -567,7 +518,6 @@ export async function sanitizeSessionHistory(
 ): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy = resolveReplayPolicy(params);
-  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const signedThinkingProvider = providerRequiresSignedThinking(params.provider);
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
     modelApi: params.modelApi,
@@ -596,7 +546,7 @@ export async function sanitizeSessionHistory(
   const latestModelSwitchTimestamp = modelChanged
     ? currentSnapshot?.timestamp
     : snapshotState.latestSwitchTimestamp;
-  const normalizedAssistantReplay = normalizeAssistantReplayContent(withInterSessionMarkers);
+  const normalizedAssistantReplay = normalizeAssistantReplayContent(params.messages);
   const sanitizedImages = await sanitizeSessionMessagesImages(
     normalizedAssistantReplay,
     "session:history",

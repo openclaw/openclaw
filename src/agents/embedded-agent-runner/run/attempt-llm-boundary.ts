@@ -30,6 +30,7 @@ import {
   retainRuntimeContextMessageForPrompt,
   stripHistoricalRuntimeContextCustomMessages,
 } from "../../internal-runtime-context.js";
+import { annotateInterSessionUserMessages } from "../../replay-provenance.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
@@ -164,8 +165,10 @@ export function normalizeMessagesForLlmBoundary(
     options?.currentUserTimestampOverride,
   );
   const normalizedUserMessages = normalizeUserMessagesForLlmBoundary(
-    normalized.map((message, index) =>
-      projectRecordedModelPrompt(message, userTranscriptMessages?.[index]),
+    annotateInterSessionUserMessages(
+      normalized.map((message, index) =>
+        projectRecordedModelPrompt(message, userTranscriptMessages?.[index]),
+      ),
     ),
     options,
   );

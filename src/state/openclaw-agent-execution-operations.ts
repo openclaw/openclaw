@@ -34,6 +34,7 @@ export async function loadAgentTranscriptReadOperations() {
   const [
     raw,
     visible,
+    replay,
     memory,
     anchors,
     cold,
@@ -47,6 +48,7 @@ export async function loadAgentTranscriptReadOperations() {
   ] = await Promise.all([
     import("../config/sessions/session-accessor.sqlite-delta.js"),
     import("../config/sessions/session-accessor.sqlite-active-events.js"),
+    import("../config/sessions/session-transcript-replay.kernel.js"),
     import("../hooks/bundled/session-memory/capture.worker.js"),
     import("../config/sessions/session-transcript-anchor-read.kernel.js"),
     import("../config/sessions/session-cold-storage-state.js"),
@@ -158,6 +160,18 @@ export async function loadAgentTranscriptReadOperations() {
         return fence.runWithSessionTranscriptReadFence(input.admission, () =>
           visible.readSessionTranscriptVisibleMessageDeltaCore(input.scope, input.limits, {
             readOnly: true,
+            resolvedScope: input.resolved,
+          }),
+        );
+      }),
+    "session.transcript.replayGroups.read": (
+      input: SessionTranscriptExecutionReadInputs["replay"],
+      context,
+    ) =>
+      readResult(() => {
+        open(input, context);
+        return fence.runWithSessionTranscriptReadFence(input.admission, () =>
+          replay.readSessionTranscriptReplayGroupsCore(input.scope, input.selection, {
             resolvedScope: input.resolved,
           }),
         );

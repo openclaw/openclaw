@@ -1,0 +1,3 @@
+# Canonical replay: durable and memory branches, admission, source-byte bounds before decode,
+# cold restoration, final LLM provenance, retired override parity, and visible-reader mocks.
+684

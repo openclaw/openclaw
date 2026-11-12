@@ -17,6 +17,7 @@ import {
   runSqliteImmediateTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
+import { readSessionTranscriptReplayGroups } from "../../plugin-sdk/session-transcript-runtime.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -264,6 +265,17 @@ async function withRace(
     }
   });
 }
+
+it("restores canonical replay through the existing worker-owned cold reader", async () => {
+  await withRace("cold-canonical-replay", async (race) => {
+    race.commitArchive();
+    await expect(
+      readSessionTranscriptReplayGroups({ ...race.scope, entryIds: ["user"], maxBytes: 2000 }),
+    ).resolves.toMatchObject([
+      { entryId: "user", message: { role: "user", content: "Original question" }, carriers: [] },
+    ]);
+  });
+});
 
 it("detects an archive committed before a warm incremental read begins", async () => {
   await withRace("warm-read-before-begin", async (race) => {

@@ -26,7 +26,7 @@ Scope includes:
 - Image payload sanitization
 - Blank text-block cleanup before provider replay
 - Incomplete reasoning-only length-turn cleanup before provider replay
-- User-input provenance tagging (for inter-session routed prompts)
+- User-input provenance tagging at the final LLM boundary, after history and provider transformations (for inter-session routed prompts)
 - Empty assistant error/aborted-turn removal before both live requests and provider replay
 - Speech-only assistant turn replay as its spoken text
 

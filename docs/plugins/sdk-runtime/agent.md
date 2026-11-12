@@ -208,6 +208,42 @@ still fail if required user messages, call arguments, summaries, or event counts
 cannot fit, or result ownership is ambiguous. Omitting `toolResultOverflow`
 preserves strict bounded-read behavior.
 
+### Canonical replay groups
+
+Context engines can retain messages longer than the host's bounded hydration
+window. Use `readSessionTranscriptReplayGroups(...)` from
+`openclaw/plugin-sdk/session-transcript-runtime` to recover canonical user
+metadata and runtime context for retained transcript entry IDs:
+
+```ts
+const groups = await readSessionTranscriptReplayGroups({
+  agentId,
+  sessionKey,
+  sessionId,
+  entryIds: retainedUserEntryIds,
+  maxBytes: 8 * 1024 * 1024,
+});
+```
+
+Each group contains `entryId`, the canonical `message`, and adjacent
+runtime-context and system-update `carriers`. Thinking/model changes, custom
+bookkeeping, labels, and session information do not interrupt the group. Other
+messages, background-result placement markers, compaction, reset, and branch
+summaries do. Prompt-update carriers retired by a later system-prefix restart,
+compaction, or reset are omitted; retained runtime facts remain available.
+Results follow requested ID order, with duplicates returned once. Missing,
+inactive-branch, non-user, and admission-fenced IDs are omitted. This is an
+identity-based read, not permission to restore compacted messages. Raw and
+visible delta semantics are unchanged.
+
+The read uses the existing transcript owner, including memory-only sessions,
+and preserves current-turn admission and database-lifetime checks. Durable reads
+run in the existing history worker or the inherited write lock's ordered worker.
+The cumulative uncompressed source budget includes users and carriers; overflow
+rejects the entire read before acquiring the oversized payload. The default is
+8 MiB, capped at 64 MiB, with at most 10,000 requested IDs. Unavailable storage
+and stale admission throw instead of returning an empty successful read.
+
 ## Scoped session visibility
 
 `createSessionVisibilityChecker` from

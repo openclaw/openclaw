@@ -3,6 +3,7 @@ import type { ImageContent, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -40,6 +41,47 @@ function contentOf(message: AgentMessage | undefined) {
 }
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it("annotates a media-only inter-session turn without changing its media or source", () => {
+    const provenance = { kind: "inter_session" as const, sourceTool: "subagent_settle" };
+    const input = { ...user([image]), provenance };
+    const output = normalizeMessagesForLlmBoundary([input], { includeTimestamp: false });
+    expect(contentOf(output[0])).toEqual([
+      {
+        type: "text",
+        text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
+      },
+      image,
+    ]);
+    expect(normalizeMessagesForLlmBoundary(output, { includeTimestamp: false })).toEqual(output);
+    expect(input.content).toEqual([image]);
+    expect(output[0]).toHaveProperty("provenance", provenance);
+  });
+
+  it.each(["text", "blocks"] as const)(
+    "preserves completion provenance after context-engine reconstruction (%s)",
+    (shape) => {
+      const provenance = {
+        kind: "inter_session" as const,
+        sourceSessionKey: "agent:main:child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
+      };
+      const text = "Child completion results: finished";
+      const marked = annotateInterSessionPromptText(text, provenance);
+      const content = (value: string) =>
+        shape === "text" ? value : [{ type: "text" as const, text: value }];
+      const current = { ...user(content(marked)), provenance };
+      const replay = { ...user(content(text)), provenance };
+      const boundary = { ...options, includeTimestamp: false };
+      const before = normalizeMessagesForLlmBoundary([current], boundary);
+      const after = normalizeMessagesForLlmBoundary([replay, user("Ok", timestamp + 1)], boundary);
+      expect(after[0]).toEqual(before[0]);
+      expect(contentOf(after[0])).toEqual(marked);
+      expect(replay.content).toEqual(content(text));
+      expect(normalizeMessagesForLlmBoundary(after, boundary)).toEqual(after);
+    },
+  );
+
   it("removes the synthetic current user without discarding operator context", () => {
     const update = buildSystemUpdateMessage("Preserve this update", "prompt-update", false);
     const runtime = buildRuntimeContextCustomMessage("Current facts", undefined, true)!;

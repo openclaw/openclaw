@@ -19,6 +19,10 @@ import type {
   SessionTranscriptModelContext,
   SessionTranscriptContextSnapshot,
 } from "./session-history-read.types.js";
+import type {
+  SessionTranscriptReplayGroup,
+  SessionTranscriptReplaySelection,
+} from "./session-transcript-replay.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 
 type Target = { sessionId?: string; admission?: UserTurnTranscriptAdmissionReceipt };
@@ -32,6 +36,10 @@ type ProjectionReads = {
 export type SessionActorMemoryHistoryReads = ProjectionReads &
   SessionActorMemoryHistoryFactsReads &
   SessionActorMemoryAnchorReads & {
+    "session.history.replay-groups": {
+      input: Target & { selection: SessionTranscriptReplaySelection };
+      output: SessionTranscriptReplayGroup[];
+    };
     "session.history.hydrate": {
       input: Target & { limits?: { maxBytes: number; maxEvents: number }; maxEventBytes?: number };
       output: PreparedSessionTranscriptHydration;

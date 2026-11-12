@@ -298,7 +298,7 @@ describe("sanitizeSessionHistory", () => {
     );
   });
 
-  it("annotates inter-session user messages before context sanitization", async () => {
+  it("preserves unrendered inter-session provenance until the final LLM boundary", async () => {
     const out = await sanitize(
       castAgentMessages([
         {
@@ -313,8 +313,12 @@ describe("sanitizeSessionHistory", () => {
     );
     expect(out[0]?.role).toBe("user");
     const content = (out[0] as UserMessage).content;
-    expect(content).toContain("[Inter-session message]");
-    expect(content).toContain("sourceSession=agent:main:req");
+    expect(content).toBe("forwarded instruction");
+    expect(out[0]).toHaveProperty("provenance", {
+      kind: "inter_session",
+      sourceSessionKey: "agent:main:req",
+      sourceTool: "sessions_send",
+    });
   });
 
   it("preserves existing usage cost while normalizing token fields", async () => {
