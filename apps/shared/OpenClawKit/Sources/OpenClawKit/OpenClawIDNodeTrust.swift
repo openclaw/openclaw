@@ -101,8 +101,7 @@ public enum OpenClawIDNodeTrust {
         try self.assess(
             response: response,
             hostname: link.hostname,
-            clawID: link.clawID,
-            rootFingerprint: link.rootFingerprint,
+            pin: (link.clawID, link.rootFingerprint),
             discoveryOrigin: discoveryOrigin,
             peerKey: peerKey,
             previous: previous,
@@ -122,8 +121,7 @@ public enum OpenClawIDNodeTrust {
         try self.assess(
             response: response,
             hostname: hostname,
-            clawID: previous.clawID,
-            rootFingerprint: previous.rootFingerprint,
+            pin: (previous.clawID, previous.rootFingerprint),
             discoveryOrigin: discoveryOrigin,
             peerKey: peerKey,
             previous: previous,
@@ -133,8 +131,7 @@ public enum OpenClawIDNodeTrust {
     private static func assess(
         response: Data,
         hostname expectedHostname: String,
-        clawID: String,
-        rootFingerprint: String,
+        pin: (clawID: String, rootFingerprint: String),
         discoveryOrigin: URL,
         peerKey: String,
         previous: OpenClawIDNodeTrustState?,
@@ -149,10 +146,10 @@ public enum OpenClawIDNodeTrust {
         guard try descriptor["transport"]!.text() == "iroh" else { throw OpenClawIDNodeEnrollmentError.malformed }
         if let reset = descriptor["reset"] { try self.validateReset(reset) }
         let claw = try identifier(descriptor["claw_id"]!)
-        guard claw == clawID else { throw OpenClawIDNodeEnrollmentError.wrongClaw }
+        guard claw == pin.clawID else { throw OpenClawIDNodeEnrollmentError.wrongClaw }
         let root = try key(descriptor["root_pub"]!, prefix: "ed25519:")
         let rootBytes = try OpenClawIDNodeIdentity.unhex(root, prefix: "ed25519:")
-        guard "fp:" + OpenClawIDNodeIdentity.hex(SHA256.hash(data: rootBytes)) == rootFingerprint else {
+        guard "fp:" + OpenClawIDNodeIdentity.hex(SHA256.hash(data: rootBytes)) == pin.rootFingerprint else {
             throw OpenClawIDNodeEnrollmentError.rootMismatch
         }
         let relay = try OpenClawIDNodeEnrollmentLink.routingURL(descriptor["relay_url"]!.text(), originOnly: false)
@@ -179,14 +176,14 @@ public enum OpenClawIDNodeTrust {
         _ = try body["issued_at"]!.number()
         // Match the canonical pin boundary before considering snapshot evidence.
         if let previous {
-            guard previous.clawID == claw, previous.rootFingerprint == rootFingerprint else {
+            guard previous.clawID == claw, previous.rootFingerprint == pin.rootFingerprint else {
                 throw OpenClawIDNodeEnrollmentError.rootMismatch
             }
             guard bindingSequence >= previous.bindingSequence else { throw OpenClawIDNodeEnrollmentError.rollback }
         }
         let pinned = OpenClawIDNodeTrustState(
             clawID: claw,
-            rootFingerprint: rootFingerprint,
+            rootFingerprint: pin.rootFingerprint,
             bindingSequence: bindingSequence,
             snapshotSequence: previous?.snapshotSequence ?? 0,
             snapshotIssuedAt: previous?.snapshotIssuedAt ?? 0,
@@ -205,7 +202,7 @@ public enum OpenClawIDNodeTrust {
             }
             let candidate = OpenClawIDNodeTrustState(
                 clawID: claw,
-                rootFingerprint: rootFingerprint,
+                rootFingerprint: pin.rootFingerprint,
                 bindingSequence: bindingSequence,
                 snapshotSequence: sequence,
                 snapshotIssuedAt: issued,
