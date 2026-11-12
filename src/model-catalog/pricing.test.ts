@@ -319,22 +319,18 @@ describe("hosted model pricing", () => {
   it("prices a proxy serving a vendor's exact model id at the vendor's rate", async () => {
     const agentDir = tempDirs.make("openclaw-vendor-price-");
     vi.stubEnv("OPENCLAW_STATE_DIR", agentDir);
-    const proxy = (baseUrl: string) =>
-      configFor(
-        baseUrl,
-        ["claude-opus-5-5", "claude-opus-5-5-unpublished"].map((id) => ({ id, name: id })),
-        "proxy",
-      );
+    const ids = ["claude-opus-5-5", "claude-opus-5-5-unpublished"].map((id) => ({ id, name: id }));
+    const [config, local] = [
+      configFor(hostedUrl, ids, "proxy"),
+      configFor(privateUrl, ids, "proxy"),
+    ];
     await prepareCatalog({});
-    const config = proxy("https://proxy.example/v1");
-    await prepareModelPricingContext(config);
+    await Promise.all([prepareModelPricingContext(config), prepareModelPricingContext(local)]);
     const anthropic = costFor(config, "claude-opus-5-5", agentDir, "anthropic");
     expect(anthropic).toMatchObject({ input: 4, output: 20 });
     expect(costFor(config, "claude-opus-5-5", agentDir, "proxy")).toEqual(anthropic);
     // Only an id the vendor publishes inherits its price; a local server never does.
     expect(costFor(config, "claude-opus-5-5-unpublished", agentDir, "proxy")).toBeUndefined();
-    const local = proxy(privateUrl);
-    await prepareModelPricingContext(local);
     expect(costFor(local, "claude-opus-5-5", agentDir, "proxy")).toBeUndefined();
   });
 
