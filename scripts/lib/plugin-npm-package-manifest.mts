@@ -671,7 +671,9 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
           throw result.error;
         }
         if (result.status !== 0) {
-          throw new Error(`packing patched runtime dependency failed: ${name}@${version}`);
+          throw new Error(
+            `packing patched runtime dependency failed: ${name}@${version}\n${String(result.stdout ?? "")}`,
+          );
         }
         const output = JSON.parse(String(result.stdout));
         const entries = Array.isArray(output) ? output : Object.values(output);
