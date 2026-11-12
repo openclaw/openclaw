@@ -5,9 +5,9 @@ import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
 const createStore = () => createWorkboardSqliteTestStore({ createStores: createKernelStores });
 
 describe("WorkboardStore completion proofId", () => {
-  it("treats an empty proofId as omitted so OpenAI strict schemas can complete", async () => {
+  it("treats an empty proofId as omitted when inline proof is supplied", async () => {
     const store = createStore();
-    const card = await store.create({ title: "Empty proofId from strict schema" });
+    const card = await store.create({ title: "Empty proofId" });
     const completed = await store.complete(card.id, {
       summary: "echo ok",
       proofId: "",
@@ -18,15 +18,16 @@ describe("WorkboardStore completion proofId", () => {
     expect(completed.metadata?.proof?.[0]?.command).toBe("echo ok");
   });
 
-  it("still rejects a null proofId", async () => {
+  it.each([null, false, 7, "   "])("still rejects malformed proofId %s", async (proofId) => {
     const store = createStore();
-    const card = await store.create({ title: "Null proofId" });
+    const card = await store.create({ title: "Malformed proofId" });
     await expect(
       store.complete(card.id, {
         summary: "echo ok",
-        proofId: null as unknown as string,
+        proofId: proofId as unknown as string,
         proof: { status: "passed", command: "echo ok" },
       }),
     ).rejects.toThrow("proofId must be a non-empty string.");
+    expect((await store.get(card.id))?.status).not.toBe("done");
   });
 });

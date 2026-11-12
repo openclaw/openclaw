@@ -22,6 +22,29 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("completes a claimed card with an empty proofId and inline proof", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const tools = toolsByName(createWorkboardTools({ store, context: { agentId: "main" } }));
+    const card = await store.create({ title: "Inline completion proof" });
+    const claim = readPayload(
+      await tools.get("workboard_claim")?.execute("claim-inline-proof", { id: card.id }),
+    );
+    const completed = readPayload(
+      await tools.get("workboard_complete")?.execute("complete-inline-proof", {
+        id: card.id,
+        token: claim.token,
+        summary: "echo ok",
+        proofId: "",
+        proof: { status: "passed", command: "echo ok" },
+      }),
+    );
+    expect(completed.card).toMatchObject({
+      status: "done",
+      metadata: { proof: [{ status: "passed", command: "echo ok" }] },
+    });
+    expect((await store.get(card.id))?.metadata?.proof).toHaveLength(1);
+  });
+
   it("passes live invocation authority through the default-on Sessions board factory", async () => {
     const store = createWorkboardSqliteTestStore();
     await startEmptySessionsBoardService(store);
