@@ -280,7 +280,7 @@ describe("prepareSimpleCompletionModel", () => {
                 id: "claude-opus-4-6",
                 name: "Claude Opus 4.6",
                 reasoning: false,
-                input: ["text"],
+                input: ["text" as const],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 maxTokens: 4096,
               },
