@@ -202,6 +202,117 @@ const transactions = {
 };
 
 describe("sealed ClawHub recovery manifest", () => {
+  it.each(["timeout", "published", "failed", "read-error", "invalid", "existing-output"])(
+    "retains native recovery custody for %s",
+    (outcome) => {
+      const directory = directories.make("clawhub-recovery-custody-");
+      const manifest = createClawHubRecoveryManifest(transactions, [pending]);
+      const manifestPath = join(directory, "manifest.json");
+      const runPath = join(directory, "run.json");
+      const outputPath = join(directory, "result.json");
+      const transport = join(directory, "transport.mjs");
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+      if (outcome === "existing-output") {
+        writeFileSync(outputPath, "prior result");
+      }
+      writeFileSync(
+        runPath,
+        JSON.stringify({
+          repository: { full_name: "openclaw/openclaw" },
+          head_repository: { full_name: "openclaw/openclaw" },
+          id: 20,
+          run_attempt: 1,
+          path: transactions.identity.workflow,
+          head_sha: transactions.identity.sha,
+          head_branch: transactions.identity.ref,
+          event: "workflow_dispatch",
+        }),
+      );
+      writeFileSync(
+        transport,
+        `
+      import { readFileSync } from "node:fs";
+      let now = 0;
+      let accepted = false;
+      const outcome = ${JSON.stringify(outcome)};
+      Date.now = () => now;
+      globalThis.fetch = async (_url, init) => {
+        if (init?.method === "POST") {
+          accepted = true;
+          if (outcome === "timeout") now = 1_800_001;
+          return Response.json({ name: outcome === "invalid" ? "@openclaw/wrong" : ${JSON.stringify(pending.name)},
+            version: ${JSON.stringify(version)}, recoveredFromAttemptId: "attempt-1",
+            attemptId: "accepted-successor", publicationStatus: "pending" });
+        }
+        if (accepted) {
+          const saved = JSON.parse(readFileSync(${JSON.stringify(outputPath)}, "utf8"));
+          if (saved.complete || saved.recovered[0]?.attemptId !== "accepted-successor" ||
+              saved.recovered[0]?.publicationStatus !== "pending") throw new Error("Lost accepted custody before observation");
+          if (outcome === "read-error") throw new Error("Registry observation interrupted");
+          return Response.json({ name: ${JSON.stringify(pending.name)}, version: ${JSON.stringify(version)},
+            state: outcome, ...(outcome === "failed" ? { attemptId: "accepted-successor", recoverable: true } : {}) });
+        }
+        return Response.json({ name: ${JSON.stringify(pending.name)},
+          version: ${JSON.stringify(version)}, state: "failed",
+          attemptId: "attempt-1", recoverable: true });
+      };
+    `,
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          transport,
+          "scripts/plugin-clawhub-recovery.mjs",
+          "execute",
+          "--manifest",
+          manifestPath,
+          "--run-json",
+          runPath,
+          "--output",
+          outputPath,
+          "--reason",
+          "Recovery",
+        ],
+        { encoding: "utf8", env: { ...process.env, CLAWHUB_TOKEN: "fixture-token" } },
+      );
+      expect(result.status, result.stderr).toBe(outcome === "published" ? 0 : 1);
+      if (outcome === "existing-output") {
+        expect(result.stderr).toContain("EEXIST");
+        expect(readFileSync(outputPath, "utf8")).toBe("prior result");
+        return;
+      }
+      if (outcome === "timeout") {
+        expect(result.stderr).toContain("ClawHub recovery timed out");
+      }
+      if (outcome === "read-error") {
+        expect(result.stderr).toContain("Registry observation interrupted");
+      }
+      if (outcome === "invalid") {
+        expect(result.stderr).toContain("changed the sealed transaction");
+      }
+      expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+        schemaVersion: 1,
+        complete: outcome === "published",
+        recovered:
+          outcome === "invalid"
+            ? []
+            : [
+                {
+                  name: pending.name,
+                  version,
+                  recoveredFromAttemptId: "attempt-1",
+                  attemptId: "accepted-successor",
+                  publicationStatus: ["published", "failed"].includes(outcome)
+                    ? outcome
+                    : "pending",
+                },
+              ],
+      });
+      expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toEqual(manifest);
+    },
+  );
+
   it("seals every available attempt when the complete manifest is unavailable", () => {
     const directory = directories.make("clawhub-cleanup-snapshot-");
     const recordPath = join(directory, "package-publish.json");

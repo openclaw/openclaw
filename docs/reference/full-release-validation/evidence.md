@@ -57,6 +57,13 @@ approval, content, and readback checks. Known enclosing evidence is budgeted bef
 fanout, but later job/attempt growth can still exceed the unchanged final artifact
 limit and fail sealing; evidence is not truncated to fit.
 
+## Native ClawHub recovery evidence
+
+Native recovery records each validated successor in its `--output` result artifact
+before waiting for publication. A timeout or failed observation retains the last
+observed status with `complete: false`; it does not permit replacement publication.
+The original sealed manifest and recovery authorization remain unchanged.
+
 <a id="publication-waivers" />
 
 ## Release-tooling waivers
