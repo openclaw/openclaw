@@ -324,6 +324,7 @@ src/agents/model-catalog-metadata.ts
 src/agents/model-compat-catalog.ts
 src/agents/model-cost-normalization.ts
 src/agents/model-extra-params.ts
+src/agents/model-fallback-stop.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
 src/agents/model-runtime-policy.ts
@@ -500,6 +501,7 @@ src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
 src/auto-reply/reply/inbound-context-marker.ts
+src/auto-reply/reply/message-injection-authority.ts
 src/auto-reply/reply/mixed-silent-reply-tokens.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
@@ -1516,6 +1518,9 @@ src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
 src/logging/logger-file-message.ts
 src/logging/logger-file-transport.ts
+src/logging/logger-file-io.ts
+src/logging/logger-file-worker.ts
+src/logging/logger-file.worker.ts
 src/logging/logger.ts
 src/logging/redact-bounded.ts
 src/logging/redact-edit-composition.ts

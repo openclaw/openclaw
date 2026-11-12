@@ -108,6 +108,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
 
   it.each([
     "private-state",
+    "captured-state",
     "unsafe-state",
     "coordination",
     "worker-private-state",
@@ -118,7 +119,10 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
     fs.mkdirSync(unsafe);
     fs.chmodSync(unsafe, 0o775);
     const state = path.join(fallback.endsWith("unsafe-state") ? unsafe : root, "state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    vi.stubEnv(
+      "OPENCLAW_STATE_DIR",
+      fallback === "captured-state" ? path.join(unsafe, "other-state") : state,
+    );
     const worker = fallback.startsWith("worker-");
     if (worker) {
       vi.spyOn(nodeFilesystemPolicy, "getNodeTrustedWritableAncestors").mockReturnValue([unsafe]);
@@ -132,6 +136,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
       resolvePreferredOpenClawTmpDir({
         preferredDir: path.join(unsafe, "openclaw"),
         tmpdir: () => unsafe,
+        ...(fallback === "captured-state" ? { stateDir: state } : {}),
         purpose: worker ? "worker" : fallback === "coordination" ? "coordination" : "workspace",
         warn,
       });

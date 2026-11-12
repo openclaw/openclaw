@@ -1,3 +1,0 @@
-95
-# Regression coverage for optional schema defaults, dynamic inherited enums and
-# reselect authoring without materializing defaults. Existing scalar/secret tests retain their coverage.

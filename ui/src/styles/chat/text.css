@@ -41,7 +41,7 @@
   );
 
   /* Expand a human message before scrolling code outside its readable preview. */
-  .chat-group.user & :where(pre) {
+  .chat-group.user & :where(pre, .code-block-viewport) {
     overflow: clip;
   }
 }
@@ -1193,6 +1193,40 @@
   background: transparent;
 }
 
+/* Human fences keep the passive block's box; their one control sits in the
+   corner of the first row instead of taking a toolbar row. */
+.code-block-wrapper.code-block-wrapper--wrap-only {
+  border-color: var(--border-strong);
+  background: var(--user-code-bg);
+}
+
+.chat-group.user .code-block-wrapper--wrap-only pre {
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.code-block-wrapper--wrap-only > .code-block-wrap {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 1;
+  width: 24px;
+  height: 24px;
+}
+
+.code-block-wrapper--wrap-only .code-block-wrap__icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Keep the first wrapped row clear of the control. */
+.code-block-wrapper--wrap-only.is-wrapped code::before {
+  float: right;
+  width: 26px;
+  height: 1lh;
+  content: "";
+}
+
 .chat-group.assistant .chat-bubble:has(.code-block-wrapper),
 .chat-group.assistant .chat-text:has(.code-block-wrapper) {
   width: 100%;
@@ -1306,6 +1340,39 @@
 
 .code-block-wrapper.has-horizontal-overflow:not(.is-wrapped) .code-block-viewport {
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+}
+
+/* Human fences wrap by default, so the toggle appears only while it changes the
+   layout, and unwrapping must outrank the human-fence wrap rule above. */
+.code-block-wrapper--wrap-only:not(.has-horizontal-overflow) .code-block-wrap {
+  visibility: hidden;
+}
+
+.code-block-wrapper--wrap-only:not(.is-wrapped) .code-block-viewport :where(pre code) {
+  width: max-content;
+  min-width: 100%;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+/* Include the end padding in the scrollable width so every line can clear the fade. */
+.chat-group.user .code-block-wrapper--wrap-only:not(.is-wrapped) pre {
+  width: max-content;
+  min-width: 100%;
+  padding-right: 48px;
+}
+
+.code-block-wrapper--wrap-only.has-horizontal-overflow:not(.is-wrapped) .code-block-viewport {
+  --code-block-first-row: calc(10px + var(--code-block-line-height));
+
+  mask-image:
+    linear-gradient(to right, black calc(100% - 48px), transparent calc(100% - 34px)),
+    linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-position: top, bottom;
+  mask-size:
+    100% var(--code-block-first-row),
+    100% calc(100% - var(--code-block-first-row));
+  mask-repeat: no-repeat;
 }
 
 .code-block-wrap:hover {

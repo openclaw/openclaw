@@ -3875,7 +3875,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             requestId: "req-talk",
             retryable: false,
             pauseReconnect: true)
-        appModel.gatewayAutoReconnectEnabled = false
         appModel.applyOperatorGatewayConnectionProblem(pairingProblem, route: nil)
         appModel.setTalkEnabled(false)
         #expect(!appModel._test_forceTalkPermissionUpgradeRequest())
@@ -4676,7 +4675,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.backgroundReconnectSuppressed)
         await waitForTalkCondition { !talkMode.isGatewayConnected }
         #expect(!appModel.gatewayConnected)
-        #expect(appModel.gatewayStatusText == "Background idle")
+        #expect(appModel.connection.node == .idle)
     }
 
     @Test @MainActor func `late finalizer release cannot restart Voice Wake in background`() async throws {
@@ -4771,7 +4770,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
         #expect(appModel.isBackgrounded)
         #expect(!appModel.backgroundReconnectSuppressed)
-        #expect(appModel.gatewayStatusText != "Background idle")
     }
 
     @Test @MainActor func `retired foreground health probe cannot reconnect after rebackgrounding`() async throws {
@@ -4785,7 +4783,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         }
         appModel.activeGatewayConnectConfig = config
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
-        appModel.gatewayStatusText = "Connected"
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
 
         appModel.setScenePhase(.background)
@@ -4800,7 +4797,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.isBackgrounded)
         #expect(appModel.gatewayConnected)
         #expect(appModel.isOperatorGatewayConnected)
-        #expect(appModel.gatewayStatusText == "Connected")
         #expect(!appModel._test_hasGatewayLoopTasks().node)
         #expect(!appModel._test_hasGatewayLoopTasks().operator)
     }
@@ -6074,7 +6070,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         configureMockApprovalRoute(appModel, stableID: gatewayStableID)
-        appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
 
@@ -6140,7 +6135,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let (watchService, appModel) = makeWatchModel()
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
-        appModel.gatewayStatusText = "Connected"
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6169,7 +6163,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 
     @Test @MainActor func `watch app snapshot preserves gateway connection progress`() async throws {
         let (watchService, appModel) = makeWatchModel()
-        appModel.setGatewayConnectionProgress(reconnecting: false)
+        appModel.setGatewayConnectionProgress(.connecting)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6257,7 +6251,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
         let (watchService, appModel) = makeWatchModel()
         appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
-        appModel.gatewayStatusText = "Connected"
+        appModel.apply(.attemptStarted, to: .operator, route: nil)
 
         watchService.emitAppSnapshotRequest(
             WatchAppSnapshotRequestEvent(
@@ -6271,6 +6265,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
+        // The node is up, so the attempting operator is what the Watch waits on.
+        #expect(watchService.lastSentAppSnapshot?.gatewayStatus.code == .gatewayConnecting)
 
         appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
         for _ in 0..<20 {

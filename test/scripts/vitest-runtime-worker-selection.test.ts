@@ -28,10 +28,45 @@ const doctorCommandFiles = [
 it.each([
   { name: "Doctor commands", config: commands, files: doctorCommandFiles, runtime: true },
   {
-    name: "Doctor update schema",
+    name: "Doctor infra",
     config: "test/vitest/vitest.infra.config.ts",
-    files: ["src/flows/doctor-health.update-schema.test.ts"],
+    files: [
+      "src/flows/doctor-health.update-schema.test.ts",
+      "src/flows/doctor-health.managed-admission.test.ts",
+      "src/flows/doctor-health.managed-approvals.test.ts",
+      "src/flows/doctor-health.managed-settlement.test.ts",
+      "src/flows/doctor-health.readonly-config.test.ts",
+    ],
     runtime: true,
+  },
+  {
+    name: "Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [
+      "src/flows/doctor-health.migration-refusal.test.ts",
+      "src/flows/doctor-health.nocow.test.ts",
+      "src/flows/doctor-health.plugin-load.test.ts",
+      "src/flows/doctor-health.readonly-filesystem.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "broad unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [],
+    runtime: false,
+  },
+  {
+    name: "mixed Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: ["src/flows/doctor-health.nocow.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
+  },
+  {
+    name: "mixed Doctor infra",
+    config: "test/vitest/vitest.infra.config.ts",
+    files: ["src/flows/doctor-health.managed-settlement.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
   },
   { name: "broad Doctor commands", config: commands, files: [], runtime: false },
   {
@@ -48,6 +83,21 @@ it.each([
       "src/plugins/loader.runtime-registry.test.ts",
     ],
     runtime: true,
+  },
+  {
+    name: "plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: [
+      "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+      "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "mixed plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: ["src/gateway/server.plugin-reload-send-revocation.product.test.ts", "unknown.test.ts"],
+    runtime: false,
   },
   { name: "reply delivery", config: reply, files: [delivery], runtime: true },
   { name: "broad reply", config: reply, files: [], runtime: false },

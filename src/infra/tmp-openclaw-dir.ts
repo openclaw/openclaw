@@ -22,6 +22,8 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
   platform?: NodeJS.Platform;
   preferredDir?: string;
+  /** Captured state fallback for filesystem work dispatched to another isolate. */
+  stateDir?: string;
   /** Coordination stays shared; worker roots cannot rely on the node's ancestry exception. */
   purpose?: "workspace" | "coordination" | "worker";
   tmpdir?: () => string;
@@ -122,7 +124,7 @@ export function resolvePreferredOpenClawTmpDir(
   } catch (error) {
     rejected = error;
   }
-  const stateDir = resolveStateDir();
+  const stateDir = options.stateDir ?? resolveStateDir();
   try {
     const fallbackRoot = resolveRoot({
       ...rootOptions,
