@@ -13,6 +13,10 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 
 ## Getting started
 
+Fresh ChatGPT OAuth setup defaults to `openai/gpt-6.1-sol` for Codex browser
+login, device-code login, and Sign in with ChatGPT (Beta). Existing explicit
+model selections are preserved. API-key setup has its own default.
+
 <Tabs>
   <Tab title="API key (OpenAI Platform)">
     **Best for:** direct API access and usage-based billing.

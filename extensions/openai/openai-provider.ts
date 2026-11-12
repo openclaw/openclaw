@@ -258,14 +258,15 @@ export function buildOpenAIProvider(): ProviderPlugin {
     wizard: apiKeyDefinition.wizard,
   });
   for (const method of providerDefinition.auth) {
+    if (method.kind === "oauth" || method.kind === "device_code") {
+      method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
+    }
     if (method.id === "siwc") {
-      method.starterModel = OPENAI_DEFAULT_MODEL;
       method.run = async (ctx) =>
         (await import("./token-sharing-oauth.runtime.js")).loginTokenSharing(ctx);
       continue;
     }
     if (method.id === "oauth" || method.id === "device-code") {
-      method.starterModel = OPENAI_CODEX_DEFAULT_MODEL;
       method.run = chatGPTAuthRuns[method.id];
       continue;
     }

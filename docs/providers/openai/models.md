@@ -13,7 +13,7 @@ sidebarTitle: "Models"
 
 | Goal                                              | Use                                                                | Notes                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-6.1-sol`                                               | Fresh subscription setup; sign in with Codex auth.                  |
+| ChatGPT OAuth sign-in                             | `openai/gpt-6.1-sol`                                               | Default for Codex browser, device-code, and SIWC sign-in.           |
 | Direct API-key billing for agent turns            | `openai/gpt-6-astra` plus an ordered API-key auth profile          | Fresh API-key setup uses Astra.                                     |
 | GPT-6.1 Sol                                       | `openai/gpt-6.1-sol`                                               | Subscription setup default; reasoning cannot be disabled.           |
 | GPT-6 Sol                                         | `openai/gpt-6-sol`                                                 | Select explicitly; account access can differ between auth routes.   |
