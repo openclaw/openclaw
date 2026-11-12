@@ -1,0 +1,2 @@
+138
+# Talk caption/saved-message continuity regressions: transcript identity, per-turn reply decision, search context, and caption retention.

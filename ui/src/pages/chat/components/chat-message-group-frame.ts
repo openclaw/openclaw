@@ -198,7 +198,9 @@ export function prepareMessageGroupFrame(
   const isTurnBlock =
     normalizedRole === "tool" ||
     (group.messages.length > 0 &&
-      group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
+      group.messages.every(
+        ({ message, voiceReply }) => isProviderVoiceTranscript(message) && !voiceReply,
+      )) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&

@@ -6,9 +6,14 @@ import { getOrCreateWeakOwnerMap } from "../../../../../src/shared/weak-owner-ma
 import {
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
+  voiceTranscriptEventId,
 } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { RealtimeTalkTranscript, RealtimeTalkTranscriptItem } from "./shared.ts";
+import type {
+  RealtimeTalkTranscript,
+  RealtimeTalkTranscriptItem,
+  RealtimeTalkTranscriptOrder,
+} from "./shared.ts";
 
 type ReservedTranscript = {
   previousItemId: string | null | undefined;
@@ -33,6 +38,7 @@ export class ClientVoiceTranscriptQueue {
 
   constructor(
     readonly queue: BoundedSerialQueue,
+    private readonly voiceSessionId: string,
     private readonly write: (
       entryId: string,
       role: "user" | "assistant",
@@ -41,7 +47,7 @@ export class ClientVoiceTranscriptQueue {
     private readonly onFailure: (error: unknown) => void,
   ) {}
 
-  observe(item: RealtimeTalkTranscriptItem): Array<{ itemId: string; order: number }> {
+  observe(item: RealtimeTalkTranscriptItem): RealtimeTalkTranscriptOrder[] {
     if (item.type === "settled") {
       this.settle(this.requireItem(item.itemId));
       return [];
@@ -87,15 +93,22 @@ export class ClientVoiceTranscriptQueue {
       if (entry.final) {
         this.settle(reservation, normalizeVoiceTranscriptText(entry.text) || undefined);
       }
-      return { ...entry, order: reservation.order };
+      return {
+        ...entry,
+        order: reservation.order,
+        ...(reservation.order === undefined
+          ? {}
+          : { transcriptId: this.transcriptId(reservation.order) }),
+      };
     }
     // Google Live and frameless transcripts have no GA item-creation contract.
     // Their provider completion order continues to own unkeyed admission.
     if (entry.final) {
       const text = normalizeVoiceTranscriptText(entry.text);
       if (text) {
-        const entryId = String(++this.sequence);
-        this.enqueue(() => this.write(entryId, entry.role, text), text.length);
+        const order = ++this.sequence;
+        this.enqueue(() => this.write(String(order), entry.role, text), text.length);
+        return { ...entry, transcriptId: this.transcriptId(order) };
       }
     }
     return entry;
@@ -121,8 +134,13 @@ export class ClientVoiceTranscriptQueue {
     return [...missing];
   }
 
-  private assignOrders(closing = false): Array<{ itemId: string; order: number }> {
-    const orders: Array<{ itemId: string; order: number }> = [];
+  /** The saved row's identity: its caption retires once history carries that row. */
+  private transcriptId(order: number): string {
+    return voiceTranscriptEventId(this.voiceSessionId, String(order));
+  }
+
+  private assignOrders(closing = false): RealtimeTalkTranscriptOrder[] {
+    const orders: RealtimeTalkTranscriptOrder[] = [];
     while (true) {
       const pending = [...this.items].filter(([, item]) => item.order === undefined);
       const next =
@@ -146,7 +164,7 @@ export class ClientVoiceTranscriptQueue {
       item.order = item.role === null ? this.sequence : ++this.sequence;
       this.lastItemId = itemId;
       if (item.role !== null) {
-        orders.push({ itemId, order: item.order });
+        orders.push({ itemId, order: item.order, transcriptId: this.transcriptId(item.order) });
       }
     }
     this.notify();

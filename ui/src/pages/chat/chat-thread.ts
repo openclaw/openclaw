@@ -135,7 +135,8 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
         entry.key === candidate.key &&
         entry.message === candidate.message &&
         JSON.stringify(entry.replyTarget) === JSON.stringify(candidate.replyTarget) &&
-        entry.hasVisibleContent === candidate.hasVisibleContent
+        entry.hasVisibleContent === candidate.hasVisibleContent &&
+        entry.voiceReply === candidate.voiceReply
       );
     })
   );

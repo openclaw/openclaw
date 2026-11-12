@@ -9,6 +9,7 @@ import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
+  retainSavingRealtimeTalkCaptions,
   type RealtimeTalkConversationState,
 } from "./talk/conversation-state.ts";
 import type { RealtimeTalkCameraDevice } from "./talk/input.ts";
@@ -95,7 +96,10 @@ export function createInitialChatRealtimeState(): Pick<ChatRealtimeState, "realt
 
 export function stopChatRealtimeTalk(
   state: ChatRealtimeState,
-  options: RealtimeVoiceCloseOptions & { preserveConversation?: boolean } = {},
+  options: RealtimeVoiceCloseOptions & {
+    /** true continues every caption; "saving" keeps those awaiting their saved message. */
+    preserveConversation?: boolean | "saving";
+  } = {},
 ) {
   const session = state.realtimeTalk.snapshot.realtimeTalkSession;
   const playback = state.realtimeTalk.snapshot.realtimeTalkPlayback;
@@ -117,9 +121,16 @@ export function stopChatRealtimeTalk(
     realtimeTalkVideoCapable: false,
     realtimeTalkVideoPending: false,
     realtimeTalkCameraError: false,
-    realtimeTalkConversationState: options.preserveConversation
-      ? continueRealtimeTalkConversation(state.realtimeTalk.snapshot.realtimeTalkConversationState)
-      : createRealtimeTalkConversationState(),
+    realtimeTalkConversationState:
+      options.preserveConversation === "saving"
+        ? retainSavingRealtimeTalkCaptions(
+            state.realtimeTalk.snapshot.realtimeTalkConversationState,
+          )
+        : options.preserveConversation
+          ? continueRealtimeTalkConversation(
+              state.realtimeTalk.snapshot.realtimeTalkConversationState,
+            )
+          : createRealtimeTalkConversationState(),
   });
   playback?.stop();
   void session?.stop({ disposition: options.disposition ?? "detach" });
@@ -311,7 +322,8 @@ export function attachChatRealtimeActions(
       state.realtimeTalk.snapshot.realtimeTalkSession ||
       state.realtimeTalk.snapshot.realtimeTalkActive
     ) {
-      stopChatRealtimeTalk(state, { disposition: "abort" });
+      // The session stays open: captions being saved hand off to their messages.
+      stopChatRealtimeTalk(state, { disposition: "abort", preserveConversation: "saving" });
       return;
     }
     await startRealtimeTalk();

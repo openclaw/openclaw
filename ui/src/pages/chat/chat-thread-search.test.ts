@@ -38,6 +38,26 @@ it.each([
   expect(texts).toEqual([[{ type: "text", text: source }]]);
 });
 
+it("keeps restated Talk speech a transcript when search hides the answer it restates", () => {
+  const speech = (text: string, timestamp: number) =>
+    assistant(text, timestamp, { __openclaw: { voiceTranscript: "provider-owned" } });
+  const found = (searchQuery: string) =>
+    messageGroups({
+      messages: [
+        user("Run the check.", 1_000),
+        assistant("It exited with code 0.", 1_001),
+        speech("It exited with code zero.", 1_002),
+        user("Thanks.", 1_003),
+        speech("Any time at all.", 1_004),
+      ],
+      searchOpen: true,
+      searchQuery,
+    }).flatMap((group) => group.messages.map((item) => item.voiceReply));
+
+  expect(found("code zero")).toEqual([undefined]);
+  expect(found("any time")).toEqual([true]);
+});
+
 it.each([
   ["raw HTML", "hello <b>world</b>"],
   ["a message above the parse budget", `**hello** world ${"x".repeat(40_000)}`],

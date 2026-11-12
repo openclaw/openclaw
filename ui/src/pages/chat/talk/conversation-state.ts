@@ -41,3 +41,18 @@ export function continueRealtimeTalkConversation(
     entries: state.entries.map((entry, order) => ({ ...entry, order, isStreaming: false })),
   };
 }
+
+/**
+ * Ending a call keeps only finished captions whose saved message is still in
+ * flight, so speech does not vanish until history shows it. A failed save leaves
+ * its caption until the next call or session change resets the conversation.
+ */
+export function retainSavingRealtimeTalkCaptions(
+  state: RealtimeTalkConversationState,
+): RealtimeTalkConversationState {
+  return {
+    ...createRealtimeTalkConversationState(),
+    nextEntryId: state.nextEntryId,
+    entries: state.entries.filter((entry) => entry.transcriptId && !entry.isStreaming),
+  };
+}

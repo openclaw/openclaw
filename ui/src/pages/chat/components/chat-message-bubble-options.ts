@@ -63,6 +63,8 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   isForwarded?: boolean;
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
+  /** Provider speech that is its turn's reply renders as one, not as a disclosure. */
+  voiceReply?: boolean;
   transcriptVisible?: PresentationValue;
   showReasoning: boolean;
   bubbleMode?: boolean;

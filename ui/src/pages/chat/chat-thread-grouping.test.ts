@@ -97,6 +97,27 @@ it("keeps provider speech separate from answer ownership and completed-work roll
   expect(collapseCompletedTurnWork(groups, { sessionKey, runWorking: false })).toEqual(groups);
 });
 
+it("treats provider speech as the reply until its turn has a backing answer", () => {
+  const speech = (text: string, timestamp: number) =>
+    message("assistant", text, timestamp, { __openclaw: { voiceTranscript: "provider-owned" } });
+  const groups = cachedGroups([
+    message("user", "Is the browser ready?", 1),
+    speech("I don't know yet. I'll check.", 2),
+    message("assistant", "The browser is ready.", 3),
+    speech("The browser is ready to use.", 4),
+    message("user", "Thanks.", 5),
+    speech("Any time.", 6),
+  ]);
+  expect(groups.map((group) => group.messages.map((item) => item.voiceReply))).toEqual([
+    [undefined],
+    [true],
+    [undefined],
+    [undefined],
+    [undefined],
+    [true],
+  ]);
+});
+
 it("keeps each queued message in the same row through acceptance and persistence", () => {
   const queue: ChatQueueItem[] = ["First queued input", "Second queued input"].map((text, index) =>
     queued(`local-${index}`, text, index + 1, "waiting-reconnect", {

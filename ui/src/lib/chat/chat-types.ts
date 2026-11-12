@@ -383,6 +383,11 @@ export type MessageGroup = {
     replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
+    /**
+     * Provider speech that answers its turn: no backing-agent answer precedes it,
+     * so it renders as the reply instead of a collapsed transcript of one.
+     */
+    voiceReply?: true;
   }>;
   visibleContent: "none" | "text" | "non-text";
   timestamp: number;

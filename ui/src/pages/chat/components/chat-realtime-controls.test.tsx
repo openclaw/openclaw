@@ -20,6 +20,14 @@ it("keeps voice rows keyed through streaming updates and reordered speaker turns
   const props = { assistantName: "Scout", userName: "  Mira  ", entries: [user, assistant] };
   const view = mountSolid(RealtimeTalkConversation, props);
   const rows = Array.from(view.container.querySelectorAll(".agent-chat__voice-turn"));
+  // Captions share the saved messages' group and bubble styles.
+  expect(rows.map((row) => row.matches(".chat-group") && row.className)).toEqual([
+    expect.stringMatching(/\buser\b/),
+    expect.stringMatching(/\bassistant\b/),
+  ]);
+  expect(
+    rows.every((row) => row.querySelector(".chat-group-messages > .chat-bubble") !== null),
+  ).toBe(true);
   expect(
     rows.map((row) => row.querySelector(".agent-chat__voice-turn-speaker")?.textContent),
   ).toEqual(["Mira", "Scout"]);
