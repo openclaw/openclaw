@@ -219,20 +219,25 @@ export function assertControlUiE2eOwnership(
   );
   expect(select(production)).toEqual([[], productionArtifactFiles, [], []]);
 
-  // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
-  const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
-  expect(ordinarySelected.flat()).not.toContain(packagedWorkboard);
-  const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]);
-  expect(
-    projectsOf(prebuilt)
-      .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
-      .filter((project) => project.files.length > 0),
-  ).toEqual([{ name: "ui-e2e-real-gateway-standalone", files: [packagedWorkboard] }]);
-  expect(
-    createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] }).e2e)
-      .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
-      .filter((file) => file === packagedWorkboard),
-  ).toEqual([packagedWorkboard]);
+  // Packaged delivery and credential collection need the prebuilt Gateway runtime,
+  // never the ordinary browser lane whose checkout has no dist/index.js.
+  for (const [file, projectName] of [
+    ["ui/src/pages/workboard/workboard-distribution.e2e.test.ts", "ui-e2e-real-gateway-standalone"],
+    ["ui/src/e2e/question-secrets.real-gateway.e2e.test.ts", "ui-e2e-serial-standalone"],
+  ] as const) {
+    expect(ordinarySelected.flat()).not.toContain(file);
+    const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", file]);
+    expect(
+      projectsOf(prebuilt)
+        .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
+        .filter((project) => project.files.length > 0),
+    ).toEqual([{ name: projectName, files: [file] }]);
+    expect(
+      createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [file] }).e2e)
+        .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
+        .filter((selected) => selected === file),
+    ).toEqual([file]);
+  }
   expect(
     createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [readonlyHome] }).e2e)
       .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
