@@ -24,6 +24,8 @@ enum OnboardingOpenClawIDAction {
     case signIn, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval, requestChat
     case pasteNodeInvitation(discoveryOrigin: String)
     case approveFromDevice, useRecoveryKit, chooseKitFile, retry, back
+    /// The person's own comparison of the six digits on this Mac.
+    case confirmCode(matches: Bool)
     /// The typed recovery code. It is passed straight to the enrollment and not kept in view state.
     case submitRecoveryKit(String)
 }
@@ -51,8 +53,9 @@ enum OnboardingOpenClawIDStep: Equatable {
     case signingIn
     /// The owner picks how this Mac becomes their device.
     case chooseApproval(claw: String, device: String)
-    /// The six digits are shown; the service waits for the approving device on its own.
-    case ownerCompareCode(claw: String, device: String, code: String, approvalURL: URL?)
+    /// The six digits are shown; the service waits for the approving device on its own, and opens
+    /// its handoff only after the person confirmed the match here too.
+    case ownerCompareCode(claw: String, device: String, code: String, approvalURL: URL?, confirmed: Bool)
     case recoveryKitEntry(claw: String)
     case ownerConnected(claw: String, device: String, approvedWith: String)
     case problem(OnboardingOpenClawIDProblem)

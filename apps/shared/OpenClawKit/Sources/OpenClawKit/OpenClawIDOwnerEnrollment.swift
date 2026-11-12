@@ -65,15 +65,18 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         self.sleep = sleep
     }
 
-    /// SAS approval from an existing owner device. `onCode` shows the six digits; the approver
-    /// compares them and admits this device before it seals the handoff, so N waits automatically.
+    /// SAS approval from an existing owner device. `onCode` shows the six digits. The person must
+    /// also confirm on this Mac that they match (`confirmed`: nil while undecided, false for a
+    /// mismatch) before any sealed handoff is opened: otherwise a relay playing the approver could
+    /// seal its own root to a Mac nobody compared (enrollment.md step 6, "both screens").
     public func approveFromDevice(
         session: OpenClawIDDiscoverySession,
         claw: OpenClawIDDiscoveryClaw,
         keys: OpenClawIDOwnerDeviceKeys,
         label: String,
         node: OpenClawIDNodeEnrollmentDescription?,
-        onCode: @escaping @Sendable (String) async -> Void) async throws -> OpenClawIDOwnerEnrolled
+        onCode: @escaping @Sendable (String) async -> Void,
+        confirmed: @escaping @Sendable () async -> Bool?) async throws -> OpenClawIDOwnerEnrolled
     {
         try await self.discovery.bindDevice(session, device: keys.device, peer: keys.peer, label: label)
         let requestID = OpenClawIDNodeIdentity.hex(Self.random(16))
@@ -90,10 +93,29 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         // The approver keeps a request for five minutes after it arrives.
         let deadline = self.now() + 330
         var cursor: String?
-        var accepted: OpenClawIDSASNewDevice.Accepted?
+        var accepted: (sas: OpenClawIDSASNewDevice.Accepted, approver: String)?
+        var sealed: (nonce: String, ciphertext: String)?
         while self.now() < deadline {
+            if let current = accepted, let box = sealed {
+                switch await confirmed() {
+                case nil: break
+                case false?:
+                    try? await self.abort(attempt, to: current.approver, session: session, claw: claw, keys: keys)
+                    throw OpenClawIDOwnerEnrollmentError.denied
+                case true?:
+                    guard let handoff = current.sas.open(nonce: box.nonce, ciphertext: box.ciphertext) else {
+                        throw OpenClawIDOwnerEnrollmentError.handoffInvalid
+                    }
+                    let root = try Self.verifyHandoff(handoff, claw: claw, keys: keys)
+                    return try await self.awaitAdmission(
+                        session: session, claw: claw, rootFingerprint: root, keys: keys, until: self.now() + 120)
+                }
+            } else if let current = accepted, await confirmed() == false {
+                try? await self.abort(attempt, to: current.approver, session: session, claw: claw, keys: keys)
+                throw OpenClawIDOwnerEnrollmentError.denied
+            }
             let (messages, next) = try await self.discovery.receive(
-                session, device: keys.device, clawID: claw.id, after: cursor, wait: 10)
+                session, device: keys.device, clawID: claw.id, after: cursor, wait: sealed == nil ? 10 : 1)
             cursor = next ?? cursor
             for mail in messages where mail.kind == "enrollment" && mail.requestID == attempt.requestID {
                 switch mail.step ?? "" {
@@ -103,7 +125,7 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
                           let current = try? attempt.accepted(ephemeralE: ephemeral, devicePubE: approver),
                           let approverFingerprint = try? OpenClawIDStatement.fingerprint(approver)
                     else { continue }
-                    accepted = current
+                    accepted = (current, approverFingerprint)
                     await onCode(current.code)
                     try await self.discovery.send(
                         session, device: keys.device, clawID: claw.id, to: approverFingerprint, payload: .object([
@@ -112,20 +134,30 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
                             "step": .string("key"),
                             "data": .object(["eph_pub": .string(attempt.ephemeralPublicHex)]),
                         ]))
-                case "sealed":
-                    guard let accepted, let nonce = mail.data["nonce"], let ciphertext = mail.data["ciphertext"]
-                    else { continue }
-                    guard let handoff = accepted.open(nonce: nonce, ciphertext: ciphertext) else {
-                        throw OpenClawIDOwnerEnrollmentError.handoffInvalid
-                    }
-                    let root = try Self.verifyHandoff(handoff, claw: claw, keys: keys)
-                    return try await self.awaitAdmission(
-                        session: session, claw: claw, rootFingerprint: root, keys: keys, until: self.now() + 120)
+                case "sealed" where accepted != nil && sealed == nil:
+                    guard let nonce = mail.data["nonce"], let ciphertext = mail.data["ciphertext"] else { continue }
+                    sealed = (nonce, ciphertext)
                 default: continue
                 }
             }
         }
         throw OpenClawIDOwnerEnrollmentError.expired
+    }
+
+    private func abort(
+        _ attempt: OpenClawIDSASNewDevice,
+        to approver: String,
+        session: OpenClawIDDiscoverySession,
+        claw: OpenClawIDDiscoveryClaw,
+        keys: OpenClawIDOwnerDeviceKeys) async throws
+    {
+        try await self.discovery.send(
+            session, device: keys.device, clawID: claw.id, to: approver, payload: .object([
+                "kind": .string("enrollment"),
+                "request_id": .string(attempt.requestID),
+                "step": .string("abort"),
+                "data": .object(["reason": .string("sas_mismatch")]),
+            ]))
     }
 
     /// Recovery-kit enrollment (enrollment.md, "Kit enrollment"). R is derived here, signs this
@@ -199,6 +231,8 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             guard retries < 3 else { throw OpenClawIDOwnerEnrollmentError.expired }
             seq = try await self.snapshotSequence(session: session, claw: claw, rootFingerprint: rootFingerprint)
             guard seq >= ref else { continue }
+            // The two-minute bound holds across the awaits above: never sign with R after it.
+            guard self.now() < deadline else { throw OpenClawIDOwnerEnrollmentError.expired }
             try await self.sendRootChange(
                 cert: cert,
                 seq: seq + 1,

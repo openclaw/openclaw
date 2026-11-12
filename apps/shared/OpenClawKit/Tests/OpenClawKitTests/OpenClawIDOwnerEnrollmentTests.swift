@@ -254,7 +254,9 @@ struct OpenClawIDOwnerEnrollmentTests {
         #expect(await deviceStore.saved == nil)
     }
 
-    @Test func `SAS enrollment shows the code then opens the approver's handoff`() async throws {
+    /// The handoff arrives either way; only the person's match on this Mac lets it be opened and pinned.
+    @Test(arguments: [true, false])
+    func `SAS enrollment opens the approver's handoff only after the code is confirmed here`(matches: Bool) async throws {
         let vectors = try Vectors()
         let keys = try vectors.keys
         let discovery = try Discovery(vectors: vectors)
@@ -317,13 +319,23 @@ struct OpenClawIDOwnerEnrollmentTests {
             }
         }
         let codes = Codes()
-        let enrolled = try await client.approveFromDevice(
+        // Undecided for the first polls, while the sealed handoff is already waiting.
+        let answers = Answers(pending: 3, then: matches)
+        let attempt = { try await client.approveFromDevice(
             session: Self.session, claw: vectors.claw, keys: keys, label: "Example Mac",
-            node: vectors.description, onCode: { await codes.append($0) })
-        #expect(try enrolled.rootFingerprint == vectors.text("kit", "root_fp"))
+            node: vectors.description, onCode: { await codes.append($0) }, confirmed: { await answers.next() }) }
+        if matches {
+            let enrolled = try await attempt()
+            #expect(try enrolled.rootFingerprint == vectors.text("kit", "root_fp"))
+            #expect(await deviceStore.saved?.peerKey == keys.peer.peerKey)
+        } else {
+            await #expect(throws: OpenClawIDOwnerEnrollmentError.denied) { try await attempt() }
+            #expect(await deviceStore.saved == nil)
+            #expect(await discovery.steps.last == "abort")
+        }
         #expect(await codes.values.count == 1)
         #expect(await codes.values.first?.count == 6)
-        #expect(await deviceStore.saved?.peerKey == keys.peer.peerKey)
+        #expect(await answers.asked >= 3)
     }
 
     @Test func `a declined SAS request ends without a pin`() async throws {
@@ -341,7 +353,7 @@ struct OpenClawIDOwnerEnrollmentTests {
         await #expect(throws: OpenClawIDOwnerEnrollmentError.denied) {
             try await client.approveFromDevice(
                 session: Self.session, claw: vectors.claw, keys: vectors.keys, label: "Example Mac", node: nil,
-                onCode: { _ in })
+                onCode: { _ in }, confirmed: { nil })
         }
         #expect(await deviceStore.saved == nil)
     }
@@ -410,6 +422,26 @@ struct OpenClawIDOwnerEnrollmentTests {
         #expect(OpenClawIDCanonicalJSON.object(mine).encoded == OpenClawIDCanonicalJSON.object(theirs).encoded)
     }
 
+    private actor Answers {
+        private var pending: Int
+        private let answer: Bool
+        private(set) var asked = 0
+
+        init(pending: Int, then answer: Bool) {
+            self.pending = pending
+            self.answer = answer
+        }
+
+        func next() -> Bool? {
+            self.asked += 1
+            guard self.pending == 0 else {
+                self.pending -= 1
+                return nil
+            }
+            return self.answer
+        }
+    }
+
     private actor Codes {
         var values: [String] = []
         func append(_ code: String) {
@@ -454,6 +486,7 @@ struct OpenClawIDOwnerEnrollmentTests {
         private(set) var rootStatements: [OpenClawIDCanonicalJSON] = []
         private(set) var bound: [String] = []
         private(set) var start: OpenClawIDCanonicalJSON?
+        private(set) var steps: [String] = []
 
         init(vectors: Vectors) throws {
             let response = try vectors.node["response"]!.fields(["descriptor", "snapshot"])
@@ -538,6 +571,7 @@ struct OpenClawIDOwnerEnrollmentTests {
                     self.rootStatements.append(change)
                     try await self.rootHook?(change, self)
                 case "enrollment":
+                    try self.steps.append(payload["step"]!.text())
                     guard case let .object(data) = payload["data"]! else { break }
                     try await self.enrollmentHook?(
                         payload["step"]!.text(), data, payload["request_id"]!.text(), self)

@@ -76,23 +76,25 @@ final class MacOpenClawIDDeviceStore {
         }
     }
 
-    /// What the operator route dials with: W, re-verified against the pin before every dial.
+    /// What the operator route dials with: W, re-verified against the pin before every dial. The
+    /// node key and Discovery session are read again for each verification, so turning tools on or
+    /// off, or signing in again, takes effect without replacing the route.
     func operatorEnrollment() -> MacOpenClawIDOperatorEnrollment? {
         guard let device = self.load() else { return nil }
         let databaseURL = self.databaseURL
         return .init(id: device.deviceEnrollmentID, hostname: device.hostname) {
-            let session = await self.session()
             let peer = try await OpenClawIDNodeIdentity.loadOrCreate(store: OpenClawIDNodeIdentityKeychainStore(
                 enrollmentID: device.deviceEnrollmentID, purpose: .devicePeer))
-            let node = try await device.nodeEnrollmentID.asyncMap {
-                try await OpenClawIDNodeIdentity.loadOrCreate(
-                    store: OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: .node))
-            }
             let store = OpenClawIDNodeNativeTrustStore(
                 databaseURL: databaseURL, enrollmentID: device.deviceEnrollmentID, assertCurrent: {})
             return MacOpenClawIDOperatorCredential(
                 identity: peer,
                 verifiedTarget: {
+                    let (nodeID, session) = await MainActor.run { (self.load()?.nodeEnrollmentID, self.session()) }
+                    let node = try await nodeID.asyncMap {
+                        try await OpenClawIDNodeIdentity.loadOrCreate(
+                            store: OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: .node))
+                    }
                     let target = try await OpenClawIDDeviceRoute.refresh(
                         hostname: device.hostname,
                         discoveryOrigin: device.discoveryOrigin,

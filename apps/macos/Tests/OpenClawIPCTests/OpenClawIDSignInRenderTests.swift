@@ -36,7 +36,11 @@ struct OpenClawIDSignInRenderTests {
             ])),
             ("mac-a06-choose-approval", .chooseApproval(claw: claw, device: Self.mac)),
             ("mac-a07-compare-code", .ownerCompareCode(
-                claw: claw, device: Self.mac, code: "482 913", approvalURL: URL(string: "https://\(claw)/"))),
+                claw: claw, device: Self.mac, code: "482 913", approvalURL: URL(string: "https://\(claw)/"),
+                confirmed: false)),
+            ("mac-a08-compare-code-confirmed", .ownerCompareCode(
+                claw: claw, device: Self.mac, code: "482 913", approvalURL: URL(string: "https://\(claw)/"),
+                confirmed: true)),
             ("mac-a09-owner-connected", .ownerConnected(
                 claw: claw, device: Self.mac, approvedWith: "Approved from your other device")),
             ("mac-b02-kit-connected", .ownerConnected(
@@ -73,9 +77,11 @@ struct OpenClawIDSignInRenderTests {
             ("mac-d01-settings-migrate", OpenClawIDSettingsPresentation.migrate(
                 claw: "studio.tail0000.ts.net", route: "Tailscale", address: "studio.tail0000.ts.net")),
             ("mac-e01-settings-owner", .owner(
-                claw: claw, device: Self.mac, runsTools: true, approvedWith: "Approved from your other device")),
+                claw: claw, device: Self.mac, runsTools: true, approvedWith: "Approved from your other device",
+                needsSignIn: false)),
             ("mac-e04-settings-owner-tools-off", .owner(
-                claw: claw, device: Self.mac, runsTools: false, approvedWith: "Approved with your recovery kit")),
+                claw: claw, device: Self.mac, runsTools: false, approvedWith: "Approved with your recovery kit",
+                needsSignIn: true)),
         ] {
             try OnboardingRenderTests.capture(
                 Form { OpenClawIDSettingsSection(presentation: presentation, model: model) }.formStyle(.grouped),

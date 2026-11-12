@@ -251,7 +251,8 @@ struct OnboardingOpenClawIDSignInTests {
                     claw: "studio-fixture",
                     device: "Fixture Mac",
                     code: "123 456",
-                    approvalURL: nil)
+                    approvalURL: nil,
+                    confirmed: false)
             case .checkApproval:
                 return try await withCheckedThrowingContinuation { self.decision = $0 }
             case .useRecoveryKit:

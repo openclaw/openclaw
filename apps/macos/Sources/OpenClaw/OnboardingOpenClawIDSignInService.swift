@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import OpenClawKit
+import Synchronization
 import UniformTypeIdentifiers
 
 /// What sign-in-first enrollment needs from the app, injectable for tests.
@@ -47,6 +48,19 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
     private var claws: [OpenClawIDDiscoveryClaw] = []
     private var claw: OpenClawIDDiscoveryClaw?
     private var approval: Task<(MacOpenClawIDDevice, OpenClawIDDiscoverySession), Error>?
+    /// The current attempt's code and the person's answer (nil until they compare).
+    private var compare: (step: OnboardingOpenClawIDStep, answer: CodeAnswer)?
+
+    final class CodeAnswer: Sendable {
+        private let value = Mutex<Bool?>(nil)
+        var current: Bool? {
+            self.value.withLock { $0 }
+        }
+
+        func set(_ matches: Bool) {
+            self.value.withLock { $0 = matches }
+        }
+    }
 
     convenience init() {
         let configuration = MacOpenClawIDConfiguration.current()
@@ -109,6 +123,13 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             return .chooseApproval(claw: claw.hostname, device: self.environment.deviceName())
         case .approveFromDevice:
             return try await self.approveFromDevice()
+        case let .confirmCode(matches):
+            guard let compare, case let .ownerCompareCode(claw, device, code, url, _) = compare.step else {
+                throw CocoaError(.featureUnsupported)
+            }
+            compare.answer.set(matches)
+            // A mismatch ends the attempt; the wait reports it as not approved.
+            return .ownerCompareCode(claw: claw, device: device, code: code, approvalURL: url, confirmed: matches)
         case .retry:
             // From an expired request, ask for a new code; from an offline claw, look again.
             return self.claw?.online == true ? try await self.approveFromDevice() : try await self.refreshClaws()
@@ -139,6 +160,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         self.environment.cancelSignIn()
         self.approval?.cancel()
         self.approval = nil
+        self.compare = nil
         self.nodeInvitations.cancel()
         self.claw = nil
     }
@@ -224,6 +246,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         let client = self.client(device, configuration: configuration)
         let label = self.label()
         let codes = AsyncThrowingStream<String, Error>.makeStream()
+        let answer = CodeAnswer()
         self.approval = Task {
             do {
                 _ = try await client.approveFromDevice(
@@ -232,7 +255,8 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
                     keys: keys,
                     label: label,
                     node: description,
-                    onCode: { codes.continuation.yield($0) })
+                    onCode: { codes.continuation.yield($0) },
+                    confirmed: { answer.current })
                 codes.continuation.finish()
                 return (device, session)
             } catch {
@@ -243,11 +267,14 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         do {
             var iterator = codes.stream.makeAsyncIterator()
             guard let code = try await iterator.next() else { throw CancellationError() }
-            return .ownerCompareCode(
+            let step = OnboardingOpenClawIDStep.ownerCompareCode(
                 claw: claw.hostname,
                 device: self.environment.deviceName(),
                 code: Self.spaced(code),
-                approvalURL: URL(string: "https://\(claw.hostname)/"))
+                approvalURL: URL(string: "https://\(claw.hostname)/"),
+                confirmed: false)
+            self.compare = (step, answer)
+            return step
         } catch {
             return try self.problem(error, claw: claw)
         }

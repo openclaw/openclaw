@@ -216,15 +216,23 @@ struct OnboardingOpenClawIDContent: View {
                 You can stop this in Settings.
                 """,
                 icon: "wrench.and.screwdriver")
-        case let .ownerCompareCode(claw, device, code, approvalURL):
+        case let .ownerCompareCode(claw, device, code, approvalURL, confirmed):
             self.heading(
                 "Compare the code",
                 subtitle: "On a device that already has access to \(claw), open the request from \(device).")
             Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).textSelection(.enabled)
-            Text("Approve only if all six digits match.").foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                ProgressView().controlSize(.small)
-                Text("Waiting for approval…").foregroundStyle(.secondary)
+            if confirmed {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for approval…").foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Does the other device show the same six digits?").foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button("They don’t match") { self.action(.confirmCode(matches: false)) }
+                    Button("The codes match") { self.action(.confirmCode(matches: true)) }
+                        .buttonStyle(.borderedProminent)
+                }
             }
             self.note("""
             Look for the notification in \(claw)’s Control UI, or open Account → Your devices → \
