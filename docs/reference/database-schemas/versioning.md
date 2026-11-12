@@ -235,8 +235,11 @@ shape without writing; any other difference is still refused as drift. A value o
 seeding with the initializer across restarts and failed dependency setup; normal
 workspace preparation does not seed defaults or mark setup complete. Successful
 package seeding clears the flag. Existing milestones and attestation hashes are
-unchanged, and existing rows need no backfill. Older builds ignore the column and
-do not resume this new Template setup flow; downgrading is not a setup retry.
+unchanged, and existing rows need no backfill. On SQLite, older builds ignore the
+column and do not resume this new Template setup flow; downgrading is not a setup retry.
+On PostgreSQL, builds that predate the column refuse a completed store as schema drift,
+as they refuse stores created with it; returning to one requires restoring the matching
+PostgreSQL schema and anchor from before the upgrade.
 The numeric schema version and backup policy are unchanged.
 
 Session-window preview caching adds bare nullable `row_transcript_json TEXT` and
