@@ -412,7 +412,7 @@ describeProviderLive("anthropic transport stream provider live", () => {
 
   it.for([
     {
-      name: "keeps a healthy forced tool when a sibling descriptor is unreadable",
+      name: "keeps a healthy forced tool when a sibling schema is malformed",
       sdk: false,
       value: "LIVE_OK",
       errorPrefix: "forced",
@@ -445,11 +445,10 @@ describeProviderLive("anthropic transport stream provider live", () => {
       ],
       tools: [
         {
-          name: "unreadable_probe",
-          description: "Unreadable probe",
-          get parameters() {
-            throw new Error("live unreadable parameters getter");
-          },
+          name: "malformed_probe",
+          description: "Malformed probe",
+          // Readable malformed schemas are quarantined; throwing getters fail before handoff.
+          parameters: { type: "object", required: "value" },
         },
         {
           name: "healthy_probe",
