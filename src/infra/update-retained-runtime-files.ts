@@ -75,6 +75,7 @@ export async function prepareRetainedRuntimeFiles(params: {
   const counts = await linkUpdateCandidatePluginTrees(plan, {
     targetStateDir: params.privateRoot,
     candidateRoot,
+    ownPackageRoot: params.sourceRoot,
     // Only this subprocess writes the private tree. Its parent kills and joins
     // the process before cleanup, then rechecks authority before using the result.
     assertCurrent() {},

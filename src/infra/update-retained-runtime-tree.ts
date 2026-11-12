@@ -3,7 +3,7 @@ import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
 import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
-import { hasNodeErrorCode } from "./path-guards.js";
+import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import { copyUpdateCandidatePluginFileBytes } from "./update-candidate-plugin-file.js";
 import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
 import {
@@ -20,6 +20,32 @@ import {
   relocateRuntimeSymlink,
   resolveRuntimeFileRelocator,
 } from "./update-runtime-relocation.js";
+
+/**
+ * Files inside an installed dependency package, never the OpenClaw package's own
+ * files or package-manager control entries (dot names such as `.pnpm` metadata or
+ * `.openclaw.package-activation-*`). Package recovery objects live only in the
+ * latter, so dependency bytes can be linked whatever their mode. Under a private
+ * umask every dependency file is owner-private; copying them all made retention
+ * take minutes on large checkouts.
+ */
+function isRetainedDependencyPackageFile(file: string, ownPackageRoot: string): boolean {
+  const own = path.relative(ownPackageRoot, file);
+  if (
+    isPathInside(ownPackageRoot, file) &&
+    !own.split(path.sep).slice(0, -1).includes("node_modules")
+  ) {
+    return false;
+  }
+  const parts = file.split(path.sep);
+  const modules = parts.lastIndexOf("node_modules");
+  const name = modules >= 0 ? parts[modules + 1] : undefined;
+  if (!name || name.startsWith(".")) {
+    return false;
+  }
+  // The package directory itself, then at least one entry inside it.
+  return parts.length > modules + (name.startsWith("@") ? 3 : 2);
+}
 
 const isLinkUnsupported = (error: unknown) =>
   ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].some((code) =>
@@ -38,6 +64,8 @@ export async function linkUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     assertCurrent: () => void;
+    /** Owner-private files outside this package's dependency trees are copied. */
+    ownPackageRoot?: string;
   },
 ): Promise<{ linked: number; copied: number } | { unusableReason: string }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
@@ -105,8 +133,13 @@ export async function linkUpdateCandidatePluginTrees(
     } else {
       // Recovery objects can also live in dist. Retaining owner-private bytes
       // must not change the source's link count or sealed recovery fingerprint.
+      // Dependency packages hold no recovery state, so their mode alone does not force a copy.
       let copy =
-        (entry.mode & 0o077) === 0 ||
+        ((entry.mode & 0o077) === 0 &&
+          !(
+            params.ownPackageRoot &&
+            isRetainedDependencyPackageFile(entry.path, params.ownPackageRoot)
+          )) ||
         pluginFiles.has(entry.path) ||
         Boolean(resolveRuntimeFileRelocator(destination));
       if (!copy) {

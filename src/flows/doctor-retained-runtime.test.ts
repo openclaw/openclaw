@@ -209,10 +209,19 @@ it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadab
 });
 
 it.each([
-  ["Gateway", ["openclaw-gateway"], true],
-  ["title-erased CLI that may be its updater", ["openclaw"], false],
-] as const)("Doctor with a live %s", async (_name, argv, reclaimed) => {
+  ["Gateway", ["openclaw-gateway"], true, false],
+  ["title-erased CLI that may be its updater", ["openclaw"], false, false],
+  // Only the recorded creating updater can hold a runtime it does not reference.
+  ["title-erased CLI that is not its recorded creator", ["openclaw"], true, true],
+] as const)("Doctor with a live %s", async (_name, argv, reclaimed, recordedCreator) => {
   const runtime = projection("Gate01");
+  if (recordedCreator) {
+    fs.writeFileSync(
+      path.join(runtime, "creator.json"),
+      JSON.stringify({ pid: 4246, startTimeMicros: Date.now() * 1000 }),
+      { mode: 0o600 },
+    );
+  }
   const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
     "../infra/openclaw-process-census.js",
   );

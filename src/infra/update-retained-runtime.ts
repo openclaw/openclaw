@@ -19,6 +19,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
   maintainRetainedUpdateRuntimes,
+  recordRetainedUpdateRuntimeCreator,
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
@@ -166,6 +167,7 @@ async function runWithRetainedUpdateRuntime<T>(
               if (sourceStat.dev === parentStat.dev) {
                 directory = await fs.mkdtemp(path.join(parent, "openclaw-update-runtime-"));
                 unregister = registerRetainedUpdateRuntime(directory);
+                await recordRetainedUpdateRuntimeCreator(directory);
               }
             } catch (error) {
               if (
@@ -189,6 +191,7 @@ async function runWithRetainedUpdateRuntime<T>(
             assertCurrent();
             directory = await fs.mkdtemp(path.join(temporary, "openclaw-update-runtime-"));
             unregister = registerRetainedUpdateRuntime(directory);
+            await recordRetainedUpdateRuntimeCreator(directory);
           }
           const privateRoot = await fs.realpath(directory);
           assertCurrent();
@@ -251,6 +254,10 @@ async function runWithRetainedUpdateRuntime<T>(
             return undefined;
           }
           const { relocations: retainedRelocations, fileCount, ...metrics } = retained;
+          // Linked vs copied separates cheap retention from a full byte copy.
+          log.info(
+            `Runtime retention attempt 1/1: retained ${metrics.entries} entries (${metrics.linked} linked, ${metrics.copied} copied) in ${metrics.materializationMs}ms after ${metrics.inventoryMs}ms inventory`,
+          );
           const files = await readRetainedRuntimeFileList(privateRoot, { fileCount });
           assertCurrent();
           const relocations = prepareRuntimeRelocations(

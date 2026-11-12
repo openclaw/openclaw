@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
@@ -150,4 +151,54 @@ it("refuses a retained file list that does not match the worker's reply", async 
   await expect(readRetainedRuntimeFileList(privateRoot, reply)).resolves.toEqual([
     "/opt/runtime/package.json",
   ]);
+});
+
+// Private umasks (077) make every installed file owner-private. Package recovery
+// state stays copied; dependency package bytes are linked whatever their mode.
+it.skipIf(process.platform === "win32").each([
+  ["git checkout", ""],
+  ["global package", "lib/node_modules/openclaw"],
+] as const)("links owner-private dependency files in a %s", async (_name, packagePath) => {
+  const prefix = fs.realpathSync(dirs.make("retained-runtime-private-source-"));
+  const sourceRoot = path.join(prefix, packagePath);
+  const write = (file: string, content: string) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, content, { mode: 0o600 });
+    return file;
+  };
+  const inSource = (relative: string, content: string) =>
+    write(path.join(sourceRoot, relative), content);
+  inSource("package.json", JSON.stringify({ name: "openclaw", type: "module" }));
+  const own = inSource("dist/index.js", "import 'dep';\n");
+  const dependency = inSource("node_modules/dep/index.js", "export default 1;\n");
+  inSource("node_modules/dep/package.json", JSON.stringify({ name: "dep", main: "index.js" }));
+  const scoped = inSource("node_modules/@scope/pkg/index.js", "export default 2;\n");
+  inSource("node_modules/@scope/pkg/package.json", JSON.stringify({ name: "@scope/pkg" }));
+  const pnpm = inSource(
+    "node_modules/.pnpm/hoisted@1.0.0/node_modules/hoisted/index.js",
+    "export default 3;\n",
+  );
+  inSource(
+    "node_modules/.pnpm/hoisted@1.0.0/node_modules/hoisted/package.json",
+    JSON.stringify({ name: "hoisted" }),
+  );
+  fs.symlinkSync(
+    path.join(sourceRoot, "node_modules/.pnpm/hoisted@1.0.0/node_modules/hoisted"),
+    path.join(sourceRoot, "node_modules/hoisted"),
+  );
+  const control = inSource("node_modules/.package-lock.json", "{}\n");
+  const privateRoot = path.join(fs.realpathSync(dirs.make("retained-runtime-private-")), "r");
+  const result = await prepareRetainedRuntimeFiles({
+    privateRoot,
+    sourceRoot,
+    roots: ["package.json", "dist", "node_modules"].map((name) => path.join(sourceRoot, name)),
+    retainedDependencyRoot: sourceRoot,
+  });
+  expect(result).not.toHaveProperty("unusableReason");
+  const nlink = (file: string) => fs.lstatSync(file).nlink;
+  expect([nlink(dependency), nlink(scoped), nlink(pnpm)]).toEqual([2, 2, 2]);
+  // The package's own private bytes, including a global install's dist under
+  // node_modules, and package-manager control entries keep nlink=1.
+  expect([nlink(own), nlink(control)]).toEqual([1, 1]);
+  expect(result).toMatchObject({ linked: 3 });
 });

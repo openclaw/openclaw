@@ -1,7 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const {
@@ -17,6 +17,7 @@ const {
   nativeDarwinCensus,
   rosetta,
   ancestry,
+  identity,
   fixturePath,
 } = vi.hoisted(() => ({
   census: vi.fn(),
@@ -31,6 +32,7 @@ const {
   nativeDarwinCensus: vi.fn(),
   rosetta: vi.fn(),
   ancestry: vi.fn(),
+  identity: vi.fn(),
   fixturePath: (file: string) => file.replaceAll("\\", "/").replace(/^[A-Za-z]:/, ""),
 }));
 vi.mock("node:child_process", () => ({ spawnSync: census }));
@@ -60,7 +62,10 @@ vi.mock("../process/supervisor/darwin-process-command.js", () => ({
   readDarwinProcessCommand: darwinCommand,
 }));
 // mock-isolation: Native ancestry would otherwise read real host PIDs behind the synthetic table.
-vi.mock("@openclaw/proc-safe/identity", () => ({ readProcessAncestry: ancestry }));
+vi.mock("@openclaw/proc-safe/identity", () => ({
+  readProcessAncestry: ancestry,
+  readProcessIdentity: identity,
+}));
 import {
   type HandoffReferences,
   inspectOtherOpenClawProcesses,
@@ -117,6 +122,9 @@ beforeEach(() => {
   );
   rosetta.mockReset().mockReturnValue(false);
   ancestry.mockReset().mockReturnValue(null);
+  identity.mockReset().mockImplementation(() => {
+    throw new Error("process identity is unavailable");
+  });
   realpath.mockReset().mockImplementation((file: string) => file);
   stat.mockReset().mockReturnValue({ isDirectory: () => false });
   readlink.mockReset().mockImplementation((file: string) => {
@@ -799,4 +807,76 @@ it("reports shared-root work unless its whole ancestry began after the family de
   expect(inspectOtherOpenClawProcesses({ ...handoff, familyDeadline }).matchingPids).toEqual(
     holders,
   );
+});
+
+describe("retained runtime creation time", () => {
+  const runtime = "/tmp/openclaw-update-runtime-Held01";
+  const createdNoLaterThanMs = Date.UTC(2026, 9, 19);
+  const startedAt = (ms: number) => ({
+    pid: peer,
+    parentPid: 1,
+    startTimeMicros: ms * 1000,
+    startTimeResolutionMicros: 10_000,
+    exited: false,
+  });
+
+  it("releases unscoped OpenClaw processes that started after the runtime was created", () => {
+    // An OpenClaw CLI without artifact evidence is an unscoped holder.
+    processRow(peer, ["node", "/app/dist/index.js"]);
+    processRow(peer + 1, ["node", "/app/dist/index.js"]);
+    identity.mockImplementation((pid: number) =>
+      startedAt(pid === peer ? createdNoLaterThanMs + 3_600_000 : createdNoLaterThanMs - 1_000),
+    );
+    expect(inspectOtherOpenClawProcesses(runtime)).toEqual({ pids: [peer, peer + 1] });
+    expect(inspectOtherOpenClawProcesses(runtime, { createdNoLaterThanMs })).toEqual({
+      pids: [peer + 1],
+    });
+  });
+
+  it("keeps processes that reference the runtime or lack a start time", () => {
+    processRow(peer, ["node", `${runtime}/tree/worker.js`]);
+    processRow(peer + 1, ["node", "/app/dist/index.js"]);
+    processRow(peer + 2, ["node", "/app/dist/index.js"], { cwd: runtime });
+    identity.mockImplementation((pid: number) => {
+      if (pid === peer + 1) {
+        throw new Error("process identity is unavailable");
+      }
+      return startedAt(createdNoLaterThanMs + 3_600_000);
+    });
+    expect(inspectOtherOpenClawProcesses(runtime, { createdNoLaterThanMs })).toMatchObject({
+      pids: [peer, peer + 1, peer + 2],
+    });
+  });
+
+  it("keeps processes that started within the clock margin", () => {
+    processRow(peer, ["node", "/app/dist/index.js"]);
+    identity.mockReturnValue(startedAt(createdNoLaterThanMs + 30_000));
+    expect(inspectOtherOpenClawProcesses(runtime, { createdNoLaterThanMs })).toEqual({
+      pids: [peer],
+    });
+  });
+
+  it("releases every unreferenced process except a live recorded creator", () => {
+    const creatorStart = createdNoLaterThanMs - 5_000;
+    processRow(peer, ["node", "/app/dist/index.js"]);
+    processRow(peer + 1, ["node", "/app/dist/index.js"]);
+    processRow(peer + 2, ["node", `${runtime}/tree/worker.js`]);
+    // All predate the runtime, so creation time alone cannot release them.
+    identity.mockImplementation((pid: number) =>
+      startedAt(pid === peer ? creatorStart : createdNoLaterThanMs - 3_600_000),
+    );
+    const creation = {
+      createdNoLaterThanMs,
+      creator: { pid: peer, startTimeMicros: creatorStart * 1000 },
+    };
+    expect(inspectOtherOpenClawProcesses(runtime, { createdNoLaterThanMs })).toEqual({
+      pids: [peer, peer + 1, peer + 2],
+    });
+    expect(inspectOtherOpenClawProcesses(runtime, creation)).toEqual({
+      pids: [peer, peer + 2],
+    });
+    // A reused creator PID names a different process.
+    identity.mockImplementation(() => startedAt(createdNoLaterThanMs + 86_400_000));
+    expect(inspectOtherOpenClawProcesses(runtime, creation)).toEqual({ pids: [peer + 2] });
+  });
 });
