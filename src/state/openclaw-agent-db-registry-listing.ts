@@ -17,7 +17,10 @@ import {
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
-import { inspectDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import {
+  inspectDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -173,12 +176,17 @@ function advanceRegisteredAgentDatabasesMemo(
 
 function captureRegistryMutation(
   kind: AgentDatabaseRegistryMutation["kind"],
-  sources: readonly { agentId: string; path: string; schemaVersion?: number }[],
+  sources: readonly {
+    agentId: string;
+    path: string;
+    schemaVersion?: number;
+    capturedIdentity?: DatabasePathIdentity;
+  }[],
 ): AgentDatabaseRegistryMutation | undefined {
   try {
     const captured: AgentDatabaseRegistrySource[] = [];
     for (const source of sources) {
-      const identity = inspectDatabasePathIdentitySync(source.path);
+      const identity = source.capturedIdentity ?? inspectDatabasePathIdentitySync(source.path);
       if (!identity) {
         return undefined;
       }
@@ -291,6 +299,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
   kind?: AgentDatabaseRegistryMutation["kind"];
   agentId: string;
   agentPath: string;
+  capturedIdentity?: DatabasePathIdentity;
   admission: OpenClawStateDatabaseReadAdmission;
   assertPublicationCurrent?: () => void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
@@ -298,7 +307,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
   const options = { path: params.admission.databasePath };
   const operation = Symbol("agent-registry-registration");
   const mutation = captureRegistryMutation(params.kind ?? "upsert", [
-    { agentId: params.agentId, path: params.agentPath },
+    { agentId: params.agentId, path: params.agentPath, capturedIdentity: params.capturedIdentity },
   ]);
   const advance = (phase: RegistryTransition["phase"]) => {
     const change = advanceRegisteredAgentDatabasesMemo(options.path, {

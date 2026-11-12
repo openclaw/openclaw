@@ -46,10 +46,7 @@ import type {
   AgentDatabaseExecutionScope,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  captureOpenClawAgentDatabasePreparationExecution,
-} from "./openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -144,6 +141,7 @@ type AgentWorkerPublicationExecution = Pick<
 type AgentWorkerPublicationOptions = {
   moduleUrl: URL;
   input: unknown;
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
   assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
   observeAdmission?: (
     admission: SqliteWorkerOperationAdmission,
@@ -251,7 +249,7 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
     resolveOpenClawStateSqlitePath(options.env),
   );
   const terminalExecution = ownedAuthority
-    ? captureOpenClawAgentDatabaseExecution(options)
+    ? await captureOpenClawAgentDatabaseExecutionAsync(options)
     : undefined;
   const capturedExecution =
     terminalExecution ??
@@ -421,11 +419,10 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       assertCurrent();
       assertHeld();
     };
-    const execution = prepare
-      ? captureOpenClawAgentDatabasePreparationExecution(options, expectedIdentity)
-      : captureOpenClawAgentDatabaseExecution(options, { expectedIdentity });
+    let execution: OpenClawAgentDatabaseExecution | undefined;
     const source: AgentDatabaseRequestExecutionSource = {
       assertCurrent: assert,
+      readCustody: worker.readCustody,
       createAdmission(binding) {
         return (retained) => {
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
@@ -449,7 +446,15 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       try {
         const publicationValue = await runOpenClawAgentWorkerWrite(
           options,
-          () => operation(execution, source),
+          async () => {
+            execution = await captureOpenClawAgentDatabaseExecutionAsync(
+              options,
+              { expectedIdentity },
+              prepare ? "inherit" : undefined,
+            );
+            assert();
+            return operation(execution, source);
+          },
           undefined,
           signal,
         );

@@ -232,11 +232,13 @@ export async function appendSessionTurnInWorker(
     }
     const operation = {
       database,
+      workspaceEvidence: ownerSource?.workspaceEvidence,
+      readCustody: ownerSource?.readCustody,
       retainedExecution: execution,
       agentId: scope.agentId,
       assertCurrent,
       candidateKind: "session-turn",
-      onTransactionFacts(facts) {
+      onTransactionFacts(this: void, facts) {
         if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
           return true;
         }
@@ -505,6 +507,12 @@ export async function appendSessionTurnInWorker(
           }
         };
         const authority: SessionActorAuthority = {
+          workspaceEvidence: (inputActor.storageAuthority?.workspaceEvidence ?? []).concat(
+            ownerSource?.workspaceEvidence ?? [],
+          ),
+          readCustody: (inputActor.storageAuthority?.readCustody ?? []).concat(
+            ownerSource?.readCustody ?? [],
+          ),
           assertCurrent: () => checkAuthority(assertCurrent),
           authorize(stage, state, publication) {
             checkAuthority(() => {
@@ -535,24 +543,22 @@ export async function appendSessionTurnInWorker(
               database,
               undefined,
               assertCurrent,
-              (preparedExecution, source) =>
-                preparedExecution
-                  .runExisting(source, (worker) =>
-                    worker.execute({ type: "session.turn.prepare", input: plan }),
-                  )
-                  .then((prepared) => {
-                    if (!prepared) {
-                      throw new Error("Input preparation lost its database");
-                    }
-                    return prepared;
-                  }),
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              (publication) => {
-                operation.onTransactionFacts(publication);
+              async (preparedExecution, source) => {
+                source.workspaceEvidence = authority.workspaceEvidence;
+                source.readCustody = authority.readCustody;
+                const prepared = await preparedExecution.runExisting(source, (worker) =>
+                  worker.execute({ type: "session.turn.prepare", input: plan }),
+                );
+                if (!prepared) {
+                  throw new Error("Input preparation lost its database");
+                }
+                return prepared;
               },
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              operation.onTransactionFacts,
             );
           },
           async () => {

@@ -1705,15 +1705,12 @@ without opening a SQLite database or allocating a database worker.
 Ordinary discovery keeps one captured roster and listing through completion.
 Later registry, path, or row changes are observed on the next owner preparation;
 there is no post-read registry retry or repeated listing-identity capture.
-Registry receipts and physical replacement invalidate reusable target facts.
-The discovery memo adopts each decoded result once and shares a deeply readonly,
-frozen snapshot on warm reads. Inventory preparation captures its selection facts
-once; repeated reads still check registry, physical-file, and applicable row revisions.
-Session-row writes invalidate fixed-store inventories, whose agent visibility
-can depend on those rows. Per-agent inventories retain their path and registry
-facts across ordinary turns, avoiding another discovery and
-reader-cleanup request. Current authorization at
-search disclosure, project removal, and other real effects remains required.
+Each preparation asks the existing discovery worker for its selected facts. There
+is no host selection memo that polls file identity or write revisions before
+reusing an inventory. Fixed-store visibility is read from current rows, including
+after the database owner closes; per-agent targets keep the same ownership policy.
+Current authorization at search disclosure, project removal, and other real
+effects remains required.
 The released synchronous transcript-hit SDK and native mutation callbacks retain
 their existing kernels until those owning contracts are migrated; this is not a
 claim that all shared discovery kernels are worker-only.
@@ -4096,7 +4093,11 @@ Bundled session-entry patches use the agent executor for snapshot reads,
 CAS validation, mutation, and COMMIT. Usage accounting, compaction
 accounting, restart cleanup, activity recaps, and the entry owner's prepared
 upsert, replacement, and route-metadata operations share this default path.
-The host runs each updater once and retains live authority. Recap transcript
+The host runs each updater once and retains live authority. Captured entry targets
+carry their physical identity and birthtime into execution without rediscovering
+the file. The native owner checks that identity before and after mutation grants;
+host patch callbacks do not poll the filesystem. Already admitted reads may finish
+on their retained file; the next command checks the pathname again. Recap transcript
 predicates run inside the write transaction before CAS. Bounded provisional
 result transfers precede the final grant; a compact native receipt certifies the
 exact committed result. Publication, committed callbacks, and identity observers

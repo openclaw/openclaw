@@ -65,7 +65,7 @@ export async function assertSessionActorPathAliasReuse(
 
   const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
   const actorDatabase = { agentId: database.agentId, path: database.path, env };
-  const actor = captureDurableSessionActor({
+  const actor = await captureDurableSessionActor({
     database: actorDatabase,
     target: {
       sessionKey,

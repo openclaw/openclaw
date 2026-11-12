@@ -146,7 +146,7 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
     const target = targetFor(scope.sessionKey);
     readSessionActorEntryFacts(target);
     const observed = observeEntries(scope.sessionKey);
-    let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
+    let actor: Awaited<ReturnType<typeof captureDurableSessionActor>> | undefined;
     try {
       await owners.upsertSessionEntryCore(scope, {
         sessionId: "publication-patch",
@@ -163,7 +163,7 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
         { message: { role: "user", content: "Synthetic retained transcript" }, now: 2 },
       );
       const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-      const currentActor = captureDurableSessionActor({
+      const currentActor = await captureDurableSessionActor({
         database: { agentId: "main", path: database.path },
         target,
         lifetime: authority,

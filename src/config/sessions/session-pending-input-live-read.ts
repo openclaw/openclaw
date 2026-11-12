@@ -27,7 +27,10 @@ export async function prepareForeignLiveSessionPendingInputEntries(
   });
   const target = memory
     ? undefined
-    : captureSessionStoreReadTarget(captured, "Live input changed its captured database owner");
+    : await captureSessionStoreReadTarget(
+        captured,
+        "Live input changed its captured database owner",
+      );
   const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
   signal?.throwIfAborted();
   const sessionKey = resolveSqliteSessionKey(captured.sessionKey, resolved.agentId);

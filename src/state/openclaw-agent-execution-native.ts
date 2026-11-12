@@ -10,11 +10,7 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   bindSqliteWorkerExecutionAuthority,
   type SqliteWorkerAdmissionFactory,
@@ -83,8 +79,10 @@ export function createAgentDatabaseNativeGeneration(
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
   startupPreparation = false,
   observePreparedIntegrity?: () => void,
+  initialIdentity?: DatabasePathIdentity,
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
+  const validationSource = { agentId, path: pathname, canonicalPath: pathname };
   const processOwner = captureGatewayStateOwner(context.admission.databasePath);
   const startupSignal = startupPreparation ? resolveSqliteInspectionSignal() : undefined;
   const startupCancellation = startupSignal
@@ -143,7 +141,7 @@ export function createAgentDatabaseNativeGeneration(
     lifetime.retire();
     // Before the lease handoff this generation has borrowed no validation.
     if (lease) {
-      invalidateOpenClawAgentDatabaseValidation(pathname);
+      invalidateOpenClawAgentDatabaseValidation(validationSource);
     }
     // Failed opening admission can be ordinary lock contention; run classifies it after settlement.
     if (preparationPublished) {
@@ -170,7 +168,7 @@ export function createAgentDatabaseNativeGeneration(
     ): SqliteWorkerAdmissionFactory =>
     (operation) => {
       let receiveValidation = registration
-        ? captureOpenClawAgentDatabaseAdmissionPublication({ agentId, path: pathname })
+        ? captureOpenClawAgentDatabaseAdmissionPublication(validationSource)
         : undefined;
       if (registration) {
         registration.nativeSettlement = operation.settled;
@@ -282,16 +280,10 @@ export function createAgentDatabaseNativeGeneration(
               sharedStatePath: context.admission.databasePath,
               sharedStateIdentity: context.admission.identity.key,
             };
-            receiveValidation = captureOpenClawAgentDatabaseAdmissionPublication({
-              agentId,
-              path: pathname,
-            });
+            receiveValidation = captureOpenClawAgentDatabaseAdmissionPublication(validationSource);
             const preparation = {
-              integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(pathname),
-              validation: getOpenClawAgentDatabaseValidationForTransfer({
-                agentId,
-                path: pathname,
-              }),
+              integrityRevoked: hasRevokedOpenClawAgentDatabaseValidation(validationSource),
+              validation: getOpenClawAgentDatabaseValidationForTransfer(validationSource),
             };
             facts.validationPort.postMessage(preparation, []);
             recordWorkerMessage("admission", "to_worker");
@@ -312,10 +304,7 @@ export function createAgentDatabaseNativeGeneration(
           if (facts.kind === "agent-validation-start") {
             // Lease cleanup can revoke borrowed proof. Capture before verification,
             // so a later revocation still rejects the resulting publication.
-            receiveValidation = captureOpenClawAgentDatabaseAdmissionPublication({
-              agentId,
-              path: pathname,
-            });
+            receiveValidation = captureOpenClawAgentDatabaseAdmissionPublication(validationSource);
           }
           return undefined;
         }
@@ -349,13 +338,6 @@ export function createAgentDatabaseNativeGeneration(
           ) {
             throw new Error("Agent database operation differs from its expected physical file");
           }
-          if (!nativeIdentity) {
-            assertExistingDatabaseIdentity(
-              pathname,
-              `file:${receivedIdentity.physicalIdentity}`,
-              receivedIdentity.birthtime,
-            );
-          }
           acceptFileIdentity({
             kind: "file",
             physicalIdentity: receivedIdentity.physicalIdentity,
@@ -373,6 +355,8 @@ export function createAgentDatabaseNativeGeneration(
       const captured = source.createAdmission({
         attachment: {
           kind: "agent-execution",
+          readCustody: source.readCustody,
+          workspaceEvidence: source.workspaceEvidence,
           startupJournal: assertPreparationJournal !== undefined,
           // Startup repair without a background verifier retains foreground verification.
           startupIntegrityRequired: Boolean(assertPreparationJournal && !assertBackgroundIntegrity),
@@ -396,15 +380,13 @@ export function createAgentDatabaseNativeGeneration(
             const creating =
               !nativeIdentity &&
               !expectedIdentity &&
-              readDatabasePathIdentitySync(pathname).key.startsWith("path:");
+              isRecord(request.facts) &&
+              request.facts.creating === true;
             if (creating) {
-              if (
-                !lease &&
-                getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })
-              ) {
+              if (!lease && getOpenClawAgentDatabaseValidationForTransfer(validationSource)) {
                 // Absence ends retained proof even if Linux reuses the inode. Later open
                 // checkpoints must preserve the publication captured by the lease handoff.
-                invalidateOpenClawAgentDatabaseValidation(pathname);
+                invalidateOpenClawAgentDatabaseValidation(validationSource);
               }
               registration.begin();
             }
@@ -444,6 +426,23 @@ export function createAgentDatabaseNativeGeneration(
       openingAdmission = { admission: captured.admission, settled: operation.settled };
       return captured;
     };
+  const captureRegistration = (source: AgentDatabaseRequestExecutionSource) => {
+    const file = nativeIdentity ?? expectedIdentity;
+    return captureOpenClawAgentDatabaseRegistration({
+      agentId,
+      agentPath: pathname,
+      capturedIdentity: file
+        ? {
+            key: `file:${file.physicalIdentity}`,
+            canonicalPath: file.nativeLocation,
+            birthtime: file.birthtime,
+          }
+        : (creatingIdentity ?? initialIdentity),
+      admission: context.admission,
+      assertPublicationCurrent: context.assertPublicationCurrent,
+      onRegistryChange: source.onRegistryChange,
+    });
+  };
   const open = (
     source: AgentDatabaseRequestExecutionSource,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
@@ -462,14 +461,7 @@ export function createAgentDatabaseNativeGeneration(
         const preparingShared = expectedIdentity !== undefined;
         const registration =
           createIfMissing || preparingShared
-            ? captureOpenClawAgentDatabaseRegistration({
-                agentId,
-                agentPath: pathname,
-                admission: context.admission,
-                assertPublicationCurrent: context.assertPublicationCurrent,
-                onRegistryChange: (preparingShared ? sharedPreparation.source : source)
-                  .onRegistryChange,
-              })
+            ? captureRegistration(preparingShared ? sharedPreparation.source : source)
             : undefined;
         const openStore = async () => {
           const assertOpening = () => {
@@ -620,7 +612,7 @@ export function createAgentDatabaseNativeGeneration(
         return undefined;
       }
       const schema = createIfMissing
-        ? getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname })?.schema
+        ? getOpenClawAgentDatabaseValidationForTransfer(validationSource)?.schema
         : undefined;
       // Explicitly invalidated proof must be prepared in the worker before host adoption.
       if (
@@ -629,13 +621,7 @@ export function createAgentDatabaseNativeGeneration(
           preparationPublished &&
           (!schema || Atomics.load(new Int32Array(schema.valid), 0) !== 1))
       ) {
-        const registration = captureOpenClawAgentDatabaseRegistration({
-          agentId,
-          agentPath: pathname,
-          admission: context.admission,
-          assertPublicationCurrent: context.assertPublicationCurrent,
-          onRegistryChange: source.onRegistryChange,
-        });
+        const registration = captureRegistration(source);
         await settleAgentRegistration(registration, async () => {
           await runSqliteWorkerStoreOperation(
             store,

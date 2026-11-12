@@ -607,7 +607,11 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         resources.delete(resource);
       };
     },
-    capture(this: void, pathname: string): OpenClawStateDatabaseReadAdmission {
+    capture(
+      this: void,
+      pathname: string,
+      preparedIdentity?: DatabasePathIdentity,
+    ): OpenClawStateDatabaseReadAdmission {
       const cached = recordsByPath.get(pathname);
       const retained = cached?.admissions.get(pathname);
       if (cached && retained && cached.identity.key.startsWith("file:")) {
@@ -615,7 +619,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         return retained;
       }
       const databasePath = resolveDatabasePath({ path: pathname });
-      const record = resolve(databasePath);
+      const record = resolve(databasePath, preparedIdentity);
       assertOpen(record);
       return captureRecord(record, databasePath);
     },

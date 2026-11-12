@@ -114,10 +114,7 @@ export async function withSessionTranscriptReadSource<T>(
       selected.assertCurrent();
     };
     assertSource();
-    const identity = readDatabasePathIdentitySync(selected.database.path);
-    if (!identity.key.startsWith("file:")) {
-      throw new Error("Admitted transcript database is no longer available");
-    }
+    const identity = selected.identity;
     return await readResolved(
       {
         agentId: selected.logicalAgentId,

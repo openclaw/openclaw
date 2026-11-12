@@ -17,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseByPathAsync,
+  openClawStateDatabaseCache,
   publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStatePathAsyncResource,
@@ -63,6 +64,32 @@ function holdReader(
 }
 
 describe("canonical shared-state resource drainage", () => {
+  it("carries a known creation fact into runtime capture without polling its path", async () => {
+    const pathname = databasePath();
+    const original = captureOpenClawStateReadContext(pathname);
+    const known = openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(pathname);
+    expect(known?.key).toMatch(/^path:/);
+    const lookup = vi.spyOn(databaseIdentity, "readDatabasePathIdentitySync");
+    let captured: ReturnType<typeof captureOpenClawStateReadContext>;
+    try {
+      captured = captureOpenClawStateReadContext(pathname, known);
+      expect(captured.admission).toBe(original.admission);
+      expect(lookup).not.toHaveBeenCalled();
+    } finally {
+      lookup.mockRestore();
+    }
+    writeFileSync(pathname, "");
+    publishOpenClawStateDatabaseWorkerAdmission(
+      captured.admission,
+      await databaseIdentity.readDatabasePathIdentity(pathname),
+    );
+    expect(captured.admission.identity.key).toMatch(/^file:/);
+    expect(captured.admission.coordinationKey).toBe(original.admission.coordinationKey);
+    captured.admission.assertCurrent();
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    expect(captured.admission.assertCurrent).toThrow(/admission changed/);
+  });
+
   it("targets registered admissions after first creation and drains all on global close", async () => {
     const lifecycle = createOpenClawStateDatabaseAsyncLifecycle();
     const firstPath = databasePath("first");

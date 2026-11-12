@@ -7,9 +7,9 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -88,7 +88,7 @@ export async function withAuthProfileUsage<T>(
   const readers = new Map<string, ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
   const executions = new Map<
     string,
-    Result<ReturnType<typeof captureOpenClawAgentDatabaseExecution>, unknown>
+    Promise<Result<Awaited<ReturnType<typeof captureOpenClawAgentDatabaseExecutionAsync>>, unknown>>
   >();
   let preparation: ReturnType<typeof reserveAuthProfileUsagePreparation> | undefined;
   let committed: AuthProfileUsageReceipt | undefined;
@@ -110,19 +110,25 @@ export async function withAuthProfileUsage<T>(
           env,
         }),
       );
-      try {
-        executions.set(databasePath, {
-          ok: true,
-          value: captureOpenClawAgentDatabaseExecution(target),
-        });
-      } catch (error) {
-        executions.set(databasePath, { ok: false, error });
+      const identity = readers.get(databasePath)!.databaseIdentity;
+      if (!identity) {
+        throw new Error("SQLite worker database path must identify a regular file");
       }
+      executions.set(
+        databasePath,
+        captureOpenClawAgentDatabaseExecutionAsync(
+          target,
+          identity.key.startsWith("file:") ? toAgentExecutionConstraints(identity) : {},
+        ).then(
+          (value) => ({ ok: true, value }) as const,
+          (error: unknown) => ({ ok: false, error }) as const,
+        ),
+      );
     }
     preparation = reserveAuthProfileUsagePreparation(
       [
         context.admission.identity,
-        ...[...readers.keys()].map((pathname) => readDatabasePathIdentitySync(pathname)),
+        ...[...readers.values()].map((reader) => reader.databaseIdentity!),
       ].flatMap((identity) => [identity.key, `path:${identity.canonicalPath}`]),
     );
     const capturedOwnership = resolveSharedAuthStoreOwnershipAsync(context).then(
@@ -172,6 +178,11 @@ export async function withAuthProfileUsage<T>(
       : selected;
     const inherited = useShared && !main;
     const owner = {
+      get databaseIdentity() {
+        return databasePath === context.admission.databasePath
+          ? context.admission.identity
+          : execution?.fileIdentity;
+      },
       databasePath,
       sharedDatabasePath: sharedPath,
       location: ownership.location,
@@ -182,19 +193,18 @@ export async function withAuthProfileUsage<T>(
       env,
     });
     const sourcePaths = new Set([...(mode ? [] : [sharedPath]), ...(localPath ? [localPath] : [])]);
+    const capturedExecution = await executions.get(databasePath);
+    if (capturedExecution && !capturedExecution.ok) {
+      throw capturedExecution.error;
+    }
+    const execution = capturedExecution?.value;
     const assertCurrent = () => {
       context.admission.assertCurrent();
       context.maintenanceScope?.assertAdmission();
       for (const sourcePath of sourcePaths) {
         readers.get(sourcePath)?.assertCurrent();
       }
-      const execution = executions.get(databasePath);
-      if (execution) {
-        if (!execution.ok) {
-          throw execution.error;
-        }
-        execution.value.assertCurrent();
-      }
+      execution?.assertCurrent();
       if (resolveSharedAuthStoreOwnership(env) !== ownership) {
         throw new Error("Auth profile shared owner changed before write admission");
       }
@@ -269,17 +279,12 @@ export async function withAuthProfileUsage<T>(
             agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
             env,
           };
-          const captured = executions.get(databasePath)!;
-          if (!captured.ok) {
-            throw captured.error;
-          }
-          const execution = captured.value;
           return await runOpenClawAgentWriteAdmission(
             target,
             async () => {
               const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
                 target,
-                { execution },
+                { execution: execution! },
                 {
                   moduleUrl: resolveRuntimeWorkerUrl(
                     runtimeProcessEntrypoints.authProfileInlineUsage,
@@ -367,9 +372,12 @@ export async function withAuthProfileUsage<T>(
     try {
       const released = await Promise.allSettled([
         ...[...readers.values()].map((reader) => reader.dispose()),
-        ...[...executions.values()].flatMap((execution) =>
-          execution.ok ? [execution.value.release()] : [],
-        ),
+        ...[...executions.values()].map(async (captured) => {
+          const execution = await captured;
+          if (execution.ok) {
+            await execution.value.release();
+          }
+        }),
       ]);
       const failures = released.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],

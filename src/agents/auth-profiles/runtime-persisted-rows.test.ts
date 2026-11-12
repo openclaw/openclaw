@@ -39,7 +39,7 @@ function emptyRows(): AuthProfileRowRead {
 
 it("preserves absent source provenance through first database admission", () => {
   const databasePath = path.join(tempDirs.make("auth-row-first-admission-"), "auth.sqlite");
-  cache.recordSource(databasePath, "absent", null);
+  cache.recordSource(databasePath, `path:${databasePath}:`, null);
   expect(cache.hasSource(databasePath)).toBe(true);
 
   using database = openNodeSqliteDatabase(databasePath);
@@ -49,6 +49,15 @@ it("preserves absent source provenance through first database admission", () => 
   cache.recordSource(databasePath, "created", null);
   database.exec("INSERT INTO session_fixture VALUES (1)");
   expect(cache.hasSource(databasePath)).toBe(true);
+  cache.recordSource(databasePath, `path:${databasePath}:`, null);
+  database.exec(
+    "CREATE TABLE auth_profile_state (state_key TEXT PRIMARY KEY, state_json TEXT, updated_at INTEGER)",
+  );
+  admitSqliteSchema(database);
+  runSqliteImmediateTransactionSync(database, () =>
+    writeAuthProfileJsonCell(database, "state", "agent", { lastGood: {} }),
+  );
+  expect(cache.hasSource(databasePath)).toBe(false);
 });
 
 it("releases retired database baselines while retaining named live owners", async () => {

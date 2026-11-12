@@ -2,29 +2,27 @@ import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { captureSessionStoreCandidateIdentities } from "../config/sessions/session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "../config/sessions/session-store-target-inventory.js";
+import { prepareSessionStoreCandidatesInWorker } from "../config/sessions/session-transcript-worker-resources.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "../infra/outbound/targets-session.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { withClientVoiceSessionResources } from "./client-voice-session-lifecycle.js";
-import type { ClientVoiceSessionSource } from "./client-voice-session-source.js";
+import {
+  type ClientVoiceSessionSource,
+  captureClientVoiceSessionWriter,
+} from "./client-voice-session-source.js";
 import {
   type ClientVoiceSessionRecord,
   type ClientVoiceRunBinding,
   operationKey,
 } from "./client-voice-session-store.js";
-import { captureClientVoiceSessionWriter } from "./client-voice-session-write.js";
 
 const loadMessageRuntime = createLazyRuntimeModule(() => import("../channels/message/runtime.js"));
 
@@ -53,7 +51,7 @@ function formatMutationDigest(effects: ClientVoiceSessionRecord["effects"]): str
 
 type MutationDigestConversation = {
   storePath: string;
-  identities: ReturnType<typeof captureSessionStoreCandidateIdentities>;
+  preparation: Promise<Awaited<ReturnType<typeof prepareSessionStoreCandidatesInWorker>>>;
   selected?: DatabasePathIdentity;
 };
 
@@ -390,12 +388,9 @@ export function createClientVoiceMutationDigestDeliveryOptions(
           context.config,
         );
         // Capture configured conversation files before a delivery slot or consult can defer work.
-        context.conversation = {
-          storePath,
-          identities: captureSessionStoreCandidateIdentities(
-            captureSessionStoreReadCandidates(storePath),
-          ),
-        };
+        const preparation = prepareSessionStoreCandidatesInWorker({ storePath });
+        void preparation.catch(() => {});
+        context.conversation = { storePath, preparation };
       }
       return captureAttempt(context.source.settlementContext);
     },
@@ -423,6 +418,7 @@ export function createClientVoiceMutationDigestDeliveryOptions(
     },
     attempt: async ({ voiceSessionId, context, signal }) => {
       const { config, source } = context;
+      await source.prepare();
       source.assertCurrent();
       if (
         !context.delivery?.confirmed &&
@@ -456,6 +452,9 @@ export function createClientVoiceMutationDigestDeliveryOptions(
         if (!conversation) {
           throw new Error("Voice mutation digest conversation source was not captured");
         }
+        const { candidates } = await conversation.preparation;
+        const identities = captureSessionStoreCandidateIdentities(candidates);
+        writer.assertCurrent();
         const preparedEntry = prepared?.entry;
         // A confirmed send survives marker retries without re-entering the sender.
         const deliverClientVoiceMutationDigest = async (): Promise<void> => {
@@ -467,17 +466,7 @@ export function createClientVoiceMutationDigestDeliveryOptions(
             if (!text) {
               return;
             }
-            const assertCurrent = () => {
-              writer.assertCurrent();
-              const selected = conversation.selected;
-              if (selected) {
-                assertExistingDatabaseIdentity(
-                  selected.canonicalPath,
-                  selected.key,
-                  selected.birthtime,
-                );
-              }
-            };
+            const assertCurrent = () => writer.assertCurrent();
             const send = async (
               entry: InternalSessionEntry | undefined,
               assertReadCurrent: () => void,
@@ -493,6 +482,22 @@ export function createClientVoiceMutationDigestDeliveryOptions(
               }
               const { sendDurableMessageBatchCore, durableMessageBatchMayHaveReachedRecipient } =
                 await loadMessageRuntime();
+              await prepareSessionStoreCandidatesInWorker({
+                validate: {
+                  candidates,
+                  sources: [
+                    { path: writer.options.path, identity: writer.identity },
+                    ...(conversation.selected
+                      ? [
+                          {
+                            path: conversation.selected.canonicalPath,
+                            identity: conversation.selected,
+                          },
+                        ]
+                      : []),
+                  ],
+                },
+              });
               assertCurrent();
               assertReadCurrent();
               signal.throwIfAborted();
@@ -532,7 +537,7 @@ export function createClientVoiceMutationDigestDeliveryOptions(
             const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(
               conversation.storePath,
             );
-            const captured = conversation.identities.get(writer.identity.canonicalPath);
+            const captured = identities.get(writer.identity.canonicalPath);
             // The metadata read already carries delivery facts for its unambiguous canonical conversation.
             if (
               !isIncognitoSessionKey(record.sessionKey) &&
@@ -557,19 +562,27 @@ export function createClientVoiceMutationDigestDeliveryOptions(
                   if (!read.ok) {
                     throw read.error;
                   }
-                  if (owner.scope && !conversation.selected) {
-                    const selected = readDatabasePathIdentitySync(owner.scope.storePath);
-                    const original = conversation.identities.get(selected.canonicalPath);
-                    if (!original) {
+                  if (
+                    owner.kind === "file" &&
+                    owner.source &&
+                    typeof owner.source.databaseIdentity === "string" &&
+                    !conversation.selected
+                  ) {
+                    const selected = {
+                      canonicalPath: owner.source.path,
+                      key: `file:${owner.source.databaseIdentity}`,
+                      birthtime: owner.source.databaseBirthtime,
+                    };
+                    const original = identities.get(selected.canonicalPath);
+                    if (
+                      !original ||
+                      original.key !== selected.key ||
+                      original.birthtime !== selected.birthtime
+                    ) {
                       throw new Error(
                         "Voice mutation digest conversation store changed before delivery",
                       );
                     }
-                    assertExistingDatabaseIdentity(
-                      selected.canonicalPath,
-                      original.key,
-                      original.birthtime,
-                    );
                     conversation.selected = selected;
                   }
                   await send(read.value, () => owner.assertCurrent());

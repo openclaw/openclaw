@@ -185,8 +185,8 @@ function holdRefreshWrites(
   const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
   const observer = vi
     .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-    .mockImplementation((...args) => {
-      const lock = prepareLock(...args);
+    .mockImplementation(async (...args) => {
+      const lock = await prepareLock(...args);
       const gate = args[0] === undefined ? undefined : gates.get(args[0]);
       if (!gate) {
         return lock;
@@ -254,8 +254,8 @@ it("bounds prune writer batches and recovers partial cleanup after restart witho
     const prepareLock = usageCacheSqlite.prepareSessionCostUsageRefreshLock;
     using _ = vi
       .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-      .mockImplementation((...args) => {
-        const lock = prepareLock(...args);
+      .mockImplementation(async (...args) => {
+        const lock = await prepareLock(...args);
         return {
           ...lock,
           pruneRows: async (rows, signal) => {
@@ -657,8 +657,8 @@ it("records failed rollups and clears health after retry", async () => {
     {
       using _ = vi
         .spyOn(usageCacheSqlite, "prepareSessionCostUsageRefreshLock")
-        .mockImplementation((...args) => ({
-          ...prepareLock(...args),
+        .mockImplementation(async (...args) => ({
+          ...(await prepareLock(...args)),
           writeRollup: async (rows) => {
             failedFiles = rows.map((row) => row.rollupId);
             throw new Error("private transcript content");

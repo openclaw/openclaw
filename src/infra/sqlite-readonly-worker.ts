@@ -130,6 +130,30 @@ export function readSqliteInspectionBudget(
   return resolveSqliteInspectionBudget(operation, pathname, sizeBytes);
 }
 
+/** Runtime preparation reads file sizes without blocking the Gateway thread. */
+export async function readSqliteInspectionBudgetAsync(
+  operation: string,
+  pathname: string,
+  mainSizeBytes?: bigint,
+): Promise<{ timeoutMs: number; size: string }> {
+  let sizeBytes = mainSizeBytes;
+  try {
+    sizeBytes ??= (await fs.promises.stat(pathname, { bigint: true })).size;
+    for (const suffix of ["-wal", "-shm", "-journal"]) {
+      try {
+        sizeBytes += (await fs.promises.stat(pathname + suffix, { bigint: true })).size;
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
+    }
+  } catch {
+    // Let the child report the source error with its normal diagnostics.
+  }
+  return resolveSqliteInspectionBudget(operation, pathname, sizeBytes);
+}
+
 export function sqliteInspectionTimeoutError(
   operation: string,
   pathname: string,

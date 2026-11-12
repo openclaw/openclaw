@@ -116,6 +116,7 @@ import type {
   SessionStoreProjectionWorkerInput,
   SessionStoreProjectionWorkerResult,
 } from "./session-store-projection.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetPreparationRequest,
   SessionStoreTargetInventoryRequest,
@@ -354,6 +355,7 @@ export type SessionTranscriptWorkerInput =
 /** Only the dispatch owner attaches live physical proof; caller-prepared inputs cannot supply it. */
 export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
   validation?: OpenClawAgentDatabaseReadValidation;
+  readCustody?: readonly SessionStoreReadCustody[];
   projectionReceipt?: SessionTranscriptProjectionReceipt;
 };
 

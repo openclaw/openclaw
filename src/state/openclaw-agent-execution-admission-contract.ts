@@ -1,3 +1,5 @@
+import type { WorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
+import type { SessionStoreReadCustody } from "../config/sessions/session-store-read-candidates.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
@@ -13,6 +15,8 @@ export type AgentDatabaseGenerationClaim = {
 
 /** A request owner composes its retained admission with the native owner's validation. */
 export type AgentDatabaseRequestExecutionSource = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   assertCurrent(): void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   createAdmission(params: {
@@ -20,6 +24,8 @@ export type AgentDatabaseRequestExecutionSource = {
       kind: "agent-execution";
       startupJournal: boolean;
       startupIntegrityRequired: boolean;
+      readCustody?: readonly SessionStoreReadCustody[];
+      workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
     };
     nativeLocations: readonly string[];
     authorize(request: SqliteWorkerAdmissionRequest): void;

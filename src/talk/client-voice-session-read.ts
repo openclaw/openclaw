@@ -5,14 +5,16 @@ import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withClientVoiceSessionResources } from "./client-voice-session-lifecycle.js";
-import type { ClientVoiceSessionSource } from "./client-voice-session-source.js";
+import {
+  type ClientVoiceSessionSource,
+  captureClientVoiceSessionWriter,
+} from "./client-voice-session-source.js";
 import {
   assertVoiceSessionOwnership,
   type ClientVoiceRunBinding,
   type VoiceSessionLookup,
   type VoiceSessionMatch,
 } from "./client-voice-session-store.js";
-import { captureClientVoiceSessionWriter } from "./client-voice-session-write.js";
 
 /** Use the existing agent reader's custody and revocation lifecycle. */
 export async function lookupClientVoiceSessions(

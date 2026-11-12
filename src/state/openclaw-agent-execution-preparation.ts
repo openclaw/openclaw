@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { WorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
+import type { SessionStoreReadCustody } from "../config/sessions/session-store-read-candidates.js";
 import {
   createSqliteWorkerOperationAdmission,
   takeSqliteWorkerOperationAdmissionAttachment,
@@ -16,6 +18,8 @@ import { getOpenClawAgentDatabaseValidationForTransfer } from "./openclaw-agent-
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 
 export function readAgentDatabaseRequestPreparation(): {
+  readCustody?: readonly SessionStoreReadCustody[];
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   startupJournal: boolean;
   startupIntegrityRequired: boolean;
   startupCancellation?: Int32Array<SharedArrayBuffer>;
@@ -31,6 +35,12 @@ export function readAgentDatabaseRequestPreparation(): {
     throw new Error("Agent execution requires its request-local preparation facts");
   }
   return {
+    // SAFETY: The private admission attachment carries the source owner's typed custody.
+    readCustody: attachment.readCustody as readonly SessionStoreReadCustody[] | undefined,
+    // SAFETY: The same private binding serializes the workspace owner's captured evidence.
+    workspaceEvidence: attachment.workspaceEvidence as
+      | readonly WorkspaceFilesystemEvidence[]
+      | undefined,
     startupJournal: attachment.startupJournal,
     startupIntegrityRequired: attachment.startupIntegrityRequired,
     // SAFETY: The private host admission owns this Gateway-lifetime cancellation cell.

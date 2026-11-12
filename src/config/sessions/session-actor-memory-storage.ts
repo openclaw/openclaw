@@ -46,6 +46,7 @@ import {
   SessionEntryLifecycleUpsertConflictError,
 } from "./session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { prepareSessionStoreCandidatesInWorker } from "./session-transcript-worker-resources.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   parseTranscriptAppendRefusal,
@@ -255,7 +256,14 @@ export function createSessionActorMemoryStorage(options: {
           });
           if (observer?.beforeCommit) {
             await observer.beforeCommit(structuredClone(committed));
-            // Companion I/O can outlive permission; check the original preimage at the effect.
+          }
+          if (authority.readCustody?.length) {
+            await prepareSessionStoreCandidatesInWorker({
+              validate: { readCustody: authority.readCustody, candidates: [], sources: [] },
+            });
+          }
+          if (observer?.beforeCommit || authority.readCustody?.length) {
+            // Physical observation and companion I/O precede the final logical grant.
             reauthorize();
           }
           authority.assertCurrent();

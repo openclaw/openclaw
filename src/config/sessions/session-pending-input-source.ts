@@ -71,7 +71,7 @@ export async function readPendingInputSource(
     idempotencyKey,
     pendingOnly,
   };
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Submitted input changed its captured database owner",
   );

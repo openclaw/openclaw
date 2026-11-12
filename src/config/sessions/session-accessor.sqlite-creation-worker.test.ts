@@ -713,7 +713,7 @@ it.each([false, true])(
       sessionId: "alias-cleanup-header",
       updatedAt: 1,
     });
-    const replacements = await import("./session-accessor.sqlite-replacement-worker.js");
+    const replacements = await import("./session-transcript-initialization.js");
     const { SqliteWorkerError } = await import("../../infra/sqlite-worker-contract.js");
     const failure = new AggregateError([
       new Error("Independent cleanup failure"),

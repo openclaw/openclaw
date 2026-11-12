@@ -19,6 +19,7 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
+import type { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { getPendingOpenClawAgentDatabasePreparation } from "../../state/openclaw-agent-execution.js";
 import {
@@ -36,6 +37,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sql
 import {
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
+  type SessionStoreReadCustody,
 } from "./session-store-read-candidates.js";
 import type {
   SessionStoreTargetPreparationRequest,
@@ -69,8 +71,11 @@ export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
   requestedPaths?: readonly string[];
   readIdentity?: DatabasePathIdentity;
   readSourcePath?: string;
+  readCustody?: readonly SessionStoreReadCustody[];
   /** Capture a cold physical source after admission and before the row request. */
-  prepareRead?: () => void;
+  prepareRead?: (
+    validation: Awaited<ReturnType<typeof captureOpenClawAgentDatabaseReadValidation>>,
+  ) => void | Promise<void>;
 };
 
 export type HistoryDatabaseResource = {

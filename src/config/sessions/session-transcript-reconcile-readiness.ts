@@ -6,7 +6,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
@@ -51,7 +51,7 @@ export async function readSessionTranscriptProjectionStatus(
       // Readiness is best effort during retirement; the close caller owns settlement.
       return false;
     }
-    const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(databaseOptions);
     try {
       execution.assertCurrent();
       return await withSessionHistoryWorkerDatabase(databaseOptions, (owner) =>

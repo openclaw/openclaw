@@ -238,7 +238,7 @@ it("refuses a prepared contribution before its statement and retains it after pu
 it("retains resident session facts across usage cache writes and reloads actual session changes", () =>
   withActor(async (f) => {
     const initial = f.read();
-    const usage = prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
+    const usage = await prepareSessionCostUsageRefreshLock(f.database.agentId, f.database.path);
     using reads = countStatements(f.database.db, ["hydration"], (sql) =>
       sql.includes('as "actor_participants"') ? "hydration" : null,
     );

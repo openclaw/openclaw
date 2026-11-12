@@ -201,8 +201,8 @@ const projectSelection = values["project-routing"]
         source: "cloned",
         name: "Synthetic clone",
       });
-      const project = await withProjectCheckoutLifecycle(repo, { env: process.env }, (lease) =>
-        registerPreparedProjectRegistry(prepared, lease, context),
+      const project = await withProjectCheckoutLifecycle(repo, { context }, (lease) =>
+        registerPreparedProjectRegistry(prepared, [lease], context),
       );
       const owner = await import("../../src/gateway/server-methods/session-create-project.js");
       // The baseline exposes only a root; the candidate also owns placement intent.

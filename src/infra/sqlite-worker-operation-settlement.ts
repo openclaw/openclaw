@@ -16,6 +16,8 @@ import {
 import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-request-custody.js";
 
 export type SqliteWorkerOperationContext = {
+  /** Native source checks finish before the live authority cells are observed. */
+  assertPhysicalSourceCurrent?: () => void;
   port: MessagePort;
   databaseAdmissionDeadlineAtMs?: number;
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */

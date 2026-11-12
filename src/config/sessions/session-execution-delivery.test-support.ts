@@ -12,9 +12,11 @@ export function decorateSessionExecutionCaptures(
   release?: (owner: OpenClawAgentDatabaseExecution) => Promise<void>,
 ): Pick<
   ExecutionModule,
-  "captureOpenClawAgentDatabaseExecution" | "captureOpenClawAgentDatabasePreparationExecution"
+  "captureOpenClawAgentDatabaseExecution" | "captureOpenClawAgentDatabaseExecutionAsync"
 > {
-  const decorate = (owner: OpenClawAgentDatabaseExecution): OpenClawAgentDatabaseExecution => ({
+  const decorate = <Execution extends OpenClawAgentDatabaseExecution>(
+    owner: Execution,
+  ): Execution => ({
     ...owner,
     get fileIdentity() {
       return owner.fileIdentity;
@@ -27,8 +29,8 @@ export function decorateSessionExecutionCaptures(
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
     ) => decorate(actual.captureOpenClawAgentDatabaseExecution(...args)),
-    captureOpenClawAgentDatabasePreparationExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
-    ) => decorate(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
+    captureOpenClawAgentDatabaseExecutionAsync: async (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecutionAsync>
+    ) => decorate(await actual.captureOpenClawAgentDatabaseExecutionAsync(...args)),
   };
 }

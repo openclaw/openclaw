@@ -1,8 +1,7 @@
-import { statSync } from "node:fs";
 import path from "node:path";
 import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { readDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -438,27 +437,32 @@ export async function restoreSessionColdTranscript(
     };
     const target = await prepareSqliteTranscriptReadScope(captured, signal);
     assertPreparedCurrent();
-    target.path = resolveOpenClawAgentSqlitePath(toDatabaseOptions(target));
+    const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(target));
+    target.path = databasePath;
     const options = toDatabaseOptions(target);
-    // Synchronous inspection stays within the admission check above.
-    try {
-      statSync(target.path);
-    } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
+    const identity = await readDatabasePathIdentity(databasePath);
+    assertPreparedCurrent();
+    if (!identity.key.startsWith("file:")) {
       // First writers may create this store; there is no cold transcript to restore yet.
       return;
     }
-    const source = createOpenClawAgentDatabasePathMatcher();
-    source(target.path, target.path);
     return await withSessionHistoryWorkerDatabase(
-      options,
+      {
+        ...options,
+        readIdentity: identity,
+        readCustody: [
+          {
+            sourcePath: databasePath,
+            candidates: [{ path: databasePath, physicalPath: identity.canonicalPath, identity }],
+          },
+        ],
+      },
       async (owner) => {
+        let source: ReturnType<typeof createOpenClawAgentDatabasePathMatcher> | undefined;
         const assertAllowed = () => {
           assertPreparedCurrent();
           owner.assertCurrent();
-          if (!source.isCurrent()) {
+          if (source && !source.isCurrent()) {
             throw new Error(
               "Session store changed while preparing its metadata. Retry the request.",
             );
@@ -477,6 +481,22 @@ export async function restoreSessionColdTranscript(
                 },
                 signal,
               );
+              const current = await readDatabasePathIdentity(databasePath);
+              assertAllowed();
+              if (
+                current.key !== identity.key ||
+                current.canonicalPath !== identity.canonicalPath ||
+                current.birthtime !== identity.birthtime
+              ) {
+                throw new Error(
+                  "Session store changed while preparing its metadata. Retry the request.",
+                );
+              }
+              // Only archived history needs the synchronous commit-grant guard.
+              if (metadata.archive && !source) {
+                source = createOpenClawAgentDatabasePathMatcher();
+                source(databasePath, databasePath);
+              }
               return metadata.archive;
             },
           },

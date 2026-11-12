@@ -44,6 +44,7 @@ import { readWithCanonicalSessionAdmission } from "./session-canonical-key.js";
 import { getSessionInputActor } from "./session-input-actor.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import {
+  composeSessionSourceAssertion,
   prepareSessionSourceAuthority,
   releaseSessionSourceAuthorities,
   type SessionSourceAssertion,
@@ -109,7 +110,9 @@ export async function appendExpectedSessionTranscriptTurn(
     phase.mark("persist.transcript.append");
     return await appendPreparedSessionTranscriptTurn(scope, requestedOptions, assertOwnedWrite);
   }
-  const ownerSource = await prepareSessionSourceAuthority(assertOwnedWrite);
+  const ownerSource = await prepareSessionSourceAuthority(
+    composeSessionSourceAssertion([assertOwnedWrite, requestedOptions.assertCurrent]),
+  );
   const errors: unknown[] = [];
   try {
     phase.mark("persist.transcript.append");

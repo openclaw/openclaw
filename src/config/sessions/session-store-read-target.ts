@@ -14,11 +14,14 @@ import {
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 
 /** Capture before discovery yields, then bind its selected physical database. */
-export function captureSessionStoreReadTarget(scope: SessionAccessScope, changedMessage: string) {
+export async function captureSessionStoreReadTarget(
+  scope: SessionAccessScope,
+  changedMessage: string,
+) {
   const logical = resolveSqliteScope({ ...scope, storePath: undefined });
   const storePath =
     logical.path ?? scope.storePath ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(logical));
-  const admitted = captureOpenClawAgentDatabaseReadValidation({
+  const admitted = await captureOpenClawAgentDatabaseReadValidation({
     agentId: toDatabaseOptions(logical).agentId,
     path: storePath,
   });

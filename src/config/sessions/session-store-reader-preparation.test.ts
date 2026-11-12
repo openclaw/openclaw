@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { expect, it, vi } from "vitest";
 import * as lookup from "../../gateway/session-utils-store-lookup.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
@@ -16,12 +17,42 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import {
   withSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,
+  withSessionStoreReaderInWorker,
 } from "./session-entry-read-runtime.js";
 import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import { readExactSessionEntriesWithLifecycleAsync } from "./session-entry-read.worker.js";
 import * as targetPreparation from "./session-store-target-runtime.js";
 import * as preparation from "./session-transcript-worker-resources.js";
+
+it("keeps admitted source guards in memory after reading through the worker", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:retained-source";
+    replaceSessionEntrySync(
+      { agentId: "main", env, sessionKey },
+      { sessionId: "retained-source", updatedAt: 1 },
+    );
+    await withSessionStoreReaderInWorker(
+      { agentId: "main", storePath: database.path, env },
+      async ({ reader, assertCurrent }) => {
+        const read = await reader.readExactEntries({ sessionKeys: [sessionKey], env });
+        expect(read.entries[0]?.entry.sessionId).toBe("retained-source");
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        try {
+          for (let index = 0; index < 5; index++) {
+            assertCurrent();
+          }
+          expect(stat).not.toHaveBeenCalled();
+        } finally {
+          stat.mockRestore();
+          syncBuiltinESMExports();
+        }
+      },
+      { capturePhysicalSource: true },
+    );
+  }));
 
 it("projects worker discovery config while retaining the host configuration owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

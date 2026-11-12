@@ -73,6 +73,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
   execution: OpenClawAgentDatabaseExecution;
   generation: AgentDatabaseGenerationClaim;
   database: PreparedSessionEntryWorkerRead["database"];
+  identity: SessionEntryCohortReader["identity"];
   sessionKey: string;
   logicalAgentId: string;
   storePaths: readonly string[];
@@ -89,6 +90,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
   };
   return {
     database,
+    identity: Object.freeze(params.identity),
     sessionKey: params.sessionKey,
     logicalAgentId: params.logicalAgentId,
     storePaths: Object.freeze([
@@ -152,6 +154,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
       const source = createSessionWorkerExecutionSource(
         assertCurrent,
         "Session cohort authority expired",
+        captured.readCustody,
       );
       const result = await params.execution.runExisting(
         source,

@@ -177,6 +177,7 @@ it.each([true, false])(
     const agentDir = tempDirs.make("openclaw-search-source-");
     const reader: SessionEntryCohortReader = {
       database: { agentId: "main", path: agentDir, env: {} },
+      identity: { key: "file:1:1", canonicalPath: agentDir },
       sessionKey: "agent:main:test",
       logicalAgentId: "main",
       storePaths: [agentDir],

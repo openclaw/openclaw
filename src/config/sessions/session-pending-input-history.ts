@@ -25,7 +25,7 @@ type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
 /** Capture live queue custody now; preserve it only after the session marker commits. */
 export async function captureSessionQueuedInputsForRestart(scope: Scope) {
-  const captured = captureSessionStoreReadTarget(
+  const captured = await captureSessionStoreReadTarget(
     scope,
     "Queued shutdown inputs changed their database owner",
   );
@@ -114,7 +114,7 @@ async function readPendingInputRows(
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Pending input history changed its captured database owner",
   );

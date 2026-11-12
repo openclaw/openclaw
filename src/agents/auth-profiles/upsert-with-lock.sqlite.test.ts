@@ -292,8 +292,8 @@ it("rejects stale nonportable OAuth batches admitted after a newer generation se
   });
 });
 
-it.each(["rotated", "appeared"] as const)(
-  "rejects queued OAuth writes when main authority has %s",
+it.each(["rotated", "appeared", "unrelated"] as const)(
+  "checks queued OAuth authority across a %s native write",
   (mode) =>
     withPeers(async (root, mainAgentDir, peerAgentDir) => {
       const profileId = "openai:default";
@@ -321,14 +321,20 @@ it.each(["rotated", "appeared"] as const)(
           await rotate(mainAgentDir, profileId, fence);
           await rotate(mainAgentDir, profileId, authoritative);
         } else {
-          saveAuthProfileStore(
-            { version: 1, profiles: { [profileId]: authoritative } },
-            mainAgentDir,
-          );
+          const writeDir =
+            mode === "unrelated" ? path.join(root, "agents", "other", "agent") : mainAgentDir;
+          fs.mkdirSync(writeDir, { recursive: true });
+          saveAuthProfileStore({ version: 1, profiles: { [profileId]: authoritative } }, writeDir);
         }
       });
 
       expect(queuedWrite).toBeDefined();
+      if (mode === "unrelated") {
+        await expect(queuedWrite!).resolves.toBeUndefined();
+        expect(readPersistedStore(peerAgentDir)?.profiles[profileId]).toEqual(credential);
+        expect(readPersistedStore(mainAgentDir)?.profiles[profileId]).toBeUndefined();
+        return;
+      }
       await expect(queuedWrite!).rejects.toThrow(
         "Refused to restore fenced OAuth refresh generation",
       );

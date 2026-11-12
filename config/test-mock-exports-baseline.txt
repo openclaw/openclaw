@@ -5893,7 +5893,6 @@
 ["src/projects/project-environment.test.ts","../infra/node-sqlite.js","b2b8992d11d38ff5b866428923524b7b2076dc7b04cec62241f3e21c5fabc552",1]
 ["src/projects/project-environment.test.ts","../state/openclaw-state-db-async-lifecycle.js","91f5d03448d3c4341856f6ff310c9b40f7494f8a443b804a661e0207afd6c79e",1]
 ["src/projects/project-environment.test.ts","../state/openclaw-state-db.js","2ad76c9856f3b2600167b47d9ee3c360e421a4b9f83871a231f3e5f3f83cbc98",1]
-["src/projects/project-environment.test.ts","../state/openclaw-state-lease.js","6bb40f9c9b0190491a6d228d0ef6af75a02b0cba5945090acd85187f5579c744",1]
 ["src/projects/project-environment.test.ts","../state/openclaw-state-worker-store.js","b7d1121ef6ce8cd0b2398310f9c98570eb32101244e44f49591e4f3577a44615",1]
 ["src/projects/project-environment.test.ts","./project-checkout.js","97efcbd45258366a69c948e5703b6c643de79fd0aec622f69043b3385f07d950",1]
 ["src/projects/project-environment.test.ts","./project-registry.kernel.js","ee29ccfee60eac8a9ebe0cd0bf8bf8403b0d3b4a1d5a1b7ece3d3a15722d7ea1",1]

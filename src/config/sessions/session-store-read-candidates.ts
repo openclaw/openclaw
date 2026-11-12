@@ -53,6 +53,11 @@ export type SessionStoreReadCandidate = Pick<
   "path" | "scope"
 > & { physicalPath: string; identity?: DatabasePathIdentity };
 
+export type SessionStoreReadCustody = {
+  sourcePath: string;
+  candidates: readonly SessionStoreReadCandidate[];
+};
+
 /** Capture exact candidates before discovery yields; sibling families have no file identity. */
 export function captureSessionStoreCandidateIdentities(
   candidates: readonly SessionStoreReadCandidate[],
@@ -217,7 +222,7 @@ export function assertSessionStoreReadCandidate(
 }
 
 /** Unlisted siblings inherit absence only from a complete inventory of the original physical family. */
-export function qualifyAbsentSessionStoreReadCandidate(
+function qualifyAbsentSessionStoreReadCandidate(
   pathname: string,
   captured: { candidates: readonly SessionStoreReadCandidate[]; familyListingComplete: boolean },
 ) {
@@ -253,4 +258,24 @@ export function qualifyAbsentSessionStoreReadCandidate(
     throw new Error("Session database appeared after its initial inventory");
   }
   return identity;
+}
+
+export function resolveSessionStoreWriteCandidate(
+  pathname: string,
+  captured: {
+    candidates: readonly SessionStoreReadCandidate[];
+    familyListingComplete: boolean;
+    identities: readonly DatabasePathIdentity[];
+  },
+) {
+  if (!captured.candidates.every(isSessionStoreReadCandidateCurrent)) {
+    throw new Error("Session database selector changed during discovery");
+  }
+  const physicalPath = assertSessionStoreReadCandidate(pathname, captured.candidates);
+  const identity = captured.identities.find((entry) => entry.canonicalPath === physicalPath);
+  if (identity) {
+    assertDatabasePathIdentity(pathname, identity);
+    return identity;
+  }
+  return qualifyAbsentSessionStoreReadCandidate(pathname, captured);
 }

@@ -76,7 +76,7 @@ export async function preparePendingInputStore(
     throw new Error("Restart resume requires the current input actor.");
   }
   const logical = resolveSqliteScope({ ...captured, storePath: undefined });
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Pending input changed its captured database owner",
   );

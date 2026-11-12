@@ -48,11 +48,12 @@ import {
 import {
   captureSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
-  qualifyAbsentSessionStoreReadCandidate,
+  resolveSessionStoreWriteCandidate,
   isSessionStoreReadCandidateCurrent,
   assertSessionStoreReadCandidate,
   type CapturedSessionStorePaths,
   type SessionStoreReadCandidate,
+  type SessionStoreReadCustody,
 } from "./session-store-read-candidates.js";
 import {
   dedupeSessionStoreTargetsBySqliteTarget,
@@ -78,8 +79,16 @@ import {
 export type SessionStoreTargetPreparationRequest =
   | { storePath: string; captureIdentity?: false }
   | { config: OpenClawConfig; agentIds: string[]; env: NodeJS.ProcessEnv }
+  | { write: { storePath: string } }
+  | {
+      resolveWrite: {
+        pathname: string;
+        captured: ReturnType<typeof captureSessionStoreWriteCandidates>;
+      };
+    }
   | {
       validate: {
+        readCustody?: readonly SessionStoreReadCustody[];
         candidates: readonly SessionStoreReadCandidate[];
         sources: readonly { path: string; identity: DatabasePathIdentity }[];
       };
@@ -87,7 +96,28 @@ export type SessionStoreTargetPreparationRequest =
 
 /** Only filesystem qualification runs before FIFO; content discovery remains ordered. */
 export function prepareSessionStoreTargetCandidates(request: SessionStoreTargetPreparationRequest) {
+  if ("write" in request) {
+    const captured = captureSessionStoreWriteCandidates(request.write.storePath);
+    return {
+      kind: "session-target-prepare" as const,
+      candidates: captured.candidates,
+      inventory: undefined,
+      write: captured,
+    };
+  }
+  if ("resolveWrite" in request) {
+    const { pathname, captured } = request.resolveWrite;
+    return {
+      kind: "session-target-prepare" as const,
+      candidates: captured.candidates,
+      inventory: undefined,
+      identity: resolveSessionStoreWriteCandidate(pathname, captured),
+    };
+  }
   if ("validate" in request) {
+    for (const source of request.validate.readCustody ?? []) {
+      assertSessionStoreReadCandidate(source.sourcePath, source.candidates);
+    }
     if (!request.validate.candidates.every(isSessionStoreReadCandidateCurrent)) {
       throw new Error("Session database selector changed before effect preparation");
     }
@@ -233,26 +263,11 @@ export function captureSessionStoreReadCandidates(storePath: string): SessionSto
 }
 
 /** A complete initial listing proves absence for a later-selected sibling without predicting ownership. */
-export function captureSessionStoreWriteCandidates(storePath: string) {
+function captureSessionStoreWriteCandidates(storePath: string) {
   const captured = captureSessionStoreCandidateInventory(storePath);
-  const identities = captureSessionStoreCandidateIdentities(captured.candidates);
-  const assertCurrent = () => {
-    if (!captured.candidates.every(isSessionStoreReadCandidateCurrent)) {
-      throw new Error("Session database selector changed during discovery");
-    }
-  };
   return {
-    assertCurrent,
-    resolveIdentity(pathname: string) {
-      assertCurrent();
-      const physicalPath = assertSessionStoreReadCandidate(pathname, captured.candidates);
-      const identity = identities.get(physicalPath);
-      if (identity) {
-        assertDatabasePathIdentity(pathname, identity);
-        return identity;
-      }
-      return qualifyAbsentSessionStoreReadCandidate(pathname, captured);
-    },
+    ...captured,
+    identities: [...captureSessionStoreCandidateIdentities(captured.candidates).values()],
   };
 }
 

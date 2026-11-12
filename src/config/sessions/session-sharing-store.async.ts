@@ -14,7 +14,7 @@ import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-even
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { readResidentUserProfileAliases } from "../../state/user-profile-list.js";
@@ -151,7 +151,7 @@ export async function runSessionCollaborationWrite<
       storePath: options.path,
       sessionKey: resolved.sessionKey,
     };
-    const execution = captureOpenClawAgentDatabaseExecution(options);
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
     const assertQueuedCurrent = () => {
       execution.assertCurrent();
       assertCurrent();

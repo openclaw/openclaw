@@ -434,7 +434,7 @@ it("includes sessions outside the refreshed range in the first aggregate read", 
 
 it("waits for a busy refresh before loading a direct session summary", async () => {
   const sessionFile = await writeMessages(modelMessage("2026-02-01T10:00:00.000Z", 12));
-  const lock = prepareSessionCostUsageRefreshLock("main");
+  const lock = await prepareSessionCostUsageRefreshLock("main");
   expect(await lock.acquire()).toBe(true);
   const released = delay(40).then(lock.release);
   try {

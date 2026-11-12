@@ -84,7 +84,7 @@ async function withdrawSessionPendingInputs(
     sessionId: target.sessionId,
     ...selection,
   };
-  const captured = captureSessionStoreReadTarget(
+  const captured = await captureSessionStoreReadTarget(
     target,
     "Pending input withdrawal changed its captured database owner",
   );
@@ -212,7 +212,7 @@ export async function listOrphanedSessionPendingInputTargets(
     sessionKey: "",
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Orphaned input discovery changed its captured database owner",
   );

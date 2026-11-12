@@ -9,7 +9,10 @@ import type { SessionTranscriptWriteScope } from "../config/sessions/session-acc
 import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,10 +22,7 @@ import {
   type TrustedToolExecutionEvent,
 } from "../infra/diagnostic-events.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { captureGatewayRootWorkReleaseObserver } from "../process/gateway-work-admission.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -43,6 +43,8 @@ import {
   matchesClientVoiceRunSource,
   type ClientVoiceSessionSource,
   type ClientVoiceRun,
+  captureClientVoiceSessionWriter,
+  type ClientVoiceSessionWriter,
 } from "./client-voice-session-source.js";
 import {
   type ClientVoiceRunBinding,
@@ -52,10 +54,8 @@ import {
   VOICE_SESSION_STALE_AFTER_MS as STALE_AFTER_MS,
 } from "./client-voice-session-store.js";
 import {
-  captureClientVoiceSessionWriter,
   mutateAuthorizedClientVoiceSession,
   type ClientVoiceSessionMutationAuthority,
-  type ClientVoiceSessionWriter,
 } from "./client-voice-session-write.js";
 import type { VoiceSessionMutation } from "./client-voice-session-write.kernel.js";
 import {
@@ -328,6 +328,7 @@ function appendVoiceTranscript(
         await voiceSessionOperations.run(
           operationKey(normalized.agentId, normalized.voiceSessionId),
           async () => {
+            await writer.prepare();
             const sessionTarget = {
               ...normalized.sessionTarget,
               agentId: normalized.agentId,
@@ -348,7 +349,7 @@ function appendVoiceTranscript(
               record: ClientVoiceSessionRecord | undefined,
               entry: InternalSessionEntry | undefined,
               target: SessionTranscriptWriteScope,
-              assertFresh: () => void,
+              assertFresh: SessionSourceAssertion,
               workerTranscript = false,
             ) => {
               if (!record) {
@@ -489,6 +490,7 @@ function appendVoiceTranscript(
               );
             } else {
               // Custom transcripts keep their separately selected durable source.
+              let physicalSource: DatabasePathIdentity | undefined;
               await withSessionEntryReadOnlyInWorker(
                 sessionTarget,
                 writer.assertCurrent,
@@ -499,29 +501,42 @@ function appendVoiceTranscript(
                   if (!read.value?.sessionId) {
                     throw new Error(`agent session not found (${normalized.sessionKey})`);
                   }
-                  const physicalSource = source.scope?.storePath
-                    ? readDatabasePathIdentitySync(source.scope.storePath)
-                    : undefined;
+                  const readCustody = [
+                    ...(source.readCustody ? [source.readCustody] : []),
+                    ...(physicalSource
+                      ? [
+                          {
+                            sourcePath: physicalSource.canonicalPath,
+                            candidates: [
+                              {
+                                path: physicalSource.canonicalPath,
+                                physicalPath: physicalSource.canonicalPath,
+                                identity: physicalSource,
+                              },
+                            ],
+                          },
+                        ]
+                      : []),
+                  ];
                   const record = await writer.mutate(reservation);
                   source.assertCurrent();
                   await appendReserved(
                     record,
                     read.value,
                     { ...sessionTarget, ...source.scope },
-                    () => {
-                      writer.assertCurrent();
-                      // Canonical reader continuations cannot enter the append's transaction.
-                      if (physicalSource) {
-                        assertExistingDatabaseIdentity(
-                          physicalSource.canonicalPath,
-                          physicalSource.key,
-                          physicalSource.birthtime,
-                        );
-                      }
-                    },
+                    Object.assign(() => writer.assertCurrent(), {
+                      prepareSessionSource: async () => ({
+                        checks: [],
+                        readCustody,
+                        assertCurrent: writer.assertCurrent,
+                      }),
+                    }),
                     physicalSource?.key === writer.identity.key &&
                       physicalSource.birthtime === writer.identity.birthtime,
                   );
+                },
+                (_database, identity) => {
+                  physicalSource = identity;
                 },
               );
             }
@@ -561,7 +576,10 @@ export async function flushClientVoiceSessionWrites(
   await withClientVoiceSessionResources(resources, async () => {
     await voiceSessionOperations.flush(operationKey(params.agentId, params.voiceSessionId));
     // Join the accepted agent-writer prefix, including synchronous diagnostic producers.
-    await runOpenClawAgentWriteAdmission(writer.options, () => writer.assertCurrent());
+    await runOpenClawAgentWriteAdmission(writer.options, async () => {
+      await writer.prepare();
+      writer.assertCurrent();
+    });
   });
 }
 
@@ -669,6 +687,7 @@ export async function closeStaleClientVoiceSessions(params: {
   // A new voice session remains a retry point, but channel I/O is detached so a
   // stalled adapter cannot block stale-session recovery.
   const physicalSource = captureClientVoiceSessionSource(params.agentId);
+  await physicalSource.prepare();
   mutationDigestDeliveryOwner.retryAgent(params.agentId, {
     config: params.config,
     source: physicalSource,

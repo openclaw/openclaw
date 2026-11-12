@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
-  readDatabasePathIdentitySync,
-  resolveDatabasePathKey,
+  readDatabasePathIdentity,
+  resolveDatabasePathKeyAsync,
 } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -34,23 +34,7 @@ export async function withWorkerAdmission<T>(
   assertAgentCreationClaimCurrent(options);
   assertAgentCreationClaimAliases(options);
   const creationClaim = captureAgentCreationClaim(options);
-  const admittedIdentity = borrowedExecution
-    ? getSqliteDatabaseAdmissionIdentityForPath(pathname)
-    : undefined;
-  const identity = admittedIdentity
-    ? { ...admittedIdentity, canonicalPath: resolveDatabasePathKey(pathname) }
-    : readDatabasePathIdentitySync(pathname);
   const agentId = normalizeAgentId(options.agentId);
-  if (borrowedExecution) {
-    borrowedExecution.assertCurrent();
-    if (borrowedExecution.agentId !== agentId || borrowedExecution.path !== pathname) {
-      throw new Error("Agent worker admission differs from its captured execution");
-    }
-  }
-  let publishAlias =
-    identity.canonicalPath !== pathname
-      ? captureOpenClawAgentDatabaseAliasPublication({ agentId, path: pathname })
-      : undefined;
   const completion = createDeferredCore();
   let revoked = false;
   let releaseExecution: (() => Promise<void>) | undefined;
@@ -73,6 +57,27 @@ export async function withWorkerAdmission<T>(
   };
   const unregister = registerOpenClawAgentDatabaseAsyncResource(resource, options);
   try {
+    const admittedIdentity = borrowedExecution
+      ? getSqliteDatabaseAdmissionIdentityForPath(pathname)
+      : undefined;
+    const identity = admittedIdentity
+      ? { ...admittedIdentity, canonicalPath: await resolveDatabasePathKeyAsync(pathname) }
+      : await readDatabasePathIdentity(pathname);
+    if (borrowedExecution) {
+      borrowedExecution.assertCurrent();
+      if (borrowedExecution.agentId !== agentId || borrowedExecution.path !== pathname) {
+        throw new Error("Agent worker admission differs from its captured execution");
+      }
+    }
+    assertAdmission();
+    let publishAlias =
+      identity.canonicalPath !== pathname
+        ? captureOpenClawAgentDatabaseAliasPublication({
+            agentId,
+            path: pathname,
+            canonicalPath: identity.canonicalPath,
+          })
+        : undefined;
     const owner = await import("./openclaw-agent-execution.js");
     assertAdmission();
     // Doctor/maintenance and deletion cleanup retain their local durable owner.
@@ -83,7 +88,7 @@ export async function withWorkerAdmission<T>(
     if (borrowedExecution) {
       execution = borrowedExecution;
     } else {
-      const captured = owner.captureOpenClawAgentDatabaseExecution(
+      const captured = await owner.captureOpenClawAgentDatabaseExecutionAsync(
         options,
         identity.key.startsWith("file:")
           ? {
@@ -115,6 +120,7 @@ export async function withWorkerAdmission<T>(
             publishAlias = captureOpenClawAgentDatabaseAliasPublication({
               agentId,
               path: pathname,
+              canonicalPath: identity.canonicalPath,
             });
           }
           if (!grant()) {
@@ -127,7 +133,11 @@ export async function withWorkerAdmission<T>(
     assertAdmission();
     publishAlias?.(
       execution.captureGenerationClaim().identity,
-      getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: identity.canonicalPath }),
+      getOpenClawAgentDatabaseValidationForTransfer({
+        agentId,
+        path: identity.canonicalPath,
+        canonicalPath: identity.canonicalPath,
+      }),
     );
     return await run("worker");
   } finally {

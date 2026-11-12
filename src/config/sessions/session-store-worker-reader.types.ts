@@ -1,6 +1,7 @@
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { PreparedSessionEntryWorkerRead } from "./session-entry-read-runtime.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
 export type SessionStoreWorkerReader = {
@@ -8,6 +9,7 @@ export type SessionStoreWorkerReader = {
   database: PreparedSessionEntryWorkerRead["database"];
   logicalAgentId: string;
   selectedStore: Readonly<{ path: string; physicalPath: string }>;
+  readCustody?: SessionStoreReadCustody;
   continuation?: CanonicalSessionReaderContinuation;
   assertCurrent: () => void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;

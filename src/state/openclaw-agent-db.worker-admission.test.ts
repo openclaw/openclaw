@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -33,12 +35,14 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import { revokeAgentDatabaseResources } from "./openclaw-agent-db-resources.js";
 import * as validationCache from "./openclaw-agent-db-validation-cache.js";
 import {
   getOpenClawAgentDatabaseValidation as getValidation,
   getOpenClawAgentDatabaseValidationForTransfer as transferValidation,
   invalidateOpenClawAgentDatabaseValidation as invalidateValidation,
 } from "./openclaw-agent-db-validation-cache.js";
+import { withWorkerAdmission } from "./openclaw-agent-db-worker-admission.js";
 import { withOpenClawAgentDatabaseWrite as writeAgent } from "./openclaw-agent-db-write.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync as closeAgent,
@@ -720,5 +724,38 @@ it("publishes owner revocation before a host grant and rolls back the native wri
   } finally {
     await closing;
     await execution.release();
+  }
+});
+
+it("refuses worker preparation retired while filesystem identity lookup is stalled", async () => {
+  const options = executionOptions("agent-admission-identity-");
+  openAgent(options);
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const stat = fsPromises.stat;
+  const spy = vi.spyOn(fsPromises, "stat").mockImplementation(async (...args) => {
+    if (args[0] === options.path) {
+      entered.resolve();
+      await resume.promise;
+    }
+    return Reflect.apply(stat, fsPromises, args);
+  });
+  syncBuiltinESMExports();
+  const consume = vi.fn(async () => undefined);
+  const pending = withWorkerAdmission(options, undefined, undefined, consume);
+  const refused = expect(pending).rejects.toThrow("admission closed during worker preparation");
+  let closing: Promise<unknown> | undefined;
+  try {
+    await entered.promise;
+    closing = Promise.all(revokeAgentDatabaseResources({ path: options.path }));
+    resume.resolve();
+    await refused;
+    await closing;
+    expect(consume).not.toHaveBeenCalled();
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([pending, closing]);
+    spy.mockRestore();
+    syncBuiltinESMExports();
   }
 });

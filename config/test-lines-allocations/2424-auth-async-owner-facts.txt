@@ -1,0 +1,2 @@
+# Real auth writes reject main-thread filesystem calls; preserve FIFO, replacement refusal, first-file receipts, and async owner retirement.
+208

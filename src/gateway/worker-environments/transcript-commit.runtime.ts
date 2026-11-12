@@ -30,7 +30,7 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -138,7 +138,7 @@ async function applyWorkerTranscriptCommit(params: {
     const options = toDatabaseOptions(resolveSqliteTranscriptScope(target));
     await restoreSessionColdTranscript(target, assertCurrent);
     assertCurrent();
-    const execution = captureOpenClawAgentDatabaseExecution(options);
+    const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
     let worker:
       | Awaited<ReturnType<typeof openOpenClawAgentSqliteWorkerStore<WorkerTranscriptOperations>>>
       | undefined;

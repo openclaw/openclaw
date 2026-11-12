@@ -658,6 +658,7 @@ serveOwnedWorkerTasks(
             () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
             request.kind === "transcript-match" ? request.request.diagnostics : undefined,
+            request.readCustody,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {

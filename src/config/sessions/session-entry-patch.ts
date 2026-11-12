@@ -15,6 +15,7 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionScope,
@@ -92,6 +93,8 @@ export async function patchSessionEntryInWorker(params: {
     { entry: Readonly<SessionEntry> | null; wrote: boolean }
   >({
     ...params,
+    workspaceEvidence: source?.workspaceEvidence,
+    readCustody: source?.readCustody,
     releaseSource,
     candidateKind: "session-entry-patch",
     decodeCandidate(candidate) {
@@ -258,6 +261,8 @@ export async function patchSessionEntryInWorker(params: {
         !prepared.conversation &&
         !prepared.ensureIdentitySource &&
         !sourceChecks.length &&
+        !source?.workspaceEvidence?.length &&
+        !source?.readCustody?.length &&
         !source?.nativeSource &&
         !params.onCommitted &&
         !params.onCommittedSource
@@ -353,6 +358,8 @@ export async function runSessionEntryWorkerOperation<
   },
   Result,
 >(params: {
+  workspaceEvidence?: AgentDatabaseRequestExecutionSource["workspaceEvidence"];
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
   expectedCreationIdentity?: DatabasePathIdentity;
@@ -610,5 +617,8 @@ export async function runSessionEntryWorkerOperation<
     params.releaseSource,
     "write",
     params.expectedCreationIdentity,
+    undefined,
+    params.workspaceEvidence,
+    params.readCustody,
   );
 }

@@ -10,10 +10,7 @@ import {
   isSqliteWorkerError,
   retainSqliteWorkerErrorCode,
 } from "../infra/sqlite-worker-contract.js";
-import {
-  assertExistingDatabaseIdentity,
-  type DatabasePathIdentity,
-} from "../infra/sqlite-worker-identity.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -50,7 +47,7 @@ import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-
 import { captureAgentDatabasePreparedIntegrity } from "./openclaw-agent-execution-preparation.js";
 import {
   type AgentDatabaseExecutionPreparedTarget,
-  assertBorrowedAgentDatabaseFileIdentity,
+  captureBorrowedAgentDatabaseFile,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
   toAgentExecutionConstraints,
@@ -220,6 +217,7 @@ export function createAgentDatabaseExecution(
         closeNative(created),
       ),
       observePreparedIntegrity,
+      identity,
     );
     return created;
   }
@@ -355,31 +353,29 @@ export function createAgentDatabaseExecution(
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
+    get fileIdentity() {
+      assertCurrent();
+      return fileIdentity;
+    },
     get creationIdentity() {
       return creationIdentity;
     },
     getPendingPreparation: () => generation?.getPendingPreparation(),
-    borrow(borrowedPath, expected, creating, requestedPath) {
+    borrow(borrowedPath, expected, creating, requestedPath, observedIdentity) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
-      if (fileIdentity) {
-        assertExistingDatabaseIdentity(
-          borrowedPath,
-          `file:${fileIdentity.physicalIdentity}`,
-          fileIdentity.birthtime,
-        );
-      }
+      const fileReference = captureBorrowedAgentDatabaseFile({
+        borrowedPath,
+        identity,
+        creatingTarget,
+        expectedIdentity,
+        observedIdentity,
+        fileIdentity: () => fileIdentity,
+      });
       const assertReferenceCurrent = (nativeIdentity?: AgentDatabaseExecutionFileIdentity) => {
         assertCurrent();
-        assertBorrowedAgentDatabaseFileIdentity({
-          borrowedPath,
-          identity,
-          creatingTarget,
-          fileIdentity,
-          expectedIdentity,
-          nativeIdentity,
-        });
+        fileReference.assertCurrent(nativeIdentity);
       };
       assertReferenceCurrent();
       if (creatingTarget && !creationIdentity && !fileIdentity && generation) {
@@ -477,10 +473,14 @@ export function createAgentDatabaseExecution(
           return captureGenerationClaim();
         },
         async prepare(source, signal) {
+          const before = fileReference.prepare(false);
+          if (before) {
+            await before;
+          }
           assertBorrowed();
           assertCreationReference(true);
           const result = run(
-            source,
+            fileReference.bindSource(source),
             async () => undefined,
             (nativeIdentity) => {
               assertReferenceCurrent(nativeIdentity);
@@ -495,6 +495,11 @@ export function createAgentDatabaseExecution(
           acceptedWork.pending.set(result, { borrower });
           void result.finally(() => acceptedWork.pending.delete(result)).catch(() => undefined);
           await result;
+          const after = fileReference.prepare(true);
+          if (after) {
+            await after;
+            assertBorrowed();
+          }
         },
         async runExisting(source, operation, runOptions) {
           const capturedGeneration = borrowerLifetime.open ? generation : undefined;
@@ -505,8 +510,11 @@ export function createAgentDatabaseExecution(
             assertCreationReference(false);
             const execute = () =>
               run(
-                source,
-                operation,
+                fileReference.bindSource(source),
+                (scope) => {
+                  fileReference.admit();
+                  return operation(scope);
+                },
                 (nativeIdentity) => {
                   assertReferenceCurrent(nativeIdentity);
                   assertCreationReference(false);
@@ -523,16 +531,8 @@ export function createAgentDatabaseExecution(
           } catch (error) {
             let retireNative = runOptions?.retireNativeOnFailure === true;
             if (capturedGeneration && generation === capturedGeneration && fileIdentity) {
-              try {
-                // A caller refusal preserves co-users; loss of our own physical file cannot.
-                assertExistingDatabaseIdentity(
-                  fileIdentity.nativeLocation,
-                  `file:${fileIdentity.physicalIdentity}`,
-                  fileIdentity.birthtime,
-                );
-              } catch {
-                retireNative = true;
-              }
+              // A caller refusal preserves co-users; loss of our own physical file cannot.
+              retireNative ||= !(await fileReference.isPhysicalFileCurrent());
             }
             if (retireNative && capturedGeneration) {
               try {
@@ -716,6 +716,7 @@ export function createAgentDatabaseExecution(
       initialIdentity,
       expectedCreationIdentity,
       prepared.requestedPath,
+      prepared.observedIdentity,
     );
   } catch (error) {
     lifetime.retire();

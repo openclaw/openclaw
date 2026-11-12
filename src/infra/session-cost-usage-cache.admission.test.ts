@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, assert, expect, it, vi } from "vitest";
@@ -42,6 +43,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { refreshCostUsageCacheForAgent as refreshUsage } from "./session-cost-usage-aggregation.js";
+import { requestCostUsageCacheRefresh } from "./session-cost-usage-cache-runtime.js";
 import {
   acquireUsageLock,
   createUsageCacheWrite as rollupRow,
@@ -52,10 +54,14 @@ import {
   isSessionCostUsageRefreshRunning as isRefreshing,
   prepareSessionCostUsageRefreshLock as prepareLock,
 } from "./session-cost-usage-cache.sqlite.js";
-import { readSessionCostUsageRollupRows as readRows } from "./session-cost-usage-cache.test-support.js";
+import {
+  readSessionCostUsageRollupEntry,
+  readSessionCostUsageRollupRows as readRows,
+} from "./session-cost-usage-cache.test-support.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { withSessionCostUsageWorkerDatabases as withUsageDatabases } from "./session-cost-usage-worker-scope.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
+import * as databaseIdentity from "./sqlite-worker-identity.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
 
@@ -79,6 +85,72 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("refreshes queued usage without synchronous filesystem work in its refresh owner", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-periodic-filesystem";
+    const sessionFile = state.path("session.jsonl");
+    const line = (id: string) =>
+      `${JSON.stringify({
+        type: "message",
+        id,
+        timestamp: "2026-09-18T00:00:00Z",
+        message: {
+          role: "assistant",
+          provider: "test",
+          model: "test",
+          usage: { input: 7, output: 3, totalTokens: 10, cost: { total: 1 } },
+        },
+      })}\n`;
+    await fs.promises.writeFile(sessionFile, line("first"));
+    await refreshUsage({ config: {}, agentId, sessionFiles: [sessionFile] });
+    await fs.promises.appendFile(sessionFile, line("second"));
+    const calls: string[] = [];
+    const stat = fs.statSync;
+    const realpath = fs.realpathSync.native;
+    const observe = (kind: string) => {
+      const stack = new Error().stack;
+      if (stack?.includes("/session-cost-usage-cache.sqlite.ts:")) {
+        calls.push(`${kind}\n${stack}`);
+      }
+    };
+    const statObserver = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      observe("statSync");
+      return Reflect.apply(stat, fs, args);
+    });
+    const pathObserver = vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+      observe("realpathSync.native");
+      return Reflect.apply(realpath, fs.realpathSync, args);
+    });
+    syncBuiltinESMExports();
+    const work = new AsyncWorkScope();
+    try {
+      work.run(() =>
+        requestCostUsageCacheRefresh({
+          config: {},
+          agentId,
+          storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
+          sessionFiles: [sessionFile],
+          env: state.env,
+        }),
+      );
+      await AsyncWorkScope.runWhenAllIdle(
+        () => [work],
+        () => {},
+      );
+      const rows = readRows(agentId);
+      expect(rows).toHaveLength(1);
+      expect(readSessionCostUsageRollupEntry(rows[0]!, agentId)?.countedRecords).toBe(2);
+      expect(calls).toEqual([]);
+    } finally {
+      work.beginClose();
+      await work.drain();
+      statObserver.mockRestore();
+      pathObserver.mockRestore();
+      syncBuiltinESMExports();
+    }
+  });
 });
 
 it("records all uncommitted rollups when a scan fails before publication", async () => {
@@ -219,7 +291,7 @@ it.each([
         withOpenClawAgentDatabaseAsync({ agentId, path: databasePath }, () => undefined),
       );
       const opened = Promise.allSettled([opening]);
-      const lock = refresh ? undefined : prepareLock(agentId, cachePath);
+      const lock = refresh ? undefined : await prepareLock(agentId, cachePath);
       let writeSettled = false;
       const writing = Promise.resolve()
         .then(async () => {
@@ -313,7 +385,7 @@ it("retries retained usage cleanup by captured path before physical retirement",
     const read = Promise.allSettled([readingFromOtherState]);
     const target = { agentId, path: selected.path, env: state.env, requestedPaths: [alias] };
     const holding = withUsageDatabases([target], async (scope) => {
-      const lock = prepareLock(agentId, selected.path, { env: state.env });
+      const lock = await prepareLock(agentId, selected.path, { env: state.env });
       scope.retainCleanup(async () => {
         if (cleanupFailure) {
           throw cleanupFailure;
@@ -432,7 +504,7 @@ it("rejects a queued rollup after its refresh authority is revoked", async () =>
     const options = { agentId, env: state.env };
     const database = openOpenClawAgentDatabase(options);
     let current = true;
-    const owner = prepareLock(agentId, database.path, {
+    const owner = await prepareLock(agentId, database.path, {
       env: state.env,
       assertCurrent() {
         if (!current) {
@@ -466,7 +538,7 @@ it("releases the acquired refresh lock after the caller changes its state direct
     const databasePath = openOpenClawAgentDatabase({ agentId }).path;
     await using original = await acquireUsageLock(agentId);
     await withEnvAsync({ OPENCLAW_STATE_DIR: otherRoot }, async () => {
-      await using other = disposableLock(agentId);
+      await using other = await disposableLock(agentId);
       expect(await other.acquire()).toBe(true);
       await original.release();
       expect(await isRefreshing(agentId, databasePath)).toBe(false);
@@ -511,13 +583,13 @@ it("keeps usage exclusion in its mixed-case Windows state root", async () => {
       withMockedPlatform("win32", () => cloneEnv(input)),
     );
     const { entered, release, reservation } = holdWriter({ ...options, path: database.path });
-    let owner: ReturnType<typeof prepareLock> | undefined;
+    let owner: Awaited<ReturnType<typeof prepareLock>> | undefined;
     let acquiring: Promise<boolean> | undefined;
     let acquired = false;
     try {
       await entered.promise;
       process.env = mixedCaseEnv;
-      owner = prepareLock(agentId);
+      owner = await prepareLock(agentId);
       acquiring = owner.acquire().then((granted) => {
         acquired = granted;
         return granted;
@@ -660,7 +732,7 @@ it.each([
         : state.statePath("fresh-usage-patch.sqlite");
       const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
       const entry = { sessionId: "patched-during-refresh", updatedAt: 1 };
-      await using lock = disposableLock(agentId, storePath, { env: state.env });
+      await using lock = await disposableLock(agentId, storePath, { env: state.env });
       if (retired) {
         await closeOpenClawAgentDatabaseByPathAsync(storePath, agentId);
       }
@@ -695,7 +767,7 @@ it.each(["replacement", "revocation"] as const)(
       const database = openOpenClawAgentDatabase({ agentId, env: state.env });
       const storePath = database.path;
       let current = true;
-      await using lock = disposableLock(agentId, storePath, {
+      await using lock = await disposableLock(agentId, storePath, {
         env: state.env,
         assertCurrent() {
           if (!current) {
@@ -730,7 +802,9 @@ it("refuses a missing usage store whose directory alias changes before acquisiti
     fs.mkdirSync(original);
     fs.mkdirSync(replacement);
     fs.symlinkSync(original, alias, "junction");
-    await using lock = disposableLock("main", path.join(alias, "usage.sqlite"), { env: state.env });
+    await using lock = await disposableLock("main", path.join(alias, "usage.sqlite"), {
+      env: state.env,
+    });
     fs.renameSync(alias, state.statePath("old-alias"));
     fs.symlinkSync(replacement, alias, "junction");
     await expect(lock.acquire()).rejects.toThrow("changed its originally observed target");
@@ -744,7 +818,7 @@ it("allows first session creation while a fresh usage refresh awaits acquisition
     const agentId = "main";
     const storePath = state.statePath("fresh-usage.sqlite");
     const scope = { agentId, sessionKey: `agent:${agentId}:first`, storePath, env: state.env };
-    await using lock = disposableLock(agentId, storePath, { env: state.env });
+    await using lock = await disposableLock(agentId, storePath, { env: state.env });
     await using preparation = prepareSessionEntryMutationDatabases(
       [{ scope, assertCurrent() {} }],
       Promise.resolve(),
@@ -790,11 +864,11 @@ it("releases refresh waiters after failed cleanup without retiring their success
     const agentId = "usage-cleanup-failure";
     const databasePath = state.statePath("usage.sqlite");
     const failure = new Error("Usage writer cleanup failed");
-    const capture = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
     const captured = vi
-      .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
-      .mockImplementationOnce((...args) => {
-        const execution = capture(...args);
+      .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+      .mockImplementationOnce(async (...args) => {
+        const execution = await capture(...args);
         const release = execution.release.bind(execution);
         vi.spyOn(execution, "release").mockImplementationOnce(async () => {
           await release();
@@ -802,14 +876,14 @@ it("releases refresh waiters after failed cleanup without retiring their success
         });
         return execution;
       });
-    const owner = prepareLock(agentId, databasePath);
-    const successor = prepareLock(agentId, databasePath);
+    const owner = await prepareLock(agentId, databasePath);
+    const successor = await prepareLock(agentId, databasePath);
     expect(await owner.acquire()).toBe(true);
     const waiting = successor.acquire(true);
     try {
       await expect(owner.release()).rejects.toBe(failure);
-      expect(captured).toHaveBeenCalledTimes(2);
       expect(await waiting).toBe(true);
+      expect(captured).toHaveBeenCalledTimes(2);
       const row = rollupRow("fresh-session", '{"totalTokens":2}', 2);
       expect(await successor.writeRollup([row])).toBe(true);
       expect(readRows(agentId, databasePath)).toEqual([
@@ -826,14 +900,51 @@ it("releases refresh waiters after failed cleanup without retiring their success
   });
 });
 
+it("claims missing-store exclusion before preparation yields and preserves a successor on release", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const databasePath = state.statePath("pending-refresh.sqlite");
+    const owner = await prepareLock("main", databasePath, { env: state.env });
+    const successor = await prepareLock("main", databasePath, { env: state.env });
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const readIdentity = databaseIdentity.readDatabasePathIdentity;
+    using _ = vi
+      .spyOn(databaseIdentity, "readDatabasePathIdentity")
+      .mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await resume.promise;
+        return readIdentity(...args);
+      });
+    const acquiring = owner.acquire();
+    const acquired = Promise.allSettled([acquiring]);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, acquiring, "Missing identity did not yield");
+      expect(await successor.acquire()).toBe(false);
+      await owner.release();
+      expect(await successor.acquire()).toBe(true);
+      resume.resolve();
+      await expect(acquiring).rejects.toThrow("refresh owner is closed");
+      await owner.release();
+      expect(await isRefreshing("main", databasePath)).toBe(true);
+      expect(await successor.writeRollup([rollupRow()])).toBe(true);
+    } finally {
+      resume.resolve();
+      await acquired;
+      await owner.release();
+      await successor.release();
+    }
+    expect(await isRefreshing("main", databasePath)).toBe(false);
+  });
+});
+
 it("waits for refresh release without persisting lock or status writes", async () => {
   const stateDir = tempDirs.make("openclaw-usage-cache-exclusion-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
     const agentId = "worker-1";
     const database = openOpenClawAgentDatabase({ agentId });
-    const owner = prepareLock(agentId, database.path);
-    const contender = prepareLock(agentId, database.path);
-    const canceled = prepareLock(agentId, database.path);
+    const owner = await prepareLock(agentId, database.path);
+    const contender = await prepareLock(agentId, database.path);
+    const canceled = await prepareLock(agentId, database.path);
     const work = new AsyncWorkScope();
     try {
       expect(await isRefreshing(agentId, database.path)).toBe(false);
