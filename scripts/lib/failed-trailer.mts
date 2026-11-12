@@ -1,11 +1,5 @@
 // Keeps wrapper failures visible even when preceding diagnostics are truncated,
 // and marks every terminal exit so a truncated log cannot be read as a clean run.
-import path from "node:path";
-
-// A CLI shim that emits the terminal marker for its implementation publishes the
-// implementation path here, so one invocation never carries two EXIT lines.
-export const EXIT_TRAILER_DEFER_ENV = "OPENCLAW_CLI_EXIT_TRAILER_DEFER";
-
 export function writeFailedTrailer(
   tool: string,
   exitCode: number | string | null | undefined,
@@ -30,26 +24,6 @@ function normalizeExitCode(exitCode: number | string | null | undefined): number
 }
 
 /**
- * Return whether this process owns the terminal EXIT marker for its script.
- * A shim wrapper writes the marker for the implementation it spawned, so that
- * implementation stays silent and the log keeps exactly one marker.
- * @internal Directly tested wrapper implementation detail.
- */
-export function ownsExitTrailer(
-  scriptPath: string | undefined = process.argv[1],
-  deferredPath: string | undefined = process.env[EXIT_TRAILER_DEFER_ENV],
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (!deferredPath || !scriptPath) {
-    return true;
-  }
-  const pathImpl = platform === "win32" ? path.win32 : path;
-  const normalize = (value: string) =>
-    platform === "win32" ? pathImpl.resolve(value).toLowerCase() : pathImpl.resolve(value);
-  return normalize(deferredPath) !== normalize(scriptPath);
-}
-
-/**
  * Write the fixed-shape terminal marker, then the human failure line.
  * The marker is unconditional: a killed run leaves no marker at all, so its
  * presence — not the log's length — is what says the run reached an end.
@@ -61,9 +35,7 @@ export function writeExitTrailer(
   log: (value: unknown) => void = console.error,
 ): void {
   const code = normalizeExitCode(exitCode);
-  if (ownsExitTrailer()) {
-    log(`[${tool}] EXIT ${code}`);
-  }
+  log(`[${tool}] EXIT ${code}`);
   writeFailedTrailer(tool, code, log);
 }
 

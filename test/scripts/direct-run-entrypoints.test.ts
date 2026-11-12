@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
-import { EXIT_TRAILER_DEFER_ENV } from "../../scripts/lib/failed-trailer.mts";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -92,8 +91,8 @@ function writeTsxFixture(modulesDir: string, marker: string) {
   writeFileSync(path.join(dependencyDir, "index.js"), 'export const value = "loaded";\n');
 }
 
-// `run-vitest.mjs` carries a curated `failureTool`; the plugin-manifest wrapper
-// carries none, so together they pin both marker-naming routes.
+// `run-vitest.mjs` names a `failureTool`, so it is a gate that owns a terminal
+// marker; the plugin-manifest wrapper names none and must stay silent.
 const VITEST_SHIM_WRAPPER = "scripts/run-vitest.mjs" as const;
 const UNCURATED_SHIM_WRAPPER = "scripts/lib/plugin-npm-package-manifest.mjs" as const;
 
@@ -111,8 +110,6 @@ function runExitTrailerFixture(
       ),
     };
     delete env.NODE_OPTIONS;
-    // An outer gate run may already own a marker; this fixture is its own run.
-    delete env[EXIT_TRAILER_DEFER_ENV];
     const args =
       entrypoint === "wrapper"
         ? [wrapperPath]
@@ -451,43 +448,36 @@ process.exitCode = child.status ?? 1;
     });
   });
 
-  it.each([
-    { code: 0, curated: true, tool: "test", wrapper: VITEST_SHIM_WRAPPER },
-    { code: 5, curated: true, tool: "test", wrapper: VITEST_SHIM_WRAPPER },
-    {
-      code: 0,
-      curated: false,
-      tool: "plugin-npm-package-manifest.mts",
-      wrapper: UNCURATED_SHIM_WRAPPER,
-    },
-    {
-      code: 5,
-      curated: false,
-      tool: "plugin-npm-package-manifest.mts",
-      wrapper: UNCURATED_SHIM_WRAPPER,
-    },
-  ])(
-    "ends a $wrapper run that exits $code with one [$tool] EXIT line",
-    async ({ code, curated, tool, wrapper }) => {
-      // A pass used to print nothing and a wrapper without a curated
-      // failureTool printed nothing at all, so a truncated detached log was
-      // indistinguishable from a killed run.
-      const result = await runExitTrailerFixture(wrapper, `process.exitCode = ${code};\n`);
+  it.each([0, 5])(
+    "ends a gate wrapper run that exits %i with one [test] EXIT line",
+    async (code) => {
+      // A pass used to print nothing, so a truncated detached log of a green run
+      // was indistinguishable from a killed one.
+      const result = await runExitTrailerFixture(
+        VITEST_SHIM_WRAPPER,
+        `process.exitCode = ${code};\n`,
+      );
 
       expect(result.error, formatShimResult(result)).toBeUndefined();
       expect(result.status, formatShimResult(result)).toBe(code);
-      const lines = exitTrailerLines(result.stderr);
-      const expected =
-        curated && code !== 0
-          ? [`[${tool}] EXIT ${code}`, `[${tool}] FAILED (exit ${code})`]
-          : [`[${tool}] EXIT ${code}`];
-      expect(lines.slice(-expected.length), formatShimResult(result)).toEqual(expected);
-      expect(lines.filter((line) => / EXIT \d+$/u.test(line))).toHaveLength(1);
-      if (!curated || code === 0) {
-        expect(result.stderr).not.toContain("FAILED (exit");
-      }
+      expect(exitTrailerLines(result.stderr), formatShimResult(result)).toEqual(
+        code === 0 ? ["[test] EXIT 0"] : [`[test] EXIT ${code}`, `[test] FAILED (exit ${code})`],
+      );
     },
   );
+
+  it.each([0, 5])("keeps a wrapper without a failureTool silent on exit %i", async (code) => {
+    // Most shimmed programs own their stderr (launchers, stream filters); only
+    // wrappers that name a gate tool may append to it.
+    const result = await runExitTrailerFixture(
+      UNCURATED_SHIM_WRAPPER,
+      `process.exitCode = ${code};\n`,
+    );
+
+    expect(result.error, formatShimResult(result)).toBeUndefined();
+    expect(result.status, formatShimResult(result)).toBe(code);
+    expect(result.stderr, formatShimResult(result)).toBe("");
+  });
 
   it.skipIf(process.platform === "win32")(
     "marks a signal-killed run with the signal exit code",
@@ -506,15 +496,15 @@ process.exitCode = child.status ?? 1;
   );
 
   it.each(["wrapper", "implementation"] as const)(
-    "keeps one terminal marker when the %s runs a trailer-aware implementation",
+    "ends a trailer-aware implementation run through its %s with one marker",
     async (entrypoint) => {
       // scripts/check-changed.mts is invoked both ways: `pnpm check:changed`
-      // goes through the shim, detached gate lanes run the .mts directly.
+      // goes through an unnamed shim, detached gate lanes run the .mts directly.
       const trailerUrl = pathToFileURL(path.resolve("scripts/lib/failed-trailer.mts")).href;
       const result = await runExitTrailerFixture(
-        VITEST_SHIM_WRAPPER,
+        UNCURATED_SHIM_WRAPPER,
         `import { runWithFailedTrailer } from ${JSON.stringify(trailerUrl)};
-await runWithFailedTrailer("deferred-probe", () => {
+await runWithFailedTrailer("trailer-probe", () => {
   process.exitCode = 5;
 });
 `,
@@ -522,14 +512,10 @@ await runWithFailedTrailer("deferred-probe", () => {
       );
 
       expect(result.status, formatShimResult(result)).toBe(5);
-      const lines = exitTrailerLines(result.stderr);
-      expect(
-        lines.filter((line) => / EXIT \d+$/u.test(line)),
-        formatShimResult(result),
-      ).toEqual(entrypoint === "wrapper" ? ["[test] EXIT 5"] : ["[deferred-probe] EXIT 5"]);
-      expect(lines.at(-1), formatShimResult(result)).toBe(
-        entrypoint === "wrapper" ? "[test] FAILED (exit 5)" : "[deferred-probe] FAILED (exit 5)",
-      );
+      expect(exitTrailerLines(result.stderr), formatShimResult(result)).toEqual([
+        "[trailer-probe] EXIT 5",
+        "[trailer-probe] FAILED (exit 5)",
+      ]);
     },
   );
 

@@ -9,8 +9,6 @@ import { ensureRepoNodeModulesLink } from "./local-check-runtime.mts";
 import { hasManagedCleanupParent } from "./managed-cleanup-handoff.mts";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
-// Mirrors EXIT_TRAILER_DEFER_ENV in scripts/lib/failed-trailer.mts.
-const EXIT_TRAILER_DEFER_ENV = "OPENCLAW_CLI_EXIT_TRAILER_DEFER";
 const DEFAULT_FORCE_KILL_DELAY_MS = 5_000;
 const FORWARDED_COMPILER_FLAGS = new Set([
   "--maglev",
@@ -86,31 +84,23 @@ function signalExitCode(signal) {
 }
 
 /**
- * Write the fixed-shape terminal marker for a shimmed run, then the human
- * failure line. A detached gate log is judged by this marker: a killed run
- * leaves none, so a pass must not be silent and a wrapper without a curated
- * `failureTool` must not be silent either. Keep both lines on stderr — several
- * shimmed implementations emit machine-parsed stdout, and detached runs
- * redirect `2>&1` anyway.
+ * Write the fixed-shape terminal marker for a curated gate wrapper, then the
+ * human failure line. A detached gate log is judged by this marker: a killed
+ * run leaves none, so a pass must not be silent. Only wrappers that name a
+ * `failureTool` get it — every other shimmed program keeps its stderr to itself.
  *
  * The text mirrors `scripts/lib/failed-trailer.mts` deliberately rather than
  * importing it: this shim's dependency set is mirrored in packaging manifests
  * and test fixtures, so it stays free of repo-internal imports.
- *
- * `exitTool` names the marker for a wrapper whose implementation already owns
- * the human failure line, so both lines read as one tool. Without either name
- * the implementation's file name still identifies the run.
- * @param {{ exitTool?: string, failureTool?: string, implementation?: string }} options
- * @param {number} exitCode
  */
-function writeExitTrailer(options, exitCode) {
-  const tool =
-    options.exitTool ?? options.failureTool ?? path.basename(options.implementation ?? "cli");
+function writeExitTrailer(tool, exitCode) {
+  if (!tool) {
+    return;
+  }
   console.error(`[${tool}] EXIT ${exitCode}`);
-  // Only a curated tool name gets the human line, and it stays last so the
-  // existing "final line names the failure" contracts keep holding.
-  if (options.failureTool && exitCode !== 0) {
-    console.error(`[${options.failureTool}] FAILED (exit ${exitCode})`);
+  // The human line stays last so "final line names the failure" keeps holding.
+  if (exitCode !== 0) {
+    console.error(`[${tool}] FAILED (exit ${exitCode})`);
   }
 }
 
@@ -140,10 +130,6 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     }
   }
   const nodeExecutable = options.executable ?? (process.versions.bun ? "node" : process.execPath);
-  const implementationPath = fileURLToPath(new URL(options.implementation, moduleUrl));
-  // This shim writes the terminal marker for the whole invocation, so the
-  // implementation's own trailer skips its EXIT line instead of doubling it.
-  const childEnv = { ...process.env, [EXIT_TRAILER_DEFER_ENV]: implementationPath };
   // The inherited-stdio Vitest wrapper alone supplies an artifact owner here.
   const commandArgs = [
     ...nodeArgs,
@@ -156,7 +142,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
           options.workerRun.descriptor.directory,
         ]
       : []),
-    implementationPath,
+    fileURLToPath(new URL(options.implementation, moduleUrl)),
     ...process.argv.slice(2),
   ];
   if (
@@ -173,7 +159,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
       bin: nodeExecutable,
       args: commandArgs,
       cwd: process.cwd(),
-      env: childEnv,
+      env: process.env,
       stdio: options.workerRun
         ? ["inherit", "inherit", "inherit", "ipc"]
         : (options.stdio ?? "inherit"),
@@ -191,7 +177,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
         });
       },
     });
-    writeExitTrailer(options, exitCode);
+    writeExitTrailer(options.failureTool, exitCode);
     if (childSignal && !interrupted) {
       process.kill(process.pid, childSignal);
       return { interrupted };
@@ -240,7 +226,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     child = spawn(nodeExecutable, commandArgs, {
       cwd: process.cwd(),
       detached,
-      env: childEnv,
+      env: process.env,
       stdio: options.workerRun
         ? ["inherit", "inherit", "inherit", "ipc"]
         : (options.stdio ?? "inherit"),
@@ -253,12 +239,12 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     cleanup();
 
     if (result.signal) {
-      writeExitTrailer(options, signalExitCode(result.signal));
+      writeExitTrailer(options.failureTool, signalExitCode(result.signal));
       process.kill(process.pid, result.signal);
       return { interrupted };
     }
     const exitCode = result.code ?? options.failureExitCode ?? 1;
-    writeExitTrailer(options, exitCode);
+    writeExitTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
     return { interrupted };
   } catch (error) {
@@ -268,7 +254,7 @@ async function runCliShimProcess(moduleUrl, options, nodeArgs, onReady) {
     }
     console.error(error);
     const exitCode = options.failureExitCode ?? 1;
-    writeExitTrailer(options, exitCode);
+    writeExitTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
     return { interrupted };
   }
@@ -289,7 +275,7 @@ async function runCliShim(moduleUrl, options, nodeArgs) {
   } catch (error) {
     console.error(error);
     const exitCode = options.failureExitCode ?? 1;
-    writeExitTrailer(options, exitCode);
+    writeExitTrailer(options.failureTool, exitCode);
     process.exitCode = exitCode;
     return { interrupted: false };
   }
@@ -314,7 +300,7 @@ export async function runTsxCliShim(moduleUrl, options = {}) {
       }
     } catch (error) {
       console.error(error);
-      writeExitTrailer(options, 1);
+      writeExitTrailer(options.failureTool, 1);
       process.exitCode = 1;
       return { interrupted: false };
     }

@@ -85,8 +85,6 @@ export async function withShimFixture<T>(
   }) => T,
 ) {
   // Own a sibling of Vitest's POSIX temp namespace so unjoined writers survive its cleanup.
-  // Pre-existing: on hosts where os.tmpdir() resolves to a top-level shared dir (e.g. plain
-  // /tmp with no per-user TMPDIR nesting), this sibling is unwritable and mkdtemp throws EACCES.
   const fixtureParent = process.platform === "win32" ? tmpdir() : path.dirname(tmpdir());
   const fixtureRoot = realpathSync(mkdtempSync(path.join(fixtureParent, "openclaw-tsx-cli-shim-")));
   const checkoutRoot = path.join(fixtureRoot, "checkout");

@@ -403,7 +403,8 @@ afterEach(cleanupCorepackPnpmShimDir);
 
 describe("scripts/changed-lanes", () => {
   it.each([
-    ["changed-lanes", "[changed-lanes.mts] EXIT 0"],
+    // changed-lanes only plans; check-changed is the gate, so it alone ends in a marker.
+    ["changed-lanes", ""],
     ["check-changed", "[check:changed] EXIT 0"],
   ])("prints %s help before running checks", (script, marker) => {
     const result = runRepoScript(`scripts/${script}.mjs`, ["--help"], {
@@ -411,7 +412,7 @@ describe("scripts/changed-lanes", () => {
       OPENCLAW_TESTBOX: "1",
     });
     expect(result.status).toBe(0);
-    // Even a run that only prints help ends in its terminal marker, so a
+    // Even a gate run that only prints help ends in its terminal marker, so a
     // truncated detached log never reads as a clean run.
     expect(result.stderr.trim()).toBe(marker);
     expect(result.stdout).toContain(`Usage: node scripts/${script}.mjs`);
@@ -461,20 +462,14 @@ describe("scripts/changed-lanes", () => {
   });
 
   it.each([
-    // Without a curated tool name the wrapper's marker names its implementation.
-    ["changed-lanes.mjs", "--jsno", "Unknown option: --jsno\n[changed-lanes.mts] EXIT 1"],
-    [
-      "check-changed.mjs",
-      "--dr-run",
-      "Unknown option: --dr-run\n[check:changed] FAILED (exit 1)\n[check:changed] EXIT 1",
-    ],
+    ["changed-lanes.mjs", "--jsno", "Unknown option: --jsno"],
     // The detached gate lanes run the implementation directly, bypassing the
-    // wrapper entirely; the marker has to survive that invocation style too.
-    [
-      "check-changed.mts",
+    // wrapper entirely; the marker has to read the same in both invocation styles.
+    ...["check-changed.mjs", "check-changed.mts"].map((script) => [
+      script,
       "--dr-run",
       "Unknown option: --dr-run\n[check:changed] EXIT 1\n[check:changed] FAILED (exit 1)",
-    ],
+    ]),
   ])("rejects unknown %s options", (script, option, error) => {
     const result = runRepoScript(`scripts/${script}`, [option], {
       ...createNestedGitEnv(),
@@ -852,8 +847,8 @@ describe("scripts/changed-lanes", () => {
       ).toHaveLength(4);
       expect(diagnostics).toContain(broken);
       expect(failed.stderr.trim().split("\n").slice(-2)).toEqual([
-        "[check:changed] FAILED (exit 1)",
         "[check:changed] EXIT 1",
+        "[check:changed] FAILED (exit 1)",
       ]);
 
       writeRepoFile(

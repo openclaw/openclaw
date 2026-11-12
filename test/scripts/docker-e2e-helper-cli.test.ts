@@ -164,28 +164,18 @@ function expectDeclaredDispatchInputs(stdout: string): void {
 
 describe("Docker E2E helper CLIs", () => {
   it.each([
-    // The shim wrapper owns a terminal marker even on a help-only run, so a
-    // truncated log never reads as a clean run; the directly run .mts
-    // entrypoints have no wrapper and must stay silent on stderr.
-    [
-      "docker-e2e.mjs",
-      "node scripts/docker-e2e.mjs github-outputs <plan.json>",
-      "[docker-e2e.mts] EXIT 0",
-    ],
+    ["docker-e2e.mjs", "node scripts/docker-e2e.mjs github-outputs <plan.json>"],
     [
       "docker-e2e-timings.mts",
       "Usage: node --import tsx scripts/docker-e2e-timings.mts <summary.json|lane-timings.json>",
-      "",
     ],
     [
       "docker-e2e-rerun.mts",
       "node --import tsx scripts/docker-e2e-rerun.mts <run-id|summary.json|failures.json>",
-      "",
     ],
-  ])("prints %s help without processing inputs", (script, usage, stderr) => {
+  ])("prints %s help without processing inputs", (script, usage) => {
     const result = runHelper(`scripts/${script}`, "--help");
-    expect(result.status).toBe(0);
-    expect(result.stderr.trim()).toBe(stderr);
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toContain(usage);
   });
 

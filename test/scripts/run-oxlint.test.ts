@@ -4,11 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  ownsExitTrailer,
-  runWithFailedTrailer,
-  writeExitTrailer,
-} from "../../scripts/lib/failed-trailer.mts";
+import { runWithFailedTrailer, writeExitTrailer } from "../../scripts/lib/failed-trailer.mts";
 import {
   createOxlintShards,
   filterOxlintShards,
@@ -232,24 +228,6 @@ describe("run-oxlint", () => {
     writeExitTrailer("oxlint", "boom", (line: unknown) => lines.push(line));
 
     expect(lines).toEqual(["[oxlint] EXIT 1", "[oxlint] FAILED (exit 1)"]);
-  });
-
-  it.each([
-    { deferred: undefined, owns: true, scenario: "no shim wrapper published a marker" },
-    { deferred: "scripts/run-oxlint.mts", owns: false, scenario: "our own shim owns the marker" },
-    { deferred: "scripts/run-vitest.mts", owns: true, scenario: "another script's shim owns it" },
-  ])("gives the terminal marker one owner when $scenario", ({ deferred, owns }) => {
-    expect(ownsExitTrailer("scripts/run-oxlint.mts", deferred, "linux")).toBe(owns);
-  });
-
-  it("matches the deferred implementation case-insensitively on Windows", () => {
-    expect(
-      ownsExitTrailer(
-        "C:\\repo\\scripts\\Run-Oxlint.mts",
-        "c:\\repo\\scripts\\run-oxlint.mts",
-        "win32",
-      ),
-    ).toBe(false);
   });
 
   it.each([

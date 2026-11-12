@@ -190,9 +190,7 @@ describe("check-openclaw-package-tarball", () => {
     expect(result.stdout).toContain(
       "Usage: node scripts/check-openclaw-package-tarball.mjs [--require-bundled-workspace-deps] <openclaw.tgz>",
     );
-    // Even a help-only run ends in its terminal marker, so a truncated log
-    // never reads as a clean run; nothing else belongs on stderr.
-    expect(result.stderr.trim()).toBe("[check-openclaw-package-tarball.mts] EXIT 0");
+    expect(result.stderr).toBe("");
   });
 
   it("rejects option-like and extra arguments before tar inspection", () => {
