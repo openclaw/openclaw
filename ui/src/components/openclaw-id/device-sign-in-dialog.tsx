@@ -5,12 +5,13 @@
 import "./owner-devices-dialog.css";
 import { createSignal, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
 import {
   beginOpenClawIdDeviceSignIn,
   finishOpenClawIdDeviceSignIn,
   type OpenClawIdDeviceSignIn,
-} from "../../lib/openclaw-id/account.ts";
+} from "../../lib/openclaw-id/device-sign-in.ts";
 import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
 import type { OpenClawIdSignedIn } from "../../lib/openclaw-id/types.ts";
 import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
@@ -20,6 +21,7 @@ import { withPromiseModalHost } from "../promise-modal-host.ts";
 import { IconButton } from "../solid/icon-button.tsx";
 import { OpenClawIdErrorMessage } from "./error-message.tsx";
 
+registerEnglishCatalog(registerOpenClawIdDialogsEnglish);
 registerEnglishCatalog(registerOpenClawIdEnglish);
 
 /** Resolves with the account once confirmed (and says so), or null when closed first. */

@@ -76,10 +76,6 @@ const enOpenClawId = {
     errorSignInCancelled: "Sign-in was cancelled in OpenClaw ID.",
     errorDeviceSignInUnsupported:
       "OpenClaw ID can't sign in this browser yet. Sign in on the computer that runs this claw.",
-    deviceSignInTitle: "Sign in with OpenClaw ID",
-    deviceSignInBody: "Open OpenClaw ID, sign in, and confirm this code:",
-    deviceSignInOpen: "Open OpenClaw ID",
-    deviceSignInWaiting: "Waiting for you to confirm…",
     signInUnconfigured:
       "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
     signedIn: "Signed in to OpenClaw ID as {account}",

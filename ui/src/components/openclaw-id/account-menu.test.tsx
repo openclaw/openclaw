@@ -3,13 +3,12 @@ import { createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGatewayHarness, flushMicrotasks } from "../../app/overlays-access.test-support.ts";
+import { openClawIdAccount, signOutOfOpenClawId } from "../../lib/openclaw-id/account.ts";
+import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
 import {
   beginOpenClawIdDeviceSignIn,
   finishOpenClawIdDeviceSignIn,
-  openClawIdAccount,
-  signOutOfOpenClawId,
-} from "../../lib/openclaw-id/account.ts";
-import { OPENCLAW_ID_CALLBACK_KEY_PREFIX } from "../../lib/openclaw-id/callback-contract.ts";
+} from "../../lib/openclaw-id/device-sign-in.ts";
 import type { OpenClawIdPublication, OpenClawIdStatusResult } from "../../lib/openclaw-id/types.ts";
 import { disposeSidebarContextLifecycles } from "../../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createSessions } from "../../test-helpers/app-sidebar.ts";

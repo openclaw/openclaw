@@ -193,6 +193,7 @@ suite.define(() => {
                   "openclawId.status": {
                     status: { state: "on", tunnel: { state: "running", relayOnline: true } },
                     channel: "local_operator",
+                    accountSignIn: "popup",
                     owner: true,
                     ownerDeviceCount: 2,
                     connection: {

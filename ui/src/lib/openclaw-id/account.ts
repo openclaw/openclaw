@@ -237,97 +237,23 @@ export async function signInWithOpenClawId(params: {
   }
 }
 
-/** A device sign-in the Gateway started: the code to show and where to enter it. */
-export type OpenClawIdDeviceSignIn = {
-  state: string;
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete: string | null;
-  expiresAt: number;
-  interval: number;
-  /** This origin's sign-out marker when the attempt began; a later sign-out retires it. */
-  signOutGeneration: string | null | undefined;
-};
+/** This origin's sign-out marker; a device sign-in started before a later sign-out is retired. */
+export function readOpenClawIdSignOutGeneration(): string | null | undefined {
+  return getSafeLocalStorage()?.getItem(SIGN_OUT_KEY);
+}
 
-/** Starts a device sign-in; the browser shows its code while `finishOpenClawIdDeviceSignIn` polls. */
-export async function beginOpenClawIdDeviceSignIn(
-  client: GatewayBrowserClient,
-): Promise<OpenClawIdDeviceSignIn> {
-  const signOutGeneration = getSafeLocalStorage()?.getItem(SIGN_OUT_KEY);
-  const started = await client.request<Omit<OpenClawIdDeviceSignIn, "signOutGeneration">>(
-    "openclawId.account",
-    { action: "device_begin" },
+/** Keeps a completed device sign-in like a popup sign-in, with its issuer and return base. */
+export function keepOpenClawIdDeviceSignIn(
+  signedIn: OpenClawIdSignedIn,
+  issuerOrigin: string,
+  basePath: string,
+): void {
+  getSafeLocalStorage()?.setItem(ISSUER_KEY, issuerOrigin);
+  getSafeLocalStorage()?.setItem(
+    RETURN_KEY,
+    `${window.location.origin}${basePath.replace(/\/+$/, "")}/`,
   );
-  if (getSafeLocalStorage()?.getItem(SIGN_OUT_KEY) !== signOutGeneration) {
-    throw new Error("You signed out while sign-in was in progress. Start again.");
-  }
-  return { ...started, signOutGeneration };
-}
-
-// Resolves after `ms`, or rejects as soon as `signal` aborts.
-function pause(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      reject(new Error("Sign-in was cancelled.", { cause: signal.reason }));
-      return;
-    }
-    const stop = listen(
-      signal,
-      "abort",
-      () => {
-        window.clearTimeout(timer);
-        reject(new Error("Sign-in was cancelled.", { cause: signal.reason }));
-      },
-      { once: true },
-    );
-    const timer = window.setTimeout(() => {
-      stop();
-      resolve();
-    }, ms);
-  });
-}
-
-/**
- * Asks the Gateway to poll the device sign-in until the user approves it, then keeps the
- * account like a popup sign-in. Rejects on denial, expiry, sign-out or `signal` abort.
- */
-export async function finishOpenClawIdDeviceSignIn(params: {
-  client: GatewayBrowserClient;
-  started: OpenClawIdDeviceSignIn;
-  basePath: string;
-  signal: AbortSignal;
-}): Promise<OpenClawIdSignedIn> {
-  const assertCurrent = () => {
-    params.signal.throwIfAborted();
-    if (getSafeLocalStorage()?.getItem(SIGN_OUT_KEY) !== params.started.signOutGeneration) {
-      throw new Error("You signed out while sign-in was in progress. Start again.");
-    }
-  };
-  let interval = params.started.interval;
-  for (;;) {
-    if (Date.now() >= params.started.expiresAt) {
-      throw new Error("Sign-in timed out. Try again.");
-    }
-    await pause(interval * 1000, params.signal);
-    assertCurrent();
-    const result = await params.client.request<
-      | { pending: true; interval: number }
-      | { account: Omit<OpenClawIdSignedIn, "idToken">; idToken: string }
-    >("openclawId.account", { action: "device_poll", state: params.started.state });
-    assertCurrent();
-    if ("pending" in result) {
-      interval = result.interval;
-      continue;
-    }
-    const signedIn = { ...result.account, idToken: result.idToken };
-    getSafeLocalStorage()?.setItem(ISSUER_KEY, new URL(params.started.verificationUri).origin);
-    getSafeLocalStorage()?.setItem(
-      RETURN_KEY,
-      `${window.location.origin}${params.basePath.replace(/\/+$/, "")}/`,
-    );
-    keep(signedIn);
-    return signedIn;
-  }
+  keep(signedIn);
 }
 
 /** Captures account custody for work that can outlive a tab's sign-out or replacement. */
