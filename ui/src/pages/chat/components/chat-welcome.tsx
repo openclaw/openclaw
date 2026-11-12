@@ -90,7 +90,7 @@ export function ChatWelcome(
               <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>
             </Show>
             <Show when={agent()?.description}>
-              {(description) => <p class="agent-chat__description">{description()}</p>}
+              {(description) => <p class="agent-chat__description muted">{description()}</p>}
             </Show>
             <Show when={props.hint}>
               <p class="agent-chat__hint">{props.hint}</p>

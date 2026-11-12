@@ -11,7 +11,7 @@ describe("agent conversation starters", () => {
       });
       expect(result.success).toBe(true);
       if (result.success) {
-        expect(result.data.entries?.briefing.conversationStarters).toEqual(conversationStarters);
+        expect(result.data).toMatchObject({ entries: { briefing: { conversationStarters } } });
       }
     },
   );
