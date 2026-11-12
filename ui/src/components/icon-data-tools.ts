@@ -160,11 +160,12 @@ export const toolIconData = {
       },
     ],
   ]),
-  upload: strokeIconData([
-    ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }],
-    ["polyline", { points: "17 8 12 3 7 8" }],
-    ["line", { x1: "12", x2: "12", y1: "3", y2: "15" }],
-  ]),
+  // Lucide import (ISC), lucide-static@1.72.0.
+  import: strokePathData(
+    "M12 3v12",
+    "m8 11 4 4 4-4",
+    "M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4",
+  ),
   download: strokeIconData([
     ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }],
     ["polyline", { points: "7 10 12 15 17 10" }],

@@ -75,7 +75,13 @@ describe("TemplateUpload", () => {
     const trigger = slot.querySelector<HTMLButtonElement>('button[aria-label="Import"]')!;
     expect(trigger).not.toBeNull();
     expect(trigger.textContent).toBe("");
-    expect(trigger.querySelector("svg polyline")?.getAttribute("points")).toBe("17 8 12 3 7 8");
+    expect(
+      Array.from(trigger.querySelectorAll("svg path"), (path) => path.getAttribute("d")),
+    ).toEqual([
+      "M12 3v12",
+      "m8 11 4 4 4-4",
+      "M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4",
+    ]);
     const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
     const click = vi.spyOn(input, "click");
     trigger.click();
