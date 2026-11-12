@@ -137,6 +137,18 @@ it.each([undefined, "still-starting"] as const)(
   },
 );
 
+it("offers the git update for a checkout whose root ends in whitespace", async () => {
+  const root = "/repo/source ";
+  mocks.git.mockResolvedValue(gitResult(0, `${root}\n`));
+  await expect(offer({ root })).resolves.toBe(true);
+  expect(mocks.confirm).toHaveBeenCalledOnce();
+  expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
+    sourceUpdate: { root },
+    timeout: "1200",
+    onResult: expect.any(Function),
+  });
+});
+
 it.each([
   ["another checkout", gitResult(0, "/repo/other\n"), true],
   ["not a repository", gitResult(128, "/repo/other\n", "fatal: not a git repository"), true],

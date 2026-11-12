@@ -29,7 +29,8 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
     }
     return "unknown";
   }
-  const gitRoot = res.stdout.trim();
+  // Git appends one LF; other trailing whitespace can belong to the checkout path.
+  const gitRoot = res.stdout.replace(/\n$/, "");
   return (await resolveComparablePath(gitRoot)) === (await resolveComparablePath(root))
     ? "git"
     : "not-git";
