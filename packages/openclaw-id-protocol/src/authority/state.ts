@@ -83,7 +83,11 @@ export type InviteRecord = {
   created_by?: OwnerApprover;
 };
 
-/** An admitted node; it has no account, role, owner capabilities or approval descendants. */
+/**
+ * An admitted node; it has no account, role, owner capabilities or approval descendants. It was
+ * approved either from a node invite (`invite_id`) or together with an owner device
+ * (`owner_device`), whose removal removes it.
+ */
 export type NodeRecord = {
   description: NodeRedemptionBody["description"];
   label: string;
@@ -91,7 +95,9 @@ export type NodeRecord = {
   added_by: OwnerApprover;
   /** Last authenticated tunnel activity/admission (or initial approval). */
   last_seen: UnixSeconds;
-  invite_id: string;
+  invite_id?: string;
+  /** The owner device this node belongs to, by fingerprint of its D. */
+  owner_device?: KeyFingerprint;
 };
 
 /** Separate invite class; member proofs can never redeem it. */
