@@ -374,12 +374,10 @@ struct SessionGroupMigrationTests {
                 scopes: ["operator.read"],
                 isCurrent: { true },
                 request: { _ in Data(#"{"groups":[{"name":"Catalog Only","position":0}]}"#.utf8) })
-            appModel.setOperatorConnected(true)
             await model.refresh(appModel: appModel, connectionProvider: { _ in connection })
             #expect(model.names(for: []) == ["Catalog Only"])
             #expect(model.usesCatalog)
 
-            appModel.setOperatorConnected(false)
             await model.refresh(appModel: appModel, connectionProvider: { _ in nil })
             #expect(appModel.chatViewModelOwnerID == owner)
             #expect(model.names(for: []) == ["Catalog Only"], "A dropped link must keep the catalog")
@@ -393,7 +391,6 @@ struct SessionGroupMigrationTests {
                     Issue.record("A connection without group methods must not request the catalog")
                     return Data()
                 })
-            appModel.setOperatorConnected(true)
             await model.refresh(appModel: appModel, connectionProvider: { _ in legacy })
             #expect(appModel.chatViewModelOwnerID == owner)
             #expect(
@@ -484,12 +481,10 @@ struct SessionGroupMigrationTests {
                 scopes: ["operator.write"],
                 isCurrent: { true },
                 request: { _ in Data(#"{"groups":[{"name":"Empty","position":0}]}"#.utf8) })
-            appModel.setOperatorConnected(true)
             await model.refresh(appModel: appModel, connectionProvider: { _ in connection })
             #expect(model.names(for: []) == ["Empty"])
             #expect(model.allows("sessions.groups.rename"))
 
-            appModel.setOperatorConnected(false)
             await model.refresh(appModel: appModel, connectionProvider: { _ in nil })
 
             // The empty group's header stays; its actions wait for the link.
