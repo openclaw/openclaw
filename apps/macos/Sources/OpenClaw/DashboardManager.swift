@@ -382,6 +382,12 @@ final class DashboardManager {
     }
 
     private func replaceWithRouteFailure(_ current: DashboardWindowController) {
+        if AppStateStore.shared.connectionMode == .unconfigured,
+           let removal = MacOpenClawIDDeviceStore.shared.lastRemoval()
+        {
+            current.showRemoval(removal, present: false)
+            return
+        }
         guard current.currentURL != Self.failureURL || current.auth.hasCredential else { return }
         let replacement = self.replaceWindowController(
             current,
@@ -655,7 +661,13 @@ final class DashboardManager {
         // Keep observing while the failure page is up so a recovered tunnel
         // swaps the window back to the live dashboard.
         self.observeEndpointChanges()
-        controller.showFailure(title: copy.title, message: copy.message, detail: copy.detail)
+        if AppStateStore.shared.connectionMode == .unconfigured,
+           let removal = MacOpenClawIDDeviceStore.shared.lastRemoval()
+        {
+            controller.showRemoval(removal)
+        } else {
+            controller.showFailure(title: copy.title, message: copy.message, detail: copy.detail)
+        }
     }
 
     private func retireWindowPresentation() {
