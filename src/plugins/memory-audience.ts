@@ -215,6 +215,10 @@ export async function resolveMemoryAudienceFromEntry(
   const record: AudienceRecord = { leases: [], state: "current", holders: 0 };
   let requiredLifecycleRevision: string | undefined;
   let sessionIdOnly = false;
+  // A spawn receipt's lifecycle revision alone names the parent incarnation: resets
+  // mint a new revision and may keep the session id, while compaction and rewind
+  // rotate the session id within the same incarnation.
+  let revisionOnly = false;
   // A scheduled occurrence's requester check caps owner status for the whole
   // lineage: no spawn receipt on any hop can restore what this run lost.
   const scheduledOwnerCap = params.scheduledParent?.senderIsOwner;
@@ -251,8 +255,10 @@ export async function resolveMemoryAudienceFromEntry(
             });
       if (
         !entry ||
-        entry.sessionId !== sessionId ||
-        (depth > 0 && !sessionIdOnly && entry.lifecycleRevision !== requiredLifecycleRevision)
+        (revisionOnly
+          ? entry.lifecycleRevision !== requiredLifecycleRevision
+          : entry.sessionId !== sessionId ||
+            (depth > 0 && !sessionIdOnly && entry.lifecycleRevision !== requiredLifecycleRevision))
       ) {
         // The admitted row moving under this turn is transient. An ancestor reset or
         // removal after the spawn is permanent: the receipt names a lost incarnation.
@@ -280,6 +286,7 @@ export async function resolveMemoryAudienceFromEntry(
       }
       record.leases.push(lease);
       sessionIdOnly = false;
+      revisionOnly = false;
 
       const parent = depth === 0 ? params.scheduledParent : undefined;
       if (parent?.sessionKey === sessionKey) {
@@ -341,6 +348,7 @@ export async function resolveMemoryAudienceFromEntry(
         sessionKey = entry.spawnedBy;
         sessionId = entry.spawnedBySessionId;
         requiredLifecycleRevision = entry.parentSessionLifecycleRevision;
+        revisionOnly = requiredLifecycleRevision !== undefined;
         senderIsOwner = entry.spawnedBySenderIsOwner;
         continue;
       }
@@ -370,7 +378,7 @@ export async function resolveMemoryAudienceFromEntry(
         return {
           status: "granted",
           ...mintMemoryAudience(
-            { kind: "conversation", agentId, sessionKey, sessionId },
+            { kind: "conversation", agentId, sessionKey, sessionId: entry.sessionId },
             params.sessionKey,
             record,
           ),

@@ -197,7 +197,6 @@ it.each([
 it("denies malformed, stale, cyclic, and cross-agent lineage", async () => {
   const mutations = [
     ["child", "spawnedBySessionId", undefined, "ineligible"],
-    ["child", "spawnedBySessionId", randomUUID(), "stale-lineage"],
     ["parent", "lifecycleRevision", randomUUID(), "stale-lineage"],
     ["child", "parentSessionLifecycleRevision", undefined, "stale-lineage"],
     ["child", "parentSessionKey", "agent:main:other", "ineligible"],
