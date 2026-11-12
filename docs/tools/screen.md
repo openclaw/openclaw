@@ -54,8 +54,12 @@ asks them if it is unclear.
 For a native application running on an attached environment, use `desktop_show`
 with its `environmentId`. For a web application, open a portal for the server's
 port, then use `portal_show` with the returned `portalId`. The selected view opens
-in that conversation's side panel. Hiding a view does not stop its application,
-close the portal, or release the environment.
+in that conversation's side panel, only while the person is viewing that
+conversation. Session-targeted panel commands never navigate: if the person has
+moved to another conversation or page, the command is ignored rather than
+replayed when they return. Use `navigate` only when the person asks to switch
+conversations. Hiding a view does not stop its application, close the portal, or
+release the environment.
 
 Panel show actions accept `expanded: true` to fill the conversation pane and
 `expanded: false` to restore split view. Expansion keeps the selected panel, its
@@ -83,7 +87,9 @@ the typed `ui.command` event to the requesting browser.
 
 Commands change only the selected person's requesting Control UI connection. Other
 people's dashboards and your other tabs keep their current view. `sessionKey`
-chooses which session to open; it does not choose the recipient.
+chooses the target session; it does not choose the recipient. Panel commands
+leave the foreground conversation and page unchanged; navigation is a separate
+action.
 
 The Gateway captures the browser target when it accepts the message and keeps
 it with queued turns and worker execution. If that browser disconnects or the

@@ -41,6 +41,7 @@ import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
 import { completeAgentOnboarding, startAgentOnboardingConversation } from "./agents-onboarding.js";
+import { captureCronCreatorSession } from "./cron-input-validation.js";
 import { publishTemplateInstallEvent } from "./templates-add-conversation.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -298,6 +299,19 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           context.cron,
           context.getRuntimeConfig,
           assertCurrent,
+          (job, cfg) =>
+            captureCronCreatorSession(
+              job,
+              undefined,
+              {
+                client,
+                context,
+                signal,
+                hasCurrentClientAuthority,
+                ...(client ? { captureIndependentOperatorSource: true as const } : {}),
+              },
+              cfg,
+            ),
         ),
         rollbackNewAgent: async (
           agentId: string,
