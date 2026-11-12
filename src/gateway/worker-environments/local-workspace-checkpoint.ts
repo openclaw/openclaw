@@ -373,6 +373,7 @@ export async function stageLocalWorkspaceCheckpoint(
 }
 
 export async function prepareLocalWorkspaceCheckpoint(params: {
+  operation: "prepare" | "reuse";
   baselineRef: string | null;
   synchronize: (
     target: LocalWorkspaceSyncTarget,
@@ -381,7 +382,7 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
   current: () => LocalWorkspaceProjection;
   signal: AbortSignal;
 }) {
-  const phase = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.checkpoint";
+  const phase = `attempt.setup.sandbox.workspace_selection.${params.operation}.reconcile.checkpoint`;
   using phases = observeDiagnosticsTimelinePhases(`${phase}.directory`);
   await assertLocalWorkspaceDirectory(params.current().projection_path);
   const selected = params.current();

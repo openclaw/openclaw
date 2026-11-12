@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { LocalWorkspacePausePhase } from "../../agents/sandbox/local-workspace-quiescence.js";
-import type { SandboxConfig } from "../../agents/sandbox/types.js";
-import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
@@ -471,11 +469,11 @@ export function projectionOperations(
     // Public operation callbacks retain their frozen-workspace contract.
     await quiescence?.pause();
   };
-  const prepare = async (dependencies?: {
-    sandbox: SandboxConfig;
-    allocation: WorktreeAllocationGuard;
-  }) => {
-    const phase = "attempt.setup.sandbox.workspace_selection.prepare.reconcile";
+  const prepare = async (
+    dependencies?: Parameters<typeof initializeLocalWorkspaceProjection>[0]["dependencies"],
+    operation: "prepare" | "reuse" = "prepare",
+  ) => {
+    const phase = `attempt.setup.sandbox.workspace_selection.${operation}.reconcile`;
     using phases = observeDiagnosticsTimelinePhases(`${phase}.head`);
     if (!row) {
       const baseCommit = await requireGit(
@@ -535,6 +533,7 @@ export function projectionOperations(
     }
     phases.mark(`${phase}.checkpoint`);
     return await prepareLocalWorkspaceCheckpoint({
+      operation,
       baselineRef: selected.baseline_ref,
       synchronize,
       current,
@@ -549,7 +548,7 @@ export function projectionOperations(
     buildCacheInputs,
     baselineDocument,
     prepare,
-    reuse: async () => (row?.baseline_ref ? await prepare() : undefined),
+    reuse: async () => (row?.baseline_ref ? await prepare(undefined, "reuse") : undefined),
     synchronize,
     settle: async () => {
       await settle();
