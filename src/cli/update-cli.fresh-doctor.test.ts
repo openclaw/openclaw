@@ -176,7 +176,7 @@ describe("update-cli", () => {
     mocks.serviceDefinitionMutationCapability.mockResolvedValue({ kind, reason });
   };
 
-  it("preserves split-root package updates when the service definition is writable-overridden", async () => {
+  it("preserves split-root package updates with a writable launcher override", async () => {
     const oldInstall = await f.setupServicePackageAtPrefix({
       prefix: f.tempDirs.make("sealed-node-a-"),
     });
@@ -191,7 +191,7 @@ describe("update-cli", () => {
       programArguments: originalCommand,
       environment: { NODE_OPTIONS: "--max-old-space-size=4096" },
       managedDefinition: { programArguments: originalCommand },
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      managedOverrides: { launcher: "command" as const, environment: { keys: ["NODE_OPTIONS"] } },
     };
     mocks.serviceReadCommand.mockResolvedValue(overriddenCommand);
     f.primeNpmChannelTag("latest", "2026.5.20");
