@@ -44,10 +44,18 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 Configure the provider plugin before selecting its model:
 
+- [Baseten](/providers/baseten#decision-models) already serves Elephant 9B and
+  Mammoth 27B through its native System One integration.
+- [Celeris](/providers/celeris) connects to Celeris-1.1 Decision through its native
+  Decisions endpoint. Configure a Celeris key; the model is not a chat model.
+- [Fastino](/providers/fastino) connects to hosted GLiDE. Its current hosted
+  selector is unversioned; selecting it does not pin an evaluation checkpoint.
 - [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
   Install the plugin candidate from a compatible development checkout and
   configure a Liquid AI API key. Text/JSON and inline image evidence use the
   native Decision endpoint; connecting it does not change the chat model.
+- [Nace](/providers/nace) connects to Drex Max v1.1 through Nace's native
+  Decisions endpoint using a Nace key.
 - [ONNX](/plugins/onnx) runs local CPU classifiers in a persistent subprocess.
   Follow its development-checkout or compatible-package setup, then explicitly
   download the model or prepare a local export. Inference needs no hosted API credential.
@@ -55,6 +63,11 @@ Configure the provider plugin before selecting its model:
   and the OpenAI Platform Decisions API. Configure an OpenAI API key;
   ChatGPT/Codex subscription credentials do not authorize this endpoint.
   Evaluations send the supplied evidence to OpenAI and incur Platform usage charges.
+- [OpenRouter](/providers/openrouter) already supports Jev 1.14 through its
+  native System One route; it remains separate from OpenRouter chat inference.
+- [Perplexity](/providers/perplexity-provider#decision-models) connects directly
+  to Decider v1.2. Native Decision credentials do not reuse OpenRouter or search
+  configuration, and calls do not enable web grounding.
 - [Rerank](/providers/rerank) is bundled and uses any reranker behind a
   `/rerank` endpoint: vLLM, Hugging Face TEI, Infinity, llama.cpp, Cohere,
   Jina, or Voyage. List the endpoint and model under `models.providers.rerank`;
@@ -74,20 +87,34 @@ Configure the provider plugin before selecting its model:
 
 The current plugins declare these model references:
 
-| Model reference                      | Model                  | Preparation                                            |
-| ------------------------------------ | ---------------------- | ------------------------------------------------------ |
-| `onnx/deberta-v3-base-zeroshot-v2.0` | DeBERTa Zero-shot v2   | Download pinned ONNX artifacts                         |
-| `onnx/gliclass-base-v3.0`            | GLiClass Base v3       | Download pinned ONNX artifacts                         |
-| `onnx/gliclass-edge-v3.0`            | GLiClass Edge v3       | Download pinned ONNX artifacts                         |
-| `onnx/gliclass-instruct-base-v1.0`   | GLiClass Instruct Base | Local export                                           |
-| `onnx/gliclass-instruct-edge-v1.0`   | GLiClass Instruct Edge | Local export                                           |
-| `onnx/gliner2.5-base-v1`             | GLiNER 2.5 Base        | Download pinned ONNX artifacts                         |
-| `onnx/gliner2.5-small-v1`            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
-| `openai/gpt-6-luna`                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
-| `subq/subq-snap-preview`             | SubQ Snap (preview)    | SubQ credential and account credits                    |
-| `typesafe/jev-1.13.0`                | Jev 1.13.0             | TypeSafe credential                                    |
-| `typesafe/jev-latest`                | Jev                    | TypeSafe credential; follows the vendor's latest model |
-| `typesafe/kev-latest`                | Kev (local server)     | Running System One server and explicit loopback URL    |
+| Model reference                                      | Model                  | Preparation                                            |
+| ---------------------------------------------------- | ---------------------- | ------------------------------------------------------ |
+| `baseten/decision-models/baseten-elephant-9b-latest` | Elephant 9B            | Baseten credential                                     |
+| `baseten/decision-models/baseten-mammoth-27b-latest` | Mammoth 27B            | Baseten credential                                     |
+| `celeris/celeris-1.1-decision`                       | Celeris-1.1 Decision   | Celeris credential                                     |
+| `fastino/fastino/GLiDE`                              | GLiDE (hosted)         | Fastino credential; unversioned hosted selector        |
+| `nace/drex-max-v1.1`                                 | Drex Max v1.1          | Nace credential and model access                       |
+| `onnx/deberta-v3-base-zeroshot-v2.0`                 | DeBERTa Zero-shot v2   | Download pinned ONNX artifacts                         |
+| `onnx/gliclass-base-v3.0`                            | GLiClass Base v3       | Download pinned ONNX artifacts                         |
+| `onnx/gliclass-edge-v3.0`                            | GLiClass Edge v3       | Download pinned ONNX artifacts                         |
+| `onnx/gliclass-instruct-base-v1.0`                   | GLiClass Instruct Base | Local export                                           |
+| `onnx/gliclass-instruct-edge-v1.0`                   | GLiClass Instruct Edge | Local export                                           |
+| `onnx/gliner2.5-base-v1`                             | GLiNER 2.5 Base        | Download pinned ONNX artifacts                         |
+| `onnx/gliner2.5-small-v1`                            | GLiNER 2.5 Small       | Download pinned ONNX artifacts                         |
+| `openai/gpt-6-luna`                                  | GPT-6 Luna             | OpenAI Platform API key and Decisions API access       |
+| `openrouter/typesafe/jev-1.14`                       | Jev 1.14               | OpenRouter credential                                  |
+| `perplexity-decisions/pplx-decider-v1.2`             | Decider v1.2           | Perplexity credential                                  |
+| `subq/subq-snap-preview`                             | SubQ Snap (preview)    | SubQ credential and account credits                    |
+| `typesafe/jev-1.13.0`                                | Jev 1.13.0             | TypeSafe credential                                    |
+| `typesafe/jev-latest`                                | Jev                    | TypeSafe credential; follows the vendor's latest model |
+| `typesafe/kev-latest`                                | Kev (local server)     | Running System One server and explicit loopback URL    |
+
+Benchmark inclusion is not evidence of chat, agent-tool, or native Decision API
+compatibility. In particular, Cloudflare's [Clef documentation](https://developers.cloudflare.com/workers-ai/models/clef/)
+states that long text state is silently truncated to fit. Clef is not registered
+here: a documented rejection/no-truncation route is needed before it can preserve
+the supplied-evidence contract. Claude Haiku 5.5's presence as a language-model
+comparison in a benchmark does not establish a native typed Decision endpoint.
 
 Rerank models have no fixed list: any model you configure under
 `models.providers.rerank` is selectable as `rerank/<model id>`.
@@ -457,3 +484,26 @@ host authority or record accepted usage. Providers still return provider outcome
 The host attaches provenance during evaluation. Accepted usage is recorded only
 after the consuming operation passes its final checks. Keep those host
 responsibilities out of codecs and application result handling.
+
+## Native provider live verification
+
+From a matching development checkout, the opt-in native Decision smoke suite
+exercises Celeris, Fastino, Nace, and Perplexity through their registered V2
+adapters and real HTTPS transport:
+
+```sh
+OPENCLAW_LIVE_TEST=1 node scripts/run-vitest.mjs --config test/vitest/vitest.live.config.ts test/decision-index-providers.live.test.ts
+```
+
+Supply only the providers you intend to test through protected credentials:
+`CELERIS_API_KEY`, `FASTINO_API_KEY`, `NACE_API_KEY`, or `PERPLEXITY_API_KEY`. Each
+configured provider receives one synthetic text batch with Boolean, Choice, and
+Score questions and incurs its normal API charges. No customer content is used.
+The suite uses the supported environment-proxy transport when a proxy is present
+and does not read or change the running Gateway configuration or model selection.
+
+Missing keys skip those providers; skips are **not** live proof. A successful case
+checks native decoding, typed answers, and reported usage, not benchmark ranking,
+cache billing, distribution-shift calibration, or production reliability.
+Results contain only synthetic answers, model identity, and usage, never headers
+or credential-bearing prepared configuration.
