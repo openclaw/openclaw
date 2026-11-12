@@ -1,3 +1,4 @@
+import { pluginInvocationContext } from "../../plugins/plugin-instance-scope.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 
 type RouteReplyParams = Parameters<typeof import("./route-reply.js").routeReply>[0];
@@ -27,5 +28,9 @@ export async function prepareSessionEventDelivery(
     );
   }
   const { channel, to, accountId, threadId } = route;
-  return (params) => routeReply({ ...params, channel, to, accountId, threadId, mirror: false });
+  // Reply dispatch drains after the producer's invocation closes; retain plugin-instance authority.
+  return (params) =>
+    pluginInvocationContext.exit(() =>
+      routeReply({ ...params, channel, to, accountId, threadId, mirror: false }),
+    );
 }

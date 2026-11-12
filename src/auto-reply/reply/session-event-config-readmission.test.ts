@@ -16,10 +16,15 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import * as routedReplies from "./route-reply.js";
+import { prepareSessionEventDelivery } from "./session-event-delivery.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -36,6 +41,32 @@ await Promise.all([
     runtime.prewarmConfigDrivenReplyRuntime(),
   ),
 ]);
+
+it("delivers a session event after its producer invocation closes without reviving old callbacks", async () => {
+  const plugin = new PluginInstance("session-event-delivery");
+  const invocations = new PluginInvocationScope(createEmptyPluginRegistry(), [plugin]);
+  const oldCallback = invocations.run(() => invocations.wrap(plugin.wrap(() => {})));
+  using routed = vi
+    .spyOn(routedReplies, "routeReply")
+    .mockImplementation(plugin.wrap(async () => ({ ok: true, delivered: true }) as const));
+  try {
+    const reply = invocations.run(async () =>
+      (await prepareSessionEventDelivery({ channel: "telegram", to: "-100001" }, () => {}))({
+        cfg: {},
+        sessionKey: "agent:main:session-event-delivery",
+        payload: { text: "Process completed" },
+        replyKind: "final",
+      }),
+    );
+    invocations.release();
+    expect(() => oldCallback()).toThrow("Plugin invocation scope is closed");
+    await expect(reply).resolves.toMatchObject({ delivered: true });
+    expect(routed).toHaveBeenCalledOnce();
+  } finally {
+    invocations.release();
+    await plugin.dispose();
+  }
+});
 
 /** Attempts the real managed write tool, as the model would, and reports the final effect. */
 async function attemptRealWrite(params: RunEmbeddedAgentParams, filePath: string) {
