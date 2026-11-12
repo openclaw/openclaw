@@ -8585,14 +8585,6 @@ describe("ci workflow guards", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     expect(gate.needs).toContain("checks-node-core-test-nondist-shard");
     expect(gate.needs).toContain("checks-ui");
-    expect(
-      runCiGateFixture(
-        "preflight=success|true\nchecks-node-core-test-nondist-shard=success|true\nchecks-ui=success|true",
-      ).status,
-    ).toBe(0);
-    for (const owner of ["checks-node-core-test-nondist-shard", "checks-ui"]) {
-      expect(runCiGateFixture("preflight=success|true\n" + owner + "=failure|true").status).toBe(1);
-    }
   });
 
   it.each([

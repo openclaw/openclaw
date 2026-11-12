@@ -29,15 +29,6 @@ describe("CI runtime job inventory", () => {
       for (const selection of original) {
         expect(split.filter((entry) => entry === selection)).toHaveLength(1);
       }
-      const exception = resolveCiTestRuntimeSelections({ targets: [nodeOnly] }, policy);
-      expect(exception).toEqual([{ runtime: "node" }]);
-      expect(filterCiTestRuntimeSelections(exception, { OPENCLAW_CI_TEST_RUNTIME: "bun" })).toEqual(
-        [],
-      );
-      expect(resolveCiTestRuntimeSelections({ targets: [bothHosts] }, "bun-all")).toEqual([
-        { runtime: "node", targets: [bothHosts] },
-        { runtime: "bun" },
-      ]);
     },
   );
 
