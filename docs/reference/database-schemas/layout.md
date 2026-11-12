@@ -192,6 +192,10 @@ Payload version 1 records the recap text, generation time, session ID and lifecy
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
 
+### Scheduled run parent receipts
+
+A child-placement scheduled run stores one optional, private `scheduledMemoryParent` object in its `:run:` row's existing `session_nodes.entry_json`. It records the parent session the occurrence was admitted against (key, session ID, lifecycle revision) and the occurrence's admitted owner bit, so sessions the run spawns resolve memory through that parent. Only cron run preparation writes it; it adds no SQL table, column, or schema-version change. See [scheduled run parent receipts](/reference/database-schemas/storage-changes#scheduled-run-parent-receipts) for its writer, lifetime, and upgrade and downgrade behavior.
+
 ### User-turn model prompt projections
 
 Stored user messages may include the optional private field

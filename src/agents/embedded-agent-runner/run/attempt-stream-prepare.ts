@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { MessageInjectionClosedError } from "../../../auto-reply/reply/message-injection-authority.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -492,7 +493,7 @@ function prepareStream(
     toolAuthorityPreparation,
     assertCurrent: () => {
       if (!composeInjectionGuard(assertCurrent)()) {
-        throw new Error("active session is finalizing");
+        throw new MessageInjectionClosedError();
       }
     },
   });
@@ -507,7 +508,7 @@ function prepareStream(
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
-      throw new Error("active session is finalizing");
+      throw new MessageInjectionClosedError();
     }
     activeQueueAdmissions++;
     try {
