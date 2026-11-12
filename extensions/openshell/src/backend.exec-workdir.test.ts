@@ -279,6 +279,12 @@ describe("openshell backend exec workdir validation", () => {
     { name: "filesystem root", target: "/", expected: null },
     { name: "ordinary directory", target: "/sandbox/nested", expected: "/sandbox/nested" },
     { name: "excluded directory", target: "/sandbox/.git/nested", expected: null },
+    { name: "nested repository metadata", target: "/sandbox/nested/.git", expected: null },
+    {
+      name: "spaced nested directory",
+      target: "/sandbox/nested/ .git ",
+      expected: "/sandbox/nested/ .git ",
+    },
     { name: "mid-path symlink", target: "/sandbox/link/nested", expected: null },
     {
       name: "agent disabled mount",
@@ -311,6 +317,8 @@ describe("openshell backend exec workdir validation", () => {
     for (const root of [workspaceDir, agentWorkspaceDir]) {
       await fs.mkdir(path.join(root, "nested"));
     }
+    await fs.mkdir(path.join(workspaceDir, "nested", ".git"));
+    await fs.mkdir(path.join(workspaceDir, "nested", " .git "));
     for (const excluded of [".git", "hooks", "git-hooks"]) {
       await fs.mkdir(path.join(workspaceDir, excluded, "nested"), { recursive: true });
     }
