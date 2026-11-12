@@ -53,8 +53,9 @@ Name the scope in the report and run its tasks in this order:
 
 - **Unlinked residue** (default; scribe runs): link, then retire.
 - **One page** (a hub, an over-budget page, or a body that no longer explains
-  its subject): enumerate, retire, move claims about a more specific subject,
-  then review the page.
+  its subject): enumerate, move claims about a more specific subject, retire,
+  then review the page. Move before retiring: a superseded or withdrawn claim
+  can no longer be relinked.
 - **One subject, optionally since a date:** enumerate, link, retire, then
   review its page if the new claims change its picture.
 

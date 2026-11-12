@@ -37,8 +37,10 @@ scribe retires the rest.
 1. Read the derived rows with `knowledge_timeline({entity, group: "source"})`,
    following `nextOffset`. Rows are usually missing for older entries; writing
    them is the job, not a reason to stop.
-2. Give every entry a record. An entry whose source already has a row with a
-   note that says the same thing needs nothing. Otherwise:
+2. Give every entry a record. An entry needs nothing when its source already
+   has a row with a note that says the same thing and the row's date is the
+   entry's date. A grouped row carries its source's date, so an entry dated
+   differently still needs its own event claim. Otherwise:
    - The first entry for a dated source with no note on its row becomes a
      `discusses` relationship (source → entity) whose body is the entry's
      sentence, citing the lines the entry cites. Copy the cited file's path,
