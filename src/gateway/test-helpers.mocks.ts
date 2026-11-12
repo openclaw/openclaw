@@ -334,16 +334,6 @@ vi.mock("/src/auto-reply/reply/get-reply-from-config.runtime.js", () => ({
     gatewayTestHoisted.getReplyFromConfig(...args),
   prewarmConfigDrivenReplyRuntime: vi.fn(async () => {}),
 }));
-// mock-isolation: Gateway suites stub startup preparation separately from reply dispatch.
-vi.mock("../auto-reply/reply/get-reply-run-helpers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../auto-reply/reply/get-reply-run-helpers.js")>()),
-  prewarmReplyRunRuntimes: vi.fn(async () => {}),
-}));
-// mock-isolation: The absolute alias uses the same isolated startup runtime boundary.
-vi.mock("/src/auto-reply/reply/get-reply-run-helpers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../auto-reply/reply/get-reply-run-helpers.js")>()),
-  prewarmReplyRunRuntimes: vi.fn(async () => {}),
-}));
 vi.mock("../cli/deps.js", async () => {
   const actual = await vi.importActual<typeof import("../cli/deps.js")>("../cli/deps.js");
   const base = actual.createDefaultDeps();
