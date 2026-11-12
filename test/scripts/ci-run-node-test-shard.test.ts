@@ -612,6 +612,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      targets: [
+        "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+        "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+      ],
+      preset: "runtime",
+    },
+    {
       extra: [
         "src/agents/provider-auth-websocket.test.ts",
         "src/cron/session-run.session-model-strictness.integration.test.ts",

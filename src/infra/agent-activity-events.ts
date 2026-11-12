@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isSyntheticMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
+  formatSubagentProgressReference,
   projectAgentActivityItem,
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
@@ -91,9 +92,17 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
       ? { name: tool.presentationName, args: tool.args }
       : unwrapped;
   const display = resolveToolDisplay(call);
-  const meta = display.progress ? display.progress.detail : (tool.meta ?? display.detail);
-  const label = display.progress?.label ?? display.label;
   const details = asOptionalRecord(asOptionalRecord(tool.result)?.details);
+  const meta =
+    [
+      display.progress ? display.progress.detail : (tool.meta ?? display.detail),
+      call.name === "sessions_spawn"
+        ? formatSubagentProgressReference(normalizeOptionalString(details?.childSessionKey))
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  const label = display.progress?.label ?? display.label;
   const approval =
     tool.phase === "result" &&
     (details?.status === "approval-pending" || details?.status === "approval-unavailable");

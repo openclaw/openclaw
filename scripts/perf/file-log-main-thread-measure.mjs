@@ -1,10 +1,12 @@
 // Node 26: --expose-gc scripts/perf/file-log-main-thread-measure.mjs
 // --runtime-root <compiled legacy-finalizer/src> --root <new synthetic directory> --serve
 // Send {"mode":"counts"|"timing"|"allocation","rotate":false|true} on stdin.
+// Add "target":"default-report" for 2,300 path reports (100 windows), with no default writes.
 // One window is 23 independently settled batches, matching the observed Gateway minute.
 // Keep baseline/candidate in separate processes: logger ownership is a process singleton.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -25,9 +27,13 @@ assert(
 );
 const root = path.resolve(values.root);
 fs.mkdirSync(root);
+process.env.TMPDIR = path.join(root, "tmp");
+process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
+fs.mkdirSync(process.env.TMPDIR, { mode: 0o700 });
 const runtimeRoot = path.resolve(values["runtime-root"]);
 const load = (relative) => import(pathToFileURL(path.join(runtimeRoot, relative)).href);
-const { getLogger, applyLoggingConfig, flushLogger } = await load("logging/logger.js");
+const { getLogger, getResolvedLoggerSettings, applyLoggingConfig, flushLogger } =
+  await load("logging/logger.js");
 const { drainGlobalSingletonLifecycleState } = await load("shared/global-singleton.js");
 const { runWithWorkerStartObserver } = await load("infra/worker-request-diagnostics.js");
 const starts = [];
@@ -68,59 +74,96 @@ try {
       break;
     }
     const rotating = Boolean(command.rotate);
+    const reporting = command.target === "default-report";
+    const preparationStart = performance.now();
+    const preparationCpu = process.cpuUsage();
+    const preparationThread = process.threadCpuUsage();
+    const preparationAllocation = getHeapStatistics().total_allocated_bytes;
     applyLoggingConfig({
       level: "info",
-      file: path.join(root, rotating ? "rotation.log" : "warm.log"),
+      ...(reporting ? {} : { file: path.join(root, rotating ? "rotation.log" : "warm.log") }),
       maxFileBytes: rotating ? 1024 : 100 * 1024 * 1024,
     });
     logger = getLogger();
-    await append();
+    const operation = reporting ? () => getResolvedLoggerSettings() : append;
+    await operation();
+    const preparation = {
+      wallMs: performance.now() - preparationStart,
+      processCpu: process.cpuUsage(preparationCpu),
+      mainCpu: process.threadCpuUsage(preparationThread),
+      allocatedBytes: getHeapStatistics().total_allocated_bytes - preparationAllocation,
+    };
     global.gc();
     const counts = {};
     const restore = [];
-    if (command.mode === "counts") {
-      // Linux exposes unsupported methods such as lchmodSync as undefined.
-      for (const key of Object.keys(fs).filter(
-        (name) => name.endsWith("Sync") && typeof Reflect.get(fs, name) === "function",
-      )) {
-        const descriptor = Object.getOwnPropertyDescriptor(fs, key);
-        Object.defineProperty(fs, key, {
+    let result;
+    const operations = reporting ? 2_300 : 23;
+    try {
+      if (command.mode === "counts") {
+        // Linux exposes unsupported methods such as lchmodSync as undefined.
+        for (const key of Object.getOwnPropertyNames(fs).filter(
+          (name) => name.endsWith("Sync") && typeof Reflect.get(fs, name) === "function",
+        )) {
+          const descriptor = Object.getOwnPropertyDescriptor(fs, key);
+          Object.defineProperty(fs, key, {
+            ...descriptor,
+            value: new Proxy(descriptor.value, {
+              apply(fn, receiver, args) {
+                counts[key] = (counts[key] ?? 0) + 1;
+                return Reflect.apply(fn, receiver, args);
+              },
+            }),
+          });
+          restore.push(() => Object.defineProperty(fs, key, descriptor));
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(fs.realpathSync, "native");
+        Object.defineProperty(fs.realpathSync, "native", {
           ...descriptor,
           value: new Proxy(descriptor.value, {
             apply(fn, receiver, args) {
-              counts[key] = (counts[key] ?? 0) + 1;
+              counts["realpathSync.native"] = (counts["realpathSync.native"] ?? 0) + 1;
               return Reflect.apply(fn, receiver, args);
             },
           }),
         });
-        restore.push(() => Object.defineProperty(fs, key, descriptor));
+        restore.push(() => Object.defineProperty(fs.realpathSync, "native", descriptor));
+        syncBuiltinESMExports();
       }
-    }
-    const cpu = process.cpuUsage(),
-      thread = process.threadCpuUsage(),
-      allocated = getHeapStatistics().total_allocated_bytes,
-      rss = process.memoryUsage().rss,
-      start = performance.now();
-    for (let index = 0; index < 23; index++) {
-      await append();
-    }
-    const wallMs = performance.now() - start,
-      main = process.threadCpuUsage(thread),
-      total = process.cpuUsage(cpu),
-      allocatedBytes = getHeapStatistics().total_allocated_bytes - allocated,
-      rssAfter = process.memoryUsage().rss;
-    restore.toReversed().forEach((undo) => undo());
-    console.log(
-      JSON.stringify({
-        phase: command.mode,
-        rotating,
-        batches: 23,
+      const cpu = process.cpuUsage(),
+        thread = process.threadCpuUsage(),
+        allocated = getHeapStatistics().total_allocated_bytes,
+        rss = process.memoryUsage().rss,
+        start = performance.now();
+      for (let index = 0; index < operations; index++) {
+        await operation();
+      }
+      const wallMs = performance.now() - start,
+        main = process.threadCpuUsage(thread),
+        total = process.cpuUsage(cpu),
+        allocatedBytes = getHeapStatistics().total_allocated_bytes - allocated,
+        rssAfter = process.memoryUsage().rss;
+      result = {
         wallMs,
         mainCpuMs: (main.user + main.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
         rssBefore: rss,
         rssAfter,
+      };
+    } finally {
+      restore.toReversed().forEach((undo) => undo());
+      if (command.mode === "counts") {
+        syncBuiltinESMExports();
+      }
+    }
+    console.log(
+      JSON.stringify({
+        phase: command.mode,
+        rotating,
+        reporting,
+        batches: operations,
+        preparation,
+        ...result,
         load: loadavg(),
         counts,
         workers: starts.length,
