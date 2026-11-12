@@ -37,7 +37,11 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it("reuses a current Node executable named nodejs without probing PATH", () => {
-  vi.spyOn(process, "versions", "get").mockReturnValue({ ...process.versions, bun: undefined });
+  vi.spyOn(process, "versions", "get").mockReturnValue({
+    ...process.versions,
+    bun: undefined,
+    node: "24.16.0",
+  });
   vi.spyOn(process, "execPath", "get").mockReturnValue("/usr/bin/nodejs");
 
   expect(resolveNode()).toBe("/usr/bin/nodejs");
