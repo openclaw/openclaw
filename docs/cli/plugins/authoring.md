@@ -112,6 +112,11 @@ OIDC. Provider scaffolds do not generate skills and do not use
 `openclaw plugins build`/`validate`; those commands are for the tool
 scaffold's generated-metadata path.
 
+For scoped IDs such as `@acme/demo`, the plugin keeps its scoped ID and package
+name, while the generated provider ID is `acme-demo` and its default model is
+`acme-demo/example-chat`. Model references reserve `/` to separate the provider
+from the model.
+
 Before publishing, replace the placeholder API base URL, model catalog, docs
 route, credential text, and README copy with real provider details. Use the
 generated README for first-time ClawHub publishing and trusted-publisher setup.
