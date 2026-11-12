@@ -31,6 +31,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
