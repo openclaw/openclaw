@@ -618,7 +618,7 @@ it.each([
         for (const published of nestedPublications) {
           expect(published.execution.outcome).toEqual(completedNestedOutcome);
         }
-        if (phase === "requester reset" || phase === "requester replacement") {
+        if (phase === "requester reset") {
           expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
         } else {
           expect(subagentRuns.has("nested")).toBe(false);
