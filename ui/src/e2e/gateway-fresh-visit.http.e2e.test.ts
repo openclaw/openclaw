@@ -1,14 +1,18 @@
 import { once } from "node:events";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, inject, it } from "vitest";
+import { expect, inject, it, vi } from "vitest";
 import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-root.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { createUiE2eSetupObserver } from "../../../test/helpers/ui-e2e-phase.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { buildProductionControlUiE2e, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+// This asset-only proof must not prepare a full Gateway test runtime.
+vi.mock("../../../src/gateway/server-http.test-harness.ts", () => {
+  throw new Error("Fresh HTTP fixture loaded the unnecessary full Gateway test harness");
+});
 
 const runtime = createDeferred();
 let starting = true;
@@ -16,105 +20,96 @@ let requests = 0;
 // This suite exercises the asset-free fallback, not the preferred Web UI lane.
 const controlUiRoot: ControlUiRootState = { kind: "missing" };
 let currentUiRoot = "";
-const setupObserver = createUiE2eSetupObserver("ui/src/e2e/gateway-fresh-visit.http.e2e.test.ts");
-const observeSetup = setupObserver.run;
 const suite = createControlUiE2eSuite({
-  observeSetup: setupObserver,
   name: "Fresh browser at the production Gateway HTTP boundary",
   startServerBeforeBrowser: true,
   browserLaunchOptions: { ignoreDefaultArgs: ["--disable-back-forward-cache"] },
   async startServer() {
     const productionRoot = inject("controlUiE2ePrebuiltAssets")?.root;
-    await observeSetup(
-      "ui-assets",
-      async () => {
-        if (productionRoot) {
-          // The deployment lane owns immutable production-relative assets.
-          currentUiRoot = productionRoot;
-        } else {
-          await mkdir(path.resolve(".openclaw/tmp"), { recursive: true });
-          currentUiRoot = await mkdtemp(path.resolve(".openclaw/tmp/fallback-current-ui-"));
-          await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
-        }
-      },
-      { prebuiltAssets: Boolean(productionRoot) },
-    );
-    const { createOpenClawTestState } = await observeSetup(
-      "test-state-import",
-      () => import("../../../src/test-utils/openclaw-test-state.ts"),
-    );
-    const state = await observeSetup("test-state", () =>
-      createOpenClawTestState({
-        prefix: "fresh-browser-maintenance-",
-        scenario: "minimal",
-        applyEnv: true,
-        prepareProfileCatalog: true,
-      }),
-    );
-    let harness: typeof import("../../../src/gateway/server-http.test-harness.ts");
+    if (productionRoot) {
+      // The deployment lane owns immutable production-relative assets.
+      currentUiRoot = productionRoot;
+    } else {
+      await mkdir(path.resolve(".openclaw/tmp"), { recursive: true });
+      currentUiRoot = await mkdtemp(path.resolve(".openclaw/tmp/fallback-current-ui-"));
+      await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
+    }
+    const { createOpenClawTestState } =
+      await import("../../../src/test-utils/openclaw-test-state.ts");
+    const state = await createOpenClawTestState({
+      prefix: "fresh-browser-maintenance-",
+      scenario: "minimal",
+      applyEnv: true,
+      prepareProfileCatalog: true,
+    });
+    let http: typeof import("../../../src/gateway/server-http.ts");
+    let configRuntime: typeof import("../../../src/config/runtime-snapshot.ts");
     try {
-      harness = await observeSetup(
-        "http-import",
-        () => import("../../../src/gateway/server-http.test-harness.ts"),
-      );
+      [http, configRuntime] = await Promise.all([
+        import("../../../src/gateway/server-http.ts"),
+        import("../../../src/config/runtime-snapshot.ts"),
+      ]);
     } catch (error) {
       await state.cleanup();
       throw error;
     }
-    const { AUTH_NONE, withGatewayServer } = harness;
+    const config = { gateway: { trustedProxies: [] } };
     const ready = createDeferred<{ baseUrl: string; close: () => Promise<void> }>();
     const done = createDeferred();
     const lifetime = runQaGatewayFixture(
-      () =>
-        withGatewayServer({
-          prefix: "fresh-browser-maintenance",
-          resolvedAuth: AUTH_NONE,
-          overrides: {
-            controlUiEnabled: true,
-            controlUiBasePath: "/console",
-            controlUiRoot,
-            getStartup: () =>
-              starting
-                ? { ok: false, status: "starting", uptimeMs: 1, pendingReason: "startup-sidecars" }
-                : { ok: true, status: "started", uptimeMs: 2 },
-            waitForRequestRuntime: () => runtime.promise,
-          },
-          async run(server) {
-            server.prependListener("request", (request) => {
-              if (request.headers.accept?.includes("text/html")) {
-                requests++;
-              }
-            });
-            server.listen(0, "127.0.0.1");
-            await once(server, "listening");
-            const address = server.address();
-            if (!address || typeof address === "string") {
-              throw new Error("Missing HTTP fixture port");
+      async () => {
+        await state.writeConfig(config);
+        configRuntime.setRuntimeConfigSnapshot(config, config);
+        const server = http.createGatewayHttpServer({
+          clients: new Set(),
+          handleHooksRequest: async () => false,
+          resolvedAuth: { mode: "none", allowTailscale: false },
+          getRuntimeConfig: () => config,
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          controlUiEnabled: true,
+          controlUiBasePath: "/console",
+          controlUiRoot,
+          getStartup: () =>
+            starting
+              ? { ok: false, status: "starting", uptimeMs: 1, pendingReason: "startup-sidecars" }
+              : { ok: true, status: "started", uptimeMs: 2 },
+          waitForRequestRuntime: () => runtime.promise,
+        });
+        try {
+          server.prependListener("request", (request) => {
+            if (request.headers.accept?.includes("text/html")) {
+              requests++;
             }
-            ready.resolve({
-              baseUrl: "http://127.0.0.1:" + address.port + "/console/",
-              async close() {
-                done.resolve();
-                await lifetime.finally(setupObserver.report);
-              },
-            });
-            try {
-              await done.promise;
-            } finally {
-              runtime.resolve();
-              server.closeAllConnections();
-              await new Promise<void>((resolve, reject) => {
-                server.close((error) => (error ? reject(error) : resolve()));
-              });
-            }
-          },
-        }),
+          });
+          server.listen(0, "127.0.0.1");
+          await once(server, "listening");
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            throw new Error("Missing HTTP fixture port");
+          }
+          ready.resolve({
+            baseUrl: "http://127.0.0.1:" + address.port + "/console/",
+            async close() {
+              done.resolve();
+              await lifetime;
+            },
+          });
+          await done.promise;
+        } finally {
+          runtime.resolve();
+          server.closeAllConnections();
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      },
       () => state.cleanup(),
       () =>
         productionRoot ? Promise.resolve() : rm(currentUiRoot, { recursive: true, force: true }),
     );
     void lifetime.catch(ready.reject);
-    return observeSetup("http-ready", () => ready.promise);
+    return ready.promise;
   },
 });
 
