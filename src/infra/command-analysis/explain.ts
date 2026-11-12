@@ -76,7 +76,7 @@ export async function resolveCommandAnalysisSummaryForDisplay(params: {
     if (!Array.isArray(params.commandArgv) || params.commandArgv.length === 0) {
       return null;
     }
-    const analysis = analyzeArgvCommand({
+    const analysis = await analyzeArgvCommand({
       argv: params.commandArgv,
       cwd: params.cwd ?? undefined,
     });
