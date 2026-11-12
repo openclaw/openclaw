@@ -429,7 +429,9 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedRemotePath {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const mounts = this.getMounts();
-    const input = params.filePath.trim();
+    // Keep the caller's literal path: a file whose name starts or ends with
+    // whitespace is a distinct filesystem entry from its trimmed sibling.
+    const input = params.filePath;
     const inputPosix = input.replace(/\\/g, "/");
     const maybeContainerMount = path.posix.isAbsolute(inputPosix)
       ? resolveRemoteMountByContainerPath(mounts, normalizeContainerPath(inputPosix))
