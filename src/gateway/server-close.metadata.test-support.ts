@@ -149,8 +149,10 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     async start(port: number, options?: GatewayServerOptions) {
       let listener = reservedListeners.get(port);
       assert(listener, "Reserve the Gateway listener before starting it");
-      // Explicit same-endpoint restarts bind anew after the prior Gateway closes.
+      // The closed listener still owns its port claim until fixture cleanup.
+      // Release that reservation before claiming the same endpoint for restart.
       if (!listener.listener.listening) {
+        await listener.closeUnadopted();
         await reservePort(port);
         listener = reservedListeners.get(port)!;
       }
