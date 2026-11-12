@@ -17,9 +17,12 @@ struct OpenClawIDRemovalTests {
         let store = MacOpenClawIDDeviceStore(
             defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
         let device = try MacOpenClawIDDevice(
-            hostname: "studio.example.test", clawID: "fixture",
+            hostname: "studio.example.test",
+            clawID: "fixture",
             discoveryOrigin: #require(URL(string: "https://id.example.test")),
-            deviceEnrollmentID: UUID(), nodeEnrollmentID: nil, approvedWith: .device)
+            deviceEnrollmentID: UUID(),
+            nodeEnrollmentID: nil,
+            approvedWith: .device)
         store.save(device)
         var effects: [String] = []
         await store.remove(
@@ -49,9 +52,12 @@ struct OpenClawIDRemovalTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: URL(fileURLWithPath: "/unused.sqlite"))
         let device = try MacOpenClawIDDevice(
-            hostname: "studio.example.test", clawID: "fixture",
+            hostname: "studio.example.test",
+            clawID: "fixture",
             discoveryOrigin: #require(URL(string: "https://id.example.test")),
-            deviceEnrollmentID: UUID(), nodeEnrollmentID: nil, approvedWith: .device)
+            deviceEnrollmentID: UUID(),
+            nodeEnrollmentID: nil,
+            approvedWith: .device)
         store.save(device)
         store.beginLocalRemoval(device)
         await store.remove(
@@ -67,7 +73,7 @@ struct OpenClawIDRemovalTests {
         await #expect(throws: OpenClawIDDeviceRouteError.trustUnavailable) {
             try await OpenClawIDDeviceRoute.refresh(
                 hostname: "studio.example.test",
-                discoveryOrigin: URL(string: "https://id.example.test")!,
+                discoveryOrigin: #require(URL(string: "https://id.example.test")),
                 peer: peer,
                 admission: .owner,
                 node: nil,
@@ -119,11 +125,21 @@ struct OpenClawIDRemovalTests {
 }
 
 private struct RemovalFixtureIdentity: OpenClawIDNodeIdentityStore {
-    func loadOrCreateSeed() -> Data { Data(repeating: 7, count: 32) }
+    func loadOrCreateSeed() -> Data {
+        Data(repeating: 7, count: 32)
+    }
 }
 
 private struct MissingRemovalTrust: OpenClawIDNodeTrustStore {
-    func load(hostname _: String) -> OpenClawIDNodeTrustState? { nil }
-    func observe(hostname _: String, state _: OpenClawIDNodeTrustState) { Issue.record("Unexpected observation") }
-    func commit(_: OpenClawIDNodeTrustTarget) { Issue.record("Unexpected commit") }
+    func load(hostname _: String) -> OpenClawIDNodeTrustState? {
+        nil
+    }
+
+    func observe(hostname _: String, state _: OpenClawIDNodeTrustState) {
+        Issue.record("Unexpected observation")
+    }
+
+    func commit(_: OpenClawIDNodeTrustTarget) {
+        Issue.record("Unexpected commit")
+    }
 }
