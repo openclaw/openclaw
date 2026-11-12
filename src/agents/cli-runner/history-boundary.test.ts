@@ -19,6 +19,7 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { CliSessionBinding } from "../../config/sessions/types.js";
 import { commitCronConversationResult } from "../../cron/conversation-result.js";
+import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildPersistedVoiceMessage } from "../../talk/voice-transcript.js";
@@ -450,6 +451,37 @@ describe("CLI transcript account boundary", () => {
     release.resolve();
     await expect(background).resolves.toBeUndefined();
     expect(JSON.stringify(f.manager().getEntries())).toContain("detached result");
+    await f.run("epoch-a", async (allowed) => expect(allowed).toBe(false));
+  });
+
+  it("covers the run's own message-tool reply mirrored outside its async context", async () => {
+    const f = await seededFixture();
+    // A message-tool send reaches the Gateway outside the CLI run's async context.
+    const mirror = (runId: string, text: string) =>
+      runWithCliHistoryWriter(undefined, () =>
+        mirrorDeliveredSourceReplyToTranscript({
+          action: "send",
+          channel: "discord",
+          runId,
+          agentId: f.target.agentId,
+          sessionKey: f.target.sessionKey,
+          sessionId: f.target.sessionId,
+          cfg: { session: { store: f.target.storePath } },
+          actionParams: { target: "user-1", message: text },
+          toolContext: { currentChannelProvider: "discord", currentChannelId: "user-1" },
+          deliveredPayload: { ok: true, messageId: "mirror-" + runId },
+        }),
+      );
+    await f.run("epoch-a", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      await mirror(params.runId, "own mirrored reply");
+    });
+    await f.run("epoch-a", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      expect(await history(allowed, params)).toContain("own mirrored reply");
+      // Another run's id lends no writer, so its row still breaks coverage.
+      await mirror("unrelated-run", "foreign mirrored reply");
+    });
     await f.run("epoch-a", async (allowed) => expect(allowed).toBe(false));
   });
 
