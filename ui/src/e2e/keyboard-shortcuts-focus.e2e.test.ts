@@ -21,7 +21,7 @@ suite.define(() => {
         await page.addInitScript((value) => {
           Object.defineProperty(navigator, "platform", { get: () => value });
         }, platform);
-        const keys = ["agent:main:first", "agent:main:second", "agent:main:third"];
+        const keys = ["agent:main:first", "agent:main:second", "agent:main:third"] as const;
         await installMockGateway(page, {
           sessionKey: keys[0],
           sessions: keys.map((key, index) => ({

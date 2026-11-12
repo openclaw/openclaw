@@ -1135,6 +1135,7 @@
   "ui/src/components/solid/modal-dialog.tsx",
   "ui/src/components/textarea-token-anchor.ts",
   "ui/src/i18n/locales/en-chat-welcome.ts",
+  "ui/src/i18n/locales/en-command-palette.ts",
   "ui/src/i18n/locales/en-new-session-setup.ts",
   "ui/src/lib/checkout-snapshot.ts",
   "ui/src/lib/config/mcp-servers.ts",

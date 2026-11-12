@@ -27,7 +27,7 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
-### Session keyboard navigation
+## Session keyboard navigation
 
 From a session, press **Cmd+[** / **Cmd+]** on macOS, or **Ctrl+[** / **Ctrl+]**
 elsewhere, to select the previous / next session in sidebar order. Traversal wraps

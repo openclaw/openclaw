@@ -1,7 +1,7 @@
 import { For, Show } from "solid-js";
 import { openShellNewSession, type ShellNewSessionHost } from "../app/app-shell-new-session.ts";
 import type { ChatSendShortcut } from "../app/settings.ts";
-import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
+import { registerKeyboardShortcutsEnglish } from "../i18n/locales/en-keyboard-shortcuts.ts";
 import { isMobileBrowserPlatform } from "../lib/browser-platform.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -17,7 +17,7 @@ import { KeyboardShortcut } from "./solid/kbd.tsx";
 import "./keyboard-shortcuts-dialog.css";
 import "./modal-dialog.tsx";
 
-registerCommandPaletteEnglish();
+registerKeyboardShortcutsEnglish();
 
 type KeyboardShortcutEntry = ReturnType<typeof keyboardShortcutEntry>;
 type KeyboardShortcutSection = ReturnType<typeof keyboardShortcutSection>;

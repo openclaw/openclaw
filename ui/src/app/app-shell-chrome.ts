@@ -52,7 +52,6 @@ import {
 import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
-import { ShellSessionShortcuts } from "./app-shell-session-shortcuts.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   clearLazyShellAction,
@@ -71,6 +70,7 @@ import {
 import { NavDrawerSwipeLoader } from "./nav-drawer-swipe-loader.ts";
 import {
   NAVIGATION_RAIL_WIDTH,
+  ShellSessionShortcuts,
   dismissNavigationTransientSurfaces,
   handleNavDrawerKeydown,
   setToastInNavDrawer,

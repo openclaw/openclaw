@@ -22,7 +22,6 @@ import {
   findSidebarSessionRow,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
-import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import {
   setStoredSessionCatalogHidden,
@@ -31,6 +30,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
+import type { ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type PersonalNavigationHost = Parameters<typeof projectSidebarSessionReference>[0]["host"] & {
@@ -549,10 +549,13 @@ export function sidebarVisibleRowsInOrder(
 }
 
 export function selectAdjacentSidebarSession(
-  host: Pick<
-    AppSidebarSessionNavigationElement,
-    "navigationView" | "contextualSidebar" | "sidebarSnapshot" | "sessionKey" | "selectSession"
-  >,
+  host: {
+    readonly navigationView: "pages" | "sessions" | "online";
+    readonly contextualSidebar: ContextualSidebar | undefined;
+    readonly sidebarSnapshot: SidebarSnapshotModel | null;
+    readonly sessionKey: string;
+    selectSession(key: string, agentId?: string, row?: SidebarRecentSession): void;
+  },
   direction: -1 | 1,
   visibleTree: () => SidebarRecentSession[],
 ): boolean {

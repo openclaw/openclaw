@@ -10,9 +10,19 @@ describe("command discovery English loading", () => {
     {
       surface: "palette search",
       load: () => import("../components/command-palette-catalog-search.ts"),
+      catalog: async () =>
+        (await import("./locales/en-command-palette.ts")).registerCommandPaletteEnglish.catalog,
+      unopenedKey: "shortcutsOverlay.labels.sendMessage",
     },
-    { surface: "shortcut help", load: () => import("../components/keyboard-shortcuts-dialog.tsx") },
-  ])("registers fallback copy before $surface reads it", async ({ load }) => {
+    {
+      surface: "shortcut help",
+      load: () => import("../components/keyboard-shortcuts-dialog.tsx"),
+      catalog: async () =>
+        (await import("./locales/en-keyboard-shortcuts.ts")).registerKeyboardShortcutsEnglish
+          .catalog,
+      unopenedKey: "commandPalette.newSessionSettings",
+    },
+  ])("registers fallback copy before $surface reads it", async ({ load, catalog, unopenedKey }) => {
     const { manager } = await loadI18n();
     expect(manager.t("palette.placeholder")).toBe("Search or start a task…");
     expect(manager.t("palette.categories.navigation")).toBe("Navigation");
@@ -22,13 +32,11 @@ describe("command discovery English loading", () => {
     );
     await manager.setLocale("de");
     await load();
-    const { registerCommandPaletteEnglish } = await import("./locales/en-command-palette.ts");
-    for (const [key, value] of flattenTranslations(registerCommandPaletteEnglish.catalog)) {
+    for (const [key, value] of flattenTranslations(await catalog())) {
       expect(manager.t(key)).toBe(value);
     }
+    expect(manager.t(unopenedKey)).toBe(unopenedKey);
     expect(manager.t("common.health")).toBe("Gesundheit");
-    expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
-    expect(manager.t("chat.commands.menu")).toBe("Slash commands");
   });
 
   it.each<[key: string, expected: string, load: () => Promise<unknown>]>([
@@ -58,6 +66,11 @@ describe("command discovery English loading", () => {
     const { registerCommandPaletteEnglish } = await import("./locales/en-command-palette.ts");
     registerCommandPaletteEnglish();
     expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
+    expect(manager.t("shortcutsOverlay.labels.sendMessage")).toBe(
+      "shortcutsOverlay.labels.sendMessage",
+    );
+    const { registerKeyboardShortcutsEnglish } = await import("./locales/en-keyboard-shortcuts.ts");
+    registerKeyboardShortcutsEnglish();
     expect(manager.t("shortcutsOverlay.labels.sendMessage")).toBe("Send message");
   });
 });

@@ -1,3 +1,4 @@
+import { isSessionRouteId } from "../app-route-paths.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { activeElement, tabbableElements } from "../components/focus-navigation.ts";
@@ -143,4 +144,77 @@ export function floatingSidebarAttentionVisible(params: {
   const attentionNeedsFloating =
     params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
+}
+
+interface SessionShortcutHost {
+  readonly element: HTMLElement;
+  readonly onboardingMode: boolean;
+  readonly routeState: { readonly routeId?: string | undefined };
+  readonly navigationSidebar: HTMLElement & {
+    selectAdjacentSession?: (direction: -1 | 1) => boolean;
+  };
+}
+
+export class ShellSessionShortcuts {
+  private claimedKey: string | null = null;
+
+  constructor(
+    private readonly host: SessionShortcutHost,
+    private readonly shouldIgnore: (event: KeyboardEvent) => boolean,
+  ) {}
+
+  readonly release = (): void => {
+    this.claimedKey = null;
+  };
+
+  handleKeydown(event: KeyboardEvent): boolean {
+    const previous = event.key === "[";
+    if (
+      !matchesShortcutCombo(
+        KEYBOARD_SHORTCUT_COMBOS[previous ? "previousSession" : "nextSession"],
+        event,
+      )
+    ) {
+      return false;
+    }
+    // Selection can autofocus the new composer. Keep a held chord from falling
+    // through to browser history, even after focus or the route changes.
+    if (event.repeat && this.claimedKey === event.key) {
+      event.preventDefault();
+      return true;
+    }
+    const host = this.host;
+    if (
+      !event.defaultPrevented &&
+      !event.repeat &&
+      !host.onboardingMode &&
+      isSessionRouteId(host.routeState.routeId) &&
+      !this.shouldIgnore(event) &&
+      host.element.contains(host.navigationSidebar) &&
+      host.navigationSidebar.selectAdjacentSession?.(previous ? -1 : 1)
+    ) {
+      this.claimedKey = event.key;
+      event.preventDefault();
+    }
+    return true;
+  }
+
+  dispatchNative(key: "[" | "]"): void {
+    // AppKit consumes menu equivalents before WebKit delivers keydown. Re-enter
+    // through the focused control so the normal editable and overlay guards apply.
+    const target = activeElement(this.host.element);
+    // Ordinary keydown never crosses a browsing-context boundary either.
+    if (target instanceof HTMLIFrameElement) {
+      return;
+    }
+    (target ?? document).dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key,
+        metaKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }),
+    );
+  }
 }

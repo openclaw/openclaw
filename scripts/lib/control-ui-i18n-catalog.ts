@@ -48,6 +48,7 @@ import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.t
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
 import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-github-connections.ts";
 import { registerGitHubEnglish } from "../../ui/src/i18n/locales/en-github.ts";
+import { registerKeyboardShortcutsEnglish } from "../../ui/src/i18n/locales/en-keyboard-shortcuts.ts";
 import { registerLabsEnglish } from "../../ui/src/i18n/locales/en-labs.ts";
 import { registerLinkReaderEnglish } from "../../ui/src/i18n/locales/en-link-reader.ts";
 import { registerLocalErrorsEnglish } from "../../ui/src/i18n/locales/en-local-errors.ts";
@@ -162,6 +163,7 @@ const sourceFiles = [
   "en-templates.ts",
   "en-code-blocks.ts",
   "en-command-palette.ts",
+  "en-keyboard-shortcuts.ts",
   "en-connection-recovery.ts",
   "en-cron.ts",
   "en-cron-schedule.ts",
@@ -594,7 +596,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       board: { ...registerBoardDocumentEnglish.catalog.board, widget: boardWidget },
       newSession,
       sessionsView,
-      shortcutsOverlay: registerCommandPaletteEnglish.catalog.shortcutsOverlay,
+      shortcutsOverlay: registerKeyboardShortcutsEnglish.catalog.shortcutsOverlay,
       commandPalette: registerCommandPaletteEnglish.catalog.commandPalette,
       palette: registerCommandPaletteEnglish.catalog.palette,
       debug: registerDebugEnglish.catalog.debug,
