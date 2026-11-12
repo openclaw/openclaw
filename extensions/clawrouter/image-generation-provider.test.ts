@@ -12,6 +12,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const MODEL = "openai/gpt-image-2.5-flare";
+const GOOGLE_MODEL = "google/gemini-3.1-flash-image";
+const GOOGLE_PATH = "/v1/native/google-gemini/v1beta/models/gemini-3.1-flash-image:generateContent";
 // A valid 1x1 PNG, independent of the adapter's parser.
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=",
@@ -80,6 +82,63 @@ function catalog(model = MODEL) {
   };
 }
 
+function googleCatalog() {
+  return {
+    version: "clawrouter.client-catalog.v1",
+    providers: [
+      {
+        id: "google-gemini",
+        allowed: true,
+        executable: true,
+        nativeBaseUrl: "/v1/native/google-gemini",
+        routes: [
+          {
+            endpoint: "image_generate",
+            methods: ["POST"],
+            path: "/v1beta/models/${model}:generateContent",
+            requestFormat: "google.image_generate",
+            responseFormat: "google.image",
+          },
+        ],
+        models: [
+          {
+            id: GOOGLE_MODEL,
+            upstream: "gemini-3.1-flash-image",
+            capabilities: ["image.generate"],
+          },
+        ],
+        offers: [
+          {
+            endpoint: "image_generate",
+            modelId: GOOGLE_MODEL,
+            transport: "http",
+            routeKind: "native",
+            route: "/v1/native/google-gemini/v1beta/models/${model}:generateContent",
+            eligible: true,
+            affordability: "request-dependent",
+          },
+        ],
+      },
+    ],
+  };
+}
+function googleResponse() {
+  return {
+    candidates: [
+      {
+        finishReason: "STOP",
+        content: {
+          parts: [
+            {
+              inlineData: { mimeType: "image/png", data: PNG.toString("base64") },
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
+
 describe("registered ClawRouter image generation over HTTP", () => {
   useIsolatedStateGuard();
   let captured: ReturnType<typeof createCapturedPluginRegistration>;
@@ -122,8 +181,11 @@ describe("registered ClawRouter image generation over HTTP", () => {
       if (request.url === "/v1/catalog") {
         response.statusCode = catalogStatus;
         response.end(JSON.stringify(inventory));
-      } else if (request.url === "/v1/images/generations") {
+      } else if (request.url === "/v1/images/generations" || request.url === GOOGLE_PATH) {
         response.statusCode = status;
+        if (status === 307) {
+          response.setHeader("Location", externalResultUrl);
+        }
         response.end(JSON.stringify(payload));
       } else if (request.url === "/result.png") {
         response.setHeader("Content-Type", resultType);
@@ -255,6 +317,128 @@ describe("registered ClawRouter image generation over HTTP", () => {
       moderation: "low",
       user: "synthetic-user",
     });
+  });
+
+  const editGoogle = (overrides: Partial<Parameters<typeof generateImage>[0]> = {}) =>
+    generate({
+      modelOverride: "clawrouter/" + GOOGLE_MODEL,
+      inputImages: [{ buffer: PNG, mimeType: "image/png" }],
+      ...overrides,
+    });
+
+  it.each(["grant", "budget", "format", "model", "upstream", "path", "capability"])(
+    "does not send a Google edit for an unqualified %s offer",
+    async (mode) => {
+      const next = googleCatalog();
+      const provider = next.providers[0]!;
+      if (mode === "grant") {
+        provider.offers[0]!.eligible = false;
+      }
+      if (mode === "budget") {
+        provider.offers[0]!.affordability = "exact-blocked";
+      }
+      if (mode === "format") {
+        provider.routes[0]!.requestFormat = "google.generate_content";
+      }
+      if (mode === "model") {
+        provider.models[0]!.id = "google/gemini-unknown-image";
+      }
+      if (mode === "upstream") {
+        provider.models[0]!.upstream = "unqualified-image";
+      }
+      if (mode === "path") {
+        provider.routes[0]!.path = "/v1beta/models/${model}:streamGenerateContent";
+      }
+      if (mode === "capability") {
+        provider.models[0]!.capabilities = ["llm.generate"];
+      }
+      inventory = next;
+      await expect(editGoogle()).rejects.toThrow(/catalog/);
+      expect(calls.map((call) => call.url)).toEqual(["/v1/catalog"]);
+    },
+  );
+
+  it.each(["mime", "bytes", "references", "options"])(
+    "rejects invalid Google %s before provider I/O",
+    async (mode) => {
+      await expect(
+        editGoogle(
+          mode === "mime"
+            ? { inputImages: [{ buffer: PNG, mimeType: "image/jpeg" }] }
+            : mode === "bytes"
+              ? {
+                  inputImages: [
+                    {
+                      buffer: Buffer.concat([PNG, Buffer.alloc(6 * 1024 * 1024)]),
+                      mimeType: "image/png",
+                    },
+                  ],
+                }
+              : mode === "references"
+                ? {
+                    inputImages: Array.from({ length: 6 }, () => ({
+                      buffer: PNG,
+                      mimeType: "image/png",
+                    })),
+                  }
+                : { providerOptions: { openai: { moderation: "low" } } },
+        ),
+      ).rejects.toThrow(/reference|limit|options/i);
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it.each(["incomplete", "mime", "base64", "url", "oversize", "http", "redirect"])(
+    "rejects Google %s output without another paid request",
+    async (mode) => {
+      inventory = googleCatalog();
+      const next = googleResponse();
+      const candidate = next.candidates[0]!;
+      if (mode === "incomplete") {
+        next.candidates.push({ ...candidate, finishReason: "MAX_TOKENS" });
+      }
+      if (mode === "mime") {
+        candidate.content.parts[0]!.inlineData.mimeType = "image/jpeg";
+      }
+      if (mode === "base64") {
+        candidate.content.parts[0]!.inlineData.data = "bm90IGFuIGltYWdl";
+      }
+      if (mode === "oversize") {
+        candidate.content.parts[0]!.inlineData.data = Buffer.concat([
+          PNG,
+          Buffer.alloc(4 * 1024 * 1024),
+        ]).toString("base64");
+      }
+      if (mode === "http") {
+        status = 503;
+      }
+      if (mode === "redirect") {
+        status = 307;
+      }
+      payload =
+        mode === "url"
+          ? {
+              candidates: [
+                {
+                  finishReason: "STOP",
+                  content: { parts: [{ fileData: { fileUri: externalResultUrl } }] },
+                },
+              ],
+            }
+          : next;
+      await expect(editGoogle()).rejects.toThrow(/image|503|redirect|private|blocked/);
+      expect(calls.map((call) => call.url)).toEqual(["/v1/catalog", GOOGLE_PATH]);
+    },
+  );
+
+  it("retains all completed native images without buying a requested count", async () => {
+    inventory = googleCatalog();
+    const next = googleResponse();
+    next.candidates[0]!.content.parts.push(next.candidates[0]!.content.parts[0]!);
+    payload = next;
+    const result = await editGoogle();
+    expect(result.images.map((image) => image.buffer)).toEqual([PNG, PNG]);
+    expect(calls).toHaveLength(2);
   });
 
   it("fetches same-origin result URLs without forwarding either credential", async () => {
@@ -433,6 +617,8 @@ describe("registered ClawRouter image generation over HTTP", () => {
     ["/v1/images/generations", false],
     ["/result.png", false],
     ["/v1/images/generations", true],
+    [GOOGLE_PATH, false],
+    [GOOGLE_PATH, true],
   ] as const)("releases held %s (deadline=%s) without retry", async (path, deadline) => {
     if (deadline) {
       // Warm auth/catalog before spending the existing 500 ms body deadline.
@@ -446,7 +632,12 @@ describe("registered ClawRouter image generation over HTTP", () => {
     const held = Promise.withResolvers<ServerResponse>();
     onHeld = held.resolve;
     const controller = new AbortController();
-    const pending = generate(deadline ? { timeoutMs: 500 } : { signal: controller.signal });
+    if (path === GOOGLE_PATH) {
+      inventory = googleCatalog();
+    }
+    const pending = (path === GOOGLE_PATH ? editGoogle : generate)(
+      deadline ? { timeoutMs: 500 } : { signal: controller.signal },
+    );
     const settled = pending.catch(() => undefined);
     const response = await awaitHeld(held.promise, pending);
     const closed = once(response, "close");
@@ -457,9 +648,9 @@ describe("registered ClawRouter image generation over HTTP", () => {
     await closed;
     await settled;
     expect(response.destroyed).toBe(true);
-    expect(calls.filter((call) => call.url === "/v1/images/generations")).toHaveLength(
-      path === "/v1/catalog" ? 0 : 1,
-    );
+    expect(
+      calls.filter((call) => call.url === "/v1/images/generations" || call.url === GOOGLE_PATH),
+    ).toHaveLength(path === "/v1/catalog" ? 0 : 1);
   });
 
   it("publishes only same-key entitled image rows through the registered catalog family", async () => {
@@ -493,6 +684,16 @@ describe("registered ClawRouter image generation over HTTP", () => {
         modes: ["generate"],
         capabilities: expect.objectContaining({
           generate: expect.objectContaining({ maxCount: 2 }),
+        }),
+      }),
+    ]);
+    inventory = googleCatalog();
+    expect(await selected!.liveCatalog!(context)).toEqual([
+      expect.objectContaining({
+        model: GOOGLE_MODEL,
+        modes: ["generate", "edit"],
+        capabilities: expect.objectContaining({
+          edit: expect.objectContaining({ enabled: true, maxInputImages: 5 }),
         }),
       }),
     ]);
