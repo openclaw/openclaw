@@ -344,8 +344,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     },
     route: { id: "models-status" },
   },
-  // These unregistered roots are reserved so plugin registration cannot claim them;
-  // the catalog entries preserve their startup policy.
+  // The unregistered legacy root stays reserved so plugin registration cannot claim it.
+  // The built-in tools root shares its policy so stray Gateway RPC names fail fast.
   ...["tool", "tools"].map((command): CliCommandCatalogEntry => ({
     commandPath: [command],
     policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },

@@ -553,7 +553,9 @@ export async function runEmbeddedAttemptPromptPhase(
               );
               const appendEntry = (customType: string, data: unknown) =>
                 sessionManager.appendCustomEntryAsync(customType, data);
-              await (inHistorySystemUpdates
+              // Only an active prompt series owns in-history prompt commits; ranking alone
+              // installs the updater without that history policy.
+              await (sessionRuntime.prepareSystemPromptUpdate && inHistorySystemUpdates
                 ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
                 : persistSessionToolSurface(sessionPromptState, appendEntry));
             });

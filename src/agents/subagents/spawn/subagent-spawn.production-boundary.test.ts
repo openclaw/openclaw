@@ -90,6 +90,7 @@ import { registerAccessStateSpawnCases } from "./subagent-spawn.access-state.tes
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
 import { registerGuestSpawnCases } from "./subagent-spawn.guest.test-support.js";
+import { createHeldModelRun } from "./subagent-spawn.held-model-run.test-support.js";
 import { registerParticipantSpawnCases } from "./subagent-spawn.participants.test-support.js";
 import { registerNativePluginSpawnCases } from "./subagent-spawn.plugin-native.test-support.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
@@ -97,7 +98,6 @@ import {
   createBoundSpawnInvocation,
   createBoundWorker,
   createEmbeddedRunWaiter,
-  createHeldModelRun,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
   holdSpawnCapacity,
