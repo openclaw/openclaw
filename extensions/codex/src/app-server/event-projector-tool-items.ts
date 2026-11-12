@@ -328,6 +328,29 @@ export function itemOutputText(
   return output ? truncateNativeToolTranscriptText(output, "Codex") : undefined;
 }
 
+// Host trajectory recorder bounds: larger strings become a bare size marker and
+// oversized events drop the field, so those keep the bounded preview instead.
+const TRAJECTORY_OUTPUT_MAX_CHARS = 65_536;
+const TRAJECTORY_OUTPUT_MAX_JSON_BYTES = 192 * 1024;
+
+// Only command output lacks a structured copy in the same event's result.
+export function itemTrajectoryOutputText(
+  item: CodexThreadItem,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
+  if (item.type === "commandExecution") {
+    const output = itemObservedOutputText(item, outputTextByItem);
+    if (
+      output?.trim() &&
+      output.length <= TRAJECTORY_OUTPUT_MAX_CHARS &&
+      Buffer.byteLength(JSON.stringify(output)) <= TRAJECTORY_OUTPUT_MAX_JSON_BYTES
+    ) {
+      return output;
+    }
+  }
+  return itemOutputText(item, outputTextByItem);
+}
+
 function itemObservedOutputText(
   item: CodexThreadItem,
   outputTextByItem?: ReadonlyMap<string, string>,

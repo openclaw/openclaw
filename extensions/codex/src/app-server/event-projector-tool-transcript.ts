@@ -27,10 +27,10 @@ import {
 import {
   isNativePostToolUseRelayItem,
   itemMeta,
-  itemOutputText,
   itemToolArgs,
   itemToolError,
   itemToolResult,
+  itemTrajectoryOutputText,
   itemTranscriptResultText,
   readInterceptedNativePatchInput,
 } from "./event-projector-tool-items.js";
@@ -496,7 +496,7 @@ export class CodexToolTranscriptProjection {
     const toolResult = itemToolResult(params.item);
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
-      itemOutputText(params.item, this.progress.outputTextByItem);
+      itemTrajectoryOutputText(params.item, this.progress.outputTextByItem);
     const status =
       params.status === "running" ? "running" : auditNativeToolTerminalStatus(params.item);
     this.options.trajectoryRecorder.recordEvent("tool.result", {

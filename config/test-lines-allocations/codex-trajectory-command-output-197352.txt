@@ -1,0 +1,2 @@
+26
+# Codex trajectory regressions: complete command output past the 10,000-char preview, plus preview fallback at the recorder field and event limits (#197352).
