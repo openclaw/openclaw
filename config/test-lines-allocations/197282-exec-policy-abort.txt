@@ -1,2 +1,0 @@
-# Ctrl+C interrupt regression proof for exec-policy show --session read-only Gateway call.
-30

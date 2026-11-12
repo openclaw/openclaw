@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerExecPolicyCli } from "./exec-policy-cli.js";
 
 const cautiousDefaults: NonNullable<ExecApprovalsFile["defaults"]> = {
@@ -84,7 +85,6 @@ const mocks = await vi.hoisted(async () => {
     defaultRuntime,
     runtimeErrors,
     callGateway: vi.fn(),
-    signal: undefined as AbortSignal | undefined,
     replaceConfigFile: vi.fn(replaceConfig),
     readConfigFileSnapshot:
       vi.fn<() => Promise<{ path: string; hash: string; config: OpenClawConfig }>>(),
@@ -151,13 +151,6 @@ vi.mock("./gateway-rpc.js", async () => {
   return { ...actual, callGatewayFromCliWithTransport: mocks.callGateway };
 });
 
-vi.mock("../shared/async-work-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../shared/async-work-scope.js")>(
-    "../shared/async-work-scope.js",
-  );
-  return { ...actual, getAsyncWorkSignal: () => mocks.signal };
-});
-
 describe("exec-policy CLI", () => {
   const runExecPolicyCommand = async (args: string[]) => {
     const program = new Command();
@@ -174,7 +167,6 @@ describe("exec-policy CLI", () => {
     mocks.state.hash = "approvals-hash";
     mocks.runtimeErrors.length = 0;
     mocks.callGateway.mockReset();
-    mocks.signal = undefined;
     for (const mock of Object.values(mocks.defaultRuntime)) {
       mock.mockClear();
     }
@@ -252,27 +244,6 @@ describe("exec-policy CLI", () => {
     },
   );
 
-  it("prints no session preview that lands after Ctrl+C", async () => {
-    mocks.state.config = { agents: { ownership: "explicit", entries: { main: {} } } };
-    mocks.callGateway.mockResolvedValueOnce({
-      agentId: "main",
-      profile: "full",
-      groups: [],
-      toolAccess: {
-        checked: "live-session",
-        profiles: [{ profile: "full", source: "tools.profile", active: true }],
-        tools: ["exec", "process"].map((id) => ({ id, status: "available", reasons: [] })),
-      },
-    });
-    mocks.signal = AbortSignal.abort();
-
-    await runExecPolicyCommand(["show", "--session", "agent:main:main", "--json"]);
-
-    expect(mocks.callGateway).toHaveBeenCalled();
-    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
-  });
-
   it.each<[string, Record<string, AgentEntryConfig>, string, boolean]>([
     ["qualified session without local agents", {}, "agent:remote:main", false],
     ["shared session with multiple local agents", { main: {}, work: {} }, "global", true],
@@ -329,7 +300,7 @@ describe("exec-policy CLI", () => {
     expectNoPolicyWrites();
   });
 
-  it("rejects a preview returned for a different explicit session agent", async () => {
+  it("rejects a different session agent's preview and prints none after Ctrl+C", async () => {
     mocks.state.config = { agents: { entries: { main: {} } } };
     mocks.callGateway.mockResolvedValueOnce({ agentId: "other", profile: "full", groups: [] });
 
@@ -341,6 +312,10 @@ describe("exec-policy CLI", () => {
         live: { status: "unverified", error: expect.stringContaining("different agent") },
       },
     });
+    const work = new AsyncWorkScope();
+    mocks.callGateway.mockImplementationOnce(async () => work.beginClose());
+    await work.run(() => runExecPolicyCommand(["show", "--session", "agent:main:main", "--json"]));
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
   });
 
   it("explains explicit session denials from a legacy preview", async () => {
@@ -492,23 +467,18 @@ describe("exec-policy CLI", () => {
     expect(mocks.replaceConfigFile.mock.calls[0]?.[0]).toMatchObject({ baseHash: "config-hash-1" });
   });
 
-  it("retains untouched policy when setting ask=always", async () => {
-    mocks.state.config = { tools: { exec: { mode: "full" } } };
-    await runExecPolicyCommand(["set", "--ask", "always", "--json"]);
-    expect(mocks.state.config.tools?.exec).toEqual({ security: "full", ask: "always" });
-  });
-
-  it.each<[string[], NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>]>([
+  it.each<[string[], NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>, "full"?]>([
     [["set", "--ask", "on-miss"], { mode: "auto" }],
     [["set", "--security", "allowlist"], { mode: "auto" }],
     [["set", "--security", "allowlist", "--ask", "on-miss"], { mode: "auto" }],
     [["preset", "cautious"], { host: "gateway", mode: "auto" }],
     [["set", "--ask", "off"], { mode: "allowlist" }],
     [["set", "--ask", "always"], { security: "allowlist", ask: "always" }],
+    [["set", "--ask", "always"], { security: "full", ask: "always" }, "full"],
     [["set", "--security", "deny"], { mode: "deny" }],
     [["set", "--security", "full"], { security: "full", ask: "on-miss" }],
-  ])("preserves auto only for unchanged policy: %j", async (args, expected) => {
-    mocks.state.config = { tools: { exec: { mode: "auto" } } };
+  ])("preserves auto only for unchanged policy: %j", async (args, expected, mode) => {
+    mocks.state.config = { tools: { exec: { mode: mode ?? "auto" } } };
     await runExecPolicyCommand([...args, "--json"]);
     expect(mocks.state.config.tools?.exec).toEqual(expected);
   });
