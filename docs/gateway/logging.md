@@ -61,10 +61,14 @@ of all workers. Startup logging never requests new worker samples.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
 
-File writes and rotation run in a lazily started worker, preserving queued record
+Default-directory safety checks, file writes, and rotation run in a lazily started worker, preserving queued record
 order without blocking the Gateway main thread on filesystem checks. Normal
 shutdown drains queued writes; forced process exit retains a synchronous rescue
 for records that have not started writing.
+
+Silent logging does not prepare a file. Requests that report or tail the log path
+wait for its directory to pass the same ownership, permission, and ancestor checks
+used by writes; they never report an unqualified fallback path.
 
 By default, logging retains runtime call-site metadata without probing source-map
 files. The existing `TSLOG_SOURCE_MAPS=on` diagnostic override remains available;
