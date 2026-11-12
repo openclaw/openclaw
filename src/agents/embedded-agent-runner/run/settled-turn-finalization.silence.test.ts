@@ -30,7 +30,14 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
   const getContext = useFinalizationAdmission([backendMocks.finalize, transcriptMocks.append]);
 
   it("makes an internal scheduled heartbeat optional rather than result-required", () => {
-    const source = { cfg: {}, ctx: { Provider: "webchat", SessionKey: "agent:main:main" } };
+    const source = {
+      cfg: {},
+      ctx: {
+        Provider: "webchat",
+        SessionKey: "agent:main:main",
+        InputProvenance: { kind: "internal_system", sourceTool: "test-required-result" },
+      },
+    } satisfies Parameters<typeof resolveSourceReplyExpectation>[0];
     expect(resolveSourceReplyExpectation(source)).toBe("result-required");
     expect(resolveSourceReplyExpectation({ ...source, scheduledAutomation: true })).toBe(
       "optional",
