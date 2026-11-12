@@ -17,7 +17,7 @@ import {
   installAgentAuthorityProofFixture,
   PNG,
 } from "./server.agent-runtime-authority-proof.test-support.js";
-import { agentCommandMock, dispatchInboundMessageMock } from "./test-helpers.js";
+import { agentCommandMock, dispatchInboundMessageMock, gatewayReplyMock } from "./test-helpers.js";
 
 const handlers: Record<string, GatewayRequestHandler> = {
   "chat.send": handleDirectExternalChatSend,
@@ -105,6 +105,7 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
   "replays accepted %s uploads after disable without admitting fresh bytes",
   async (method) => {
     await using f = await prepare();
+    gatewayReplyMock.mockResolvedValue({ text: "Accepted upload reply" });
     using dispatch = vi.spyOn(chatDispatch, "startChatDispatch");
     const params = {
       agentId: "main",
