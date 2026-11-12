@@ -875,8 +875,8 @@ export function buildGatewayCronService(params: {
   cron.stop = () => {
     stopCronLifecycle();
   };
-  const stopAndDrainCron = async (preserveExitWatchers = false) => {
-    stopCronLifecycle(preserveExitWatchers);
+  cron.stopAndDrain = async () => {
+    stopCronLifecycle();
     await drainGatewayCron({
       settlements: [
         cron.waitForIdle(),
@@ -887,7 +887,6 @@ export function buildGatewayCronService(params: {
       logger: cronLogger,
     });
   };
-  cron.stopAndDrain = () => stopAndDrainCron();
   const pauseScheduling = cron.pauseScheduling.bind(cron);
   const resumeScheduling = cron.resumeScheduling.bind(cron);
   cron.pauseScheduling = () => {
@@ -1001,8 +1000,11 @@ export function buildGatewayCronService(params: {
         exitWatchers = watchers;
         return watchers.updateHandlers(exitWatcherHandlers);
       },
+      // The replacement adopts the exit watchers and starts around runs still
+      // active here, so a reload lets them finish instead of aborting them.
       stopOwner: async () => {
-        await stopAndDrainCron(true);
+        stopCronLifecycle(true);
+        await Promise.all([startPromise, stopStreamWatchers()]);
       },
     }),
     reconcileExitWatchers,

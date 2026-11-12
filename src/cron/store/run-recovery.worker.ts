@@ -29,7 +29,9 @@ export function recoverCronRunsInWorker(
             .selectAll()
             .where("store_key", "=", input.storeKey)
             .where("status", "=", "running"),
-        ).rows.map((row) => [row.job_id, receiptFromRow(row)]),
+        )
+          .rows.filter((row) => !input.protectedJobIds?.includes(row.job_id))
+          .map((row) => [row.job_id, receiptFromRow(row)]),
       );
       const outcome: CronRunRecoveryOutcome = {
         jobs: [],
@@ -49,6 +51,12 @@ export function recoverCronRunsInWorker(
         },
       };
       for (const job of jobs) {
+        if (input.protectedJobIds?.includes(job.id)) {
+          // Its live run settles the receipt and schedule; startup catch-up must not run it again.
+          outcome.jobs.push(job);
+          outcome.skipJobIds.push(job.id);
+          continue;
+        }
         const result = recoverCronJobInDatabase({
           database,
           receiptSchema,
