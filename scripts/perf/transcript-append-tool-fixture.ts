@@ -27,7 +27,8 @@ export function toolAppendFixture(index: number, payloadBytes: number): Message 
     case 1: {
       toolName = "exec";
       const output = new CodeModeOutputState(65_536);
-      output.append(captureCodeModeOutput([{ records }], 65_536));
+      const nested = snapshotToolSearchTargetTranscriptResult(jsonResult({ records }));
+      output.append(captureCodeModeOutput([nested.details], 65_536));
       result = formatToolSearchControlResult(
         output.takeResult(
           { status: "completed" },
