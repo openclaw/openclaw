@@ -95,14 +95,14 @@ Use `modelCatalog` when OpenClaw should know provider model metadata before load
 
 Top-level fields:
 
-| Field            | Type                                                     | What it means                                                                                               |
-| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `modelsDev`      | `Record<string, string>`                                 | Publication-time opt-in mapping from an owned OpenClaw provider id to a models.dev provider id.             |
-| `providers`      | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`.       |
-| `aliases`        | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.              |
-| `suppressions`   | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
-| `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
-| `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning.       |
+| Field            | Type                                                     | What it means                                                                                         |
+| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `modelsDev`      | `Record<string, string>`                                 | Publication-time opt-in mapping from an owned OpenClaw provider id to a models.dev provider id.       |
+| `providers`      | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`. |
+| `aliases`        | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.        |
+| `suppressions`   | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.            |
+| `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | `static`: read from manifest metadata. `runtime` (and the identical `refreshable`): provider runtime. |
+| `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning. |
 
 `configuredEndpointDiscovery: ["provider-id"]` opts an owned `runtime` catalog into discovery from the operator-configured origin. Its hook must return inventory from that origin; without an override, the manifest provider URL supplies the default. Retained inventory from another origin is excluded. Static capability declarations remain scoped to their declared endpoints. Providers without this opt-in retain their existing endpoint policy, including runtime-selected account and regional endpoints.
 
@@ -255,7 +255,9 @@ family only when they match a manifest row exactly. Provider plugins can also se
 GitHub Copilot's model `vendor`. The family appears on `models.list` rows and in the
 [requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
 
-Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `refreshable` when manifest rows are useful listable seeds or supplements but a refresh/cache can add more rows later; refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw must load provider runtime to know the list.
+Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `runtime` when OpenClaw must load provider runtime to know the list; manifest rows then only seed the picker until the listing publishes. `refreshable` is accepted and behaves exactly like `runtime`.
+
+The Gateway saves each accepted runtime listing in the agent database. After a restart or plugin reload, those rows are available before discovery runs again. A failed listing, including an ended sign-in, keeps them, and the picker marks them unavailable with the reason; a successful listing replaces them.
 
 After a provider gains credentials, list and picker surfaces show its declared manifest rows while account discovery is still pending, in every discovery mode. Once discovery publishes for that provider, its account result replaces them.
 
