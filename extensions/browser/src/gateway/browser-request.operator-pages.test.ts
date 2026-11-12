@@ -36,7 +36,7 @@ async function dispatchedRequester(client: Client) {
   return m.dispatch.mock.calls[0]?.[0]?.requester;
 }
 
-function socket(id: string, internal: Client["internal"]): Client {
+function socket(id: Client["connect"]["client"]["id"], internal: Client["internal"]): Client {
   const client = makeClient(new AbortController().signal);
   return {
     ...client,
