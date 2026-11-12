@@ -245,15 +245,23 @@ export type OpenClawIdDeviceSignIn = {
   verificationUriComplete: string | null;
   expiresAt: number;
   interval: number;
+  /** This origin's sign-out marker when the attempt began; a later sign-out retires it. */
+  signOutGeneration: string | null | undefined;
 };
 
 /** Starts a device sign-in; the browser shows its code while `finishOpenClawIdDeviceSignIn` polls. */
-export function beginOpenClawIdDeviceSignIn(
+export async function beginOpenClawIdDeviceSignIn(
   client: GatewayBrowserClient,
 ): Promise<OpenClawIdDeviceSignIn> {
-  return client.request<OpenClawIdDeviceSignIn>("openclawId.authority", {
-    action: "account_device_begin",
-  });
+  const signOutGeneration = getSafeLocalStorage()?.getItem(SIGN_OUT_KEY);
+  const started = await client.request<Omit<OpenClawIdDeviceSignIn, "signOutGeneration">>(
+    "openclawId.account",
+    { action: "device_begin" },
+  );
+  if (getSafeLocalStorage()?.getItem(SIGN_OUT_KEY) !== signOutGeneration) {
+    throw new Error("You signed out while sign-in was in progress. Start again.");
+  }
+  return { ...started, signOutGeneration };
 }
 
 // Resolves after `ms`, or rejects as soon as `signal` aborts.
@@ -289,10 +297,9 @@ export async function finishOpenClawIdDeviceSignIn(params: {
   basePath: string;
   signal: AbortSignal;
 }): Promise<OpenClawIdSignedIn> {
-  const signOutGeneration = getSafeLocalStorage()?.getItem(SIGN_OUT_KEY);
   const assertCurrent = () => {
     params.signal.throwIfAborted();
-    if (getSafeLocalStorage()?.getItem(SIGN_OUT_KEY) !== signOutGeneration) {
+    if (getSafeLocalStorage()?.getItem(SIGN_OUT_KEY) !== params.started.signOutGeneration) {
       throw new Error("You signed out while sign-in was in progress. Start again.");
     }
   };
@@ -306,7 +313,7 @@ export async function finishOpenClawIdDeviceSignIn(params: {
     const result = await params.client.request<
       | { pending: true; interval: number }
       | { account: Omit<OpenClawIdSignedIn, "idToken">; idToken: string }
-    >("openclawId.authority", { action: "account_device_poll", state: params.started.state });
+    >("openclawId.account", { action: "device_poll", state: params.started.state });
     assertCurrent();
     if ("pending" in result) {
       interval = result.interval;

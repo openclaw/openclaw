@@ -275,8 +275,9 @@ describe("approved OpenClaw ID account menu", () => {
     // The person's own profile heads the menu until this browser holds an OpenClaw ID.
     expect(openClawIdMenuIdentity(personal)).toBeNull();
     let polls = 0;
-    const request = vi.fn(async (_method: string, params: Record<string, unknown>) => {
-      if (params.action === "account_device_begin") {
+    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      expect(method).toBe("openclawId.account");
+      if (params.action === "device_begin") {
         return {
           state: "d1",
           userCode: "WDJB-MJHT",
@@ -286,7 +287,7 @@ describe("approved OpenClaw ID account menu", () => {
           interval: 5,
         };
       }
-      expect(params).toEqual({ action: "account_device_poll", state: "d1" });
+      expect(params).toEqual({ action: "device_poll", state: "d1" });
       polls += 1;
       return polls < 2 ? { pending: true, interval: 5 } : { account, idToken: "device-token" };
     });
@@ -315,6 +316,22 @@ describe("approved OpenClaw ID account menu", () => {
     vi.useRealTimers();
   });
 
+  it("retires a device sign-in when this origin signs out while it starts", async () => {
+    const begun = Promise.withResolvers<unknown>();
+    const request = vi.fn(async () => begun.promise);
+    const starting = beginOpenClawIdDeviceSignIn({ request } as unknown as GatewayBrowserClient);
+    window.localStorage.setItem("openclaw.openclawId.signedOut", "another-tab");
+    begun.resolve({
+      state: "d1",
+      userCode: "WDJB-MJHT",
+      verificationUri: "https://issuer.example.test/device",
+      verificationUriComplete: null,
+      expiresAt: Date.now() + 600_000,
+      interval: 5,
+    });
+    await expect(starting).rejects.toThrow("You signed out while sign-in was in progress");
+  });
+
   it("stops polling a device sign-in when it is cancelled", async () => {
     vi.useFakeTimers();
     const request = vi.fn(async () => ({ pending: true, interval: 5 }));
@@ -328,6 +345,7 @@ describe("approved OpenClaw ID account menu", () => {
         verificationUriComplete: null,
         expiresAt: Date.now() + 600_000,
         interval: 5,
+        signOutGeneration: window.localStorage.getItem("openclaw.openclawId.signedOut"),
       },
       basePath: "",
       signal: stop.signal,

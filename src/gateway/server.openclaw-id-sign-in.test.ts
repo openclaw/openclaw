@@ -38,14 +38,15 @@ async function withOpenClawIdGateway(run: (port: number) => Promise<void>) {
   await withGatewayServer(async ({ port }) => run(port));
 }
 
-// Calls openclawId.authority as `client` and returns the refusal code, if any.
+// Calls an OpenClaw ID method as `client` and returns the refusal code, if any.
 async function authorityRefusal(
   client: unknown,
   params: Record<string, unknown>,
   openclawId: Record<string, unknown> = OPENCLAW_ID,
+  method: "openclawId.authority" | "openclawId.account" = "openclawId.authority",
 ) {
   let refusal: string | undefined;
-  await openclawIdHandlers["openclawId.authority"]!({
+  await openclawIdHandlers[method]!({
     params,
     client,
     respond: (_ok: boolean, _payload: unknown, error?: { details?: { code?: string } }) => {
@@ -144,6 +145,27 @@ describe("OpenClaw ID sign-in locality", () => {
 });
 
 describe("OpenClaw ID sign-in over a personal sign-in", () => {
+  test("reaches the account method with read scope, while authority writes need admin", async () => {
+    await withOpenClawIdGateway(async (port) => {
+      const ws = await openWs(port);
+      try {
+        await connectOk(ws, { client: TEST_OPERATOR_CLIENT, scopes: ["operator.read"] });
+        // Dispatch admits the read-only connection; the handler then refuses loopback.
+        const account = await rpcReq(ws, "openclawId.account", { action: "device_begin" });
+        expect((account.error?.details as { code?: string } | undefined)?.code).toBe(
+          "not_personal_connection",
+        );
+        const authority = await rpcReq(ws, "openclawId.authority", { action: "account_begin" });
+        expect(authority.ok).toBe(false);
+        expect((authority.error?.details as { code?: string } | undefined)?.code).toBe(
+          "MISSING_SCOPE",
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test.each([
     ["the direct-loopback operator", { internal: { isLocalClient: true } }, "popup"],
     ["a verified personal profile", personal, "device"],
@@ -174,9 +196,14 @@ describe("OpenClaw ID sign-in over a personal sign-in", () => {
   test("starts a device sign-in only for a personal connection, never the loopback popup", async () => {
     // The gate passes, then the unconfigured issuer refuses: no request leaves the Gateway.
     const unconfigured = { enabled: true };
-    expect(await authorityRefusal(personal, { action: "account_device_begin" }, unconfigured)).toBe(
-      "unconfigured",
-    );
+    expect(
+      await authorityRefusal(
+        personal,
+        { action: "device_begin" },
+        unconfigured,
+        "openclawId.account",
+      ),
+    ).toBe("unconfigured");
     for (const client of [
       { ...personal, authenticatedUserProfile: { profileId: GATEWAY_OWNER_PROFILE_ID } },
       {
@@ -186,8 +213,10 @@ describe("OpenClaw ID sign-in over a personal sign-in", () => {
       { internal: { isLocalClient: true } },
       { internal: {} },
     ]) {
-      for (const action of ["account_device_begin", "account_device_poll"]) {
-        expect(await authorityRefusal(client, { action })).toBe("not_personal_connection");
+      for (const action of ["device_begin", "device_poll"]) {
+        expect(await authorityRefusal(client, { action }, OPENCLAW_ID, "openclawId.account")).toBe(
+          "not_personal_connection",
+        );
       }
     }
     // A personal connection cannot use the loopback popup or get a Discovery link code.
@@ -200,8 +229,8 @@ describe("OpenClaw ID sign-in over a personal sign-in", () => {
 
   test("is unavailable while the OpenClaw ID Labs switch is off", async () => {
     let error: { code?: string; message?: string } | undefined;
-    await openclawIdHandlers["openclawId.authority"]!({
-      params: { action: "account_device_begin" },
+    await openclawIdHandlers["openclawId.account"]!({
+      params: { action: "device_begin" },
       client: personal,
       respond: (_ok: boolean, _payload: unknown, shape?: { code?: string; message?: string }) => {
         error = shape;

@@ -79,17 +79,13 @@ function respondSignIn(
   opts.respond(true, result);
 }
 
-// The Control UI's OpenClaw ID account, by action. Direct loopback only:
+// The Control UI's OpenClaw ID account on the direct-loopback operator, by action:
 // - account_begin: PKCE authorization URL for the sign-in popup (redirectUri
 //   ends with /openclaw-id/callback on the Control UI origin);
 // - account_complete: redeems the popup's code once; returns the account and ID token;
 // - account_link_code: a Discovery link code for the signed-in account, so Make
 //   reachable needs no pasted code.
-// A connection with a verified personal profile (see resolveOpenClawIdSignInRoute):
-// - account_device_begin: a device sign-in's user code and verification page;
-// - account_device_poll: polls it once; returns pending, or the account and ID token.
-//   The account is never recorded in the claw record; it proves only which account
-//   this browser holds and grants nothing.
+// Personal connections sign in through openclawId.account instead (handleDeviceAccount).
 async function handleAccount(opts: GatewayRequestHandlerOptions, action: string) {
   const config = opts.context.getRuntimeConfig().gateway?.openclawId;
   if (config?.enabled !== true) {
@@ -98,41 +94,6 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
   }
   const route = resolveOpenClawIdSignInRoute(opts.client);
   const params = isRecord(opts.params) ? opts.params : {};
-  if (action === "account_device_begin" || action === "account_device_poll") {
-    const owner = opts.client?.authenticatedUserProfile?.profileId;
-    if (route !== "device" || !owner) {
-      refuse(opts, {
-        code: "not_personal_connection",
-        detail: "Sign in with OpenClaw ID through a personal sign-in such as Tailscale",
-      });
-      return;
-    }
-    try {
-      if (action === "account_device_begin") {
-        if (!config.issuerUrl || !config.clientId) {
-          refuse(opts, { code: "unconfigured", detail: "set issuerUrl and clientId to sign in" });
-          return;
-        }
-        respondSignIn(
-          opts,
-          await accountSignIn.beginDevice({
-            issuerUrl: config.issuerUrl,
-            clientId: config.clientId,
-            owner,
-          }),
-        );
-        return;
-      }
-      respondSignIn(opts, await accountSignIn.pollDevice({ state: params.state, owner }));
-    } catch (error) {
-      opts.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, `OpenClaw ID sign-in failed: ${String(error)}`),
-      );
-    }
-    return;
-  }
   if (route !== "popup") {
     refuse(opts, {
       code: "not_local_operator",
@@ -195,7 +156,59 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
   }
 }
 
+// Sign in with OpenClaw ID on a connection with a verified personal profile (see
+// resolveOpenClawIdSignInRoute), by action. It needs only read scope: the account proves
+// which OpenClaw ID this browser holds, is never recorded in the claw record, and grants
+// nothing.
+// - device_begin: a device sign-in's user code and verification page;
+// - device_poll: polls it once; returns pending, or the account and ID token.
+async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
+  const config = opts.context.getRuntimeConfig().gateway?.openclawId;
+  if (config?.enabled !== true) {
+    opts.respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "OpenClaw ID is off"));
+    return;
+  }
+  const params = isRecord(opts.params) ? opts.params : {};
+  const owner = opts.client?.authenticatedUserProfile?.profileId;
+  if (resolveOpenClawIdSignInRoute(opts.client) !== "device" || !owner) {
+    refuse(opts, {
+      code: "not_personal_connection",
+      detail: "Sign in with OpenClaw ID through a personal sign-in such as Tailscale",
+    });
+    return;
+  }
+  try {
+    if (params.action === "device_begin") {
+      if (!config.issuerUrl || !config.clientId) {
+        refuse(opts, { code: "unconfigured", detail: "set issuerUrl and clientId to sign in" });
+        return;
+      }
+      respondSignIn(
+        opts,
+        await accountSignIn.beginDevice({
+          issuerUrl: config.issuerUrl,
+          clientId: config.clientId,
+          owner,
+        }),
+      );
+      return;
+    }
+    if (params.action === "device_poll") {
+      respondSignIn(opts, await accountSignIn.pollDevice({ state: params.state, owner }));
+      return;
+    }
+    refuse(opts, { code: "malformed", detail: `unknown account action ${String(params.action)}` });
+  } catch (error) {
+    opts.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, `OpenClaw ID sign-in failed: ${String(error)}`),
+    );
+  }
+}
+
 export const openclawIdHandlers: GatewayRequestHandlers = {
+  "openclawId.account": handleDeviceAccount,
   "openclawId.status": async (opts) => {
     const service = requireService(opts);
     if (!service) {
