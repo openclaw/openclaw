@@ -210,7 +210,8 @@ export async function collectWorktreeTemplates(
       record.cacheKey.startsWith("retained:") &&
       worktreeTemplateMutationKey(record.cacheKey) ===
         worktreeTemplateMutationKey(options.supersededBy.cacheKey);
-    if (options.supersededBy && !supersededPrewarm) {
+    // Interrupted retirement has already relinquished its selection key, but still needs cleanup.
+    if (options.supersededBy && !supersededPrewarm && !record.cacheKey.startsWith("retired:")) {
       continue;
     }
     const overCapacity =

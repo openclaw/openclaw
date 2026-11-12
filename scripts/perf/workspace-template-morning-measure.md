@@ -94,26 +94,38 @@ the campaign; do not continue using partially cleaned state. Qualify this lifecy
 first with a small baseline/candidate/baseline sequence, including genuine seal
 reuse, seed preservation and zero live workspace/template/builder custody.
 
-Earlier runs with a small agent database remain archived separately and cannot
-qualify this combined scale requirement. The push pattern, request composition,
-idle compression, acceptance thresholds and A/A/paired order are unchanged.
+Earlier runs with a small agent database or compressed scheduler idle time remain
+archived as diagnostic evidence. They cannot qualify this real-time, combined-scale
+workload or supply its A/A controls. Record new workload and source hashes; preserve
+all earlier failures. Acceptance thresholds and the counterbalanced order are unchanged.
 
-The replay preserves seven advances across a logical thirty-minute morning,
-including three adjacent advances five seconds apart. Only scheduler idle time
-is compressed through its existing clock interface. The base-refresh owner's
-real thirty-second freshness interval is preserved; each observed advance waits
-at least 30.1 seconds since the preceding completed fetch. Native Git, filesystem,
-installation, cancellation, and foreground execution run at actual speed. The
-three-push burst preserves its real five-second gaps and fetches only its final
+The replay preserves seven advances across thirty real minutes, including three
+adjacent advances five seconds apart. Both variants use the same real elapsed clock
+and fixed nominal push/request deadlines. Actual arrivals can differ when preceding
+foreground work overruns; retain that lateness instead of forcing equal arrival times. Kernel PSI averages and Btrfs commit counters
+therefore experience the actual idle intervals; no clock jump, synthetic pressure
+value, or treatment-dependent wait grants the candidate extra warm-up time.
+The base-refresh owner's real thirty-second freshness interval is preserved; each
+observed advance waits at least 30.1 seconds since the preceding completed fetch.
+The three-push burst keeps its real five-second gaps and fetches only its final
 head, as a single source's freshness window would do. Scheduler debounce across
-multiple observations is covered separately by its focused tests. The injected
-clock advances at real speed during native work and foreground requests, and
-uses real timers, so a deadline can start background work during a slow request.
-Only settled idle intervals advance through an offset. Nominal later request
-waves arrive ninety seconds after each selected push, or later if real work
-overruns that deadline. Record any such late arrival instead of changing native
-execution speed. This is an owner workload with compressed idle intervals, not
-a measurement of a thirty-minute Gateway wall-clock session.
+multiple observations remains covered by focused tests. Native work is never sped
+up. Later request waves arrive ninety seconds after each selected push, or later
+if preceding work overruns the deadline; retain the actual late arrival.
+
+The nominal measured horizon is 32 real minutes per arm. Allow up to five additional
+real minutes for final live settlement, separately measured below. An outer 30-minute
+arm timeout cannot execute this schedule. A 60-minute arm bound allows 15 minutes for
+excluded per-arm initialization, 32 minutes for the nominal schedule, five minutes
+for settlement, and eight minutes for overruns and teardown. These are budget
+allowances, not extra delays or success criteria. A deadline failure preserves its
+artifacts and stops the campaign; do not extend or retry an adverse sample.
+Four initial qualification arms require at least 2 hours 8 minutes of schedule time;
+all twelve require at least 6 hours 24 minutes. Their outer arm bounds total four
+and twelve hours respectively, excluding shared fixture construction, canonical
+agent seeding, source hydration, artifact transfer, and campaign cleanup. Verify the
+provider's effective lease/runtime bounds before allocation; a shorter lease is not
+made sufficient by compressing idle time, dropping arms, or moving the physical seed.
 
 The seed activates managed source-only and sandbox template recipes. Each observed
 head is discovered by a real default-base managed request with no explicit commit.
@@ -125,9 +137,13 @@ authority, allocation, and foreground-priority ownership.
 After that request settles, the scheduler can prewarm during the following idle
 interval. Each later measured wave creates a managed-only consumer and a managed-plus-sandbox consumer for the
 same head, with an additional sandbox waiter after the rapid-push burst. An older
-commit is requested after the second advance. After the sixth advance, another
-older-commit request arrives 100 ms after the background scheduler wake, exercising
-foreground priority while native work can still be running. Every consumer must
+commit has a nominal request deadline 120 seconds after the second advance,
+independent of when its preceding foreground wave finishes. After the sixth advance,
+another older-commit request has a nominal deadline 31 seconds after that push in
+both variants. These are common nominal deadlines, not guaranteed identical actual
+arrivals: preserve delays caused by unfinished foreground work. Record whether native
+background work actually overlaps; never move an arrival to manufacture overlap.
+Focused owner tests prove cancellation. Every consumer must
 have the requested HEAD, clean tracked bytes, and, for sandboxes, installation
 output derived from that exact source. Managed setup and ignored-file provisioning
 are disabled, matching the sandbox source preparation path.
@@ -135,8 +151,11 @@ are disabled, matching the sandbox source preparation path.
 Acceptance requires at least 25% fewer foreground commit-change builds and at
 least 30% lower aggregate foreground `templatePrepare` wait, without increasing foreground latency tails or total
 process CPU/allocation materially. Report any adverse metric, including canceled
-background work; prewarming moves work and may increase total cost. Same-head
-waiters must share production builds. Background errors fail the run. Retained
+background work; prewarming moves work and may increase total cost. CPU/allocation
+spending compares campaign plus settlement in every arm, using the unchanged
+thresholds. Also report both components separately; moving deferred work into
+settlement cannot remove it from the spending hold. Same-head waiters must share
+production builds. Background errors fail the run. Retained
 template generations must satisfy the production bound without removing leased
 readers; inspect the recorded final registry alongside the owner regression tests.
 
@@ -144,8 +163,24 @@ readers; inspect the recorded final registry alongside the owner regression test
 was still running at each arrival, owner phases, production
 preparation diagnostics, host load, exact commits, and final template generations.
 The seed is separate. Request-level CPU and allocation overlap under concurrency;
-use `wave-*` rows for each concurrent wave and `campaign` for total foreground plus
-background work. Summed request `templatePrepare` time describes aggregate user
+use `wave-*` rows for each concurrent wave and `campaign` for foreground plus
+background work through the fixed measured horizon. The separate `settlement` row
+records elapsed time, process/thread CPU, main-isolate allocation, initial/final
+scheduler deadline and in-flight count, and whether live settlement completed.
+Settlement lets native timers and real pressure retries run until there is no
+pending wake or in-flight callback. It never advances time, invokes collection
+directly, or waits for a desired template count. The five-minute limit fails closed.
+Only after successful settlement does the live registry snapshot set
+`templateSnapshotWhileLive: true`; the unchanged strict retention check still applies.
+When shutdown settles after a failure, retain the partial rows and post-stop fallback
+snapshot with this field false. Results are written after awaited scheduler stop;
+a stuck callback can prevent final JSON or CPU profiles before an outer TERM/KILL.
+Preserve the available prefix, logs and whole-arm artifacts, mark the arm and teardown
+incomplete, and never infer cleanup success. Stop-induced cancellation never counts
+as successful quiescence. Whole-arm native child/VM accounting includes settlement
+and teardown; report these separately
+from campaign and settlement CPU/allocation. Their sum is the process CPU/allocation
+spending input; whole-arm child/VM costs remain separately reported and reviewed. Summed request `templatePrepare` time describes aggregate user
 wait, not total CPU or non-overlapping elapsed work. Diagnostics carrying a
 `template.missReason` count actual building callers; joined waiters can still pay
 template wait without recording a new build. Main-isolate allocation excludes

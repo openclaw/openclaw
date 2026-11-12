@@ -235,7 +235,7 @@ it("prepares another commit without waiting for an in-flight native refresh", as
   }
 });
 
-it("refreshes from a ready generation after matching retained retirement is interrupted", async () => {
+it("refreshes and collects after matching retained retirement is interrupted", async () => {
   const original = await idle();
   const current = await prepare({ contentKey: "commit-2", sourceCommit: "b".repeat(40) });
   assert(original && current);
@@ -262,9 +262,6 @@ it("refreshes from a ready generation after matching retained retirement is inte
     status: "preparing",
     contentKey: params.contentKey,
   });
-  expect(
-    await templateRegistry.hasTemplateReadersAsync(env, original.id, options.commitGuard),
-  ).toBe(false);
   const build = vi.fn(params.prepare);
   const refresh = vi.fn<NonNullable<typeof params.refresh>>(async (existing, staged) => {
     expect(existing.id).toBe(current.id);
@@ -288,6 +285,16 @@ it("refreshes from a ready generation after matching retained retirement is inte
   } finally {
     await switched?.release();
   }
+  expect(
+    await templateRegistry.hasTemplateReadersAsync(env, original.id, options.commitGuard),
+  ).toBe(false);
+  await collectWorktreeTemplates(env, 0, {
+    ...options,
+    scope: params,
+    supersededBy: current,
+  });
+  expect(await list()).toMatchObject([{ id: current.id, status: "ready" }]);
+  await expect(fs.access(original.path)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it.each([false, true])("settles refresh before publication (fail=%s)", async (fail) => {
@@ -475,7 +482,11 @@ it.each([
         expect(replacement.id).not.toBe(record.id);
         expect(replacement.path).not.toBe(record.path);
         expect(await source(replacement)).toBe("source");
-        await collect();
+        await collectWorktreeTemplates(env, 0, {
+          ...options,
+          scope: params,
+          supersededBy: replacement,
+        });
         expect((await list()).find((entry) => entry.id === record.id)).toMatchObject({
           status: "preparing",
         });

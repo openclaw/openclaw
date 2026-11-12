@@ -257,7 +257,13 @@ it("admits readers only from retained ready generations and refuses retirement u
   await release("warm");
   expect(await retire()).toMatchObject({ id: template.id });
   expect(await retain(selection)).toBeUndefined();
-  expect((await read())?.status).toBe("preparing");
+  expect(await read()).toBeUndefined();
+  expect(await registry.readTemplateAsync(env, `retired:${template.id}`, guard)).toEqual({
+    ...template,
+    cacheKey: `retired:${template.id}`,
+    lastUsedAt: 20,
+  });
+  expect(await registry.hasTemplateReadersAsync(env, template.id, guard)).toBe(true);
   await release("retire");
 });
 
@@ -324,9 +330,15 @@ it("keeps template rows and reader custody in the worker's selected database", a
           type: "worktrees.templates.read",
           input: { cacheKey: template.cacheKey },
         }),
+      ).toMatchObject({ type: "worktrees.templates.read", record: undefined });
+      expect(
+        await selected.read({
+          type: "worktrees.templates.read",
+          input: { cacheKey: `retired:${template.id}` },
+        }),
       ).toMatchObject({
         type: "worktrees.templates.read",
-        record: { ...template, lastUsedAt: 20 },
+        record: { ...template, cacheKey: `retired:${template.id}`, lastUsedAt: 20 },
       });
       expect(await execute("worktrees.templates.hasReaders", { id: template.id })).toBe(true);
       await execute("worktrees.templates.releaseReader", { key: "reader" });

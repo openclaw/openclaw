@@ -141,77 +141,29 @@ const service = new ManagedWorktreeService({ getConfig: () => config });
 const sandbox = resolveSandboxConfigForAgent(config, "fixture");
 const signal = new AbortController().signal;
 const clockOrigin = performance.now();
-let idleOffset = 0;
-const clockNow = () => idleOffset + performance.now() - clockOrigin;
-let armed: { at: number; run: () => void | Promise<void>; rearm: () => void } | undefined;
+const clockNow = () => performance.now() - clockOrigin;
 const running = new Set<Promise<void>>();
 const errors: string[] = [];
 const clock: GatewaySchedulerClock = {
   now: clockNow,
   monotonicNow: clockNow,
   arm(run, delayMs) {
-    let active = true;
-    let nativeTimer: ReturnType<typeof setTimeout> | undefined;
-    const timer = {
-      at: clockNow() + delayMs,
-      rearm: () => {
-        clearTimeout(nativeTimer);
-        nativeTimer = setTimeout(() => void timer.run(), Math.max(0, timer.at - clockNow()));
-        nativeTimer.unref();
-      },
-      run: () => {
-        if (!active) {
-          return undefined;
-        }
-        active = false;
-        clearTimeout(nativeTimer);
-        if (armed === timer) {
-          armed = undefined;
-        }
-        const pending = Promise.resolve()
-          .then(run)
-          .catch((error: unknown) => {
-            errors.push(String(error));
-          })
-          .finally(() => running.delete(pending));
-        running.add(pending);
-        return pending;
-      },
-    };
-    armed = timer;
-    timer.rearm();
-    return () => {
-      active = false;
-      clearTimeout(nativeTimer);
-      if (armed === timer) {
-        armed = undefined;
-      }
-    };
+    const timer = setTimeout(() => {
+      const pending = Promise.resolve()
+        .then(run)
+        .catch((error: unknown) => {
+          errors.push(String(error));
+        })
+        .finally(() => running.delete(pending));
+      running.add(pending);
+    }, delayMs);
+    timer.unref();
+    return () => clearTimeout(timer);
   },
 };
 const scheduler = new GatewayScheduler({ clock });
 const advance = async (at: number) => {
-  // Only idle gaps jump. A user deadline can arrive while native prewarm is still running.
-  while (clockNow() < at) {
-    if (running.size) {
-      const deadline = new AbortController();
-      try {
-        await Promise.race([
-          Promise.all(running),
-          delay(Math.max(0, at - clockNow()), undefined, { signal: deadline.signal }),
-        ]);
-      } finally {
-        deadline.abort();
-      }
-    } else {
-      idleOffset += Math.max(0, Math.min(at, armed?.at ?? at) - clockNow());
-      if (armed && armed.at <= clockNow()) {
-        void armed.run();
-      } else {
-        armed?.rearm();
-      }
-    }
-  }
+  await delay(Math.max(0, at - clockNow()));
 };
 const prewarm = values.prewarm
   ? (await import("../../src/gateway/workspace-template-prewarm.js")).startWorkspaceTemplatePrewarm(
@@ -330,7 +282,7 @@ async function request(label: string, commit: string, guest = true, discover = f
 }
 let lastRefreshAt = -Infinity;
 async function observe(index: number) {
-  // Leave the owner's real freshness contract intact; compress only remaining idle time.
+  // Preserve the base owner's real freshness contract even if a request runs late.
   await delay(Math.max(0, 30_100 - (Date.now() - lastRefreshAt)));
   if (index === 0) {
     const base = await resolveWorktreeBase(repo);
@@ -344,6 +296,54 @@ async function observe(index: number) {
 }
 let replayOrigin = 0;
 let admittedVerificationAt: number | undefined;
+let templates: Awaited<ReturnType<typeof listTemplatesAsync>> | undefined;
+const settlePrewarm = async () => {
+  const budgetMs = 5 * 60_000;
+  const before = resources();
+  const started = performance.now();
+  const deadline = started + budgetMs;
+  const initialNextWakeAtMs = scheduler.nextWakeAtMs;
+  const initialRunning = running.size;
+  let complete = false;
+  try {
+    while (scheduler.nextWakeAtMs !== null || running.size) {
+      const remainingMs = deadline - performance.now();
+      assert(remainingMs > 0, "Live template maintenance did not settle within five real minutes");
+      const wait = new AbortController();
+      try {
+        await Promise.race([
+          ...(running.size ? [Promise.all(running)] : []),
+          delay(
+            running.size
+              ? remainingMs
+              : Math.max(1, Math.min(remainingMs, scheduler.nextWakeAtMs! - clockNow())),
+            undefined,
+            { signal: wait.signal },
+          ),
+        ]);
+      } finally {
+        wait.abort();
+      }
+    }
+    assert(
+      performance.now() <= deadline,
+      "Live template maintenance exceeded its settlement limit",
+    );
+    complete = true;
+  } finally {
+    rows.push({
+      label: "settlement",
+      budgetMs,
+      elapsedMs: performance.now() - started,
+      ...used(before),
+      initialNextWakeAtMs,
+      initialRunning,
+      nextWakeAtMs: scheduler.nextWakeAtMs,
+      running: running.size,
+      complete,
+    });
+  }
+};
 try {
   await request("seed", commits[0]!);
   admittedVerificationAt = readSqliteDatabaseIntegrityVerification(
@@ -378,9 +378,8 @@ try {
     }
     await observe(generation);
     if (generation === 6) {
-      // Arrival during a different-head refresh exercises foreground priority.
-      await advance(armed?.at ?? clockNow());
-      await delay(100);
+      // Both variants use the same nominal arrival; retain late arrivals and actual overlap.
+      await advance(replayOrigin + at + 31_000);
       await request("during-prewarm-older", commits[5]!);
     }
     await advance(replayOrigin + at + 90_000);
@@ -403,6 +402,7 @@ try {
       ...used(waveBefore),
     });
     if (generation === 2) {
+      await advance(replayOrigin + at + 120_000);
       await request("recent-older", commits[1]!);
     }
     await advance(replayOrigin + at + 120_000);
@@ -410,7 +410,9 @@ try {
   assert.equal(sessions.length, 9);
   assert.equal(worktrees.length, 19);
   rows.push({ label: "campaign", elapsedMs: performance.now() - started, ...used(before) });
-  await delay(0);
+  await settlePrewarm();
+  // Inspect retention before stop can cancel pending maintenance.
+  templates = await listTemplatesAsync(process.env);
 } finally {
   prewarm?.stop();
   await scheduler.stop();
@@ -422,6 +424,7 @@ try {
         {
           sourceHead: command(process.cwd(), "rev-parse", "HEAD"),
           prewarm: Boolean(values.prewarm),
+          timingMode: "real-clock",
           node: process.version,
           replayOrigin,
           files: shape.length,
@@ -437,7 +440,8 @@ try {
           rows,
           events,
           errors,
-          templates: await listTemplatesAsync(process.env),
+          templateSnapshotWhileLive: templates !== undefined,
+          templates: templates ?? (await listTemplatesAsync(process.env)),
         },
         null,
         2,

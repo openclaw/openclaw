@@ -1,6 +1,5 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { hostname } from "node:os";
 import path from "node:path";
 import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,13 +38,7 @@ import {
   ageManagedWorktreeTemplates,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
-import {
-  listTemplatesAsync,
-  markTemplateReadyAsync,
-  readTemplateAsync,
-  releaseTemplateReaderAsync,
-  retainTemplateReaderAsync,
-} from "./template-registry-async.js";
+import { listTemplatesAsync, readTemplateAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({
   detectWorktreeFilesystemBackend: vi.fn(),
@@ -763,74 +756,20 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     expect(await listTemplatesAsync(env)).toEqual([]);
   });
 
-  it("rereads template activity after waiting for its mutation lease", async (ctx) => {
+  it("rereads template activity after waiting for maintenance IO", async () => {
     await service.create({ repoRoot: repo, name: "retained", baseRef: "HEAD" });
     const template = (await listTemplatesAsync(env))[0];
     assert(template);
     await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
     let refreshedAt: number | undefined;
-    const held = createDeferredCore<stateLease.OpenClawStateLeaseContext>();
-    const release = createDeferredCore();
-    const templateKey = `template:${template.cacheKey}`;
-    const holder = stateLease.withOpenClawStateLease(
-      {
-        scope: "core:managed-worktrees:mutation",
-        key: templateKey,
-        database: { scope: "shared", options: { env } },
-        leaseMs: 60_000,
-        waitMs: 0,
-      },
-      async (lease) => {
-        held.resolve(lease);
-        await release.promise;
-      },
-    );
-    const lease = await held.promise;
-    const templateRequested = createDeferredCore();
-    const acquireLease = stateLease.withOpenClawStateLeaseAsync;
-    vi.spyOn(stateLease, "withOpenClawStateLeaseAsync").mockImplementation((options, ...args) => {
-      if (options.scope === "core:managed-worktrees:mutation" && options.key === templateKey) {
-        templateRequested.resolve();
-      }
-      return acquireLease(options, ...args);
+    const refreshActivity = vi.fn(async () => {
+      refreshedAt = Date.now();
+      await ageManagedWorktreeTemplates(env, refreshedAt);
     });
-    const pending = service.gc();
-    try {
-      await racePromiseWithAbortSignal(
-        awaitGateBeforeSettlement(
-          templateRequested.promise,
-          pending,
-          "Collection completed without requesting template custody",
-        ),
-        ctx.signal,
-      );
-      const guard = () => lease.assertOwned();
-      const reader = "activity-refresh";
-      await retainTemplateReaderAsync(
-        env,
-        {
-          id: template.id,
-          key: reader,
-          owner: { pid: process.pid, host: hostname(), startedAt: null },
-          unpublish: true,
-        },
-        guard,
-      );
-      try {
-        refreshedAt = Date.now();
-        expect(await markTemplateReadyAsync(env, template.id, refreshedAt, guard)).toBe(true);
-      } finally {
-        await releaseTemplateReaderAsync(env, reader, guard);
-      }
-    } finally {
-      release.resolve();
-      try {
-        await holder;
-      } finally {
-        await pending;
-      }
-    }
-    expect((await pending).removed).toEqual([]);
+    const result = await service.gc({ beforeTemplateRemoval: refreshActivity });
+    expect(refreshActivity).toHaveBeenCalledOnce();
+    expect(result.failedCount).toBe(0);
+    expect(result.removed).toEqual([]);
     expect(await listTemplatesAsync(env)).toEqual([{ ...template, lastUsedAt: refreshedAt }]);
     expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
   });
