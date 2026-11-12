@@ -1,0 +1,4 @@
+# Computed-style regressions for the file preview, meeting notes, and Logbook stand-up Markdown:
+# each reading surface uses auto font smoothing while the body keeps antialiased app chrome.
+# Exact net growth for this change.
+40

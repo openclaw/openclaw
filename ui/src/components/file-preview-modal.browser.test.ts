@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
 import type { OpenClawModalDialog } from "./modal-dialog.tsx";
+import "../styles/base.css";
 import "./file-preview-modal.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -255,8 +256,15 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
       expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(width);
       expect(preview.querySelectorAll(".item")).toHaveLength(4);
       expect(preview.querySelectorAll("details")).toHaveLength(3);
-      const markdown = element(preview, ".markdown").textContent;
+      const article = element(preview, ".markdown");
+      const markdown = article.textContent;
       expect(markdown).toContain("Last complete instruction.");
+      // Rendered documents are reading text; app chrome keeps the body's antialiased smoothing.
+      expect(
+        [document.body, article].map((target) =>
+          getComputedStyle(target).getPropertyValue("-webkit-font-smoothing"),
+        ),
+      ).toEqual(["antialiased", "auto"]);
       expect(markdown).not.toContain("truncated");
       const binary = element(preview, '[data-path="assets/image.png"]');
       binary.click();

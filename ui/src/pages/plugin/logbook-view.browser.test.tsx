@@ -70,3 +70,29 @@ it.each([
     expect(getComputedStyle(title).overflow).toBe("hidden");
   },
 );
+
+it("renders the stand-up as reading text while app chrome stays antialiased", async () => {
+  const day = "2026-01-01";
+  const standup = { day, text: "**Yesterday** reviewed the synthetic example.", updatedMs: 1 };
+  const replies: Record<string, unknown> = {
+    "logbook.status": logbookStatus(day),
+    "logbook.standup": standup,
+  };
+  const request = vi.fn(async (method: string) => replies[method] ?? logbookTimeline(day, [{}]));
+  const { container } = mountSolid(() => (
+    <Logbook initialClient={logbookClient(request)} getRetired={() => neverRetired} />
+  ));
+  await waitForSolid(() => expect(container.querySelector(".logbook-card__header")).not.toBeNull());
+  [...container.querySelectorAll("button")]
+    .find((button) => button.textContent?.trim() === "Generate")!
+    .click();
+  await waitForSolid(() =>
+    expect(container.querySelector(".logbook-standup__body")).not.toBeNull(),
+  );
+  const body = container.querySelector(".logbook-standup__body")!;
+  expect(
+    [document.body, body].map((target) =>
+      getComputedStyle(target).getPropertyValue("-webkit-font-smoothing"),
+    ),
+  ).toEqual(["antialiased", "auto"]);
+});
