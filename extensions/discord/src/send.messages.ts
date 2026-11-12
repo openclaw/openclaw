@@ -224,19 +224,23 @@ export async function deleteMessageDiscord(
 export async function listPinsDiscord(
   channelId: string,
   opts: DiscordReactOpts,
+  limit?: number,
 ): Promise<APIMessage[]> {
   const rest = resolveDiscordRest(opts);
   const messages: APIMessage[] = [];
   let before: string | undefined;
   while (true) {
     const response = await rest.get(Routes.channelMessagesPins(channelId), {
-      limit: 50,
+      limit: limit === undefined ? 50 : Math.min(50, limit - messages.length),
       ...(before ? { before } : {}),
     });
     // SAFETY: Discord's current pin endpoint returns items and has_more.
     const page = response as RESTGetAPIChannelMessagesPinsResult;
     messages.push(...page.items.map((pin) => pin.message));
-    if (!page.has_more) {
+    if (!page.has_more || (limit !== undefined && messages.length >= limit)) {
+      if (limit !== undefined && messages.length > limit) {
+        messages.length = limit;
+      }
       return messages;
     }
     // Pagination uses the last pin timestamp verbatim, not its message snowflake.

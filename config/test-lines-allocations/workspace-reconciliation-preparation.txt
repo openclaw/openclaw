@@ -1,2 +1,0 @@
-# Exercise staged mixed-delta reconciliation, reject redundant payload readback, and migrate apply callers.
-14

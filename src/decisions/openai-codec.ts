@@ -56,10 +56,11 @@ function probability(value: unknown): value is number {
 
 export function decodeOpenAIDecisionResult(
   batch: DecisionBatchV2,
-  payload: Record<string, unknown>,
+  payload: unknown,
 ): ProviderDecisionOutcomeV2 {
   const entries = Object.entries(batch.questions);
   if (
+    !isRecord(payload) ||
     typeof payload.model !== "string" ||
     !payload.model ||
     payload.model.length > 256 ||

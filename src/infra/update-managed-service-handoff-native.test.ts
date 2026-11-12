@@ -96,11 +96,15 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("preserves the single-file stage outside FreeBSD", () => {
+it("stages both sealed entry points outside FreeBSD", () => {
   mockProcessPlatform("linux");
   const files = stageManagedHandoffRuntime(destination);
-  expect(files).toEqual([path.join(destination, "runtime", "managed-handoff-runtime.mjs")]);
+  expect(files).toEqual([
+    path.join(destination, "runtime", "managed-handoff-runtime.mjs"),
+    path.join(destination, "runtime", "managed-handoff-postgres-bridge.worker.mjs"),
+  ]);
   expect(fs.readFileSync(files[0]!)).toEqual(runtimeBytes);
+  expect(fs.readFileSync(files[1]!)).toEqual(runtimeBytes);
   expect(mocks.createRequire).not.toHaveBeenCalled();
 });
 
@@ -113,6 +117,7 @@ it("copies private regular bytes through a temporary-directory alias", async () 
   const privatePackage = path.join(privateModules, procSafe);
   expect(files).toEqual([
     path.join(destination, "runtime", "managed-handoff-runtime.mjs"),
+    path.join(destination, "runtime", "managed-handoff-postgres-bridge.worker.mjs"),
     ...Object.keys(packageFiles).map((relative) => path.join(privatePackage, relative)),
     path.join(privateModules, platformName, "package.json"),
     path.join(privateModules, platformName, "proc-safe-native.node"),

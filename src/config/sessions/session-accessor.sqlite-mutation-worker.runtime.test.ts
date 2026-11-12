@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { on } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { MessageChannel } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { OpenClawAgentDatabaseWriteAdmission } from "../../state/openclaw-agent-db.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { runReclamationWorkerPort } from "./session-accessor.sqlite-mutation-worker.runtime.js";
 import type {
   SqliteReclamationWorkerCloseRequest,
@@ -147,7 +147,7 @@ it("releases replies and preserves idle collection across buffered admissions", 
     const control = new WeakRef({});
     for (let pass = 0; pass < 4; pass++) {
       await nextTurn();
-      queryObjects(WeakRef);
+      forceFullGc();
     }
     await nextTurn();
     expect(control.deref()).toBeUndefined();

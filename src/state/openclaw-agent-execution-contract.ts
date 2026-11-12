@@ -113,3 +113,9 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
     "database.prepareWrite": { input: undefined; output: void };
     "database.integrityVerified": { input: { verifiedAt: number }; output: void };
   };
+
+export type AgentDatabaseExecutionState = {
+  owners: Map<string, AgentDatabaseFileExecutionOwner>;
+  // LRU entries keep their slots during eviction and after failed cleanup.
+  idle: Set<AgentDatabaseFileExecutionOwner>;
+};

@@ -43,7 +43,7 @@ export type WorkerTaskHost = {
   taskContextTransferList?(context: unknown): readonly Transferable[];
   createTaskObserver?(url: URL): (operation?: string) => WorkerTaskObservation;
   /** Return only bounded, privacy-safe labels; never retain or serialize task input. */
-  describeTask?(url: URL, input: unknown): string;
+  describeTask?(url: URL, input: unknown, operation?: string): string;
   receiveMessage(worker: WorkerLifecycle, message: unknown): boolean;
   observeResourceReply?(this: void): void;
   /** Capture diagnostics before construction detaches from the task's async context. */

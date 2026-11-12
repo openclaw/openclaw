@@ -40,6 +40,7 @@ type FailureReason =
   | "cancelled"
   | "invalid-profile"
   | "profile-too-large"
+  | "insufficient-disk-space"
   | "capture-failed"
   | "cleanup-failed";
 
@@ -317,7 +318,8 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     startBlockedMs = performance.now() - startedAt;
     await starting;
     // The event loop owns this timer. Requested duration is not a hard wall-time
-    // or V8 allocation bound when the Gateway is blocked; return native actual timing.
+    // or V8 allocation bound when the Gateway is blocked. Elapsed time includes
+    // native startup and stop completion.
     if (options.durationMs > 0) {
       await delay(options.durationMs, undefined, { signal: options.signal });
     }

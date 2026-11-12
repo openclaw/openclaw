@@ -13,6 +13,14 @@ export function migrateAgentStorageInTransaction(
   warnings: string[],
 ): void {
   maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
+  // Transcript rebuilds reparse every trigger. Canonical body FTS triggers can
+  // already address chunk_rowid while the published chunks table lacks it, so
+  // the memory owner admits, converts, and reinstalls them first.
+  migrateMemoryIndexStorage(db, {
+    renewAuthority: maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
+    onWarning: (warning) => warnings.push(warning),
+  });
+  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
   if (previousVersion === TRANSCRIPT_FTS_ROW_SCHEMA_VERSION) {
     migrateDeployedTranscriptFtsRowsInTransaction(db, schemaSql);
   } else if (
@@ -24,11 +32,6 @@ export function migrateAgentStorageInTransaction(
   }
   maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
   migrateTranscriptPayloadStorageInTransaction(db, schemaSql);
-  maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
-  migrateMemoryIndexStorage(db, {
-    renewAuthority: maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent,
-    onWarning: (warning) => warnings.push(warning),
-  });
   maintenanceAuthority.renewAgentDatabaseMaintenanceAuthorityIfPresent();
   migrateSessionCostUsageRollupStorage(
     db,

@@ -28,8 +28,7 @@ export function createExistingSessionDeadline(
   const error =
     typeof label === "string" ? new Error(`${label} timed out after ${timeoutMs}ms`) : label;
   const deadlineAt = performance.now() + timeoutMs;
-  const timer = setTimeout(() => controller.abort(error), timeoutMs);
-  timer.unref?.();
+  const timer = setTimeout(() => controller.abort(error), timeoutMs).unref();
   return {
     signal,
     remainingMs: () => Math.max(0, deadlineAt - performance.now()),

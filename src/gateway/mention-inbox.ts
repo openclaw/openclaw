@@ -359,11 +359,8 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   function scheduleExpiry(): void {
-    if (
-      closing ||
-      scheduler.signal.aborted ||
-      (state.processed.size === 0 && refreshRetryAt === 0)
-    ) {
+    const idle = state.processed.size === 0 && refreshRetryAt === 0;
+    if (closing || scheduler.signal.aborted || idle) {
       return;
     }
     scheduler.schedule({
@@ -610,25 +607,33 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   }
 
   return {
-    async mentionable(client, input, publish) {
-      let preparationFailure: Result<never, ErrorShape> | undefined;
+    async mentionable(client, input, publish, displayIds) {
       try {
         // A committed profile change can invalidate preparation before this continuation runs.
         while (policy.needsDirectoryPreparation()) {
           await policy.prepareDirectory();
         }
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
+      let prepared: Awaited<ReturnType<typeof policy.prepareContext>>;
       try {
+        // Legacy synchronous recipient validation consumes the lookup’s prepared target cache.
         if ("sessionKey" in input) {
           await prepareTarget(input.sessionKey, input.agentId);
         }
+        prepared = await policy.prepareContext(input, true);
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
-      // Current policy selection and response publication must not cross another await.
-      publish(preparationFailure ?? readOperation(() => policy.mentionable(client, input)));
+      try {
+        // Current policy selection and response publication must not cross another await.
+        publish(readOperation(() => policy.mentionable(client, input, prepared, displayIds)));
+      } finally {
+        prepared.release();
+      }
     },
     validateRecipients(client, input, profileIds) {
       warnMentionInboxDeprecation("validateRecipients");
@@ -651,20 +656,23 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     list: () => err(legacyError("list")),
     dismiss: () => err(legacyError("dismiss")),
     async listAsync(client, publish) {
-      let failure: Result<never, ErrorShape> | undefined;
       try {
         await enqueue(async () => {
           const changed = await maintain();
-          await prepareTargets();
           if (changed) {
-            publishConnectedViews();
+            await refreshConnectedViews();
+          } else {
+            const viewer = policy.identify(client, params.getRuntimeConfig());
+            if (viewer.ok) {
+              await prepareTargets(state.itemsByProfile.get(viewer.value.profile.profileId) ?? []);
+            }
           }
           scheduleExpiry();
         });
       } catch {
-        failure = mentionInboxUnavailable(log);
+        return publish(mentionInboxUnavailable(log));
       }
-      publish(failure ?? readResponse(client));
+      return publish(readResponse(client));
     },
     async dismissAsync(client, ids, publish) {
       let failure: Result<never, ErrorShape> | undefined;

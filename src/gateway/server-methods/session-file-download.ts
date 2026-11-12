@@ -15,10 +15,10 @@ export async function readSessionFileDownloadWindow(
     assertCurrent: () => void;
   },
 ) {
-  const { file } = await getSessionWorkspaceFile({ ...params, includeContent: false });
+  const { file, reason } = await getSessionWorkspaceFile({ ...params, includeContent: false });
   params.assertCurrent();
   if (!file || file.missing || !file.workspacePath) {
-    return { status: "missing" as const };
+    return { status: "missing" as const, reason };
   }
   const target = await resolveSessionFileReadTarget(
     { ...params, fileRoot: params.root },

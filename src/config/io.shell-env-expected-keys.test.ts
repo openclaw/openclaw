@@ -2,10 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import {
   createGeneratedPluginTempRoot,
   installGeneratedPluginTempRootCleanup,
-  writeJson,
 } from "../plugins/generated-plugin-test-helpers.js";
 import { createConfigIO } from "./io.js";
 
@@ -29,7 +29,7 @@ describe("config io shell env expected keys", () => {
     const home = createGeneratedPluginTempRoot("openclaw-shell-env-metadata-");
     const pluginDir = path.join(home, "configured-plugin");
     const configPath = path.join(home, "state", "openclaw.json");
-    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+    writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
       id: "shell-fixture",
       providers: ["shell-fixture"],
       channels: ["shell-fixture"],
@@ -40,7 +40,7 @@ describe("config io shell env expected keys", () => {
       },
       configSchema: { type: "object", properties: {} },
     });
-    writeJson(path.join(pluginDir, "package.json"), {
+    writeJsonFile(path.join(pluginDir, "package.json"), {
       name: "shell-fixture",
       version: "1.0.0",
       openclaw: {
@@ -57,7 +57,7 @@ describe("config io shell env expected keys", () => {
       },
     });
     fs.writeFileSync(path.join(pluginDir, "index.js"), 'throw new Error("metadata only");\n');
-    writeJson(configPath, {
+    writeJsonFile(configPath, {
       env: { shellEnv: { enabled: true } },
       plugins: { allow: ["shell-fixture"], load: { paths: [pluginDir] } },
     });

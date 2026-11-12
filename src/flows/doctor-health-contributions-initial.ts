@@ -5,6 +5,7 @@ import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-fa
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { gmailGogCheck } from "./doctor-gmail-gog-check.js";
 import { runInitialConfigWriteHealth } from "./doctor-health-contribution-runners.config.js";
 import {
   runClaudeCliHealth,
@@ -139,6 +140,10 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthCheckIds: ["core/doctor/claude-cli"],
       run: runClaudeCliHealth,
     }),
+    createDoctorHealthContribution("doctor:gmail-gog", "Gmail Gog", {
+      updateWork: { kind: "inspection", scope: "run" },
+      healthChecks: gmailGogCheck,
+    }),
     createDoctorHealthContribution("doctor:gateway-auth", "Gateway auth", {
       healthCheckIds: ["core/doctor/gateway-auth"],
       run: params.runGatewayAuthHealth,
@@ -175,7 +180,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     ),
     createDoctorHealthContribution("doctor:legacy-state", "Legacy state", {
-      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
+      healthCheckIds: [
+        "core/doctor/legacy-state",
+        "core/doctor/removed-workspaces-state",
+        "core/doctor/session-archive-read-cache",
+      ],
       run: params.runLegacyStateHealth,
     }),
     createDoctorHealthContribution("doctor:session-transcripts", "Session transcripts", {
@@ -433,17 +442,17 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution("doctor:project-clone-shape", "Project clones", {
       updateWork: { kind: "standalone" },
       healthChecks: {
-        description: "Partial and shallow registry-owned project clones need manual repair.",
+        description: "Shallow registry-owned project clones need full history.",
         defaultEnabled: false,
         async detect(ctx) {
           const { collectProjectCloneShapeHealthFindings } =
             await import("../commands/doctor-project-clone-shape.js");
-          return await collectProjectCloneShapeHealthFindings(ctx.cfg);
+          return await collectProjectCloneShapeHealthFindings(ctx.cfg, { env: ctx.env });
         },
       },
       async run(ctx) {
         const { noteProjectCloneShape } = await import("../commands/doctor-project-clone-shape.js");
-        await noteProjectCloneShape(ctx.cfg);
+        await noteProjectCloneShape(ctx.cfg, { repair: ctx.options.repair, env: ctx.env });
       },
     }),
     createDoctorHealthContribution("doctor:db-bloat", "SQLite database size", {
@@ -595,7 +604,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       },
     }),
     createDoctorHealthContribution("doctor:legacy-cron", "Legacy cron", {
-      healthCheckIds: ["core/doctor/legacy-whatsapp-crontab", "core/doctor/legacy-cron-store"],
+      healthCheckIds: [
+        "core/doctor/legacy-whatsapp-crontab",
+        "core/doctor/legacy-cron-store",
+        "core/doctor/cron-inference-accounts",
+      ],
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
@@ -636,7 +649,8 @@ export function resolveInitialDoctorHealthContributions(params: {
           }
           maintenance.assertOwnerCurrent();
         });
-        await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        const imageWarnings = await maybeRepairSandboxImages(ctx.cfg, ctx.runtime, ctx.prompter);
+        recordDoctorHealthWarnings(ctx, [], imageWarnings);
         noteSandboxScopeWarnings(ctx.cfg);
       },
     }),

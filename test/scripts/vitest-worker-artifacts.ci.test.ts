@@ -194,19 +194,16 @@ it.runIf(process.platform !== "win32").for([
         }});`,
             );
         const env = ciEnv(fixture.probe, parallelism, parallelism === 1);
-        const controlled =
-          shared && parallelism === 2 ? undefined : createControlledWorkerCompiler(directory, env);
+        const controlled = createControlledWorkerCompiler(directory, env);
         try {
           const { code, stdout, stderr } = await node(
             capability ? ["--import", "tsx", "--import", capability, command.at(-1)!] : command,
             root,
-            controlled?.env ?? env,
+            controlled.env,
           );
           expect(code, stderr + stdout).toBe(0);
-          if (controlled) {
-            const entries = controlled.read();
-            expect(entries).toHaveLength(shared ? 1 : 2);
-          }
+          const entries = controlled.read();
+          expect(entries).toHaveLength(shared ? 1 : 2);
           const observations = fixture.read();
           const borrowerCount = parallelism === 1 ? 3 : 2;
           expect(observations).toHaveLength(borrowerCount);

@@ -76,14 +76,15 @@ suite.define(() => {
             expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(
               true,
             );
-            const scrolled = viewport.evaluate(
-              (element) =>
-                new Promise<void>((resolve) => {
-                  element.addEventListener("scrollend", () => resolve(), { once: true });
-                }),
-            );
+            // A locator resolves asynchronously; arm the listener before sending the key.
+            const scrolled = await viewport.evaluateHandle((element) => ({
+              finished: new Promise<void>((resolve) => {
+                element.addEventListener("scrollend", () => resolve(), { once: true });
+              }),
+            }));
             await page.keyboard.press("ArrowRight");
-            await scrolled;
+            await scrolled.evaluate((state) => state.finished);
+            await scrolled.dispose();
             before = await viewport.evaluate((element) => element.scrollLeft);
             expect(before).toBeGreaterThan(0);
             await page.keyboard.press("Tab");
@@ -229,14 +230,14 @@ suite.define(() => {
         await shortBubble.scrollIntoViewIfNeeded();
         await expect.poll(() => shortWrap.isVisible()).toBe(false);
 
-        // Virtualization must initialize replacement DOM in an otherwise quiet transcript.
+        // Virtualization must restore working controls in an otherwise quiet transcript.
         const thread = page.locator(".chat-thread");
         // Focused rows stay mounted offscreen; move focus out of the wrap control first.
         await page.locator(".agent-chat__composer-combobox textarea").click();
         await thread.hover();
         await page.mouse.wheel(0, -100_000);
         await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
-        await expect.poll(() => wideBubble.count()).toBe(0);
+        await expect.poll(() => wideBubble.isVisible()).toBe(false);
         await page.mouse.wheel(0, 100_000);
         await wideBubble.waitFor({ state: "visible" });
         await expect.poll(() => wideWrapper.locator(".code-block-wrap").isVisible()).toBe(true);

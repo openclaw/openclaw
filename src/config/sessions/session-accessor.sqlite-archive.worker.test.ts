@@ -6,6 +6,7 @@ import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import type { Compilable } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { recordAcpParentStreamEventsForTest as recordAcpParentStreamEvents } from "../../agents/subagents/spawn/acp-parent-stream-store.sqlite.test-support.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
@@ -20,7 +21,6 @@ import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
 } from "../../trajectory/runtime-store.test-support.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -52,7 +52,7 @@ const trajectory = (sessionId: string) =>
 
 function expectArchive(archivePath: string | undefined, expected: TestEvent) {
   assert.ok(archivePath, "expected archive path");
-  const lines = readSessionArchiveContentSync(archivePath).trim().split("\n");
+  const lines = readSessionArchiveText(archivePath).trim().split("\n");
   expect(lines).toEqual([JSON.stringify(expected)]);
 }
 
@@ -157,7 +157,7 @@ describe("SQLite transcript archive worker", () => {
     });
     expect(archivedPath).not.toBe(stagedPath);
     expect(fs.existsSync(stagedPath)).toBe(true);
-    expect(readSessionArchiveContentSync(archivedPath)).toBe(content);
+    expect(readSessionArchiveText(archivedPath)).toBe(content);
   });
 
   it("keeps the event loop responsive while a transcript archive is built", async () => {

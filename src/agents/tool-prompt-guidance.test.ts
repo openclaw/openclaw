@@ -65,7 +65,7 @@ describe("tool-gated prompt guidance", () => {
     });
     builder.registry.plugins.push(record);
     builder
-      .createApi(record, { config: {}, hookPolicy: { allowPromptInjection: false } })
+      .createApi(record, { config: {}, hookPolicy: { allowPromptModification: false } })
       .registerTool(() => null, { name: "quiet_tool", promptGuidance: "## quiet guidance" });
     setActivePluginRegistry(builder.registry);
 
@@ -74,7 +74,7 @@ describe("tool-gated prompt guidance", () => {
       "## quiet guidance",
     );
     expect(builder.registry.diagnostics).toMatchObject([
-      { level: "warn", message: expect.stringContaining("allowPromptInjection=false") },
+      { level: "warn", message: expect.stringContaining("allowPromptModification=false") },
     ]);
   });
 

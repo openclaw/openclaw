@@ -37,8 +37,10 @@ function declarationPath(file: string) {
   );
 }
 
-function assertRegularPath(root: string, file: string) {
-  const boundary = createDeclarationInputBoundary(root);
+function assertRegularPath(
+  boundary: ReturnType<typeof createDeclarationInputBoundary>,
+  file: string,
+) {
   const target = boundary.assert(file);
   for (let current = target; current !== boundary.root; current = path.dirname(current)) {
     if (fs.lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
@@ -118,12 +120,13 @@ function pack(root: string) {
   if (!record) {
     throw new Error("Only a current full SDK receipt can be published");
   }
+  const boundary = createDeclarationInputBoundary(root);
   const names = [...Object.keys(record.outputs), recordName].toSorted();
   const files = names.map((file) => {
     if (!declarationPath(file)) {
       throw new Error("SDK receipt contains a non-declaration transport path");
     }
-    const target = assertRegularPath(root, file);
+    const target = assertRegularPath(boundary, file);
     if (!fs.statSync(target).isFile()) {
       throw new Error("SDK transport requires regular declaration files");
     }
@@ -138,7 +141,7 @@ function pack(root: string) {
   if (packed.length > maxArchiveBytes) {
     throw new Error("Prepared SDK archive exceeds the transport size limit");
   }
-  const archive = assertRegularPath(root, archiveName);
+  const archive = assertRegularPath(boundary, archiveName);
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   fs.writeFileSync(archive, packed);
   console.log(`Prepared SDK archive: ${files.length} files, ${packed.length} bytes`);
@@ -146,7 +149,8 @@ function pack(root: string) {
 }
 
 function restore(root: string, required: boolean) {
-  const archive = assertRegularPath(root, archiveName);
+  const boundary = createDeclarationInputBoundary(root);
+  const archive = assertRegularPath(boundary, archiveName);
   const bytes = fs.readFileSync(archive);
   if (bytes.length > maxArchiveBytes) {
     throw new Error("Prepared SDK archive exceeds the transport size limit");
@@ -182,13 +186,13 @@ function restore(root: string, required: boolean) {
       throw new Error("Invalid or repeated prepared SDK file");
     }
     seen.add(entry[0]);
-    return { path: assertRegularPath(root, entry[0]), content: entry[1] };
+    return { path: assertRegularPath(boundary, entry[0]), content: entry[1] };
   });
   if (!seen.has(recordName) || !seen.has(`${LOCAL_SDK_ROOT}/.inputs.json`)) {
     throw new Error("Prepared SDK archive is missing its native receipt");
   }
-  const sdk = assertRegularPath(root, LOCAL_SDK_ROOT);
-  const record = assertRegularPath(root, recordName);
+  const sdk = assertRegularPath(boundary, LOCAL_SDK_ROOT);
+  const record = assertRegularPath(boundary, recordName);
   fs.rmSync(record, { force: true });
   fs.rmSync(sdk, { recursive: true, force: true });
   try {

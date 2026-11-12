@@ -8,6 +8,7 @@ import { buffer as consumeBuffer } from "node:stream/consumers";
 import zlib from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrictSync } from "../../infra/directory-walk.js";
@@ -595,7 +596,7 @@ it("retains exact multiline imported events through deletion and final-answer lo
     expect(deletion.deleted).toBe(true);
     expect(deletion.archivedTranscripts).toHaveLength(1);
     const archivePath = deletion.archivedTranscripts[0]!.archivedPath;
-    expect(archiveCompression.readSessionArchiveContentSync(archivePath)).toBe(
+    expect(readSessionArchiveText(archivePath)).toBe(
       `${rows.map((row) => row.event_json).join("\n")}\n`,
     );
     await expect(history.findSessionTranscriptArchiveEventReadOnly(scope, runId)).resolves.toEqual({

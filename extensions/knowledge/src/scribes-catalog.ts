@@ -254,7 +254,7 @@ const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
 
 // Step 1 of every prompt; `fix` says how the owner restores access.
 const accessStep = (fix: string) =>
-  `Call knowledge_status. Go on when the scope is private and writes are enabled, or the store is unprovisioned (a vault that was never written reports writes off until its first write). Otherwise stop: this conversation lacks the owner's private Knowledge access. ${fix}`;
+  `Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: this conversation lacks the owner's private Knowledge access. ${fix}`;
 
 // The last step of every prompt: the closing status line.
 const endStep = (state: "on" | "done", what: string) =>

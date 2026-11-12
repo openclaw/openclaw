@@ -1,5 +1,7 @@
 // Build qaRuntime first. Synthetic localhost chat.send proof; never operator state.
 // node --import ./scripts/tsx.mjs scripts/perf/transcript-turn-gateway.mts --root <new-dir>
+// Warm census: --entry src/entry.ts --sync-fs --turns 7 --settle-ms 30000 --steady-ms 60000 --windows 5.
+// Run --timings separately: CPU and V8 allocation counters exclude census overhead.
 import assert from "node:assert/strict";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -14,6 +16,7 @@ import {
 } from "node:fs";
 import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
@@ -45,6 +48,10 @@ const { values } = parseArgs({
     timings: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
+    entry: { type: "string", default: "openclaw.mjs" },
+    "steady-ms": { type: "string", default: "0" },
+    "settle-ms": { type: "string", default: "0" },
+    windows: { type: "string", default: "1" },
   },
 });
 assert(values.root, "--root must name a new synthetic directory");
@@ -59,11 +66,28 @@ if (!fixture) {
 }
 const turnCount = Number(values.turns);
 assert(Number.isSafeInteger(turnCount) && turnCount > 0 && turnCount <= 30);
+const steadyMs = Number(values["steady-ms"]);
+assert(Number.isSafeInteger(steadyMs) && steadyMs >= 0);
+assert(!steadyMs || (values["sync-fs"] && turnCount > 1));
+const windows = Number(values.windows);
+assert(Number.isSafeInteger(windows) && windows >= 1 && windows <= 10);
+assert(windows === 1 || steadyMs > 0);
+const steadyTurns = turnCount - 1;
+const totalTurns = turnCount * windows;
+const settleMs = Number(values["settle-ms"]);
+assert(Number.isSafeInteger(settleMs) && settleMs >= 0);
+const probeFetch = (url: string | URL) => fetch(url, { headers: { connection: "close" } });
+const sourceEntry = values.entry!.endsWith(".ts");
+const entryArgs = sourceEntry ? ["--import", "./scripts/tsx.mjs", values.entry!] : [values.entry!];
 const delayMs = Number(values["delay-ms"]);
 assert(Number.isSafeInteger(delayMs) && delayMs >= 0 && delayMs <= 1000);
 const port = await getFreePort();
 const mockPort = await getFreePort();
 const probePort = values["sync-fs"] ? await getFreePort() : undefined;
+const tracePreload = new URL(
+  probePort ? "./sync-fs-turn-preload.mjs" : "../bench-transcript-turn-preload.mjs",
+  import.meta.url,
+).href;
 const config: OpenClawConfig = {
   ...structuredClone(BASE_GATEWAY_BENCH_CONFIG),
   tools: { codeMode: false },
@@ -112,6 +136,10 @@ const env = createGatewayBenchEnv(root, configPath, {
     XDG_CACHE_HOME: cacheRoot,
     OPENAI_API_KEY: values.live ? process.env.OPENAI_API_KEY! : "synthetic-localhost-fixture",
     ...(fixture ? { OPENCLAW_STATE_DIR: fixture } : {}),
+    ...(values.sandbox && process.env.DOCKER_HOST ? { DOCKER_HOST: process.env.DOCKER_HOST } : {}),
+    ...(values.sandbox && process.env.DOCKER_CONFIG
+      ? { DOCKER_CONFIG: process.env.DOCKER_CONFIG }
+      : {}),
     ...(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH
       ? { BUN_RUNTIME_TRANSPILER_CACHE_PATH: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }
       : {}),
@@ -175,7 +203,7 @@ const turns: Array<{ turn: number; start: number; end: number; elapsedMs: number
 const filesystem: unknown[] = [];
 let history: Array<{ role: string; text: string }> = [];
 try {
-  const validation = spawnSync(process.execPath, ["openclaw.mjs", "config", "validate", "--json"], {
+  const validation = spawnSync(process.execPath, [...entryArgs, "config", "validate", "--json"], {
     env,
     encoding: "utf8",
     timeout: 120_000,
@@ -210,7 +238,9 @@ try {
   gateway = launch(
     [
       ...(values.profile ? ["--cpu-prof", `--cpu-prof-dir=${root}`] : []),
-      "openclaw.mjs",
+      ...entryArgs.slice(0, -1),
+      ...(sourceEntry ? ["--import", tracePreload] : []),
+      entryArgs.at(-1)!,
       "gateway",
       "run",
       "--port",
@@ -230,12 +260,7 @@ try {
             OPENCLAW_SYNC_FS_PROBE_MODE: values.timings ? "timing" : "trace",
           }
         : { OPENCLAW_TURN_TRACE: trace }),
-      NODE_OPTIONS: `--enable-source-maps --import=${
-        new URL(
-          probePort ? "./sync-fs-turn-preload.mjs" : "../bench-transcript-turn-preload.mjs",
-          import.meta.url,
-        ).href
-      }`,
+      NODE_OPTIONS: `--enable-source-maps${sourceEntry ? "" : ` --import=${tracePreload}`}`,
     },
     "gateway",
   );
@@ -257,26 +282,43 @@ try {
     caps: [],
   });
   const sessionKey = `agent:main:transcript-turn-proof-${path.basename(root)}`;
+  if (steadyMs) {
+    await rpc("sessions.create", { key: sessionKey, agentId: "main" });
+  }
   const expected: typeof history = [];
-  for (let turn = 1; turn <= turnCount; turn++) {
-    const liveFile = `lane2113-payload-${turn}.txt`;
-    const liveContent = `SYNTHETIC_FS_TURN_OK_${turn}`;
+  let steadyStarted = 0;
+  for (let turn = 1; turn <= totalTurns; turn++) {
+    const windowTurn = ((turn - 1) % turnCount) + 1;
+    if (steadyMs && windowTurn === 1) {
+      await rpc("sessions.reset", { key: sessionKey });
+      expected.length = 0;
+      expected.push({ role: "system", text: "Reset" });
+      history = [];
+    }
+    if (windowTurn === 2 && settleMs) {
+      await delay(settleMs);
+    }
+    const liveFile = `lane2113-payload-${windowTurn}.txt`;
+    const liveContent = `SYNTHETIC_FS_TURN_OK_${windowTurn}`;
     if (values.live) {
       writeFileSync(path.join(workspace, liveFile), `${liveContent}\n`);
     }
     const message = values.live
-      ? `Turn ${turn}: I just created ${liveFile} in the workspace. Use the read tool to inspect this new file and reply with its exact contents.`
-      : `Synthetic prompt ${turn}.`;
-    const answer = `Synthetic answer ${turn}.`;
+      ? `Turn ${windowTurn}: I just created ${liveFile} in the workspace. Use the read tool to inspect this new file and reply with its exact contents.`
+      : `Synthetic prompt ${windowTurn}.`;
+    const answer = `Synthetic answer ${windowTurn}.`;
     writeFileSync(control, JSON.stringify({ text: answer }));
-    if (probePort) {
+    if (probePort && (!steadyMs || windowTurn === 2)) {
       const probe = new URL(`http://127.0.0.1:${probePort}/start`);
       probe.searchParams.set("delayMs", String(turn > 1 ? delayMs : 0));
       probe.searchParams.set("match", values["delay-match"]!);
       if (values.allocations) {
         probe.searchParams.set("allocations", "1");
       }
-      await fetch(probe);
+      await probeFetch(probe);
+      if (steadyMs) {
+        steadyStarted = performance.now();
+      }
     }
     const start = performance.timeOrigin + performance.now();
     const started = await rpc("chat.send", {
@@ -291,10 +333,10 @@ try {
     const settled = await rpc("agent.wait", { runId: started.runId, timeoutMs: 100_000 });
     const end = performance.timeOrigin + performance.now();
     assert(isRecord(settled) && settled.status === "ok");
-    if (probePort) {
+    if (probePort && !steadyMs) {
       filesystem.push({
         turn,
-        ...(await (await fetch(`http://127.0.0.1:${probePort}/stop`)).json()),
+        ...(await (await probeFetch(`http://127.0.0.1:${probePort}/stop`)).json()),
       });
     }
     turns.push({ turn, start, end, elapsedMs: end - start });
@@ -329,12 +371,28 @@ try {
       assert.deepEqual(history, expected);
     }
     if (probePort) {
-      await fetch(`http://127.0.0.1:${probePort}/start`);
+      if (!steadyMs) {
+        await probeFetch(`http://127.0.0.1:${probePort}/start`);
+      }
       await rpc("sessions.list", { limit: 50, includeActivitySummary: true });
-      filesystem.push({
-        rowsAfterTurn: turn,
-        ...(await (await fetch(`http://127.0.0.1:${probePort}/stop`)).json()),
-      });
+      if (!steadyMs) {
+        filesystem.push({
+          rowsAfterTurn: turn,
+          ...(await (await probeFetch(`http://127.0.0.1:${probePort}/stop`)).json()),
+        });
+      }
+    }
+    if (steadyMs && windowTurn > 1) {
+      const until = steadyStarted + ((windowTurn - 1) * steadyMs) / steadyTurns;
+      await delay(Math.max(0, until - performance.now()));
+      if (windowTurn === turnCount) {
+        filesystem.push({
+          window: Math.floor((turn - 1) / turnCount) + 1,
+          steadyTurns,
+          ...(await (await probeFetch(`http://127.0.0.1:${probePort}/stop`)).json()),
+        });
+        writeFileSync(path.join(root, "filesystem.json"), JSON.stringify(filesystem, null, 2));
+      }
     }
   }
 } catch (error) {
@@ -384,8 +442,10 @@ try {
     };
   });
   const evidence = {
-    scope:
-      "wall-window SQL from chat.send through agent.wait; history reads excluded; background work may overlap",
+    scope: steadyMs
+      ? "warm fixed windows: chat.send through agent.wait, history and list reads, plus background work"
+      : "wall-window SQL from chat.send through agent.wait; history reads excluded; background work may overlap",
+    workload: { entry: values.entry, steadyMs, windows, steadyTurns, settleMs },
     engine: values.engine,
     runtime: process.version,
     load: loadavg(),

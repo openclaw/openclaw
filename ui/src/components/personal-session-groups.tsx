@@ -195,7 +195,10 @@ function PersonalGroups(props: { host: SidebarSessionListHost }) {
                       void edit(group().id);
                     } else if (item.id === "remove") {
                       write(groups().filter((candidate) => candidate.id !== group().id));
-                      showToast({ message: t("sessionsView.personalGroupRemoved") });
+                      showToast({
+                        severity: "success",
+                        message: t("sessionsView.personalGroupRemoved"),
+                      });
                     } else {
                       move(group().id, item.id === "up" ? -1 : 1);
                     }

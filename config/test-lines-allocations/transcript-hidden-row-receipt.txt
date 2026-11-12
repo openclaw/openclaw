@@ -1,2 +1,0 @@
-12
-# Preserve cached row geometry across deferred hidden receipts while accepting visible zero-height rows.

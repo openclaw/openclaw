@@ -13,7 +13,7 @@ import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
-import { SessionManager } from "../sessions/index.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import {
   createBackgroundMaintenanceEngine,
   createMaintenanceGate,
