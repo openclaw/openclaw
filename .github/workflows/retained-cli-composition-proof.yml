@@ -1,111 +1,100 @@
-name: Required Backports Generated Patch
-
+name: Required Backports Targeted Proof
 on:
   workflow_dispatch:
     inputs:
       target_ref:
-        description: Reviewed four-backport candidate full commit SHA (not a branch or tag)
+        description: Reviewed generated four-backport candidate SHA
         required: true
         type: string
-
 permissions:
   contents: read
-
 concurrency:
-  group: required-backports-generated-patch-${{ inputs.target_ref }}
+  group: required-backports-targeted-${{ inputs.target_ref }}
   cancel-in-progress: false
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   BASE_SHA: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
-  EXPECTED_PATHS_SHA256: d3e7d95f86730273c8d8df822b34488842f92ba09c18d333cd72397a8abb870c
-
+  CANDIDATE_SHA: f38131f934b45447558cf6f431353a49656198d5
+  SOURCE_TREE: a2b41999e8f0ac728cec97457e0500a76a7fd71e
+  PATHS_SHA256: 0f3f3c4058345f4b099f067e11c98729d9e4842fbd2889f789b035e47019340c
 jobs:
-  generate:
-    if: github.repository == 'openclaw/openclaw'
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [checks, tests]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
-      - name: Require exact candidate identity
-        env:
-          TARGET_SHA: ${{ inputs.target_ref }}
-        run: |
-          [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
-
-      - name: Checkout reviewed candidate
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Verify bounded source and record identity
-        id: source
+      - name: Bind exact source
         env:
           TARGET_SHA: ${{ inputs.target_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
-          [[ -z "$(git status --porcelain)" ]]
+          test "$TARGET_SHA" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+          test -z "$(git status --porcelain)"
           git merge-base --is-ancestor "$BASE_SHA" HEAD
-          mkdir -p "$RUNNER_TEMP/backport-generated"
-          git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > "$RUNNER_TEMP/backport-generated/source-paths.txt"
-          echo "$EXPECTED_PATHS_SHA256  $RUNNER_TEMP/backport-generated/source-paths.txt" | sha256sum -c -
-          git diff --binary "$BASE_SHA" HEAD > "$RUNNER_TEMP/backport-generated/source.patch"
-          printf 'base=%s\ncandidate=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' \
-            "$BASE_SHA" "$TARGET_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
-            > "$RUNNER_TEMP/backport-generated/identity.txt"
-
-      - name: Setup canonical Node environment
-        uses: ./.github/actions/setup-node-env
+          mkdir -p .artifacts/required-backports
+          git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/required-backports/source-paths.txt
+          echo "$PATHS_SHA256  .artifacts/required-backports/source-paths.txt" | sha256sum -c -
+          printf 'candidate=%s\nbase=%s\ntree=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$CANDIDATE_SHA" "$BASE_SHA" "$SOURCE_TREE" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/required-backports/identity.txt
+      - uses: ./.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          semantic-checks: "true"
           install-bun: "false"
-
-      - name: Generate canonical config docs and format only the reviewed scope
+          cache-mode: "restore"
+      - uses: ./.github/actions/setup-test-bun
+      - name: Run canonical changed checks
+        if: matrix.lane == 'checks'
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/backport-generated"
-          pnpm config:docs:gen
-          git diff --binary HEAD -- docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256 > "$out/config-docs.patch"
-          mapfile -t paths < "$out/source-paths.txt"
-          pnpm format --no-error-on-unmatched-pattern -- "${paths[@]}" \
-            docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256
-
-      - name: Export generated delta and content hashes
-        if: ${{ !cancelled() && steps.source.outcome == 'success' }}
+          pnpm check:changed --base "$BASE_SHA" --head HEAD --dry-run 2>&1 | tee .artifacts/required-backports/check-plan.log
+          pnpm check:changed --base "$BASE_SHA" --head HEAD --timed 2>&1 | tee .artifacts/required-backports/checks.log
+      - name: Run touched tests through canonical project router
+        if: matrix.lane == 'tests'
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/backport-generated"
-          [[ -f "$out/source.patch" ]]
-          git diff --binary HEAD > "$out/generated-format.patch"
-          cp docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256 "$out/"
-          { cat "$out/source-paths.txt"; printf '%s\n' docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256; } | LC_ALL=C sort -u > "$out/allowed-output-paths.txt"
-          git diff --name-only HEAD | LC_ALL=C sort > "$out/generated-paths.txt"
-          comm -23 "$out/generated-paths.txt" "$out/allowed-output-paths.txt" > "$out/unexpected-paths.txt"
-          [[ ! -s "$out/unexpected-paths.txt" ]]
-          (cd "$out" && sha256sum source.patch config-docs.patch generated-format.patch config-baseline.counts.json config-baseline.sha256 > SHA256SUMS)
-
-      - name: Verify generated baseline and scoped formatting
+          git diff --name-only "$BASE_SHA" HEAD -- '*.test.ts' '*.test.tsx' '*.spec.ts' '*.spec.tsx' > .artifacts/required-backports/test-paths.txt
+          if test -f src/gateway/derive-goal-session-title.test.ts; then
+            echo src/gateway/derive-goal-session-title.test.ts >> .artifacts/required-backports/test-paths.txt
+          fi
+          LC_ALL=C sort -u .artifacts/required-backports/test-paths.txt -o .artifacts/required-backports/test-paths.txt
+          grep -Fx src/gateway/server.delegated-administration.product.test.ts .artifacts/required-backports/test-paths.txt
+          grep -Fx test/system-agent-delegation-authority.e2e.test.ts .artifacts/required-backports/test-paths.txt
+          mapfile -t tests < .artifacts/required-backports/test-paths.txt
+          test "${#tests[@]}" -gt 0
+          node scripts/test-projects.mts "${tests[@]}" -- --reporter=default --reporter=json --outputFile=.artifacts/required-backports/tests.json 2>&1 | tee .artifacts/required-backports/tests.log
+      - name: Verify critical suites actually ran
+        if: matrix.lane == 'tests'
         run: |
-          set -euo pipefail
-          pnpm config:docs:check
-          mapfile -t paths < "$RUNNER_TEMP/backport-generated/source-paths.txt"
-          pnpm format:check --no-error-on-unmatched-pattern -- "${paths[@]}" \
-            docs/.generated/config-baseline.counts.json docs/.generated/config-baseline.sha256
-          git diff --check
-
-      - name: Record owner-selected check plan for next exact candidate
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          const report = JSON.parse(fs.readFileSync('.artifacts/required-backports/tests.json', 'utf8'));
+          for (const suffix of ['src/gateway/server.delegated-administration.product.test.ts', 'test/system-agent-delegation-authority.e2e.test.ts', 'ui/src/e2e/session-management.trailing-state.e2e.test.ts']) {
+            const file = report.testResults.find((item) => item.name.replaceAll('\\', '/').endsWith(suffix));
+            assert(file && file.assertionResults.length > 0, 'Missing executed suite: ' + suffix);
+            assert(file.assertionResults.every((item) => item.status === 'passed'), 'Non-passing critical suite: ' + suffix);
+          }
+          NODE
+      - name: Record artifact hashes
+        if: always()
         run: |
-          pnpm check:changed --base "$BASE_SHA" --head HEAD --dry-run \
-            > "$RUNNER_TEMP/backport-generated/check-plan.log" 2>&1
-
-      - name: Upload generated patch for review, never commit or publish it
-        if: ${{ always() && steps.source.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          if test -d .artifacts/required-backports; then
+            (cd .artifacts/required-backports && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
-          name: required-backports-generated-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/backport-generated/
+          name: required-backports-${{ matrix.lane }}-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/required-backports/
           if-no-files-found: error
           retention-days: 14
