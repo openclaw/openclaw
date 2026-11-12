@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerCodexSessionCli } from "./session-cli.js";
 
@@ -141,6 +142,16 @@ describe("registerCodexSessionCli", () => {
 
       expect(emptyOutput).toBe("No Codex session hosts found.\n");
       expect(hostOutput).toBe('No Codex session host matched "node:missing".\n');
+    });
+
+    it("prints no session list that lands after Ctrl+C", async () => {
+      const work = new AsyncWorkScope();
+      // The catalog read settles only after the command scope begins closing.
+      callGatewayFromCli.mockImplementation(() => work.beginClose());
+
+      const output = await work.run(() => runCli(["sessions"], { json: true }));
+
+      expect(output).toBe("");
     });
   });
 

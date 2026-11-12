@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   addGatewayClientOptions,
   callGatewayFromCli,
@@ -174,11 +175,25 @@ async function listCodexSessions(options: CodexSessionsCliOptions): Promise<void
     ...(host ? { hostIds: [host] } : {}),
     ...(cursor && host ? { cursors: { [host]: cursor } } : {}),
   };
-  const raw = await callGatewayFromCli("sessions.catalog.list", gatewayOptions(options), params, {
-    mode: "cli",
-    // Federation invokes paired nodes, so this inherits node.invoke's write scope.
-    scopes: ["operator.write"],
-  });
+  // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
+  const signal = getAsyncWorkSignal();
+  let raw: unknown;
+  try {
+    raw = await callGatewayFromCli("sessions.catalog.list", gatewayOptions(options), params, {
+      mode: "cli",
+      // Federation invokes paired nodes, so this inherits node.invoke's write scope.
+      scopes: ["operator.write"],
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      return;
+    }
+    throw error;
+  }
+  if (signal?.aborted) {
+    return;
+  }
   if (!isRecord(raw) || !Array.isArray(raw.catalogs)) {
     throw new Error("Codex session catalog returned an invalid result");
   }
