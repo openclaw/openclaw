@@ -160,6 +160,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                     cacheEnabled: effectiveSettings.cache.enabled,
                     ftsEnabled: effectiveSettings.query.hybrid.enabled,
                     ftsTokenizer: effectiveSettings.store.fts.tokenizer,
+                    cjkBigramFts: effectiveSettings.store.fts.cjk === "bigram",
                   },
                 });
                 manager = new MemoryIndexManager({
@@ -259,7 +260,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     if (
       source?.embeddingBootstrapFailure &&
       cachedProbe?.result.ok === false &&
-      cachedProbe.expireAtMs > performance.now()
+      cachedProbe.expireAtMs > Date.now()
     ) {
       // Detached maintenance inherits the remaining cooldown, never a fresh deadline.
       this.embeddingBootstrapFailure = source.embeddingBootstrapFailure;

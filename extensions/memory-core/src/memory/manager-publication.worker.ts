@@ -9,6 +9,7 @@ import {
   readRepairedMemoryIndexSchema,
   publishRepairedMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
+  MEMORY_INDEX_CJK_FTS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -322,6 +323,7 @@ function createPublicationBackend(
               fts: schema.get(MEMORY_INDEX_FTS_TABLE) ?? null,
               paths: schema.get(MEMORY_INDEX_PATHS_FTS_TABLE) ?? null,
               vector: schema.get(MEMORY_INDEX_VECTOR_TABLE) ?? null,
+              cjk: schema.get(MEMORY_INDEX_CJK_FTS_TABLE) ?? null,
             },
           }
         : {}),

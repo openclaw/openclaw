@@ -631,12 +631,10 @@ auto-injected.
 
 Paths can be absolute or workspace-relative. Directories are scanned recursively for supported
 files. Object entries narrow a directory with a root-relative glob using `/` separators; direct
-file entries are indexed exactly. Wildcards do not implicitly include dotfiles or hidden
-directories: use an explicit dot pattern such as `.*.md` or `.notes/**/*.md` to include them.
-Brace alternatives and extglobs are supported. Entries with the same resolved directory share
-one scan, and scans skip subdirectories that their patterns can prove irrelevant. The builtin
-engine skips symlinks. When a configured root is a symlink, `openclaw memory status` names the
-skipped root in text and JSON output and recommends
+file entries are indexed exactly. Entries with the same resolved directory share one scan, and
+scans skip subdirectories that their patterns can prove irrelevant. Complex patterns retain
+conservative traversal. The builtin engine skips symlinks. When a configured root is a
+symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
 configuring its resolved absolute directory instead.
 
 Set `evergreen: true` only for stable reference sources whose relevance should not fall as their
@@ -832,10 +830,18 @@ Built-in memory indexes live in each agent's OpenClaw SQLite database at
 | Key                   | Type     | Default     | Description                               |
 | --------------------- | -------- | ----------- | ----------------------------------------- |
 | `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
+| `store.fts.cjk`       | `string` | unset       | Companion CJK index mode (`bigram`)       |
 
 With `trigram`, query terms shorter than three characters use substring matching,
 so short terms such as `AI` and `UK` remain searchable. Longer terms keep
 full-text matching, including in queries that also contain short terms.
+
+Substring matching confirms recall but carries no BM25 score, so the result
+order of a short-term query stays driven by the vector leg. Set
+`store.fts.cjk: "bigram"` to add a companion index that stores a character
+bigram encoded copy of the chunk text, which keeps two-character Chinese terms
+indexable and BM25-ranked. The companion index is derived state: enabling it
+rebuilds only the FTS leg and never re-embeds.
 
 ---
 

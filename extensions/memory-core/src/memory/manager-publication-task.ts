@@ -34,6 +34,7 @@ export type MemoryPublicationSchema = {
   fts: string | null;
   paths: string | null;
   vector: string | null;
+  cjk?: string | null;
 };
 export type MemoryEmbeddingCacheEntry = {
   hash: string;
@@ -85,7 +86,7 @@ export type MemoryPublicationOperations = {
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
-      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer" | "fresh"
+      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer" | "cjkBigramFts" | "fresh"
     >;
     output: MemoryPublicationResult<
       ReturnType<typeof ensureMemoryIndexSchema> & { admission?: MemoryDatabaseAdmission }
