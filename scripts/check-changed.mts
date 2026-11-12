@@ -48,8 +48,8 @@ import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
 import { createChangedOxlintEnv, isOxlintCommand } from "./lib/oxlint-changed-scope.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
-import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import { TSGO_CORE_TEST_SHARDS } from "./lib/tsgo-core-test-shards.mts";
+import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
 import {
   hasImportGraphImpactOnTargets,
@@ -701,7 +701,9 @@ export function createChangedCheckPlan(
     // Keep both inline rather than silently broadening or dropping their work.
     const delegated = options.delegateCompilers
       ? new Map(
-          [...typechecks].filter(([command, graphs]) => graphs.length > 0 && !command.coreTestCheck),
+          [...typechecks].filter(
+            ([command, graphs]) => graphs.length > 0 && !command.coreTestCheck,
+          ),
         )
       : new Map<ChangedCheckCommand, readonly string[]>();
     return {

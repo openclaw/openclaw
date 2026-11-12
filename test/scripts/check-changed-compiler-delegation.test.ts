@@ -78,7 +78,9 @@ it("assigns the complete delegated graph union once using native stripes and roo
     }
   }
   const configs = (graphNames: string[]) =>
-    expandTsgoExecutionGraphs(resolveCiTsgoGraphs(graphNames)).map(({ config }) => config).toSorted();
+    expandTsgoExecutionGraphs(resolveCiTsgoGraphs(graphNames))
+      .map(({ config }) => config)
+      .toSorted();
   const actual = configs(names);
   const expected = configs(expectedGraphs);
   expect(actual).toEqual(expected);
