@@ -14,6 +14,7 @@ import type { PostgresCatalogFact } from "./postgres-catalog.js";
 import {
   admitPostgresCapabilities,
   getAdmittedPostgresSchema,
+  missingPostgresAdditiveColumns,
   postgresSchemaHash,
   readPostgresSchema,
   recordPostgresSchema,
@@ -75,7 +76,16 @@ export function admitPostgresPhysicalFacts(params: {
         );
       }
     }
-    return retained;
+    // Inspection retains a predecessor as found; a writer completes it before sharing those facts.
+    const completesPredecessor =
+      params.schema !== undefined &&
+      !params.recordSchema &&
+      !params.preserveSchemaSeal &&
+      !params.requireSealedSchema &&
+      missingPostgresAdditiveColumns(params.schema, retained.catalog).length > 0;
+    if (!completesPredecessor) {
+      return retained;
+    }
   }
   const capabilities = admitPostgresCapabilities(params.db);
   let snapshot;

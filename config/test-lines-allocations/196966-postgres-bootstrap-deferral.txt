@@ -1,2 +1,2 @@
-218
-# PostgreSQL schema-39 predecessor admission and drift-refusal regressions for bootstrap_deferred.
+245
+# PostgreSQL schema-39 predecessor admission, retained-inspection writer completion and drift-refusal regressions for bootstrap_deferred.

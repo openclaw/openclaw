@@ -187,6 +187,33 @@ describe.skipIf(!connection)("PostgreSQL shared state sealed before bootstrap de
     });
   });
 
+  it("completes a predecessor for a writer while its inspection admission is retained", async () => {
+    await withPreDeferralStore(async ({ options, pathname, readColumn }) => {
+      const inspected = withEngineStoreAdmission(() =>
+        openExistingStatePostgresConnection(pathname),
+      );
+      try {
+        expect(await readColumn()).toEqual([]);
+        expect(
+          withEngineStoreAdmission(() =>
+            runOpenClawStateWriteTransaction(
+              ({ db }) =>
+                db
+                  .prepare(`SELECT workspace_key, bootstrap_deferred FROM workspace_setup_state`)
+                  .all(),
+              options,
+            ),
+          ),
+        ).toEqual([{ workspace_key: "retained", bootstrap_deferred: null }]);
+        expect(await readColumn()).toEqual([
+          { data_type: "bigint", is_nullable: "YES", column_default: null },
+        ]);
+      } finally {
+        expect(inspected?.close()).toBe(true);
+      }
+    });
+  });
+
   it.each([
     {
       shape: "a column added outside OpenClaw under the predecessor seal",

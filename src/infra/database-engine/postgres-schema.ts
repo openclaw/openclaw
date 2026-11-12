@@ -204,20 +204,29 @@ export function recordPostgresSchema(
   return schemaHash;
 }
 
+export function isPostgresAdditiveColumnFact(
+  fact: PostgresCatalogFact,
+  { table, column }: NonNullable<StoreSchema["postgresAdditiveColumns"]>[number],
+): boolean {
+  return (
+    fact.kind === "column" &&
+    fact.table === table &&
+    fact.value !== null &&
+    typeof fact.value === "object" &&
+    "name" in fact.value &&
+    fact.value.name === column
+  );
+}
+
 /** Additive columns this store predates; a missing table stays a fragment concern. */
 export function missingPostgresAdditiveColumns(
   schema: Pick<StoreSchema, "postgresAdditiveColumns">,
   catalog: readonly PostgresCatalogFact[],
 ): NonNullable<StoreSchema["postgresAdditiveColumns"]> {
   return (schema.postgresAdditiveColumns ?? []).filter(
-    ({ table, column }) =>
-      catalog.some((fact) => fact.kind === "table" && fact.table === table) &&
-      !catalog.some(
-        (fact) =>
-          fact.kind === "column" &&
-          fact.table === table &&
-          (fact.value as { name?: unknown }).name === column,
-      ),
+    (additive) =>
+      catalog.some((fact) => fact.kind === "table" && fact.table === additive.table) &&
+      !catalog.some((fact) => isPostgresAdditiveColumnFact(fact, additive)),
   );
 }
 

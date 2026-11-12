@@ -11,7 +11,10 @@ import {
   postgresIndexOrderingMigration,
   withLegacyPostgresIndexOrdering,
 } from "../infra/database-engine/postgres-index-ordering.js";
-import { missingPostgresAdditiveColumns } from "../infra/database-engine/postgres-schema.js";
+import {
+  isPostgresAdditiveColumnFact,
+  missingPostgresAdditiveColumns,
+} from "../infra/database-engine/postgres-schema.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
@@ -112,12 +115,7 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       runtime.expectedCatalog.filter(
         (fact) =>
           !absent.has(fact.table) &&
-          !predecessorColumns.some(
-            ({ table, column }) =>
-              fact.kind === "column" &&
-              fact.table === table &&
-              (fact.value as { name?: unknown }).name === column,
-          ),
+          !predecessorColumns.some((additive) => isPostgresAdditiveColumnFact(fact, additive)),
       ),
     );
   }
