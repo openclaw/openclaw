@@ -277,7 +277,15 @@ export class ComposerDictationOwner extends EventTarget {
     }
   };
 
-  private readonly handleWindowBlur = (): void => this.cancel();
+  // Losing the window interrupts capture; it is not a request to discard what was already heard.
+  private readonly handleWindowBlur = (): void => {
+    if (!this.active) {
+      this.cancel();
+      return;
+    }
+    this.clearClickSuppression();
+    void this.stop({ commit: true });
+  };
 
   private canHold(): boolean {
     return (

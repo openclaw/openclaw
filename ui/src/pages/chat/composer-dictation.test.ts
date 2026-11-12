@@ -310,32 +310,44 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
-  it.each(["draft replacement", "Escape", "hidden"])(
-    "discards active capture on %s",
-    async (action) => {
-      const { controller, options, onCommit } = createHarness({ draftKey: "first" });
-      const stopTrack = captureStop();
-      await startDirect(controller);
-      expect(getUserMedia).toHaveBeenCalledOnce();
-      expect(controller.active).toBe(true);
-      emit({ type: "partial", text: "discard me" });
-      const nextCommit = vi.fn();
-      if (action === "draft replacement") {
-        controller.update({ ...options, draftKey: "next", onCommit: nextCommit });
-      } else if (action === "Escape") {
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      } else {
-        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-      transcript("Old draft final words");
-      expect(controller.active).toBe(false);
-      expect(stopTrack).toHaveBeenCalledOnce();
-      expect(onCommit).not.toHaveBeenCalled();
-      expect(nextCommit).not.toHaveBeenCalled();
-      await waitForFast(() => expectClosed("dictation-1", true));
-    },
-  );
+  it.each(["draft replacement", "Escape"])("discards active capture on %s", async (action) => {
+    const { controller, options, onCommit } = createHarness({ draftKey: "first" });
+    const stopTrack = captureStop();
+    await startDirect(controller);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(controller.active).toBe(true);
+    emit({ type: "partial", text: "discard me" });
+    const nextCommit = vi.fn();
+    if (action === "draft replacement") {
+      controller.update({ ...options, draftKey: "next", onCommit: nextCommit });
+    } else {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+    transcript("Old draft final words");
+    expect(controller.active).toBe(false);
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(nextCommit).not.toHaveBeenCalled();
+    await waitForFast(() => expectClosed("dictation-1", true));
+  });
+
+  it.each(["hidden", "blur"])("keeps the dictated text when the window goes %s", async (event) => {
+    const { controller, onCommit } = createHarness();
+    await startDirect(controller);
+    transcript("five minutes of speech");
+    emit({ type: "partial", text: "and more" });
+    if (event === "hidden") {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else {
+      window.dispatchEvent(new Event("blur"));
+    }
+    emit({ type: "close", reason: "completed" });
+    await waitForFast(() =>
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith("five minutes of speech and more", true),
+    );
+    expect(controller.active).toBe(false);
+  });
 
   it.each([false, true])("Read aloud replaces dictation (finalizing: %s)", async (finalizing) => {
     const stopTrack = captureStop();
