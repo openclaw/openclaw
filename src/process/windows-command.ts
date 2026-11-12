@@ -69,7 +69,9 @@ function resolveWindowsCommandFromCwdOrPath(params: {
     }
     return resolveExecutableFromPathEnv(
       path.basename(candidate),
-      path.dirname(candidate),
+      // Probe one prepared directory; a string would split on literal semicolons
+      // that Windows directory names may contain.
+      [path.dirname(candidate)],
       params.env,
       { includeExtensionless: false },
     );
@@ -86,7 +88,8 @@ function resolveWindowsCommandFromCwdOrPath(params: {
     .map((entry) => (path.isAbsolute(entry) ? entry : path.resolve(cwd, entry)));
   // Bare names search PATH only. Requiring an explicit relative path prevents
   // an untrusted child cwd from shadowing installed tools such as git or node.
-  return resolveExecutableFromPathEnv(params.command, pathEntries.join(";"), params.env, {
+  // Prepared directory entries keep literal semicolons in cwd-derived names intact.
+  return resolveExecutableFromPathEnv(params.command, pathEntries, params.env, {
     includeExtensionless: false,
   });
 }
