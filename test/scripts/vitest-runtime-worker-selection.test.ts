@@ -28,13 +28,39 @@ const doctorCommandFiles = [
 it.each([
   { name: "Doctor commands", config: commands, files: doctorCommandFiles, runtime: true },
   {
-    name: "Doctor update schema and managed settlement",
+    name: "Doctor infra",
     config: "test/vitest/vitest.infra.config.ts",
     files: [
       "src/flows/doctor-health.update-schema.test.ts",
+      "src/flows/doctor-health.managed-admission.test.ts",
+      "src/flows/doctor-health.managed-approvals.test.ts",
       "src/flows/doctor-health.managed-settlement.test.ts",
+      "src/flows/doctor-health.readonly-config.test.ts",
     ],
     runtime: true,
+  },
+  {
+    name: "Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [
+      "src/flows/doctor-health.migration-refusal.test.ts",
+      "src/flows/doctor-health.nocow.test.ts",
+      "src/flows/doctor-health.plugin-load.test.ts",
+      "src/flows/doctor-health.readonly-filesystem.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "broad unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: [],
+    runtime: false,
+  },
+  {
+    name: "mixed Doctor unit",
+    config: "test/vitest/vitest.unit.config.ts",
+    files: ["src/flows/doctor-health.nocow.test.ts", "src/flows/unknown.test.ts"],
+    runtime: false,
   },
   {
     name: "mixed Doctor infra",
