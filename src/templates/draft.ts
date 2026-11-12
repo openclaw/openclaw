@@ -7,6 +7,7 @@ import {
   type TemplateDraftDocument,
   type TemplateDraftReviewChoices,
   type TemplateDraftReviewItem,
+  type TemplatesDraftsReviewResult,
   validateTemplateDraftDocument,
 } from "../../packages/gateway-protocol/src/index.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -190,6 +191,10 @@ export async function prepareTemplateDraft(params: {
       kind: pkg.kind === "skill" ? "skill" : "plugin",
       label: pkg.source === "bundled" ? pkg.path : pkg.ref,
       detail: pkg.source === "bundled" ? "bundled folder" : `${pkg.source} · ${pkg.version}`,
+      requirement:
+        pkg.source === "bundled"
+          ? { source: pkg.source, path: pkg.path }
+          : { source: pkg.source, ref: pkg.ref, version: pkg.version },
     });
   }
   for (const [name, server] of Object.entries(draftManifest.mcpServers)) {
@@ -201,6 +206,12 @@ export async function prepareTemplateDraft(params: {
       kind: "automation",
       label: job.name ?? job.id,
       detail: `${job.schedule.cron} · ${job.schedule.timezone} · ${job.enabled === false ? "Paused" : "Enabled"}`,
+      automation: {
+        message: job.message,
+        schedule: job.schedule,
+        session: job.session,
+        enabled: job.enabled !== false,
+      },
     });
   }
   const known = new Set(items.map((item) => item.id));
@@ -310,7 +321,13 @@ export async function prepareTemplateDraft(params: {
     const built = await buildTemplateProject(project, staging.path("template.tgz"));
     await using extracted = await extractBuiltTemplateArtifact(built.artifact);
     const archiveRoot = await fsSafeRoot(extracted.packageRoot);
-    const publishedFiles: Array<{ path: string; content: string }> = [];
+    const workspaceFiles = [
+      ...Object.entries(draftManifest.workspace.bootstrapFiles).flatMap(([path, entry]) =>
+        entry ? [{ path, source: entry.source }] : [],
+      ),
+      ...draftManifest.workspace.files,
+    ];
+    const publishedFiles: TemplatesDraftsReviewResult["files"] = [];
     for (const path of built.files) {
       const read = await archiveRoot.read(path, {
         maxBytes: MAX_TEMPLATE_DRAFT_BYTES,
@@ -319,7 +336,13 @@ export async function prepareTemplateDraft(params: {
       });
       const content = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
       assertPortableContent(path, content);
-      publishedFiles.push({ path, content });
+      const workspacePaths = workspaceFiles
+        .filter((file) => file.source === path)
+        .map((file) => file.path);
+      if (path === "BOOTSTRAP.md") {
+        workspacePaths.push(path);
+      }
+      publishedFiles.push({ path, content, ...(workspacePaths.length ? { workspacePaths } : {}) });
     }
     return {
       name,

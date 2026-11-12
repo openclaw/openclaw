@@ -1001,6 +1001,13 @@ async function runPreparedNpmCommand(argv) {
             client: createReleaseEvidenceClient(common.repository),
             shareAcquisitionReads: true,
           });
+    } else if (command === "authorize") {
+      // The parent dispatch precedes child preview, so it has no carrier. Share
+      // this invocation's raw graph reads; the final sweep still refreshes live
+      // dependencies and authority. Nothing is serialized or trusted as a verdict.
+      adoptionParams.immutableReads = createReleaseEvidenceReplay({}, undefined, {
+        shareAcquisitionReads: true,
+      });
     }
     adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
     if (options["--evidence-output"]) {

@@ -2882,7 +2882,7 @@ describe("ci workflow guards", () => {
 
   it.each([
     ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
-    ["macos-swift-packages", false, "workflow_dispatch", false, ["packages"]],
+    ["macos-swift-packages", false, "workflow_dispatch", false, ["packages", "mlx"]],
     ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
     ["ios-build", true, "workflow_dispatch", false, ["tests"]],
     ["ios-build", false, "pull_request", false, ["smoke"]],
@@ -2936,6 +2936,7 @@ describe("ci workflow guards", () => {
               "OpenClawKit tests",
               "Swabble tests",
             ],
+            mlx: ["MLX TTS helper build and tests"],
           }
         : {
             smoke: [
@@ -3050,8 +3051,9 @@ describe("ci workflow guards", () => {
         ? job.strategy.matrix.phase
         : evaluateWorkflowExpression(job.strategy.matrix.phase, context);
       expect(appPhases).toEqual(full ? ["release", "tests"] : ["tests"]);
-      expect(packages.strategy.matrix.phase).toEqual(["packages"]);
-      const phases = [...appPhases, ...packages.strategy.matrix.phase];
+      const packagePhases = evaluateWorkflowExpression(packages.strategy.matrix.phase, context);
+      expect(packagePhases).toEqual(["packages", "mlx"]);
+      const phases = [...appPhases, ...packagePhases];
       expect(job.strategy["max-parallel"]).toBe(2);
       const env = Object.fromEntries(
         Object.entries(job.env).map(([key, value]) => [
@@ -3306,6 +3308,14 @@ describe("ci workflow guards", () => {
       expect(actual).not.toContain("check-lint-hosted-core-shard");
       expect(actual).toContain("checks-baseline-ratchets");
       expect(actual).not.toContain("check-plan");
+      expect(actual.filter((job) => job === "macos-swift")).toHaveLength(1);
+      expect(actual.filter((job) => job === "macos-swift-packages")).toHaveLength(2);
+      const ordinaryRows = emittedHostedRows(ordinary.outputs, {
+        eventName: "pull_request",
+        runnerBackend: "runson",
+        runnerProfile: "hybrid",
+      });
+      expect(ordinaryRows.filter((job) => job.startsWith("macos-swift"))).toEqual([]);
       expect(ordinary.outputs.split_pr_guards).toBe("true");
       expect(qualification.outputs.split_pr_guards).toBe("false");
       for (const [manifest, eventName] of [
@@ -3331,6 +3341,53 @@ describe("ci workflow guards", () => {
         expect(Number(reportedBaseRows)).toBe(baseRows.length);
       }
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
+    });
+
+    it.each([
+      {
+        eventName: "workflow_dispatch" as const,
+        backend: "hybrid" as const,
+        ref: "refs/heads/main",
+      },
+      {
+        eventName: "workflow_dispatch" as const,
+        backend: "runson" as const,
+        ref: "refs/heads/main",
+      },
+      { eventName: "push" as const, backend: "hybrid" as const, ref: "refs/heads/feature" },
+      { eventName: "push" as const, backend: "hybrid" as const, ref: "refs/heads/main" },
+    ])("reserves the emitted Swift inventory for $eventName/$backend/$ref", (row) => {
+      const releaseGate = row.eventName === "workflow_dispatch";
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        historicalCompatibility: false,
+        eventName: row.eventName,
+        releaseGate,
+        runnerBackend: row.backend,
+        runnerProfile: "hybrid",
+        nodeRunnerBackend: "runson",
+        changedPaths: [".github/workflows/ci.yml"],
+        scopeEnv: {
+          OPENCLAW_CI_QUALIFICATION: String(releaseGate),
+          GITHUB_REF: row.ref,
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_macos_swift).toBe("true");
+      expect(manifest.outputs.run_mlx_native_proof).toBe("false");
+      const hosted = emittedHostedRows(
+        { ...manifest.outputs, node_runner_backend: "runson" },
+        {
+          eventName: row.eventName,
+          releaseGate,
+          runnerBackend: row.backend,
+          runnerProfile: "hybrid",
+          ref: row.ref,
+        },
+      );
+      expect(hosted.filter((job) => job === "macos-swift")).toHaveLength(1);
+      expect(hosted.filter((job) => job === "macos-swift-packages")).toHaveLength(2);
+      expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);
     });
 
     function manifestWithHostedNodeRows(
@@ -3418,8 +3475,16 @@ describe("ci workflow guards", () => {
       expect(forkRows).toContain("pr-failure-report");
     });
 
-    it.each([true, false])("bounds hosted rows with Android=%s", (androidSelected) => {
-      const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
+    it.each([
+      [true, false],
+      [false, false],
+      [true, true],
+      [false, true],
+    ])("bounds hosted rows with Android=%s and macOS=%s", (androidSelected, nativeSelected) => {
+      const scopeEnv = {
+        OPENCLAW_CI_RUN_ANDROID: String(androidSelected),
+        OPENCLAW_CI_RUN_MACOS: String(nativeSelected),
+      };
       const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);
       const baselineRows = emittedHostedRows({
@@ -3444,6 +3509,12 @@ describe("ci workflow guards", () => {
           );
         }
         const hosted = emittedHostedRows(manifest.outputs);
+        expect(hosted.filter((name) => name === "macos-swift")).toHaveLength(
+          nativeSelected ? 1 : 0,
+        );
+        expect(hosted.filter((name) => name === "macos-swift-packages")).toHaveLength(
+          nativeSelected ? 2 : 0,
+        );
         expect(hosted.filter((name) => name === "android-access-native")).toHaveLength(
           androidSelected ? 2 : 0,
         );
@@ -6056,9 +6127,14 @@ describe("ci workflow guards", () => {
     ];
     const original = expectDefined(
       createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
-      "selected original eight-group workload",
+      "selected original workload",
     );
-    expect(original.flatMap((job) => job.groups)).toHaveLength(8);
+    const workspaceOwner = expectDefined(
+      original.find((job) =>
+        job.groups.some((group) => group.includePatterns?.includes(workspace)),
+      ),
+      "original workspace owner",
+    );
     const routed = routeBoatNodeTestJobs(original);
     const retained = routed
       .filter((job) => job.runner.startsWith("boat"))
@@ -6089,7 +6165,7 @@ describe("ci workflow guards", () => {
     expect([undefined, hosted.runner]).toContain(hosted.runner_label);
     expect(hosted).toMatchObject({
       runner: "ubuntu-24.04",
-      cpu_budget: 8,
+      cpu_budget: workspaceOwner.runner === "blacksmith-32vcpu-ubuntu-2404" ? 8 : 2,
       plan_concurrency: 1,
     });
     expect(rows.flatMap(files).toSorted()).toEqual(targets.toSorted());
