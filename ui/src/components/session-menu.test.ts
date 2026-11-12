@@ -479,11 +479,10 @@ describe("session menu", () => {
     ).toBeDefined();
     const research = menuItem(submenu, "Research");
     expect(research.getAttribute("aria-checked")).toBe("true");
-    research.focus();
-    expect(press(research, "٢", { code: "Digit2" }).defaultPrevented).toBe(true);
-    await settleSessionMenu(menu);
-    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
+    expect(research.hasAttribute("aria-keyshortcuts")).toBe(false);
+    expect(submenu.querySelector("input[data-search]")).toBeNull();
     for (const [value, action] of [
+      ["move-to-group:Projects", { kind: "move-to-group", category: "Projects" }],
       ["move-to-group:", { kind: "move-to-group", category: null }],
       ["new-group", { kind: "new-group" }],
     ] as const) {
@@ -492,6 +491,42 @@ describe("session menu", () => {
       await selectMenuValue(menu, value);
       expect(onAction).toHaveBeenCalledWith(action);
     }
+  });
+
+  it("searches long group lists and starts each opening unfiltered", async () => {
+    const groups = [
+      "Research",
+      "Releases",
+      "Issues",
+      "Pull requests",
+      "PR reviews",
+      "Automation",
+      "Design",
+      "Docs",
+      "Support",
+    ];
+    const { menu, onAction } = await actionMenu({ session: { category: "Issues" }, groups });
+    const submenu = await openSubmenu(menu, "Move to group");
+    const search = submenu.querySelector<HTMLInputElement>("input[data-search]")!;
+    expect(search.getAttribute("aria-label")).toBe("Search groups");
+    const type = async (value: string) => {
+      search.value = value;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await settleSessionMenu(menu);
+    };
+    await type("pr re");
+    expect(menuItemLabels(submenu)).toEqual(["PR reviews", "Remove from group", "New group"]);
+    await type("zzz");
+    expect(menuItemLabels(submenu)).toEqual(["Remove from group", "New group"]);
+    expect(submenu.textContent).toContain("No groups match your search.");
+    await type("pull");
+    await selectMenuValue(menu, `move-to-group:${encodeURIComponent("Pull requests")}`);
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Pull requests" });
+
+    await reopen(menu);
+    const reopened = await openSubmenu(menu, "Move to group");
+    expect(reopened.querySelector<HTMLInputElement>("input[data-search]")!.value).toBe("");
+    expect(menuItemLabels(reopened)).toEqual([...groups, "Remove from group", "New group"]);
   });
 
   it.each([
