@@ -6,13 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { DURABLE_LAUNCHD_WRAPPER_SOURCE } from "./bash-process-launchd-wrapper.js";
-import {
-  cleanupDurableProcess,
-  durableProcessUnitName,
-  launchDurableProcess,
-  readDurableProcess,
-  requireDurableProcessHost,
-} from "./bash-process-launchd.js";
+import { launchdDurableSupervisor as supervisor } from "./bash-process-launchd.js";
 
 const { spawn } = vi.hoisted(() => ({
   spawn: vi.fn<(input: SpawnInput) => Promise<ManagedRun>>(),
@@ -25,7 +19,7 @@ vi.mock("../infra/executable-path.js", async (importOriginal) => ({
 }));
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
-const label = durableProcessUnitName("quiet-raven:0123456789ab");
+const label = supervisor.unitName("quiet-raven:0123456789ab");
 let stateDir: string;
 const statusFile = () => path.join(stateDir, "processes", `${label}.status.json`);
 function respond(stdout = "", exitCode = 0) {
@@ -68,15 +62,15 @@ afterEach(async () => {
 
 it("refuses hosts outside a logged-in Aqua session", async () => {
   respond("Background\n");
-  await expect(requireDurableProcessHost()).rejects.toThrow("logged-in user's GUI (Aqua)");
+  await expect(supervisor.requireHost()).rejects.toThrow("logged-in user's GUI (Aqua)");
   respond("Aqua\n");
-  await expect(requireDurableProcessHost()).resolves.toBeUndefined();
+  await expect(supervisor.requireHost()).resolves.toBeUndefined();
 });
 
 it("bootstraps a private job through the supervisor without command env in the plist", async () => {
   respond();
   const assertCurrent = vi.fn();
-  await launchDurableProcess({
+  await supervisor.launch({
     id: "quiet-raven:0123456789ab",
     argv: ["/bin/sh", "-c", "echo hi"],
     env: { GH_TOKEN: "synthetic-launch-secret" },
@@ -102,19 +96,19 @@ it("bootstraps a private job through the supervisor without command env in the p
 
 it("treats a failed or unparsable launchctl list as unknown, never missing", async () => {
   respond("", 1);
-  await expect(readDurableProcess(label)).rejects.toThrow("not confirmed");
+  await expect(supervisor.read(label)).rejects.toThrow("not confirmed");
   respond("something else entirely\n");
-  await expect(readDurableProcess(label)).rejects.toThrow("not confirmed");
+  await expect(supervisor.read(label)).rejects.toThrow("not confirmed");
 });
 
 it("maps launchd and wrapper facts to durable observations", async () => {
   list(`4242\t0\t${label}`);
-  await expect(readDurableProcess(label)).resolves.toEqual({ state: "running", pid: 4242 });
+  await expect(supervisor.read(label)).resolves.toEqual({ state: "running", pid: 4242 });
   // Loaded, no PID, no status file: launchd has not started the wrapper yet.
   list(`-\t0\t${label}`);
-  await expect(readDurableProcess(label)).resolves.toEqual({ state: "running" });
+  await expect(supervisor.read(label)).resolves.toEqual({ state: "running" });
   list();
-  await expect(readDurableProcess(label)).resolves.toEqual({ state: "missing" });
+  await expect(supervisor.read(label)).resolves.toEqual({ state: "missing" });
 });
 
 it("checks the recorded process group after the wrapper is killed", async () => {
@@ -124,18 +118,18 @@ it("checks the recorded process group after the wrapper is killed", async () => 
   try {
     await running(Date.now());
     list(`-\t-9\t${label}`);
-    await expect(readDurableProcess(label)).resolves.toEqual({ state: "running" });
+    await expect(supervisor.read(label)).resolves.toEqual({ state: "running" });
     // A group id recorded before the last boot belongs to some other program now.
     await running(Date.now() - os.uptime() * 1000 - 60_000);
     list(`-\t-9\t${label}`);
-    await expect(readDurableProcess(label)).resolves.toMatchObject({ result: "supervisor-lost" });
+    await expect(supervisor.read(label)).resolves.toMatchObject({ result: "supervisor-lost" });
   } finally {
     process.kill(-group.pid!, "SIGKILL");
   }
   await once(group, "exit");
   await running(Date.now());
   list(`-\t-9\t${label}`);
-  await expect(readDurableProcess(label)).resolves.toMatchObject({
+  await expect(supervisor.read(label)).resolves.toMatchObject({
     state: "exited",
     reason: "spawn-error",
     result: "supervisor-lost",
@@ -166,7 +160,7 @@ it("does not declare a wrapper lost when it first appears between the two reads"
       cancel() {},
     };
   });
-  await expect(readDurableProcess(label)).resolves.toEqual({ state: "running" });
+  await expect(supervisor.read(label)).resolves.toEqual({ state: "running" });
 });
 
 it("reports the wrapper's recorded duration and releases the job files", async () => {
@@ -180,13 +174,13 @@ it("reports the wrapper's recorded duration and releases the job files", async (
       durationMs: 1234,
     }),
   );
-  await expect(readDurableProcess(label)).resolves.toMatchObject({
+  await expect(supervisor.read(label)).resolves.toMatchObject({
     state: "exited",
     exitCode: 3,
     durationMs: 1234,
   });
   respond("", 0);
-  await cleanupDurableProcess(label);
+  await supervisor.cleanup(label);
   await expect(fs.stat(statusFile())).rejects.toThrow();
 });
 

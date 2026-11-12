@@ -19,7 +19,7 @@ import {
   type DurableProcessRecord,
 } from "./bash-durable-process-store.js";
 import { prepareAdoptedDurableProcessNotification } from "./bash-process-durable-notify.js";
-import * as launchd from "./bash-process-launchd.js";
+import { launchdDurableSupervisor } from "./bash-process-launchd.js";
 import {
   addSession,
   appendOutput,
@@ -29,7 +29,7 @@ import {
   type ProcessSession,
   waitForExecSession,
 } from "./bash-process-registry.js";
-import * as systemd from "./bash-process-systemd.js";
+import { systemdDurableSupervisor } from "./bash-process-systemd.js";
 import { maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
 import { buildExecExitOutcome, buildExecRuntimeErrorOutcome } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
@@ -37,7 +37,8 @@ import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 
 let store: ReturnType<typeof createDurableProcessStore> | undefined;
 // Linux user services and macOS launchd jobs supervise behind the same operations.
-const supervisor = () => (process.platform === "darwin" ? launchd : systemd);
+const supervisor = () =>
+  process.platform === "darwin" ? launchdDurableSupervisor : systemdDurableSupervisor;
 const warn = () =>
   logWarn(
     "exec: durable process observation or persistence failed; inspect process status and the systemd user manager or launchd.",
@@ -147,8 +148,8 @@ export async function startDurableExecProcess(
     );
   }
   const persistence = store;
-  await supervisor().requireDurableProcessHost(input.env);
-  const unitName = supervisor().durableProcessUnitName(session.id);
+  await supervisor().requireHost(input.env);
+  const unitName = supervisor().unitName(session.id);
   const logPath = path.join(resolveStateDir(), "processes", `${unitName}.log`);
   await mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
   const log = await open(logPath, "wx", 0o600);
@@ -183,7 +184,7 @@ export async function startDurableExecProcess(
     ),
   );
   try {
-    await supervisor().launchDurableProcess({
+    await supervisor().launch({
       id: session.id,
       argv: input.argv,
       cwd: input.cwd,
@@ -230,7 +231,7 @@ function bind(
     }
     const observed = record.result
       ? { state: "missing" as const }
-      : await supervisor().readDurableProcess(record.unitName);
+      : await supervisor().read(record.unitName);
     const file = await open(record.logPath, "r").catch((error: unknown) => {
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
@@ -282,7 +283,7 @@ function bind(
       record.endedAt = endedAt;
     }
     // Record the real status before releasing the supervisor's retained job.
-    await supervisor().cleanupDurableProcess(record.unitName, {
+    await supervisor().cleanup(record.unitName, {
       assertCurrent: persistence.assertCurrent,
     });
     session.endedAt = record.endedAt;
@@ -310,7 +311,7 @@ function bind(
         record.cancellationRequested = true;
       }
       await persistence.upsert(record, assertCurrent);
-      await supervisor().stopDurableProcess(record.unitName, { assertCurrent });
+      await supervisor().stop(record.unitName, { assertCurrent });
       stopReason ??= reason;
       await observeUnit();
     });

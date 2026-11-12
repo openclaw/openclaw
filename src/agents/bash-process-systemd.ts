@@ -2,34 +2,15 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { parseKeyValueOutput } from "../daemon/runtime-parse.js";
 import { getHostExecMemoryBudget } from "../process/child-memory.js";
-import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
+import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import {
   runDurableControlCommand,
   type DurableControlOptions as ControlOptions,
-} from "./bash-process-durable-command.js";
-
-type StopOptions = Pick<ControlOptions, "assertCurrent">;
-export type DurableLaunchOptions = ControlOptions &
-  Pick<SpawnInput, "cwd" | "timeoutMs"> & {
-    id: string;
-    argv: string[];
-    env: Record<string, string>;
-    logPath: string;
-  };
-export type DurableProcessObservation =
-  | { state: "missing" }
-  | { state: "running"; pid?: number; cgroupDirectory?: string }
-  | {
-      state: "exited";
-      exitCode: number | null;
-      exitSignal: NodeJS.Signals | number | null;
-      reason: TerminationReason;
-      result: string;
-      /** Supervisor-measured run time, when the supervisor records one. */
-      durationMs?: number;
-      /** Explains an exit whose outcome the supervisor could not record. */
-      note?: string;
-    };
+  type DurableLaunchOptions,
+  type DurableProcessObservation,
+  type DurableProcessSupervisor,
+  type DurableStopOptions as StopOptions,
+} from "./bash-process-durable-supervisor.js";
 
 const REQUIREMENT =
   "Durable exec requires Gateway-host execution on Linux, systemd 250 or newer, and a reachable Gateway user's systemd manager (XDG_RUNTIME_DIR or DBUS_SESSION_BUS_ADDRESS). Use ordinary background exec on unsupported hosts.";
@@ -47,7 +28,7 @@ const failure = () =>
 const command = (argv: string[], options: ControlOptions = {}): Promise<RunExit> =>
   runDurableControlCommand(argv, options, failure);
 
-export function durableProcessUnitName(id: string): string {
+function durableProcessUnitName(id: string): string {
   return `openclaw-proc-${createHash("sha256").update(id).digest("hex")}.service`;
 }
 
@@ -58,9 +39,7 @@ function control(args: string[], unit: string, options?: StopOptions) {
   return command(["systemctl", "--user", "--no-ask-password", ...args, "--", unit], options);
 }
 
-export async function requireDurableProcessHost(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
+async function requireDurableProcessHost(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   if (process.platform !== "linux" || !MANAGER_KEYS.some((key) => process.env[key])) {
     throw new Error(REQUIREMENT);
   }
@@ -84,9 +63,7 @@ export async function requireDurableProcessHost(
   }
 }
 
-export async function launchDurableProcess(
-  params: DurableLaunchOptions,
-): Promise<{ unitName: string }> {
+async function launchDurableProcess(params: DurableLaunchOptions): Promise<{ unitName: string }> {
   const unitName = durableProcessUnitName(params.id);
   // The manager can retain credentials ordinary exec omitted; discard names absent from the launch env.
   const manager = await command(["systemctl", "--user", "show-environment"]);
@@ -145,7 +122,7 @@ export async function launchDurableProcess(
   return { unitName };
 }
 
-export async function readDurableProcess(unit: string): Promise<DurableProcessObservation> {
+async function readDurableProcess(unit: string): Promise<DurableProcessObservation> {
   const reply = await control(
     [
       "show",
@@ -190,14 +167,14 @@ export async function readDurableProcess(unit: string): Promise<DurableProcessOb
   };
 }
 
-export async function stopDurableProcess(unit: string, options?: StopOptions): Promise<void> {
+async function stopDurableProcess(unit: string, options?: StopOptions): Promise<void> {
   if ((await control(["stop"], unit, options)).exitCode !== 0) {
     throw failure();
   }
 }
 
 /** The registry records the real result before releasing systemd's retained unit. */
-export async function cleanupDurableProcess(unit: string, options?: StopOptions): Promise<void> {
+async function cleanupDurableProcess(unit: string, options?: StopOptions): Promise<void> {
   for (const action of ["stop", "reset-failed"]) {
     if (
       (await control([action], unit, options)).exitCode !== 0 &&
@@ -207,3 +184,12 @@ export async function cleanupDurableProcess(unit: string, options?: StopOptions)
     }
   }
 }
+
+export const systemdDurableSupervisor: DurableProcessSupervisor = {
+  unitName: durableProcessUnitName,
+  requireHost: requireDurableProcessHost,
+  launch: launchDurableProcess,
+  read: readDurableProcess,
+  stop: stopDurableProcess,
+  cleanup: cleanupDurableProcess,
+};

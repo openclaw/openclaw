@@ -11,11 +11,13 @@ import { escapeXml } from "../shared/xml.js";
 import {
   runDurableControlCommand,
   type DurableControlOptions,
-} from "./bash-process-durable-command.js";
+  type DurableLaunchOptions,
+  type DurableProcessObservation,
+  type DurableProcessSupervisor,
+  type DurableStopOptions as StopOptions,
+} from "./bash-process-durable-supervisor.js";
 import { DURABLE_LAUNCHD_WRAPPER_SOURCE } from "./bash-process-launchd-wrapper.js";
-import type { DurableLaunchOptions, DurableProcessObservation } from "./bash-process-systemd.js";
 
-type StopOptions = Pick<DurableControlOptions, "assertCurrent">;
 type WrapperStatus =
   | { phase: "running"; pgid: number; startedAt: number }
   | {
@@ -41,7 +43,7 @@ const domain = () => `gui/${process.getuid!()}`;
 const directory = () => path.join(resolveStateDir(), "processes");
 const file = (label: string, suffix: string) => path.join(directory(), `${label}${suffix}`);
 
-export function durableProcessUnitName(id: string): string {
+function durableProcessUnitName(id: string): string {
   return `${DURABLE_PROCESS_LAUNCHD_LABEL_PREFIX}${createHash("sha256").update(id).digest("hex")}`;
 }
 
@@ -55,7 +57,7 @@ function assertLabel(label: string) {
   }
 }
 
-export async function requireDurableProcessHost(): Promise<void> {
+async function requireDurableProcessHost(): Promise<void> {
   try {
     if (process.platform !== "darwin" || typeof process.getuid !== "function") {
       throw failure();
@@ -133,7 +135,7 @@ function exited(status: Extract<WrapperStatus, { phase: "exited" }>): DurablePro
   };
 }
 
-export async function readDurableProcess(label: string): Promise<DurableProcessObservation> {
+async function readDurableProcess(label: string): Promise<DurableProcessObservation> {
   assertLabel(label);
   const before = await readStatus(label);
   if (before?.phase === "exited") {
@@ -179,9 +181,7 @@ export async function readDurableProcess(label: string): Promise<DurableProcessO
       };
 }
 
-export async function launchDurableProcess(
-  params: DurableLaunchOptions,
-): Promise<{ unitName: string }> {
+async function launchDurableProcess(params: DurableLaunchOptions): Promise<{ unitName: string }> {
   const label = durableProcessUnitName(params.id);
   const digest = createHash("sha256").update(DURABLE_LAUNCHD_WRAPPER_SOURCE).digest("hex");
   // Content-addressed: an update never rewrites the copy a running job executes.
@@ -240,7 +240,7 @@ export async function launchDurableProcess(
 }
 
 /** Ask the wrapper to stop its group, then wait for its recorded outcome. */
-export async function stopDurableProcess(label: string, options: StopOptions = {}): Promise<void> {
+async function stopDurableProcess(label: string, options: StopOptions = {}): Promise<void> {
   assertLabel(label);
   const deadline = Date.now() + KILL_GRACE_MS + 5_000;
   let signalled = false,
@@ -277,7 +277,7 @@ export async function stopDurableProcess(label: string, options: StopOptions = {
 }
 
 /** The registry records the real result before the job and its files are released. */
-export async function cleanupDurableProcess(label: string, options?: StopOptions): Promise<void> {
+async function cleanupDurableProcess(label: string, options?: StopOptions): Promise<void> {
   assertLabel(label);
   const reply = await command(["launchctl", "bootout", `${domain()}/${label}`], options);
   if (reply.exitCode !== 0 && (await listJob(label))) {
@@ -287,3 +287,12 @@ export async function cleanupDurableProcess(label: string, options?: StopOptions
     await rm(file(label, suffix), { force: true });
   }
 }
+
+export const launchdDurableSupervisor: DurableProcessSupervisor = {
+  unitName: durableProcessUnitName,
+  requireHost: requireDurableProcessHost,
+  launch: launchDurableProcess,
+  read: readDurableProcess,
+  stop: stopDurableProcess,
+  cleanup: cleanupDurableProcess,
+};
