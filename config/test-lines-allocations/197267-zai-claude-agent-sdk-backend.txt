@@ -1,0 +1,3 @@
+283
+# Z.AI Claude Agent SDK backend: bearer-token credential delivery through the Claude CLI process owner, provider-config API key preparation, Z.AI backend registration/setup-entry discovery, and the private-workspace dependency contract.
+# Exact measured net test LF growth; shared scalar unchanged and no spare ceiling credit.
