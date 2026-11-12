@@ -232,7 +232,9 @@ it.for([
           () => config,
         );
         context.resolveGatewayContext = () => context;
+        let resumedContext: string | undefined;
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+          resumedContext = params.currentInboundContext?.text;
           const admission = expectDefined(params.preparedRunAdmission, "resumed guest admission");
           const admittedRunContext = await admission.admit("gateway", params.runId);
           params.onExecutionPhase?.({ phase: "model_call_started" });
@@ -354,7 +356,7 @@ it.for([
               }),
             };
           });
-        // A long run leaves unpolled exec completions queued for a later turn.
+        // A long run leaves unpolled exec completions queued for the resumed turn.
         const passive = outcome === "published-behind-full-queue" ? 20 : 0;
         for (let index = 0; index < passive; index++) {
           enqueueSystemEventWithReceipt(`Exec completed (${index})`, {
@@ -453,7 +455,11 @@ it.for([
               expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
               expect(forbidden).not.toHaveBeenCalled();
               expect(publish).toHaveBeenCalledOnce();
-              expect(peekSystemEvents(sessionKey)).toHaveLength(passive);
+              // The resumed internal turn drains passive notices like an ordinary turn.
+              expect(peekSystemEvents(sessionKey)).toEqual([]);
+              if (passive > 0) {
+                expect(resumedContext).toContain(`Exec completed (${passive - 1})`);
+              }
             }
           }
           if (outcome === "interrupted") {

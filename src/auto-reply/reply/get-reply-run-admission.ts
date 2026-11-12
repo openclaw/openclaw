@@ -222,8 +222,10 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         sessionKey: systemEventSessionKey,
         isMainSession: isCurrentSession && isMainSession,
         isNewSession: isCurrentSession && isNewSession,
-        // Producer-owned turns consume only their captured occurrence selection.
-        events: opts?.internalEventExecution ? (eventContext?.events ?? []) : undefined,
+        // Internal event turns drain passive notices like ordinary turns. Producer-owned
+        // occurrences (claimed turns, deferred automations, held exec attempts) stay with
+        // their own owner: the drain skips turn-owned and delivery-held entries.
+        events: eventContext?.events,
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
