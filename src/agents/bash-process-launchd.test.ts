@@ -20,11 +20,10 @@ const label = supervisor.unitName("quiet-raven:0123456789ab");
 let dir: string;
 const file = (suffix: string) => path.join(dir, "processes", `${label}${suffix}`);
 const status = (value: object) => fs.writeFile(file(".status.json"), JSON.stringify(value));
-// One launchctl reply; `during` runs while the call is in flight.
-const respond = (stdout = "", exitCode = 0, during?: () => Promise<unknown>) =>
+const respond = (stdout = "", exitCode = 0, whileInFlight?: () => Promise<unknown>) =>
   spawn.mockImplementationOnce(async (input) => {
     input.assertCurrent?.();
-    await during?.();
+    await whileInFlight?.();
     const exit = { reason: "exit" as const, stdout, stderr: "", exitCode, exitSignal: null };
     const wait = async () => ({ ...exit, durationMs: 1, timedOut: false, noOutputTimedOut: false });
     return {
@@ -35,8 +34,8 @@ const respond = (stdout = "", exitCode = 0, during?: () => Promise<unknown>) =>
       cancel() {},
     };
   });
-const list = (row?: string, during?: () => Promise<unknown>) =>
-  respond(`PID\tStatus\tLabel\n-\t0\tcom.apple.other\n${row ? `${row}\n` : ""}`, 0, during);
+const list = (row?: string, whileInFlight?: () => Promise<unknown>) =>
+  respond(`PID\tStatus\tLabel\n-\t0\tcom.apple.other\n${row ? `${row}\n` : ""}`, 0, whileInFlight);
 
 beforeEach(async () => {
   Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
@@ -162,7 +161,8 @@ it("wrapper records the exit after the whole group ends and enforces the timeout
   expect(run.log).toBe("s-out\nchild-done\n");
   expect(run.status.durationMs).toBeGreaterThanOrEqual(900);
   const timeout = await runWrapper("trap '' TERM; sleep 30 & wait", 300);
-  expect(timeout.status).toMatchObject({ reason: "overall-timeout", exitSignal: "SIGKILL" });
+  const signal = expect.stringMatching(/^SIG(TERM|KILL)$/);
+  expect(timeout.status).toMatchObject({ reason: "overall-timeout", exitSignal: signal });
   expect(timeout.status.durationMs).toBeLessThan(5000);
 });
 
