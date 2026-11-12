@@ -62,6 +62,13 @@ the completed backup image while retaining filesystem inventory and source-chang
 checks. The candidate must contain these changes; backup publication, integrity
 checks, migrations, and rollback rules are unchanged.
 
+Candidate Doctor checks an existing OpenClaw ID role catalog against local
+membership, offers missing preset definitions only with repair consent, and
+preserves existing definitions, the named default, and assignments. Its cron
+owner review enables named-role enforcement only when `gateway.roles.default`
+is set. These checks and repairs must be present in the candidate Doctor; the
+installed updater needs no protocol or schema change.
+
 Lazy SQLite schema catalogs load through the retained updater's module loader.
 An updater that first needs a catalog after Git activation therefore reads its
 own generation, not the candidate's replacement JSON. This fix must be present
