@@ -175,6 +175,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
       expect(inspected).toEqual([image]);
+      expect(mocks.observePrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ skipPromptSubmission: block }),
+      );
       expect(streamMocks.streamSimple).toHaveBeenCalledTimes(block ? 0 : 1);
       expect(submittedImages).toEqual(block ? [] : [image]);
       if (block) {

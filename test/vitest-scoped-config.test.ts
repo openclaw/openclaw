@@ -6,6 +6,7 @@ import { BUNDLED_PLUGIN_TEST_GLOB } from "openclaw/plugin-sdk/test-fixtures";
 import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
+import { withEnvAsync } from "../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
@@ -472,8 +473,15 @@ describe("scoped vitest configs", () => {
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "plugins"));
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
     expect(testConfig.exclude).toContain("contracts/**");
-    const resolved = await resolveConfig({ config: "test/vitest/vitest.plugins.config.ts" });
-    expect(resolved.test.resolvedProjects.map(({ viteConfig }) => normalizeConfigPath(viteConfig.configFile))).toEqual([
+    // The outer test runner's include file selects this config test, not plugin suites.
+    const resolved = await withEnvAsync({ OPENCLAW_VITEST_INCLUDE_FILE: undefined }, () =>
+      resolveConfig({ config: "test/vitest/vitest.plugins.config.ts" }),
+    );
+    expect(
+      resolved.test.resolvedProjects.map(({ viteConfig }) =>
+        normalizeConfigPath(viteConfig.configFile),
+      ),
+    ).toEqual([
       "test/vitest/vitest.plugins-source.config.ts",
       "test/vitest/vitest.plugins-native-loader.config.ts",
     ]);

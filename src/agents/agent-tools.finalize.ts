@@ -1,7 +1,10 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  bindAgentToolExecutionSchema,
+  finalizeAgentToolAvailability,
+} from "./agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import {
@@ -77,5 +80,11 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
   );
   options.recordToolPrepStage?.("deferred-followup-descriptions");
   descriptors.settle(sources, normalizedSchemas, finalized, options.registerRunCleanup);
-  return finalized;
+  return finalized.map((tool, index) => {
+    // Finalization preserves positions; provider cleanup must not relax local validation.
+    const canonicalParameters = sources[index] ?? tool.parameters;
+    return tool.parameters === canonicalParameters
+      ? tool
+      : bindAgentToolExecutionSchema(tool, canonicalParameters);
+  });
 }

@@ -191,7 +191,9 @@ it("keeps exact deferred capabilities and resolved tools, not an unused installe
   };
   const workspaceDir = makePluginLoaderTempDir();
   const registry = loadAgentRuntimePluginRegistryHandle({ config, workspaceDir });
-  expect(registry.typedHooks.map(({ pluginId, hookName }) => ({ pluginId, hookName }))).toContainEqual({
+  expect(
+    registry.typedHooks.map(({ pluginId, hookName }) => ({ pluginId, hookName })),
+  ).toContainEqual({
     pluginId: hook.id,
     hookName: "agent_end",
   });

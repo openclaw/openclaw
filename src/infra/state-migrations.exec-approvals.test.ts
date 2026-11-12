@@ -185,7 +185,12 @@ describe("legacy exec approvals migration", () => {
     await writeLegacy(claimed ? `${sourcePath}.doctor-importing` : sourcePath, stub);
     const original = await fsp.readFile(claimed ? `${sourcePath}.doctor-importing` : sourcePath);
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+    if (canonical === "missing") {
+      expect(() => loadExecApprovals()).toThrow(ExecApprovalsMigrationRequiredError);
+    } else {
+      // Retained legacy bytes never override canonical policy, including fail-closed policy.
+      expect(loadExecApprovals().defaults?.security).toBe("deny");
+    }
 
     const result = await migrate();
 

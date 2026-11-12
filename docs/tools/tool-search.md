@@ -206,7 +206,9 @@ tool declares one.
 through OpenClaw, and returns the `{ tool, result }` envelope. The model-facing
 `result` contains the target's content and model-relevant status fields.
 OpenClaw validates a trusted core or plugin tool's declared input schema before
-execution. Missing required arguments, incorrect types, and forbidden
+execution. Provider-specific schema projections do not relax that canonical
+contract, including through deferred tools and wrappers. Missing required
+arguments, incorrect types, and forbidden
 properties return actionable tool errors instead of executing the tool;
 misspelled properties include a suggested parameter when available.
 If a trusted tool also declares `outputSchema`, OpenClaw compiles that schema

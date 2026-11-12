@@ -305,15 +305,16 @@ describe("Tool Search terminal results", () => {
 describe("Tool Search input schemas", () => {
   it("keeps canonical Gemini read arguments through deferred publication and wrappers", async () => {
     const readTool = fakeTool("read", readToolInputSchema);
-    const finalized = finalizeAgentTools({
+    const cleanups: Array<(reason: string) => Promise<void>> = [];
+    const finalize = () => finalizeAgentTools({
       tools: [readTool],
       hookContext: { sessionId: "gemini-read" },
       modelProvider: "google",
       modelId: "gemini-2.5-pro",
       wrapBeforeToolCallHook: false,
-      registerRunCleanup: vi.fn(),
+      registerRunCleanup: (cleanup) => cleanups.push(cleanup),
     });
-    const wrapped = finalized.map((tool) => copyAgentToolMetadata(tool, { ...tool }));
+    const wrapped = finalize().map((tool) => copyAgentToolMetadata(tool, { ...tool }));
     const { catalogRef, runtime } = createRuntime(wrapped);
     const advertised = catalogRef.current?.entries[0]?.parameters;
     expect(advertised).toHaveProperty("properties.optional.type", "boolean");
@@ -325,6 +326,16 @@ describe("Tool Search input schemas", () => {
       runtime.call("read", { path: "nonexistent.txt", optional: false }),
     ).rejects.toThrow();
     expect(readTool.execute).toHaveBeenCalledOnce();
+
+    for (const cleanup of cleanups) {
+      await cleanup("finished");
+    }
+    const warm = createRuntime(finalize().map((tool) => copyAgentToolMetadata(tool, { ...tool })));
+    await expect(warm.runtime.call("read", input)).resolves.toBeDefined();
+    await expect(
+      warm.runtime.call("read", { path: "nonexistent.txt", optional: false }),
+    ).rejects.toThrow();
+    expect(readTool.execute).toHaveBeenCalledTimes(2);
   });
 
   it("validates arguments after a policy hook repairs them", async () => {

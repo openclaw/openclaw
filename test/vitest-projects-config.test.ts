@@ -176,7 +176,11 @@ describe("projects vitest config", () => {
       const resolved = await withEnvAsync(env, () =>
         resolveConfig({ config: "test/vitest/vitest.gateway.config.ts" }),
       );
-      expect(resolved.test.resolvedProjects.map(({ viteConfig }) => normalizeConfigPath(viteConfig.configFile))).toEqual([
+      expect(
+        resolved.test.resolvedProjects.map(({ viteConfig }) =>
+          normalizeConfigPath(viteConfig.configFile),
+        ),
+      ).toEqual([
         "test/vitest/vitest.gateway-ordinary.config.ts",
         "test/vitest/vitest.gateway-database-workers.config.ts",
       ]);

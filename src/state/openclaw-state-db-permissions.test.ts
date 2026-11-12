@@ -9,8 +9,30 @@ import {
 } from "./openclaw-state-db-permissions.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
+const openFailure = vi.hoisted(() => {
+  // Runtime setup can capture named filesystem imports before this test loads.
+  vi.resetModules();
+  return { target: undefined as string | undefined, attempted: false };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const openSync: typeof actual.openSync = (target, flags, mode) => {
+    if (target === openFailure.target) {
+      openFailure.attempted = true;
+      throw Object.assign(new Error("fixture access refused"), { code: "EACCES" });
+    }
+    return actual.openSync(target, flags, mode);
+  };
+  return { ...actual, openSync, default: { ...actual, openSync } };
+});
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  openFailure.target = undefined;
+  openFailure.attempted = false;
+  vi.restoreAllMocks();
+});
 
 function fixture() {
   const parent = dirs.make("capture-root-permissions-");
@@ -105,10 +127,9 @@ it.skipIf(process.platform === "win32")(
     const { captureRoot, env } = fixture();
     fs.chmodSync(captureRoot, 0o2770);
     const before = fs.lstatSync(captureRoot, { bigint: true });
-    vi.spyOn(fs, "openSync").mockImplementationOnce(() => {
-      throw Object.assign(new Error("fixture access refused"), { code: "EACCES" });
-    });
+    openFailure.target = captureRoot;
     restorePrivateUpdateCaptureRootMode(env);
+    expect(openFailure.attempted).toBe(true);
     const after = fs.lstatSync(captureRoot, { bigint: true });
     expect(after.mode).toBe(before.mode);
     expect(after.ctimeNs).toBe(before.ctimeNs);
