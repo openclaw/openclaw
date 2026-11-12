@@ -1,0 +1,2 @@
+# Prove readable lifecycle/operation/context rows in both Telegram HTML and native RichText, including unknown outcome.
+32

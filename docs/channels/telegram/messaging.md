@@ -86,6 +86,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
     Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`. Compaction status follows the same settings and appears as soon as compaction starts, including before the first model output.
 
+    In the rolling log, each tool row separates a bold operation label from its context with `·`. Lifecycle marks distinguish running (`◌`), completed (`✓`), and attention-needed (`!`) operations; a neutral bullet (`•`) does not assert an outcome. Status text remains visible for failures and other non-completed states. These marks describe the operation, not whether the overall task is verified.
+
     In default `progress` mode, `/verbose on` sends separate tool summaries and `/verbose full` also sends completed tool output. An explicit `toolProgress: false` wins over `/verbose`; `streaming.mode: "off"` also suppresses these diagnostics.
 
     Native questions keep their buttons and remain visible when a progress update is retired at the same time. Progress cleanup and question delivery share the draft's ordering, so cleanup cannot discard a pending question or delete an accepted one.
