@@ -1,4 +1,0 @@
-# Real command-policy revocation at fork effect boundaries and serialized
-# Telegram literal recap fallback, with ordinary prose and current-authority controls.
-# Native SDK result-shape and retained command-policy contract coverage.
-336
