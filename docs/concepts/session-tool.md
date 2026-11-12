@@ -177,7 +177,7 @@ The returned view is intentionally bounded:
 
 - text, including tool results and credentials, is returned without secret masking
 - thinking signatures, reasoning replay payloads, and inline image data are omitted
-- long text blocks are truncated to 4000 characters, with a truncation marker appended
+- text fields default to 4000 characters; optional `maxChars` accepts 1–64,000 characters per field for a bounded source read, with a truncation marker when clipped. The same current session-access checks apply, and the 80 KB response cap still applies. Use `offset: 0` and returned `nextOffset` values to recover locally omitted older rows; a single oversized row can remain unavailable and must not be counted as fully reviewed.
 - returned messages are capped at 80 KB; older rows can be dropped or an oversized row replaced with `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`, `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 

@@ -542,7 +542,7 @@ it("rejects a durable history grant when the target incarnation changes", async 
   const { tool, requests, targetSessionKey } = childHistoryFixture("old-child-race", true);
 
   await expect(
-    tool.execute("old-child-history-race", { sessionKey: targetSessionKey }),
+    tool.execute("old-child-history-race", { sessionKey: targetSessionKey, maxChars: 64_000 }),
   ).rejects.toThrow(`Session "${targetSessionKey}" changed after access was granted.`);
   expect(requests.some((request) => request.method === "chat.history")).toBe(false);
 });
@@ -622,3 +622,285 @@ it.each([
     }
   },
 );
+
+it.each([4000, 4001, 16000])(
+  "recovers %i visible characters only when requested",
+  async (length) => {
+    const text = "x".repeat(length);
+    const { tool, requests } = historyFixture({ messages: [{ role: "user", content: text }] });
+    const baseline = readHistoryDetails(await tool.execute("default-text", { sessionKey: "main" }));
+    expect(baseline.contentTruncated).toBe(length > 4000);
+    const full = readHistoryDetails(
+      await tool.execute("expanded-text", { sessionKey: "main", maxChars: 64000 }),
+    );
+    expect(full.messages).toEqual([{ role: "user", content: text }]);
+    expect(full.contentTruncated).toBe(false);
+    expect(requests.findLast((request) => request.method === "chat.history")?.params).toMatchObject(
+      { maxChars: 64000 },
+    );
+  },
+);
+
+it("replays locally omitted expanded rows without skipping source positions", async () => {
+  const messages = [1, 2, 3].map((seq) => ({
+    role: "user",
+    content: "x".repeat(40000),
+    __openclaw: { id: "expanded-" + seq, seq },
+  }));
+  const { tool } = historyFixture((request) => {
+    if (request.method !== "chat.history") {
+      return {};
+    }
+    const offset = (request.params as { offset?: number }).offset ?? 0;
+    return {
+      messages: messages.slice(0, 3 - offset),
+      offset,
+      nextOffset: 3,
+      hasMore: false,
+      totalMessages: 3,
+    };
+  });
+  const first = readHistoryDetails(
+    await tool.execute("expanded-first", { sessionKey: "main", offset: 0, maxChars: 64000 }),
+  );
+  expect((first.messages as unknown[]).map(readMessageId)).toEqual(["expanded-2", "expanded-3"]);
+  expect(first).toMatchObject({ droppedMessages: true, nextOffset: 2, hasMore: true });
+  const second = readHistoryDetails(
+    await tool.execute("expanded-second", {
+      sessionKey: "main",
+      offset: first.nextOffset,
+      maxChars: 64000,
+    }),
+  );
+  expect((second.messages as unknown[]).map(readMessageId)).toEqual(["expanded-1"]);
+  expect(second.hasMore).toBe(false);
+});
+
+it("keeps indivisible oversized expanded text explicitly incomplete", async () => {
+  const { tool } = historyFixture({
+    messages: [
+      { role: "user", content: "🦊".repeat(30000), __openclaw: { id: "large-visible", seq: 1 } },
+    ],
+    offset: 0,
+    totalMessages: 1,
+    hasMore: false,
+  });
+  const details = readHistoryDetails(
+    await tool.execute("oversized-expanded", { sessionKey: "main", offset: 0, maxChars: 64000 }),
+  );
+  expect(details).toMatchObject({ truncated: true, droppedMessages: true });
+  expect((details.messages as unknown[]).map(readMessageId)).toEqual(["large-visible"]);
+  expect(JSON.stringify(details.messages)).toContain("message too large");
+});
+
+it("does not widen private cross-agent reads with expanded text", async () => {
+  const { tool, requests } = historyFixture(
+    { key: "agent:other:private", agentId: "other" },
+    { agentSessionKey: "agent:main:main", config: { tools: { sessions: { visibility: "self" } } } },
+  );
+  const result = await tool.execute("private-expanded", {
+    sessionKey: "agent:other:private",
+    maxChars: 64_000,
+  });
+  expect(result.details).toMatchObject({ status: "forbidden" });
+  expect(requests.some((request) => request.method === "chat.history")).toBe(false);
+});
+
+it("bounds opt-in text expansion in both schema and direct execution", async () => {
+  const { tool, requests } = historyFixture({ messages: [] });
+  expect(Value.Check(tool.parameters, { sessionKey: "main", maxChars: 64_000 })).toBe(true);
+  expect(Value.Check(tool.parameters, { sessionKey: "main", maxChars: 64_001 })).toBe(false);
+  await expect(
+    tool.execute("over-expanded", { sessionKey: "main", maxChars: 64_001 }),
+  ).rejects.toThrow("64000");
+  expect(requests).toEqual([]);
+});
+
+it("does not expand reasoning or tool argument previews", async () => {
+  const blocks = [
+    { type: "thinking", thinking: "r".repeat(6000) },
+    { type: "toolCall", partialJson: "a".repeat(6000), text: "c".repeat(6000) },
+  ];
+  const { tool } = historyFixture({ messages: [{ role: "assistant", content: blocks }] });
+  const normal = readHistoryDetails(
+    await tool.execute("normal-private-fields", { sessionKey: "main" }),
+  );
+  const expanded = readHistoryDetails(
+    await tool.execute("expanded-private-fields", { sessionKey: "main", maxChars: 64000 }),
+  );
+  expect(expanded.messages).toEqual(normal.messages);
+});
+
+it("retains upstream display-cap incompleteness", async () => {
+  const { tool } = historyFixture({
+    messages: [
+      {
+        role: "assistant",
+        content: "x".repeat(64000),
+        __openclaw: { id: "upstream-clipped", truncated: true, reason: "display-cap" },
+      },
+    ],
+  });
+  const details = readHistoryDetails(
+    await tool.execute("upstream-clipped", { sessionKey: "main", maxChars: 64000 }),
+  );
+  expect(details).toMatchObject({ contentTruncated: true, truncated: true });
+});
+
+it("marks a locally split source-row group incomplete rather than silently skipping siblings", async () => {
+  const messages = [1, 2, 3].map((id) => ({
+    role: "assistant",
+    content: "x".repeat(40000),
+    __openclaw: { id: "sibling-" + id, seq: 1 },
+  }));
+  const { tool } = historyFixture({ messages, offset: 0, totalMessages: 1, hasMore: false });
+  const details = readHistoryDetails(
+    await tool.execute("split-source-group", { sessionKey: "main", offset: 0, maxChars: 64000 }),
+  );
+  expect(details).toMatchObject({ truncated: true, droppedMessages: true });
+  expect(details.messages).toHaveLength(1);
+  expect(JSON.stringify(details.messages)).toContain("message too large");
+});
+
+it.each(["input_text", "output_text"])(
+  "expands supported visible %s through real display projection",
+  async (type) => {
+    const { sanitizeChatHistoryMessage } =
+      await import("../../gateway/chat-display-projection.sanitize.js");
+    const source = { role: "assistant", content: [{ type, text: "v".repeat(6000) }] };
+    const { tool } = historyFixture((request) =>
+      request.method === "chat.history"
+        ? {
+            messages: [
+              sanitizeChatHistoryMessage(source, (request.params as { maxChars?: number }).maxChars)
+                .message,
+            ],
+          }
+        : {},
+    );
+    const details = readHistoryDetails(
+      await tool.execute("visible-variant", { sessionKey: "main", maxChars: 64000 }),
+    );
+    expect(JSON.stringify(details.messages)).toContain("v".repeat(6000));
+    expect(details.contentTruncated).toBe(false);
+  },
+);
+
+it("keeps reasoning-variant thinking at the existing upstream preview bound", async () => {
+  const { sanitizeChatHistoryMessage } =
+    await import("../../gateway/chat-display-projection.sanitize.js");
+  const source = {
+    role: "assistant",
+    content: [{ type: "reasoning", thinking: "r".repeat(50000) }],
+  };
+  const { tool } = historyFixture((request) =>
+    request.method === "chat.history"
+      ? {
+          messages: [
+            sanitizeChatHistoryMessage(source, (request.params as { maxChars?: number }).maxChars)
+              .message,
+          ],
+        }
+      : {},
+  );
+  const normal = readHistoryDetails(
+    await tool.execute("reasoning-default", { sessionKey: "main" }),
+  );
+  const expanded = readHistoryDetails(
+    await tool.execute("reasoning-expanded", { sessionKey: "main", maxChars: 64000 }),
+  );
+  expect(expanded.messages).toEqual(normal.messages);
+  expect(JSON.stringify(expanded.messages)).not.toContain("r".repeat(8001));
+});
+
+it.each([
+  { role: "tool" },
+  { role: "toolResult" },
+  { role: "tool_result" },
+  { role: "function" },
+  { role: "custom", toolName: "read", toolCallId: "read-1" },
+])("preserves $role result previews when visible text expands", async (envelope) => {
+  const text = "t".repeat(6000);
+  const { tool } = historyFixture({
+    messages: [
+      { ...envelope, content: text },
+      { ...envelope, content: [{ type: "text", text }] },
+      { ...envelope, text },
+    ],
+  });
+  const normal = readHistoryDetails(
+    await tool.execute("normal-result-preview", { sessionKey: "main", includeTools: true }),
+  );
+  const expanded = readHistoryDetails(
+    await tool.execute("expanded-result-preview", {
+      sessionKey: "main",
+      includeTools: true,
+      maxChars: 64000,
+    }),
+  );
+  expect(expanded.messages).toEqual(normal.messages);
+});
+
+it("does not shrink reasoning and tool previews when visible text is shortened", async () => {
+  const { sanitizeChatHistoryMessage } =
+    await import("../../gateway/chat-display-projection.sanitize.js");
+  const source = {
+    role: "assistant",
+    content: [
+      { type: "text", text: "v".repeat(200) },
+      { type: "reasoning", thinking: "r".repeat(6000) },
+      { type: "thinking", thinking: "s".repeat(6000) },
+      { type: "toolCall", partialJson: "a".repeat(6000), text: "c".repeat(6000) },
+    ],
+  };
+  const { tool } = historyFixture((request) =>
+    request.method === "chat.history"
+      ? {
+          messages: [
+            sanitizeChatHistoryMessage(source, (request.params as { maxChars?: number }).maxChars)
+              .message,
+          ],
+        }
+      : {},
+  );
+  const normal = readHistoryDetails(await tool.execute("normal-previews", { sessionKey: "main" }));
+  const shortened = readHistoryDetails(
+    await tool.execute("shortened-visible", { sessionKey: "main", maxChars: 100 }),
+  );
+  const normalMessage = (normal.messages as (typeof source)[])[0];
+  const shortenedMessage = (shortened.messages as (typeof source)[])[0];
+  expect(shortenedMessage?.content.slice(1)).toEqual(normalMessage?.content.slice(1));
+  expect(shortenedMessage?.content[0]?.text).toBe("v".repeat(100) + "\n…(truncated)…");
+});
+
+it("preserves nested tool-result content at the upstream preview bound", async () => {
+  const { sanitizeChatHistoryMessage } =
+    await import("../../gateway/chat-display-projection.sanitize.js");
+  const source = {
+    role: "custom",
+    customType: "openclaw.nested-tool.v1",
+    content: [{ type: "toolResult", content: [{ type: "text", text: "n".repeat(20000) }] }],
+  };
+  const { tool } = historyFixture((request) =>
+    request.method === "chat.history"
+      ? {
+          messages: [
+            sanitizeChatHistoryMessage(source, (request.params as { maxChars?: number }).maxChars)
+              .message,
+          ],
+        }
+      : {},
+  );
+  const normal = readHistoryDetails(
+    await tool.execute("normal-nested-preview", { sessionKey: "main", includeTools: true }),
+  );
+  const expanded = readHistoryDetails(
+    await tool.execute("expanded-nested-preview", {
+      sessionKey: "main",
+      includeTools: true,
+      maxChars: 64000,
+    }),
+  );
+  expect(expanded.messages).toEqual(normal.messages);
+  expect(expanded.contentTruncated).toBe(true);
+});

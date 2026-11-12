@@ -10,9 +10,13 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { messageHasToolResultShape } from "../../gateway/chat-display-projection.canvas.js";
+import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "../../gateway/chat-display-projection.helpers.js";
+import { sanitizeChatHistoryContentBlock } from "../../gateway/chat-display-projection.sanitize.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { isAssistantTextContentBlockType } from "../../shared/chat-message-content.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
@@ -55,6 +59,14 @@ const SessionsHistoryToolSchema = Type.Object({
   user: requesterProfileSchema({ defaultToTurnOwner: true }),
   sessionKey: ChatHistoryParamsSchema.properties.sessionKey,
   limit: ChatHistoryParamsSchema.properties.limit,
+  maxChars: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 64_000,
+      description:
+        "Per-text-field character limit (default 4000). The 80 KiB response cap still applies; inspect truncation flags and continue with nextOffset.",
+    }),
+  ),
   offset: Type.With(ChatHistoryParamsSchema.properties.offset, {
     description:
       "Plain-pagination offset. Ignored when messageId is set; limit still bounds anchored history.",
@@ -136,13 +148,16 @@ function sanitizeHistoryMessage(
     return { message, truncated: false };
   }
   const entry = { ...(message as Record<string, unknown>) };
-  let truncated = false;
-  const sanitizeText = (text: string) => {
-    if (text.length <= maxChars) {
+  let truncated = asOptionalRecord(entry["__openclaw"])?.truncated === true;
+  const visibleTextMaxChars = messageHasToolResultShape(entry)
+    ? SESSIONS_HISTORY_TEXT_MAX_CHARS
+    : maxChars;
+  const sanitizeText = (text: string, fieldMaxChars = visibleTextMaxChars) => {
+    if (text.length <= fieldMaxChars) {
       return text;
     }
     truncated = true;
-    return `${truncateUtf16Safe(text, maxChars)}\n…(truncated)…`;
+    return `${truncateUtf16Safe(text, fieldMaxChars)}\n…(truncated)…`;
   };
   // Tool result details often contain very large nested payloads.
   for (const field of ["details", "usage", "cost"]) {
@@ -159,12 +174,23 @@ function sanitizeHistoryMessage(
       if (!block || typeof block !== "object") {
         return block;
       }
-      const content = { ...(block as Record<string, unknown>) };
+      const rawContent = block as Record<string, unknown>;
+      const visibleText = isAssistantTextContentBlockType(rawContent.type);
+      // Reuse the display owner for non-prose, including nested tool-result content.
+      const preview = visibleText ? undefined : sanitizeChatHistoryContentBlock(rawContent);
+      const content = { ...((preview?.block ?? rawContent) as Record<string, unknown>) };
+      if (preview?.truncated) {
+        const meta = asOptionalRecord(entry["__openclaw"]);
+        entry["__openclaw"] = { ...meta, truncated: true, reason: meta?.reason ?? "display-cap" };
+        truncated = true;
+      }
       const fields =
         content.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
       for (const field of fields) {
         if (typeof content[field] === "string") {
-          content[field] = sanitizeText(content[field]);
+          const fieldMaxChars =
+            visibleText && field === "text" ? visibleTextMaxChars : SESSIONS_HISTORY_TEXT_MAX_CHARS;
+          content[field] = sanitizeText(content[field], fieldMaxChars);
         }
       }
       return content;
@@ -369,6 +395,10 @@ export function createSessionsHistoryTool(opts?: {
         required: true,
       });
       const limit = readPositiveIntegerParam(params, "limit");
+      const maxChars = readPositiveIntegerParam(params, "maxChars");
+      if (maxChars !== undefined && maxChars > 64_000) {
+        throw new ToolInputError("maxChars must not exceed 64000");
+      }
       const offset = readNonNegativeIntegerParam(params, "offset");
       const pendingBefore = readPositiveIntegerParam(params, "pendingBefore");
       const messageId = readToolStringParam(params, "messageId");
@@ -508,6 +538,10 @@ export function createSessionsHistoryTool(opts?: {
               sessionKey: resolvedKey,
               ...(historyAgentId === undefined ? {} : { agentId: historyAgentId }),
               limit,
+              // A smaller visible-text limit must not shrink upstream reasoning/tool previews.
+              ...(maxChars !== undefined
+                ? { maxChars: Math.max(maxChars, DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS) }
+                : {}),
               ...(paginationOffset !== undefined ? { offset: paginationOffset } : {}),
               ...(pendingBefore !== undefined ? { pendingBefore } : {}),
               ...(messageId ? { messageId } : {}),
@@ -519,13 +553,35 @@ export function createSessionsHistoryTool(opts?: {
       const pending = result?.pendingInputs ? boundPendingInputs(result.pendingInputs) : undefined;
       const transcriptBudget = SESSIONS_HISTORY_MAX_BYTES - (pending?.bytes ?? 0);
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
-      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
+      const sanitizedMessages = selectedMessages.map((message) =>
+        sanitizeHistoryMessage(message, maxChars),
+      );
       const contentTruncated =
         sanitizedMessages.some((entry) => entry.truncated) || pending?.truncated === true;
       const sanitizedItems = sanitizedMessages.map((entry) => entry.message);
       const cappedMessages = messageId
         ? capSessionsHistoryAroundMessage(sanitizedItems, messageId, transcriptBudget)
         : capArrayByJsonBytes(sanitizedItems, transcriptBudget);
+      if (
+        maxChars !== undefined &&
+        !messageId &&
+        cappedMessages.items.length < sanitizedItems.length
+      ) {
+        const boundary = sanitizedItems.length - cappedMessages.items.length;
+        const first = cappedMessages.items[0];
+        const seq = readHistoryMessageSeq(first);
+        if (seq !== undefined && readHistoryMessageSeq(sanitizedItems[boundary - 1]) === seq) {
+          // Numeric offsets address source rows, so a split display group cannot be replayed.
+          const siblings = cappedMessages.items.findIndex(
+            (item) => readHistoryMessageSeq(item) !== seq,
+          );
+          cappedMessages.items = [
+            buildSessionsHistoryOmittedPlaceholder(first),
+            ...(siblings === -1 ? [] : cappedMessages.items.slice(siblings)),
+          ];
+          cappedMessages.bytes = jsonUtf8Bytes(cappedMessages.items);
+        }
+      }
       const droppedMessages = cappedMessages.items.length < selectedMessages.length;
       const hardened = enforceSessionsHistoryHardCap({
         items: cappedMessages.items,
