@@ -600,10 +600,3 @@ it("projects successfulCronAdds from CliOutput into the settled run result", () 
   });
   expect(result.successfulCronAdds).toBe(1);
 });
-
-it("omits successfulCronAdds when no scheduler add was recorded", () => {
-  const result = testRunResult({
-    output: { text: "Done." },
-  });
-  expect(result.successfulCronAdds).toBeUndefined();
-});

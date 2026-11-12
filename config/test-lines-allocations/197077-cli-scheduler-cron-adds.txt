@@ -1,5 +1,5 @@
 # Regression coverage for #193958: CLI scheduler adds carry into successfulCronAdds.
 # execute-tool-tracking.test.ts adds positive/negative it.each variants for the MCP
 # automations/cron aliases (+71); cli-run-settlement.test.ts projects the fact through
-# settlement (+16). Exact net growth this PR adds against the CI ratchet base (+87).
-87
+# settlement (+9). Exact net growth this PR adds against the CI ratchet base (+80).
+80
