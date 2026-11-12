@@ -37,18 +37,21 @@ function CodePointCount(value) {
 }
 var isBoardSnapshot = (() => {
   let External = [
+      /(^sessionKey$|^revision$|^tabs$|^widgets$)/u,
+      /(^tabId$|^title$|^position$|^chatDock$)/u,
       /^[a-z0-9-]{1,40}$/u,
       /(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)/u,
       /^[a-z0-9][a-z0-9._-]{0,63}$/u,
-      /^[a-z0-9-]{1,40}$/u,
       /^[a-z][a-z0-9-]{0,31}$/u,
       /^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$/u,
       /^.*$/u,
       /(^netOrigins$|^tools$|^queries$)/u,
-      /^[a-z0-9][a-z0-9._-]{0,63}$/u,
+      /(^name$|^bindingId$|^params$|^fields$)/u,
+      /(^repository$|^workflow$|^branch$|^status$|^created$|^perPage$|^excludePullRequests$)/u,
       /^[a-f0-9]{32}$/u,
     ],
-    check_0 = (value) =>
+    check_0 = (value) => check_1(value),
+    check_1 = (value) =>
       typeof value == "object" &&
       value !== null &&
       !Array.isArray(value) &&
@@ -56,300 +59,272 @@ var isBoardSnapshot = (() => {
       "revision" in value &&
       "tabs" in value &&
       "widgets" in value &&
-      Object.getOwnPropertyNames(value).length === 4 &&
-      typeof value.sessionKey == "string" &&
-      (value.sessionKey.length >= 2 ||
-        (value.sessionKey.length >= 1 && CodePointCount(value.sessionKey) >= 1)) &&
-      Number.isInteger(value.revision) &&
-      (!(Number.isFinite(value.revision) || typeof value.revision == "bigint") ||
-        value.revision >= 0) &&
-      Array.isArray(value.tabs) &&
-      value.tabs.every(
-        (unique_0, index) =>
-          typeof unique_0 == "object" &&
-          unique_0 !== null &&
-          !Array.isArray(unique_0) &&
-          "tabId" in unique_0 &&
-          "title" in unique_0 &&
-          "position" in unique_0 &&
-          "chatDock" in unique_0 &&
-          Object.getOwnPropertyNames(unique_0).length === 4 &&
-          typeof unique_0.tabId == "string" &&
-          External[0].test(unique_0.tabId) &&
-          typeof unique_0.title == "string" &&
-          (unique_0.title.length >= 2 ||
-            (unique_0.title.length >= 1 && CodePointCount(unique_0.title) >= 1)) &&
-          (unique_0.title.length <= 80 ||
-            (unique_0.title.length <= 160 && CodePointCount(unique_0.title) <= 80)) &&
-          Number.isInteger(unique_0.position) &&
-          (!(Number.isFinite(unique_0.position) || typeof unique_0.position == "bigint") ||
-            unique_0.position >= 0) &&
-          ((typeof unique_0.chatDock == "string" && unique_0.chatDock === "left") ||
-            (typeof unique_0.chatDock == "string" && unique_0.chatDock === "right") ||
-            (typeof unique_0.chatDock == "string" && unique_0.chatDock === "bottom") ||
-            (typeof unique_0.chatDock == "string" && unique_0.chatDock === "hidden")),
+      Object.getOwnPropertyNames(value).every(
+        (unique_0, unique_1) => External[0].test(unique_0) || check_2(value[unique_0]),
       ) &&
-      Array.isArray(value.widgets) &&
-      value.widgets.every(
-        (unique_1, index) =>
-          typeof unique_1 == "object" &&
-          unique_1 !== null &&
-          !Array.isArray(unique_1) &&
-          "name" in unique_1 &&
-          "tabId" in unique_1 &&
-          "contentKind" in unique_1 &&
-          "sizeW" in unique_1 &&
-          "sizeH" in unique_1 &&
-          "position" in unique_1 &&
-          "grantState" in unique_1 &&
-          "revision" in unique_1 &&
-          Object.getOwnPropertyNames(unique_1).every(
-            (unique_2, unique_3) => External[1].test(unique_2) || !1,
-          ) &&
-          typeof unique_1.name == "string" &&
-          External[2].test(unique_1.name) &&
-          typeof unique_1.tabId == "string" &&
-          External[3].test(unique_1.tabId) &&
-          (unique_1.title === void 0 ||
-            !("title" in unique_1) ||
-            (typeof unique_1.title == "string" &&
-              (unique_1.title.length >= 2 ||
-                (unique_1.title.length >= 1 && CodePointCount(unique_1.title) >= 1)) &&
-              (unique_1.title.length <= 80 ||
-                (unique_1.title.length <= 160 && CodePointCount(unique_1.title) <= 80)))) &&
-          ((typeof unique_1.contentKind == "string" && unique_1.contentKind === "html") ||
-            (typeof unique_1.contentKind == "string" && unique_1.contentKind === "mcp-app") ||
-            (typeof unique_1.contentKind == "string" && unique_1.contentKind === "plugin")) &&
-          (unique_1.contentOwner === void 0 ||
-            !("contentOwner" in unique_1) ||
-            (typeof unique_1.contentOwner == "string" &&
-              (unique_1.contentOwner === "html" ||
-                unique_1.contentOwner === "mcp-app" ||
-                unique_1.contentOwner === "plugin" ||
-                unique_1.contentOwner === "registered"))) &&
-          (unique_1.registeredContentKind === void 0 ||
-            !("registeredContentKind" in unique_1) ||
-            (typeof unique_1.registeredContentKind == "string" &&
-              External[4].test(unique_1.registeredContentKind))) &&
-          (unique_1.pluginKind === void 0 ||
-            !("pluginKind" in unique_1) ||
-            (typeof unique_1.pluginKind == "string" && External[5].test(unique_1.pluginKind))) &&
-          (unique_1.props === void 0 ||
-            !("props" in unique_1) ||
-            (typeof unique_1.props == "object" &&
-              unique_1.props !== null &&
-              !Array.isArray(unique_1.props) &&
-              Object.entries(unique_1.props).every(
-                ([unique_4, unique_5], _) => !External[6].test(unique_4) || !0,
-              ))) &&
-          (unique_1.presentation === void 0 ||
-            !("presentation" in unique_1) ||
-            (typeof unique_1.presentation == "string" && unique_1.presentation === "card") ||
-            (typeof unique_1.presentation == "string" && unique_1.presentation === "full-bleed") ||
-            (typeof unique_1.presentation == "string" && unique_1.presentation === "frameless")) &&
-          (unique_1.heightMode === void 0 ||
-            !("heightMode" in unique_1) ||
-            (typeof unique_1.heightMode == "string" && unique_1.heightMode === "auto") ||
-            (typeof unique_1.heightMode == "string" && unique_1.heightMode === "fixed")) &&
-          Number.isInteger(unique_1.sizeW) &&
-          (!(Number.isFinite(unique_1.sizeW) || typeof unique_1.sizeW == "bigint") ||
-            (unique_1.sizeW >= 1 && unique_1.sizeW <= 12)) &&
-          Number.isInteger(unique_1.sizeH) &&
-          (!(Number.isFinite(unique_1.sizeH) || typeof unique_1.sizeH == "bigint") ||
-            (unique_1.sizeH >= 1 && unique_1.sizeH <= 20)) &&
-          Number.isInteger(unique_1.position) &&
-          (!(Number.isFinite(unique_1.position) || typeof unique_1.position == "bigint") ||
-            unique_1.position >= 0) &&
-          ((typeof unique_1.grantState == "string" && unique_1.grantState === "none") ||
-            (typeof unique_1.grantState == "string" && unique_1.grantState === "pending") ||
-            (typeof unique_1.grantState == "string" && unique_1.grantState === "granted") ||
-            (typeof unique_1.grantState == "string" && unique_1.grantState === "rejected")) &&
-          Number.isInteger(unique_1.revision) &&
-          (!(Number.isFinite(unique_1.revision) || typeof unique_1.revision == "bigint") ||
-            unique_1.revision >= 1) &&
-          (unique_1.instanceId === void 0 ||
-            !("instanceId" in unique_1) ||
-            (typeof unique_1.instanceId == "string" &&
-              (unique_1.instanceId.length >= 2 ||
-                (unique_1.instanceId.length >= 1 && CodePointCount(unique_1.instanceId) >= 1)))) &&
-          (unique_1.declaredSummary === void 0 ||
-            !("declaredSummary" in unique_1) ||
-            (Array.isArray(unique_1.declaredSummary) &&
-              unique_1.declaredSummary.every((unique_6, index2) => typeof unique_6 == "string"))) &&
-          (unique_1.declared === void 0 ||
-            !("declared" in unique_1) ||
-            (typeof unique_1.declared == "object" &&
-              unique_1.declared !== null &&
-              !Array.isArray(unique_1.declared) &&
-              Object.getOwnPropertyNames(unique_1.declared).every(
-                (unique_7, unique_8) => External[7].test(unique_7) || !1,
-              ) &&
-              (unique_1.declared.netOrigins === void 0 ||
-                !("netOrigins" in unique_1.declared) ||
-                (Array.isArray(unique_1.declared.netOrigins) &&
-                  unique_1.declared.netOrigins.every(
-                    (unique_9, index2) =>
-                      typeof unique_9 == "string" &&
-                      (unique_9.length >= 2 ||
-                        (unique_9.length >= 1 && CodePointCount(unique_9) >= 1)) &&
-                      (unique_9.length <= 2048 ||
-                        (unique_9.length <= 4096 && CodePointCount(unique_9) <= 2048)),
-                  ) &&
-                  unique_1.declared.netOrigins.length <= 32)) &&
-              (unique_1.declared.tools === void 0 ||
-                !("tools" in unique_1.declared) ||
-                (Array.isArray(unique_1.declared.tools) &&
-                  unique_1.declared.tools.every(
-                    (unique_10, index2) =>
-                      typeof unique_10 == "string" &&
-                      (unique_10.length >= 2 ||
-                        (unique_10.length >= 1 && CodePointCount(unique_10) >= 1)) &&
-                      (unique_10.length <= 269 ||
-                        (unique_10.length <= 538 && CodePointCount(unique_10) <= 269)),
-                  ) &&
-                  unique_1.declared.tools.length <= 64)) &&
-              (unique_1.declared.queries === void 0 ||
-                !("queries" in unique_1.declared) ||
-                (Array.isArray(unique_1.declared.queries) &&
-                  unique_1.declared.queries.every(
-                    (unique_11, index2) =>
-                      typeof unique_11 == "object" &&
-                      unique_11 !== null &&
-                      !Array.isArray(unique_11) &&
-                      "name" in unique_11 &&
-                      "bindingId" in unique_11 &&
-                      "params" in unique_11 &&
-                      "fields" in unique_11 &&
-                      Object.getOwnPropertyNames(unique_11).length === 4 &&
-                      typeof unique_11.name == "string" &&
-                      External[8].test(unique_11.name) &&
-                      typeof unique_11.bindingId == "string" &&
-                      unique_11.bindingId === "github.actions.runs" &&
-                      typeof unique_11.params == "object" &&
-                      unique_11.params !== null &&
-                      !Array.isArray(unique_11.params) &&
-                      "repository" in unique_11.params &&
-                      "workflow" in unique_11.params &&
-                      "branch" in unique_11.params &&
-                      "status" in unique_11.params &&
-                      "created" in unique_11.params &&
-                      "perPage" in unique_11.params &&
-                      "excludePullRequests" in unique_11.params &&
-                      Object.getOwnPropertyNames(unique_11.params).length === 7 &&
-                      typeof unique_11.params.repository == "string" &&
-                      (unique_11.params.repository.length >= 2 ||
-                        (unique_11.params.repository.length >= 1 &&
-                          CodePointCount(unique_11.params.repository) >= 1)) &&
-                      (unique_11.params.repository.length <= 140 ||
-                        (unique_11.params.repository.length <= 280 &&
-                          CodePointCount(unique_11.params.repository) <= 140)) &&
-                      ((typeof unique_11.params.workflow == "string" &&
-                        (unique_11.params.workflow.length >= 2 ||
-                          (unique_11.params.workflow.length >= 1 &&
-                            CodePointCount(unique_11.params.workflow) >= 1)) &&
-                        (unique_11.params.workflow.length <= 255 ||
-                          (unique_11.params.workflow.length <= 510 &&
-                            CodePointCount(unique_11.params.workflow) <= 255))) ||
-                        (Number.isInteger(unique_11.params.workflow) &&
-                          (!(
-                            Number.isFinite(unique_11.params.workflow) ||
-                            typeof unique_11.params.workflow == "bigint"
-                          ) ||
-                            (unique_11.params.workflow >= 1 &&
-                              unique_11.params.workflow <= 9007199254740991))) ||
-                        unique_11.params.workflow === null) &&
-                      ((typeof unique_11.params.branch == "string" &&
-                        (unique_11.params.branch.length >= 2 ||
-                          (unique_11.params.branch.length >= 1 &&
-                            CodePointCount(unique_11.params.branch) >= 1)) &&
-                        (unique_11.params.branch.length <= 255 ||
-                          (unique_11.params.branch.length <= 510 &&
-                            CodePointCount(unique_11.params.branch) <= 255))) ||
-                        unique_11.params.branch === null) &&
-                      ((typeof unique_11.params.status == "string" &&
-                        (unique_11.params.status.length >= 2 ||
-                          (unique_11.params.status.length >= 1 &&
-                            CodePointCount(unique_11.params.status) >= 1)) &&
-                        (unique_11.params.status.length <= 32 ||
-                          (unique_11.params.status.length <= 64 &&
-                            CodePointCount(unique_11.params.status) <= 32))) ||
-                        unique_11.params.status === null) &&
-                      ((typeof unique_11.params.created == "string" &&
-                        (unique_11.params.created.length >= 2 ||
-                          (unique_11.params.created.length >= 1 &&
-                            CodePointCount(unique_11.params.created) >= 1)) &&
-                        (unique_11.params.created.length <= 32 ||
-                          (unique_11.params.created.length <= 64 &&
-                            CodePointCount(unique_11.params.created) <= 32))) ||
-                        unique_11.params.created === null) &&
-                      Number.isInteger(unique_11.params.perPage) &&
-                      (!(
-                        Number.isFinite(unique_11.params.perPage) ||
-                        typeof unique_11.params.perPage == "bigint"
-                      ) ||
-                        (unique_11.params.perPage >= 1 && unique_11.params.perPage <= 30)) &&
-                      typeof unique_11.params.excludePullRequests == "boolean" &&
-                      Array.isArray(unique_11.fields) &&
-                      unique_11.fields.every(
-                        (unique_12, index3) =>
-                          unique_12 === "total_count" ||
-                          unique_12 === "id" ||
-                          unique_12 === "name" ||
-                          unique_12 === "display_title" ||
-                          unique_12 === "head_branch" ||
-                          unique_12 === "status" ||
-                          unique_12 === "conclusion" ||
-                          unique_12 === "html_url" ||
-                          unique_12 === "run_started_at" ||
-                          unique_12 === "created_at" ||
-                          unique_12 === "updated_at" ||
-                          unique_12 === "event" ||
-                          unique_12 === "workflow_id" ||
-                          unique_12 === "run_attempt",
-                      ) &&
-                      unique_11.fields.length >= 1 &&
-                      unique_11.fields.length <= 14,
-                  ) &&
-                  unique_1.declared.queries.length <= 8)))) &&
-          (unique_1.frameUrl === void 0 ||
-            !("frameUrl" in unique_1) ||
-            typeof unique_1.frameUrl == "string") &&
-          (unique_1.viewTicket === void 0 ||
-            !("viewTicket" in unique_1) ||
-            typeof unique_1.viewTicket == "string") &&
-          (unique_1.viewTicketTtlMs === void 0 ||
-            !("viewTicketTtlMs" in unique_1) ||
-            (Number.isInteger(unique_1.viewTicketTtlMs) &&
-              (!(
-                Number.isFinite(unique_1.viewTicketTtlMs) ||
-                typeof unique_1.viewTicketTtlMs == "bigint"
-              ) ||
-                unique_1.viewTicketTtlMs >= 1))) &&
-          (unique_1.viewGeneration === void 0 ||
-            !("viewGeneration" in unique_1) ||
-            (typeof unique_1.viewGeneration == "string" &&
-              External[9].test(unique_1.viewGeneration))) &&
-          (unique_1.sandboxUrl === void 0 ||
-            !("sandboxUrl" in unique_1) ||
-            typeof unique_1.sandboxUrl == "string") &&
-          (unique_1.sandboxPort === void 0 ||
-            !("sandboxPort" in unique_1) ||
-            (Number.isInteger(unique_1.sandboxPort) &&
-              (!(
-                Number.isFinite(unique_1.sandboxPort) || typeof unique_1.sandboxPort == "bigint"
-              ) ||
-                (unique_1.sandboxPort >= 1 && unique_1.sandboxPort <= 65535)))) &&
-          (unique_1.sandboxOrigin === void 0 ||
-            !("sandboxOrigin" in unique_1) ||
-            typeof unique_1.sandboxOrigin == "string") &&
-          (unique_1.kindLabel === void 0 ||
-            !("kindLabel" in unique_1) ||
-            (typeof unique_1.kindLabel == "string" &&
-              (unique_1.kindLabel.length >= 2 ||
-                (unique_1.kindLabel.length >= 1 && CodePointCount(unique_1.kindLabel) >= 1)) &&
-              (unique_1.kindLabel.length <= 80 ||
-                (unique_1.kindLabel.length <= 160 && CodePointCount(unique_1.kindLabel) <= 80)))),
-      );
+      check_3(value.sessionKey) &&
+      check_4(value.revision) &&
+      check_5(value.tabs) &&
+      check_14(value.widgets),
+    check_2 = (value) => !1,
+    check_3 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+    check_4 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || value >= 0),
+    check_5 = (value) =>
+      Array.isArray(value) && value.every((unique_2, index) => check_6(unique_2)),
+    check_6 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "tabId" in value &&
+      "title" in value &&
+      "position" in value &&
+      "chatDock" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (unique_3, unique_4) => External[1].test(unique_3) || check_2(value[unique_3]),
+      ) &&
+      check_7(value.tabId) &&
+      check_8(value.title) &&
+      check_4(value.position) &&
+      check_9(value.chatDock),
+    check_7 = (value) => typeof value == "string" && External[2].test(value),
+    check_8 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+      (value.length <= 80 || (value.length <= 160 && CodePointCount(value) <= 80)),
+    check_9 = (value) => check_10(value) || check_11(value) || check_12(value) || check_13(value),
+    check_10 = (value) => typeof value == "string" && value === "left",
+    check_11 = (value) => typeof value == "string" && value === "right",
+    check_12 = (value) => typeof value == "string" && value === "bottom",
+    check_13 = (value) => typeof value == "string" && value === "hidden",
+    check_14 = (value) =>
+      Array.isArray(value) && value.every((unique_5, index) => check_15(unique_5)),
+    check_15 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "name" in value &&
+      "tabId" in value &&
+      "contentKind" in value &&
+      "sizeW" in value &&
+      "sizeH" in value &&
+      "position" in value &&
+      "grantState" in value &&
+      "revision" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (unique_6, unique_7) => External[3].test(unique_6) || check_2(value[unique_6]),
+      ) &&
+      check_16(value.name) &&
+      check_7(value.tabId) &&
+      (value.title === void 0 || !("title" in value) || check_17(value.title)) &&
+      check_18(value.contentKind) &&
+      (value.contentOwner === void 0 ||
+        !("contentOwner" in value) ||
+        check_22(value.contentOwner)) &&
+      (value.registeredContentKind === void 0 ||
+        !("registeredContentKind" in value) ||
+        check_23(value.registeredContentKind)) &&
+      (value.pluginKind === void 0 || !("pluginKind" in value) || check_24(value.pluginKind)) &&
+      (value.props === void 0 || !("props" in value) || check_25(value.props)) &&
+      (value.presentation === void 0 ||
+        !("presentation" in value) ||
+        check_27(value.presentation)) &&
+      (value.heightMode === void 0 || !("heightMode" in value) || check_31(value.heightMode)) &&
+      check_34(value.sizeW) &&
+      check_35(value.sizeH) &&
+      check_4(value.position) &&
+      check_36(value.grantState) &&
+      check_41(value.revision) &&
+      (value.instanceId === void 0 || !("instanceId" in value) || check_42(value.instanceId)) &&
+      (value.declaredSummary === void 0 ||
+        !("declaredSummary" in value) ||
+        check_43(value.declaredSummary)) &&
+      (value.declared === void 0 || !("declared" in value) || check_45(value.declared)) &&
+      (value.frameUrl === void 0 || !("frameUrl" in value) || check_66(value.frameUrl)) &&
+      (value.viewTicket === void 0 || !("viewTicket" in value) || check_66(value.viewTicket)) &&
+      (value.viewTicketTtlMs === void 0 ||
+        !("viewTicketTtlMs" in value) ||
+        check_67(value.viewTicketTtlMs)) &&
+      (value.viewGeneration === void 0 ||
+        !("viewGeneration" in value) ||
+        check_68(value.viewGeneration)) &&
+      (value.sandboxUrl === void 0 || !("sandboxUrl" in value) || check_66(value.sandboxUrl)) &&
+      (value.sandboxPort === void 0 || !("sandboxPort" in value) || check_69(value.sandboxPort)) &&
+      (value.sandboxOrigin === void 0 ||
+        !("sandboxOrigin" in value) ||
+        check_66(value.sandboxOrigin)) &&
+      (value.kindLabel === void 0 || !("kindLabel" in value) || check_17(value.kindLabel)),
+    check_16 = (value) => typeof value == "string" && External[4].test(value),
+    check_17 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+      (value.length <= 80 || (value.length <= 160 && CodePointCount(value) <= 80)),
+    check_18 = (value) => check_19(value) || check_20(value) || check_21(value),
+    check_19 = (value) => typeof value == "string" && value === "html",
+    check_20 = (value) => typeof value == "string" && value === "mcp-app",
+    check_21 = (value) => typeof value == "string" && value === "plugin",
+    check_22 = (value) =>
+      typeof value == "string" &&
+      (value === "html" || value === "mcp-app" || value === "plugin" || value === "registered"),
+    check_23 = (value) => typeof value == "string" && External[5].test(value),
+    check_24 = (value) => typeof value == "string" && External[6].test(value),
+    check_25 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.entries(value).every(
+        ([unique_8, unique_9], _) => !External[7].test(unique_8) || check_26(unique_9),
+      ),
+    check_26 = (value) => !0,
+    check_27 = (value) => check_28(value) || check_29(value) || check_30(value),
+    check_28 = (value) => typeof value == "string" && value === "card",
+    check_29 = (value) => typeof value == "string" && value === "full-bleed",
+    check_30 = (value) => typeof value == "string" && value === "frameless",
+    check_31 = (value) => check_32(value) || check_33(value),
+    check_32 = (value) => typeof value == "string" && value === "auto",
+    check_33 = (value) => typeof value == "string" && value === "fixed",
+    check_34 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 12)),
+    check_35 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 20)),
+    check_36 = (value) => check_37(value) || check_38(value) || check_39(value) || check_40(value),
+    check_37 = (value) => typeof value == "string" && value === "none",
+    check_38 = (value) => typeof value == "string" && value === "pending",
+    check_39 = (value) => typeof value == "string" && value === "granted",
+    check_40 = (value) => typeof value == "string" && value === "rejected",
+    check_41 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || value >= 1),
+    check_42 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+    check_43 = (value) =>
+      Array.isArray(value) && value.every((unique_10, index) => check_44(unique_10)),
+    check_44 = (value) => typeof value == "string",
+    check_45 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      Object.getOwnPropertyNames(value).every(
+        (unique_11, unique_12) => External[8].test(unique_11) || check_2(value[unique_11]),
+      ) &&
+      (value.netOrigins === void 0 || !("netOrigins" in value) || check_46(value.netOrigins)) &&
+      (value.tools === void 0 || !("tools" in value) || check_48(value.tools)) &&
+      (value.queries === void 0 || !("queries" in value) || check_50(value.queries)),
+    check_46 = (value) =>
+      Array.isArray(value) &&
+      value.every((unique_13, index) => check_47(unique_13)) &&
+      value.length <= 32,
+    check_47 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+      (value.length <= 2048 || (value.length <= 4096 && CodePointCount(value) <= 2048)),
+    check_48 = (value) =>
+      Array.isArray(value) &&
+      value.every((unique_14, index) => check_49(unique_14)) &&
+      value.length <= 64,
+    check_49 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+      (value.length <= 269 || (value.length <= 538 && CodePointCount(value) <= 269)),
+    check_50 = (value) =>
+      Array.isArray(value) &&
+      value.every((unique_15, index) => check_51(unique_15)) &&
+      value.length <= 8,
+    check_51 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "name" in value &&
+      "bindingId" in value &&
+      "params" in value &&
+      "fields" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (unique_16, unique_17) => External[9].test(unique_16) || check_2(value[unique_16]),
+      ) &&
+      check_16(value.name) &&
+      check_52(value.bindingId) &&
+      check_53(value.params) &&
+      check_64(value.fields),
+    check_52 = (value) => typeof value == "string" && value === "github.actions.runs",
+    check_53 = (value) =>
+      typeof value == "object" &&
+      value !== null &&
+      !Array.isArray(value) &&
+      "repository" in value &&
+      "workflow" in value &&
+      "branch" in value &&
+      "status" in value &&
+      "created" in value &&
+      "perPage" in value &&
+      "excludePullRequests" in value &&
+      Object.getOwnPropertyNames(value).every(
+        (unique_18, unique_19) => External[10].test(unique_18) || check_2(value[unique_18]),
+      ) &&
+      check_54(value.repository) &&
+      check_55(value.workflow) &&
+      check_59(value.branch) &&
+      check_60(value.status) &&
+      check_60(value.created) &&
+      check_62(value.perPage) &&
+      check_63(value.excludePullRequests),
+    check_54 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+      (value.length <= 140 || (value.length <= 280 && CodePointCount(value) <= 140)),
+    check_55 = (value) => check_56(value) || check_57(value) || check_58(value),
+    check_56 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+      (value.length <= 255 || (value.length <= 510 && CodePointCount(value) <= 255)),
+    check_57 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") ||
+        (value >= 1 && value <= 9007199254740991)),
+    check_58 = (value) => value === null,
+    check_59 = (value) => check_56(value) || check_58(value),
+    check_60 = (value) => check_61(value) || check_58(value),
+    check_61 = (value) =>
+      typeof value == "string" &&
+      (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)) &&
+      (value.length <= 32 || (value.length <= 64 && CodePointCount(value) <= 32)),
+    check_62 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 30)),
+    check_63 = (value) => typeof value == "boolean",
+    check_64 = (value) =>
+      Array.isArray(value) &&
+      value.every((unique_20, index) => check_65(unique_20)) &&
+      value.length >= 1 &&
+      value.length <= 14,
+    check_65 = (value) =>
+      value === "total_count" ||
+      value === "id" ||
+      value === "name" ||
+      value === "display_title" ||
+      value === "head_branch" ||
+      value === "status" ||
+      value === "conclusion" ||
+      value === "html_url" ||
+      value === "run_started_at" ||
+      value === "created_at" ||
+      value === "updated_at" ||
+      value === "event" ||
+      value === "workflow_id" ||
+      value === "run_attempt",
+    check_66 = (value) => typeof value == "string",
+    check_67 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || value >= 1),
+    check_68 = (value) => typeof value == "string" && External[11].test(value),
+    check_69 = (value) =>
+      Number.isInteger(value) &&
+      (!(Number.isFinite(value) || typeof value == "bigint") || (value >= 1 && value <= 65535));
   return (value) => check_0(value);
 })();
 export { isBoardSnapshot };

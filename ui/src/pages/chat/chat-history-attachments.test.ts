@@ -23,6 +23,7 @@ it.each(["empty", "populated", "partial", "newer"] as const)(
               role: "user",
               content: "",
               __openclaw: {
+                seq: 1,
                 media: [
                   { url: "media://inbound/report.pdf", kind: "document", fileName: "report.pdf" },
                 ],
@@ -45,6 +46,8 @@ it.each(["empty", "populated", "partial", "newer"] as const)(
     expect(read()).toMatchObject({ loading: true, coverage: "unknown" });
     initial.resolve(history);
     await loading;
+    expect(state.chatMessages).toEqual(history.messages);
+    expect(state.chatMessages[0]).toBe(history.messages?.[0]);
     // An older mounted window can have newer accepted rows outside its slice.
     state.chatHistoryPagination.hasNewer = kind === "newer";
     const accepted = read();

@@ -130,6 +130,10 @@ const boardWithQuery = (query: unknown) => ({
   ...board,
   widgets: [{ ...board.widgets[0], declared: { queries: [query] } }],
 });
+const boardWithWidget = (fields: object) => ({
+  ...board,
+  widgets: [{ ...board.widgets[0], ...fields }],
+});
 const queryBoard = boardWithQuery(actionsQuery);
 const queryParamsWithoutWorkflow = Object.fromEntries(
   Object.entries(actionsQuery.params).filter(([key]) => key !== "workflow"),
@@ -232,6 +236,84 @@ describe("standalone browser protocol validation", () => {
       }
     },
   );
+
+  it.each([
+    {
+      name: "root revision zero without accepting widget revision zero",
+      accepted: { ...board, revision: 0 },
+      rejected: boardWithWidget({ revision: 0 }),
+    },
+    {
+      name: "read-only registered content metadata",
+      accepted: boardWithWidget({
+        contentOwner: "registered",
+        registeredContentKind: "legacy-chart",
+      }),
+      rejected: boardWithWidget({
+        contentOwner: "registered",
+        registeredContentKind: "Legacy-chart",
+      }),
+    },
+    ...["tab", "widget"].map((owner) => ({
+      name: owner + " tab identifiers",
+      accepted: {
+        ...boardWithWidget({ tabId: "a".repeat(40) }),
+        tabs: [{ ...board.tabs[0], tabId: "a".repeat(40) }],
+      },
+      rejected:
+        owner === "tab"
+          ? { ...board, tabs: [{ ...board.tabs[0], tabId: "a".repeat(41) }] }
+          : boardWithWidget({ tabId: "INVALID" }),
+    })),
+    ...["widget", "query"].map((owner) => ({
+      name: owner + " bounded names",
+      accepted: boardWithWidget({
+        name: "a".repeat(64),
+        declared: { queries: [{ ...actionsQuery, name: "a".repeat(64) }] },
+      }),
+      rejected:
+        owner === "widget"
+          ? boardWithWidget({ name: "a".repeat(65) })
+          : boardWithQuery({ ...actionsQuery, name: "INVALID" }),
+    })),
+    ...["tab", "title", "kindLabel"].map((owner) => ({
+      name: owner + " independent Unicode label bounds",
+      accepted: {
+        ...boardWithWidget({ title: "short", kindLabel: "🦊".repeat(80) }),
+        tabs: [{ ...board.tabs[0], title: "🦊".repeat(80) }],
+      },
+      rejected:
+        owner === "tab"
+          ? { ...board, tabs: [{ ...board.tabs[0], title: "🦊".repeat(81) }] }
+          : boardWithWidget({ [owner]: "🦊".repeat(81) }),
+    })),
+    ...["workflow", "branch", "status", "created"].map((field) => {
+      const limit = field === "workflow" || field === "branch" ? 255 : 32;
+      return {
+        name: field + " independent query bounds",
+        accepted: boardWithQuery({
+          ...actionsQuery,
+          params: {
+            ...actionsQuery.params,
+            workflow: "w".repeat(255),
+            branch: null,
+            status: null,
+            created: "c".repeat(32),
+            [field]: "🦊".repeat(limit),
+          },
+        }),
+        rejected: boardWithQuery({
+          ...actionsQuery,
+          params: { ...actionsQuery.params, [field]: "🦊".repeat(limit + 1) },
+        }),
+      };
+    }),
+  ])("preserves Board $name", ({ accepted, rejected }) => {
+    expect(Value.Check(BoardSnapshotSchema, accepted)).toBe(true);
+    expect(checks.isBoardSnapshot(accepted)).toBe(true);
+    expect(Value.Check(BoardSnapshotSchema, rejected)).toBe(false);
+    expect(checks.isBoardSnapshot(rejected)).toBe(false);
+  });
 
   it("retains bounded delegation receipts while cleaning unknown nested fields", () => {
     const value = {

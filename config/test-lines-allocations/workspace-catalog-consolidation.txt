@@ -1,5 +1,7 @@
 # Adopt canonical Files authority, filtering, active downloads and keyboard regressions.
 # Includes accepted Mobile refresh and attachment coverage with M3 newer-history retention.
-# Adoption adds 924 test LF; retained history corrections remove 1 LF.
-# Exactly 923 net test LF over incoming 8ee6209724a4a01816e021b813105b967c14d9fe.
-923
+# Files adoption adds 924 test LF; retained history corrections remove 1 LF.
+# Exact follow-up proof adds 3 fixture + 158 packet collection + 38 loader parity LF,
+# 82 Board validator parity LF and 56 actor-generation continuity LF.
+# Exactly 1260 net test LF over incoming 8ee6209724a4a01816e021b813105b967c14d9fe.
+1260
