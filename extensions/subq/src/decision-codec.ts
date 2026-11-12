@@ -3,8 +3,9 @@ import type { DecisionBatch, DecisionBatchResult } from "openclaw/plugin-sdk/dec
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 
-const MODEL = manifest.decisionModels[0]!.id;
-const LIMITS = manifest.decisionModels[0]!.capabilities;
+const row = manifest.modelCatalog.providers.subq.models[0]!;
+const MODEL = row.id;
+const { questions: QUESTIONS, limits: LIMITS } = row.inference.decision;
 
 export function supportsSubQDecisionBatch(batch: DecisionBatch, model: string): boolean {
   const questions = Object.entries(batch.questions);
@@ -19,10 +20,12 @@ export function supportsSubQDecisionBatch(batch: DecisionBatch, model: string): 
       }
       if (question.type === "choice") {
         const count = Object.keys(question.criteria).length;
-        return count >= 2 && count <= LIMITS.maxChoiceAlternatives;
+        return count >= 2 && count <= QUESTIONS.choice.maxOptions;
       }
       if (question.type === "score") {
-        return question.criteria.length >= 2 && question.criteria.length <= LIMITS.maxScoreLevels;
+        return (
+          question.criteria.length >= 2 && question.criteria.length <= QUESTIONS.score.maxOptions
+        );
       }
       return true;
     })

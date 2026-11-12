@@ -5,7 +5,12 @@ import path from "node:path";
 import * as catalog from "@openclaw/model-catalog-core";
 import { LITELLM_PRICING_URL } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts";
+import {
+  assembleModelCatalogBundle,
+  assembleVersionedModelCatalogBundle,
+  readModelCatalogManifests,
+  runPublishModelCatalog,
+} from "../../scripts/publish-model-catalog.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 
@@ -247,6 +252,29 @@ describe("task facts", () => {
     expect(row).not.toHaveProperty("baseUrl");
     expect(parsedV3.models.find((model) => model.id === "chat-0")?.inference?.chat).toBe(true);
     expect(v2.models.find((model: Row) => model.id === "chat-0")).not.toHaveProperty("inference");
+  });
+
+  it("hosts every bundled Decision provider with a fixed model list", async () => {
+    const manifests = readModelCatalogManifests();
+    const bundle = await assembleModelCatalogBundle({
+      manifests,
+      generatedAt: 1,
+      sourceCommit: "x",
+    });
+    const v3 = await assembleVersionedModelCatalogBundle(
+      bundle,
+      new WeakMap(),
+      undefined,
+      [],
+      {},
+      3,
+    );
+    const hosted = new Set(v3.models.flatMap((m) => (m.inference?.decision ? [m.provider] : [])));
+    // ONNX presets are local artifacts pinned in plugin code; Rerank has no fixed list.
+    const unhosted = manifests
+      .flatMap(({ manifest }) => manifest.contracts?.decisionProviders ?? [])
+      .filter((provider: string) => !hosted.has(provider));
+    expect(unhosted).toEqual(["onnx", "rerank"]);
   });
 
   it("does not use native-only rows to satisfy the released chat catalog floor", async () => {

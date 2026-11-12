@@ -69,23 +69,46 @@
     },
     "additionalProperties": false
   },
-  "decisionModels": [
-    {
-      "provider": "subq",
-      "id": "subq-snap-preview",
-      "name": "SubQ Snap (preview)",
-      "capabilities": {
-        "questionTypes": [
-          "boolean",
-          "choice",
-          "score"
-        ],
-        "maxQuestions": 16,
-        "maxChoiceAlternatives": 255,
-        "maxScoreLevels": 10,
-        "maxInputTokens": 393216,
-        "confidence": "provider-specific"
+  "modelCatalog": {
+    "providers": {
+      "subq": {
+        "models": [
+          {
+            "id": "subq-snap-preview",
+            "name": "SubQ Snap (preview)",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "decision-v1",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "provider-defined",
+                    "abstention": false,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "provider-defined",
+                    "abstention": false,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "maxQuestions": 16,
+                  "maxInputTokens": 393216
+                }
+              }
+            }
+          }
+        ]
       }
     }
-  ]
+  }
 }
