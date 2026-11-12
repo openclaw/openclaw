@@ -93,12 +93,11 @@ extension OnboardingView {
     }
 
     /// The Mac joined an existing claw with chat; its own first-run setup does not apply.
-    func finishJoinedClaw() {
+    func finishJoinedClaw(_ claw: String) {
         guard !finishState.didFinish else { return }
         finishState.didFinish = true
-        OnboardingController.markComplete()
-        OnboardingController.shared.close()
-        dashboardHandoffOpener(.dashboard)
+        let opener = dashboardHandoffOpener
+        MacOpenClawIDJoinCompletion.finishWithChat(claw: claw, openDashboard: { opener(.dashboard) })
     }
 
     @discardableResult
