@@ -34,16 +34,6 @@ openclaw-message-reaction-picker .trigger[aria-expanded="true"] {
   color: var(--accent);
   background: var(--bg-hover);
 }
-openclaw-message-reaction-picker[compact] .trigger {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  background: var(--bg-elevated);
-}
-openclaw-message-reaction-picker[compact] .trigger:hover,
-openclaw-message-reaction-picker[compact] .trigger[aria-expanded="true"] {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
 openclaw-message-reaction-picker .chat-reaction-picker {
   pointer-events: auto;
   padding: 4px;
@@ -126,4 +116,112 @@ openclaw-message-reaction-picker .back svg {
   openclaw-message-reaction-picker .palette .emoji:hover {
     transform: none;
   }
+}
+
+/* Reaction tab: the bubble's own surface extended into a small tab and cut from
+   it by the page color, so it needs no border. A total appears past one. */
+.chat-message-reactions > openclaw-message-reaction-picker {
+  pointer-events: auto;
+}
+openclaw-message-reaction-picker .chat-reaction-tab {
+  --chat-reaction-tab-surface: var(--chat-bubble-background, var(--bg-elevated));
+  width: auto;
+  min-width: 28px;
+  height: 22px;
+  gap: 2px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(
+    in srgb,
+    var(--text) var(--chat-reaction-tab-tone, 0%),
+    var(--chat-reaction-tab-surface)
+  );
+  box-shadow: 0 0 0 2px var(--bg-content, var(--bg));
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+}
+/* Flat assistant text has no surface to extend: a faint tint of the page instead. */
+.chat:not(.chat--bubbles) .chat-group.assistant:not(.chat-group--forwarded) .chat-reaction-tab {
+  --chat-reaction-tab-surface: color-mix(in srgb, var(--text) 6%, var(--bg-content, var(--bg)));
+  box-shadow: none;
+}
+/* Your own reaction reads as pressed: a deeper tone of the same surface. */
+.chat-message-reactions.chat-message-reactions--own .chat-reaction-tab {
+  --chat-reaction-tab-tone: 10%;
+  --chat-reaction-tab-ink: var(--accent);
+  color: var(--accent);
+}
+.chat-message-reactions .chat-reaction-tab:is(:hover, [aria-expanded="true"]) {
+  --chat-reaction-tab-tone: 16%;
+  color: var(--chat-reaction-tab-ink, var(--text));
+}
+/* Color emoji sit a touch low in their line box next to the count's digits. */
+.chat-reaction-tab__emoji {
+  font-size: 13px;
+  line-height: 1;
+  translate: 0 -0.5px;
+}
+/* Digits end tighter than an emoji's box; a hair of margin evens the two ends. */
+.chat-reaction-tab__count {
+  margin-inline: 1px;
+}
+
+/* Who reacted, on hover or focus of the tab. */
+.chat-reaction-who {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 6px;
+  max-width: 260px;
+  text-align: start;
+}
+.chat-reaction-who__emoji {
+  font-size: 13px;
+  line-height: 1;
+}
+.chat-reaction-who__more {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+/* Existing reactions lead the opened picker so any of them toggles in place. */
+openclaw-message-reaction-picker .current {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-width: 280px;
+  padding: 2px 2px 6px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+openclaw-message-reaction-picker .current:last-child {
+  padding-bottom: 2px;
+  margin-bottom: 0;
+  border-bottom: 0;
+}
+openclaw-message-reaction-picker .chat-reaction-picker:has(> .current) {
+  border-radius: 18px;
+}
+openclaw-message-reaction-picker .chat-reaction-chip {
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+openclaw-message-reaction-picker .chat-reaction-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+openclaw-message-reaction-picker .chat-reaction-chip[aria-pressed="true"] {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.chat-reaction-chip__emoji {
+  font-size: 15px;
+  line-height: 1;
 }
