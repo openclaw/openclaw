@@ -324,8 +324,22 @@ Control UI reaches the Gateway:
 
 The browser keeps the account and its ID token until the token expires or you sign
 out. Signing in only proves which OpenClaw ID account the browser holds; on its own
-it grants nothing. While signed in on the Gateway machine, **Turn on remote access**
-gets its link code from your account instead of asking you to paste one.
+it grants nothing.
+
+### Link OpenClaw ID to your profile
+
+Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
+runs the same device sign-in and records the account on your profile. Both sides are
+proven on one connection, so there is no "who are you?" picker. Owner devices of the
+claw's OpenClaw ID owner account then arrive as you (your name, sessions, personal
+instructions and My GitHub) instead of the shared owner. Their owner authority still
+comes from each device's certificate, and linking grants or removes nothing.
+
+- One profile per account: linking an account already linked to another profile, or to
+  a member's profile, is refused. Merging profiles in **Users** carries the link.
+- **Unlink** returns owner devices to the shared owner on their next connection.
+  Sessions they already created are not rewritten. While signed in on the Gateway machine, **Turn on remote access**
+  gets its link code from your account instead of asking you to paste one.
 
 ### How the tunnel reaches the Gateway
 

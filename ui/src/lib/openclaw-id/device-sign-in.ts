@@ -56,16 +56,26 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
+/** What linking the signed-in account to this profile did (Settings → Profile → Identity). */
+export type OpenClawIdLinkOutcome =
+  | "linked"
+  | "linked_elsewhere"
+  | "profile_changed"
+  | "owner_profile";
+
 /**
  * Asks the Gateway to poll the device sign-in until the user approves it, then keeps the
- * account like a popup sign-in. Rejects on denial, expiry, sign-out or `signal` abort.
+ * account like a popup sign-in. With `link`, the Gateway also links the account to this
+ * connection's profile and reports the outcome. Rejects on denial, expiry, sign-out or
+ * `signal` abort.
  */
 export async function finishOpenClawIdDeviceSignIn(params: {
   client: GatewayBrowserClient;
   started: OpenClawIdDeviceSignIn;
   basePath: string;
   signal: AbortSignal;
-}): Promise<OpenClawIdSignedIn> {
+  link?: boolean;
+}): Promise<{ signedIn: OpenClawIdSignedIn; link?: OpenClawIdLinkOutcome }> {
   const assertCurrent = () => {
     params.signal.throwIfAborted();
     if (readOpenClawIdSignOutGeneration() !== params.started.signOutGeneration) {
@@ -81,8 +91,16 @@ export async function finishOpenClawIdDeviceSignIn(params: {
     assertCurrent();
     const result = await params.client.request<
       | { pending: true; interval: number }
-      | { account: Omit<OpenClawIdSignedIn, "idToken">; idToken: string }
-    >("openclawId.account", { action: "device_poll", state: params.started.state });
+      | {
+          account: Omit<OpenClawIdSignedIn, "idToken">;
+          idToken: string;
+          link?: OpenClawIdLinkOutcome;
+        }
+    >("openclawId.account", {
+      action: "device_poll",
+      state: params.started.state,
+      ...(params.link ? { link: true } : {}),
+    });
     assertCurrent();
     if ("pending" in result) {
       interval = result.interval;
@@ -94,6 +112,6 @@ export async function finishOpenClawIdDeviceSignIn(params: {
       new URL(params.started.verificationUri).origin,
       params.basePath,
     );
-    return signedIn;
+    return { signedIn, ...(result.link ? { link: result.link } : {}) };
   }
 }
