@@ -45,6 +45,13 @@ backup.
 
 ## Update implementation contract
 
+SQLite header-probe timeouts report the discovery path count and link to the
+manual package-manager hop. A probe batch that misses its 10-second deadline now
+splits and retries, so slow or cold storage gets an answer; a path that cannot
+answer alone still refuses the backup. Backup refusal and rollback safety are
+unchanged. These changes require the updater performing discovery to contain the
+fix; a candidate cannot change an older installed updater's probe.
+
 Recovery cleanup refusal diagnostics distinguish file-stat checks from generation
 checks and report whether the serving owner permitted destination mutations. These
 labels identify the failed verification stage, not the writer or root cause. Cleanup
