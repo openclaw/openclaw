@@ -17,6 +17,7 @@ import {
 } from "../openclaw-id/channel.js";
 import { decodeInviteProofKey } from "../openclaw-id/invites-view.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
+import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 // Responds with the service, or an unavailable error when this Gateway has none.
@@ -162,6 +163,17 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
 // nothing.
 // - device_begin: a device sign-in's user code and verification page;
 // - device_poll: polls it once; returns pending, or the account and ID token.
+// Whether `opts.client` is still the live personal connection of profile `owner`, with
+// OpenClaw ID on: checked again right before an account leaves the Gateway.
+function isCurrentDeviceSignIn(opts: GatewayRequestHandlerOptions, owner: string): boolean {
+  return (
+    opts.context.getRuntimeConfig().gateway?.openclawId?.enabled === true &&
+    hasCurrentPersonalGatewaySource(opts.client, opts.context) &&
+    resolveOpenClawIdSignInRoute(opts.client) === "device" &&
+    opts.client.authenticatedUserProfile?.profileId === owner
+  );
+}
+
 async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
   const config = opts.context.getRuntimeConfig().gateway?.openclawId;
   if (config?.enabled !== true) {
@@ -194,7 +206,14 @@ async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
       return;
     }
     if (params.action === "device_poll") {
-      respondSignIn(opts, await accountSignIn.pollDevice({ state: params.state, owner }));
+      const result = await accountSignIn.pollDevice({ state: params.state, owner });
+      // The poll awaited the issuer: release the ID token only to the same live personal
+      // connection, profile and Labs switch that started it. Otherwise it is discarded.
+      if ("account" in result && !isCurrentDeviceSignIn(opts, owner)) {
+        refuse(opts, { code: "not_personal_connection", detail: "this connection changed" });
+        return;
+      }
+      respondSignIn(opts, result);
       return;
     }
     refuse(opts, { code: "malformed", detail: `unknown account action ${String(params.action)}` });
