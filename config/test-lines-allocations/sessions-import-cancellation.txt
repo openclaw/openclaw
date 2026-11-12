@@ -1,2 +1,0 @@
-# Protect cancelled catalog reads and accepted import receipts without admitting later imports.
-40

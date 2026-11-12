@@ -295,13 +295,7 @@ export async function sessionsImportCommand(
   const ok = !interrupted && summary.failed === 0;
   if (opts.json) {
     writeRuntimeJson(runtime, {
-      ...(ok
-        ? { ok }
-        : formatCliJsonFailure(
-            interrupted
-              ? "Session import interrupted."
-              : "Session import did not complete for every source.",
-          )),
+      ...(ok ? { ok } : formatCliJsonFailure("Session import did not complete for every source.")),
       operation: "import",
       dryRun: Boolean(opts.dryRun),
       results,

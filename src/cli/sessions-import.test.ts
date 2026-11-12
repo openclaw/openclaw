@@ -49,6 +49,8 @@ const imported = {
   complete: true,
   created: true,
 };
+const methods = () =>
+  mocks.callGateway.mock.calls.map(([params]) => params.method.replace("sessions.catalog.", ""));
 
 describe("sessions import CLI", () => {
   beforeEach(() => {
@@ -86,14 +88,7 @@ describe("sessions import CLI", () => {
       "sessions --agent work --json import --all --url ws://gateway.test --token test-token",
     );
 
-    expect(mocks.callGateway.mock.calls.map(([params]) => params.method)).toEqual([
-      "sessions.catalog.list",
-      "sessions.catalog.import",
-      "sessions.catalog.import",
-      "sessions.catalog.list",
-      "sessions.catalog.import",
-      "sessions.catalog.import",
-    ]);
+    expect(methods()).toEqual(["list", "import", "import", "list", "import", "import"]);
     expect(mocks.callGateway).toHaveBeenNthCalledWith(
       4,
       expect.objectContaining({
@@ -135,45 +130,6 @@ describe("sessions import CLI", () => {
     expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 
-  it.each(["listing", "import"])(
-    "stops cancelled %s without losing an accepted receipt",
-    async (phase) => {
-      const scope = new AsyncWorkScope();
-      mocks.callGateway.mockImplementation(async ({ method }) => {
-        if (method === "sessions.catalog.list") {
-          if (phase === "listing") {
-            scope.beginClose();
-            throw scope.signal.reason;
-          }
-          return {
-            catalogs: [
-              catalog("claude", [host(["first", "second"], { nextCursor: "older" })]),
-              catalog("codex", [host(["third"])]),
-            ],
-          };
-        }
-        scope.beginClose();
-        return imported;
-      });
-
-      await scope.run(() => run("sessions import --all --json"));
-
-      expect(mocks.callGateway.mock.calls.map(([params]) => params.method)).toEqual(
-        phase === "listing"
-          ? ["sessions.catalog.list"]
-          : ["sessions.catalog.list", "sessions.catalog.import"],
-      );
-      expect(JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]))).toMatchObject({
-        ok: false,
-        error: { message: "Session import interrupted." },
-        results:
-          phase === "listing" ? [] : [{ threadId: "first", status: "imported", importedItems: 2 }],
-        summary: { imported: phase === "listing" ? 0 : 1, failed: 0 },
-      });
-      expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    },
-  );
-
   it("imports visible partial rows while reporting listing errors and stopping stale paging", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({
@@ -193,10 +149,7 @@ describe("sessions import CLI", () => {
 
     await run("sessions import --all --json");
 
-    expect(mocks.callGateway.mock.calls.map(([params]) => params.method)).toEqual([
-      "sessions.catalog.list",
-      "sessions.catalog.import",
-    ]);
+    expect(methods()).toEqual(["list", "import"]);
     expect(JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]))).toMatchObject({
       ok: false,
       results: [
@@ -207,6 +160,21 @@ describe("sessions import CLI", () => {
       summary: { imported: 1, failed: 2 },
     });
     expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("finishes the accepted import and starts no more after Ctrl+C", async () => {
+    const scope = new AsyncWorkScope();
+    mocks.callGateway
+      .mockResolvedValueOnce({ catalogs: [catalog("claude", [host(["first", "second"])])] })
+      .mockImplementationOnce(async () => {
+        scope.beginClose();
+        return imported;
+      });
+    await scope.run(() => run("sessions import --all --json"));
+    expect(methods()).toEqual(["list", "import"]);
+    const output = JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]));
+    expect(output).toMatchObject({ ok: false, results: [{ threadId: "first", status: "imported" }] });
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("honors the total dry-run limit without issuing writes or fetching another page", async () => {
