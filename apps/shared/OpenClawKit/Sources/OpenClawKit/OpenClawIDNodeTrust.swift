@@ -14,7 +14,6 @@ public struct OpenClawIDNodeTrustState: Codable, Sendable, Equatable {
     public let snapshotBindingSequence: Int64
     public let snapshotGatewayKey: String?
 
-    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     /// Restores public state; verification rechecks scope and refuses any rollback.
     public init(
         clawID: String,
