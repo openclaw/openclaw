@@ -17,11 +17,13 @@ import { listTemplatesAsync } from "../../agents/worktrees/template-registry-asy
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { RuntimeMsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { initializeLocalWorkspaceProjection } from "./local-workspace-checkout.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
 import { cloneLocalWorkspaceTemplate } from "./local-workspace-template.js";
@@ -189,7 +191,20 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   const backend = createCopyWorktreeBackend();
   mocks.backend.mockResolvedValue(backend);
   const clone = await fixture(signal);
-  const first = await clone("first");
+  const log = { info: vi.fn<(message: string) => void>() };
+  const timing = startChatSendDiagnostics(log);
+  timing.acknowledge();
+  const first = await withDiagnosticsTimelineObserver(timing.observeSpan, () => clone("first"));
+  // Force only reporting over the slow threshold; the owner phases remain real measurements.
+  {
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(performance.now() + 2_000);
+    timing.finish();
+  }
+  const detail = "detail.attempt.setup.sandbox.workspace_selection.prepare.reconcile.template";
+  expect(log.info.mock.lastCall?.[0]).toContain(`${detail}.build=`);
+  expect(log.info.mock.lastCall?.[0]).toContain(`${detail}.select=`);
+  expect(log.info.mock.lastCall?.[0]).toContain(`${detail}.clone=`);
   expect(await read(first, dependencyFile)).toBe(firstLock);
   const template = (await listTemplatesAsync(env)).find(
     (record) => record.worktreeRoot === path.join(path.dirname(first), "templates"),
@@ -460,6 +475,17 @@ function holdInstall() {
   return { waitForStart, release };
 }
 
+it("defers dependency builds while maintenance reports pressure", async ({ signal }) => {
+  const warmed = prewarmFixture();
+  await prewarmLocalWorkspaceTemplates({
+    getConfig: () => warmed.config,
+    signal,
+    shouldDefer: async () => true,
+  });
+  expect(mocks.install).not.toHaveBeenCalled();
+  await expectMissing(warmed.state, "worktree-projections");
+});
+
 it.each(["default", "agent-override"] as const)(
   "does not prepare dependency templates when sandboxing is off (%s)",
   async (mode) => {
@@ -521,6 +547,41 @@ it("joins background preparation through the allocation owner", async ({ signal 
     release.resolve();
     await preparation;
   }
+});
+
+it("prepares the current base of a previously sandboxed project with sandbox mode off", async ({
+  signal,
+}) => {
+  const warmed = prewarmFixture();
+  const templateRoot = path.join(warmed.state, "worktree-projections");
+  await fs.mkdir(templateRoot);
+  const clone = (name: string, commit: string) =>
+    withWorktreeAllocationLease({ env: warmed.env, signal }, (guard) =>
+      cloneLocalWorkspaceTemplate({
+        source,
+        repoRoot: source,
+        baseCommit: commit,
+        branch: `openclaw/${name}`,
+        destination: path.join(templateRoot, name),
+        temporaryRoot: templateRoot,
+        templateRoot,
+        env: warmed.env,
+        sandbox,
+        guard: { ...guard, signal: guard.signal ?? signal },
+      }),
+    );
+  await clone("prior-session", baseCommit);
+  warmed.config.agents = {
+    entries: { main: { workspace: path.join(warmed.state, "unused"), sandbox: { mode: "off" } } },
+  };
+  await warmed.prepare(signal);
+  expect(mocks.install).toHaveBeenCalledTimes(2);
+  const commit = await git(source, "rev-parse", "HEAD");
+  await clone("first-after-advance", commit);
+  expect(await read(path.join(templateRoot, "first-after-advance"), dependencyFile)).toBe(
+    secondLock,
+  );
+  expect(mocks.install).toHaveBeenCalledTimes(2);
 });
 
 it.each(["shutdown", "config"])(

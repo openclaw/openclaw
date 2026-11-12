@@ -111,9 +111,14 @@ On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the
 Gateway is ready, it prepares the default session base for agent repositories
-with sandbox mode `all` or `non-main` in the background. Agents with sandbox mode
-`off` skip background dependency preparation; creator-role-required sandboxes
-still prepare dependencies on first use. A session arriving during preparation
+with sandbox mode `all` or `non-main` in the background. After each pass, the
+Gateway checks again after one idle minute, fetching the current default base
+through the normal base owner. Existing sandbox template records also select
+previously used project repositories with matching sandbox policies, including
+creator-role-required sandboxes when the agent's sandbox mode is `off`.
+Unused repositories with sandbox mode `off` are not prepared. Background passes
+run serially and defer for foreground work or host I/O pressure; each build keeps
+the existing disk admission and generation retention. A session arriving during preparation
 waits for the same build; later checkouts arrive with `node_modules`. Other selected commits
 still run dependency installation on first use. When the frozen lockfile and Git
 attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
