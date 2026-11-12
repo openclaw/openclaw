@@ -8,7 +8,7 @@ export type DecisionExecutionLifetime = {
 };
 
 export type DecisionExecutionContext = DecisionExecutionLifetime & {
-  /** Check synchronously at physical dispatch, including after DNS or worker queue waits.
+  /** Check synchronously when each request starts, and again after a queue wait or before a retry.
    * False closes this request; a thrown caller authority assertion remains terminal. */
   readonly isAdmissible: () => boolean;
 };

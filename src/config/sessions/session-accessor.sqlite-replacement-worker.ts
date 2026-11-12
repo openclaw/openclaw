@@ -112,6 +112,7 @@ export async function withSessionEntryWorker<T>(
           ? {
               kind: "file",
               physicalIdentity: databaseIdentity,
+              birthtime: expectedCreationIdentity?.birthtime,
               nativeLocation: options.path,
             }
           : undefined,

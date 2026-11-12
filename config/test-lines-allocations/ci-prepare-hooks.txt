@@ -1,2 +1,0 @@
-# Real prepare entrypoint preserves generators without mutating CI Git configuration.
-56

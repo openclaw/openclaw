@@ -115,6 +115,10 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     title: configLabelInContext(label, params.contextLabel),
     help,
     showLabel,
+    usingDefault:
+      params.value === undefined &&
+      (params.schema.default !== undefined ||
+        hintForPath(params.path, params.hints)?.inheritedDefault === true),
     placement: params.compact ? undefined : ("column" as const),
     path: params.path,
     helpContext: params.helpContext,

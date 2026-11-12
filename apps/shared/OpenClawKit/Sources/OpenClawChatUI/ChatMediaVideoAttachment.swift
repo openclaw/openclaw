@@ -170,11 +170,14 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
     @ObservationIgnored private let title: String
     @ObservationIgnored private let temporaryFileURL: URL?
     @ObservationIgnored private var statusTask: Task<Void, Never>?
+    @ObservationIgnored private var rateObserver: (any NSObjectProtocol)?
+    @ObservationIgnored private let playbackCoordinator: ChatMediaPlaybackCoordinator
 
     init(
         loaded: OpenClawChatLoadedMedia,
         title: String,
-        playbackAllowed: @escaping @MainActor @Sendable () -> Bool) async throws
+        playbackAllowed: @escaping @MainActor @Sendable () -> Bool,
+        playbackCoordinator: ChatMediaPlaybackCoordinator = .shared) async throws
     {
         let playbackURL: URL
         let temporaryFileURL: URL?
@@ -196,6 +199,8 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
         self.title = title
         self.playbackAllowed = playbackAllowed
         self.temporaryFileURL = temporaryFileURL
+        self.playbackCoordinator = playbackCoordinator
+        self.observePlaybackActions()
         self.startStatusUpdates()
     }
 
@@ -205,17 +210,18 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
             return
         }
         self.isPlaybackBlocked = false
-        ChatMediaPlaybackCoordinator.shared.activate(self)
+        self.playbackCoordinator.activate(self)
         self.rewindIfFinished()
         self.player.play()
         self.isPlaying = true
-        ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
+        self.playbackCoordinator.updateNowPlaying(self)
     }
 
     func pause() {
+        self.playbackCoordinator.playbackDidPause(self)
         self.player.pause()
         self.isPlaying = false
-        ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
+        self.playbackCoordinator.updateNowPlaying(self)
     }
 
     var nowPlayingMetadata: ChatMediaNowPlayingMetadata {
@@ -229,14 +235,43 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
     }
 
     func cleanup() {
+        if let rateObserver {
+            NotificationCenter.default.removeObserver(rateObserver)
+            self.rateObserver = nil
+        }
         self.statusTask?.cancel()
         self.statusTask = nil
         self.player.pause()
         self.player.replaceCurrentItem(with: nil)
         self.isPlaying = false
-        ChatMediaPlaybackCoordinator.shared.release(self)
+        self.playbackCoordinator.release(self)
         if let temporaryFileURL {
             try? FileManager.default.removeItem(at: temporaryFileURL)
+        }
+    }
+
+    private func observePlaybackActions() {
+        let reasonKey = AVPlayer.rateDidChangeReasonKey
+        let explicitRateChange = AVPlayer.RateDidChangeReason.setRateCalled.rawValue
+        self.rateObserver = NotificationCenter.default.addObserver(
+            forName: AVPlayer.rateDidChangeNotification,
+            object: self.player,
+            queue: .main)
+        { [weak self] notification in
+            // AVKit's controls change AVPlayer directly, bypassing our methods.
+            // Buffering and natural completion are not explicit set-rate actions.
+            guard notification.userInfo?[reasonKey] as? String == explicitRateChange else { return }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.player.rate == 0 {
+                    self.playbackCoordinator.playbackDidPause(self)
+                } else if self.playbackAllowed() {
+                    self.playbackCoordinator.activate(self)
+                } else {
+                    self.isPlaybackBlocked = true
+                    self.player.pause()
+                }
+            }
         }
     }
 
@@ -250,12 +285,12 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
                     return
                 }
                 let playing = self.player.timeControlStatus == .playing
-                let ownsPlayback = ChatMediaPlaybackCoordinator.shared.isActive(self)
+                let ownsPlayback = self.playbackCoordinator.isActive(self)
                 if playing || ownsPlayback, !self.playbackAllowed() {
                     self.player.pause()
                     self.isPlaybackBlocked = true
                     self.isPlaying = false
-                    ChatMediaPlaybackCoordinator.shared.release(self)
+                    self.playbackCoordinator.release(self)
                     continue
                 }
                 if playing, !ownsPlayback {
@@ -266,14 +301,14 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
                         continue
                     }
                     self.isPlaybackBlocked = false
-                    ChatMediaPlaybackCoordinator.shared.activate(self)
+                    self.playbackCoordinator.activate(self)
                 } else if !playing, self.isPlaying {
                     if self.rewindIfFinished() {
-                        ChatMediaPlaybackCoordinator.shared.release(self)
+                        self.playbackCoordinator.release(self)
                     }
                 }
                 self.isPlaying = playing
-                ChatMediaPlaybackCoordinator.shared.updateNowPlaying(self)
+                self.playbackCoordinator.updateNowPlaying(self)
             }
         }
     }
@@ -296,7 +331,7 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
         self.player.pause()
         self.isPlaying = false
         self.isUnavailable = true
-        ChatMediaPlaybackCoordinator.shared.release(self)
+        self.playbackCoordinator.release(self)
     }
 
     private nonisolated static func writeTemporaryVideo(
