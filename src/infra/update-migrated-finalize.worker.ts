@@ -47,6 +47,7 @@ import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
@@ -155,10 +156,12 @@ async function finalizeMigratedUpdate(): Promise<void> {
     return;
   }
   if (process.argv[2] === "--post-core") {
-    return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
+    const postCoreInput = readUpdatePostCoreInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedPostCore(postCoreInput));
   }
   if (process.argv[2] === "--doctor") {
-    return await runDelegatedDoctor(readUpdateDoctorInput(JSON.parse(text)));
+    const doctorInput = readUpdateDoctorInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedDoctor(doctorInput));
   }
   // SAFETY: Only the typed parent continuation serializes this private input.
   const input = JSON.parse(text) as MigratedUpdateFinalizationInput;

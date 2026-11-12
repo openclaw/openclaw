@@ -89,6 +89,7 @@ const operatorAuthority = (accessOnly: boolean): AdmittedRunOperatorAuthority =>
             sessionAccessCap: "none" as const,
             sandboxRequired: false,
             agents: "*" as const,
+            accessPrograms: { cyber: [] },
           },
         }
       : { modelPolicy: { models: [], allows: () => true } }),

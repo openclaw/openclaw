@@ -150,6 +150,7 @@ export async function prepareCrabboxProjectFiles(params: {
       throw new Error("Enrolled project cannot verify its completed workspace");
     }
     await params.project.inspectPreparedWorkspace({
+      recordRecipePreparation: params.recordRecipePreparation,
       runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
     });
     return undefined;

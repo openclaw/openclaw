@@ -203,6 +203,8 @@ export async function handleChatHistoryRequest({
                 maxChars: effectiveMaxChars,
                 queuedRunIds,
                 cronStorePath: context.cronStorePath,
+                resolveGatewayContext: context.resolveGatewayContext,
+                physicalPaths: rowProjection.physicalPaths,
               },
             ),
           )

@@ -4,7 +4,10 @@ import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
-import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import type {
+  LocalWorkspaceManifestRecord,
+  LocalWorkspaceManifestNode,
+} from "./local-workspace-manifest-tree.js";
 import type {
   LocalWorkspaceManifestValue,
   LocalWorkspaceProjection,
@@ -12,6 +15,7 @@ import type {
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
+  type WorkspaceManifestPathPolicy,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
@@ -31,6 +35,25 @@ export function parseLocalWorkspaceSourcePaths(value: string): string[] {
     throw new Error("Invalid local workspace source admission");
   }
   return paths;
+}
+
+/** Read guest ignore files with the host's index/config, never guest Git metadata. */
+export async function readLocalWorkspaceGitExclusions(
+  root: string,
+  projection: string,
+  retainedPaths: ReadonlySet<string>,
+) {
+  const listed = await requireGitBuffer(root, [
+    `--work-tree=${projection}`,
+    "ls-files",
+    "--full-name",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+  ]);
+  return { paths: new Set(decodeLocalWorkspaceGitPaths(listed)), retainedPaths };
 }
 
 /** Admit untracked source once, before any guest can change canonical ignore rules. */
@@ -192,8 +215,34 @@ async function selectArchiveManifest(params: ArchiveBaselineInput) {
   };
 }
 
-function archiveDocument(manifest: WorkerWorkspaceManifest) {
-  const rawManifest = serializeWorkerWorkspaceManifest(manifest);
+export function localWorkspaceManifestDocument(
+  nodes: Iterable<LocalWorkspaceManifestNode>,
+  baseCommit: string,
+  retained?: string[],
+  pathPolicy: WorkspaceManifestPathPolicy = "current",
+) {
+  const manifest: WorkerWorkspaceManifest = {
+    version: 1,
+    baseCommit,
+    entries: [],
+    directories: [],
+    ...(retained ? { buildCacheInputs: retained } : {}),
+  };
+  for (const node of nodes) {
+    if (node.type === "directory") {
+      manifest.directories!.push(node.path);
+    } else {
+      manifest.entries.push(node);
+    }
+  }
+  return archiveDocument(manifest, pathPolicy);
+}
+
+function archiveDocument(
+  manifest: WorkerWorkspaceManifest,
+  pathPolicy: WorkspaceManifestPathPolicy = "current",
+) {
+  const rawManifest = serializeWorkerWorkspaceManifest(manifest, pathPolicy);
   return {
     rawManifest,
     manifestRef: "sha256:" + createHash("sha256").update(rawManifest).digest("hex"),

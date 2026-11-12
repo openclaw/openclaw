@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../lib/local-error-catalog.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import { openClawIdDocumentConfig } from "./openclaw-id-document.ts";
 import { readWebPushAccess, type WebPushAccess } from "./web-push-access.ts";
 
 const SW_READY_TIMEOUT = 10_000;
@@ -160,7 +161,11 @@ async function reconcileWebPushCapability(
   canManage: boolean,
   publish: (patch: WebPushCapabilityPatch) => void,
 ): Promise<WebPushCapabilityPatch> {
-  const subscription = await getExistingSubscription();
+  // WebKit can suspend enabled ID pages on a passive PushManager read before permission.
+  const subscription =
+    openClawIdDocumentConfig() && Notification.permission !== "granted"
+      ? null
+      : await getExistingSubscription();
   if (subscription && !canManage) {
     publish({ subscription: "local" });
     return {

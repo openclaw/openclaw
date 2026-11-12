@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import "../pages/chat/components/browser-tab-card.css";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
@@ -433,6 +434,11 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         // This matrix checks final colors; animation behavior has its own cases.
         host.style.setProperty("--control-ui-transition-fast", "0s");
         const { page, userEvent } = await import("vitest/browser");
+        const hover = async (element: HTMLElement) => {
+          // These fixtures are static: skip stability frames, but prove the pointer hit.
+          await page.elementLocator(element).hover({ force: true });
+          expect(element.matches(":hover"), element.textContent ?? "hover target").toBe(true);
+        };
         const style = document.head.appendChild(document.createElement("style"));
         onTestFinished(() => style.remove());
         style.textContent =
@@ -507,7 +513,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
         ]) {
           const canonical = className.includes("oc-menu-item");
           for (const { name: state, menu, plain } of states) {
-            await page.elementLocator(park).hover();
+            await hover(park);
             park.focus();
             const item = host.appendChild(document.createElement("button"));
             item.className = className;
@@ -537,14 +543,14 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
             const label = `${className}: ${state}`;
             expect(getComputedStyle(item).backgroundColor, `${label} resting`).toBe(color(resting));
             expect(getComputedStyle(item).opacity, `${label} opacity`).toBe(opacity);
-            await page.elementLocator(item).hover();
+            await hover(item);
             await expect
               .poll(() => getComputedStyle(item).backgroundColor, {
                 message: `${label} hover`,
               })
               .toBe(color(interactive));
             if (!item.disabled) {
-              await page.elementLocator(park).hover();
+              await hover(park);
               await userEvent.keyboard("{Tab}");
               item.focus();
               expect(item.matches(":focus-visible"), `${label} keyboard focus`).toBe(true);
@@ -681,3 +687,87 @@ async function openAdmittedMenu(host: HTMLElement, selector: string) {
     .toEqual({ expanded: "true", shown: true, interactive: true });
   return menu;
 }
+
+describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
+  it("keeps multiline labels inside their highlight in a capped scrolling menu", async () => {
+    await import("../styles/sidebar-menus.css");
+    const { renderSidebarMenuAction } = await import("./app-sidebar-dropdown.tsx");
+    const host = mountMenu({
+      id: "multiline-menu",
+      label: "Multiline menu",
+      panelClass: "sidebar-customize-menu",
+      items: Array.from({ length: 20 }, (_, index) => ({
+        ...renderSidebarMenuAction(`row-${index}`, `Action ${index}`, "key"),
+        content: (
+          <span class="sidebar-openclaw-id__lines">
+            <span>Action {index}</span>
+            <span class="sidebar-openclaw-id__detail">
+              A wrapped secondary description that must fit inside its highlighted row.
+            </span>
+          </span>
+        ),
+      })),
+    });
+    const menu = await openMenu(host);
+    expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+    for (const label of menu.querySelectorAll(".sidebar-openclaw-id__lines")) {
+      const row = label.closest(".oc-menu-item")!.getBoundingClientRect();
+      const bounds = label.getBoundingClientRect();
+      expect(bounds.top).toBeGreaterThanOrEqual(row.top);
+      expect(bounds.bottom).toBeLessThanOrEqual(row.bottom);
+    }
+  });
+
+  it.each(["Enter", "Space", "disabled"])(
+    "registers the signed-out native button: %s",
+    async (key) => {
+      await import("../styles/sidebar-menus.css");
+      const { openClawIdMenuEntries } = await import("./openclaw-id/account-menu.tsx");
+      const { page, userEvent } = await import("vitest/browser");
+      const selected = vi.fn();
+      const host = mountMenu({
+        id: "sign-in-menu",
+        label: "Account menu",
+        panelClass: "sidebar-customize-menu",
+        items: [
+          ...openClawIdMenuEntries({
+            status: { state: "on" },
+            link: { linked: false },
+            channel: "local_operator",
+            owner: true,
+            connection: { kind: "local" },
+            services: {
+              issuerUrl: null,
+              discoveryUrl: null,
+              loaderDomain: null,
+              clientId: key === "disabled" ? undefined : "fixture",
+            },
+          }),
+          { id: "settings", label: "Settings" },
+        ],
+        onSelect: selected,
+      });
+      const menu = await openMenu(host);
+      const button = menu.querySelector<HTMLButtonElement>('[data-value="openclaw-id:sign-in"]')!;
+      await expect
+        .element(page.elementLocator(button))
+        .toHaveAccessibleName("Sign in with OpenClaw ID");
+      expect(button.getAttribute("role")).toBe("button");
+      query(menu, '[data-value="settings"]').focus();
+      await userEvent.keyboard("{ArrowUp}");
+      if (key === "disabled") {
+        expect(button.disabled).toBe(true);
+        await expect
+          .element(page.elementLocator(button))
+          .toHaveAccessibleDescription(t("openclawId.signInUnconfigured"));
+        expect(document.activeElement).not.toBe(button);
+        button.click();
+        expect(selected).not.toHaveBeenCalled();
+      } else {
+        await expect.poll(() => document.activeElement).toBe(button);
+        await userEvent.keyboard(key === "Enter" ? "{Enter}" : " ");
+        expect(selected).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+});

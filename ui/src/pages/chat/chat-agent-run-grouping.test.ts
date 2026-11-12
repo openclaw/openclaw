@@ -76,7 +76,27 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
-  it.each(["interrupted", "silent-terminal"] as const)(
+  it.each([
+    { label: "commentary", fields: { phase: "commentary" } },
+    { label: "provider speech", fields: { __openclaw: { voiceTranscript: "provider-owned" } } },
+    { label: "reasoning mirror", fields: { __openclaw: { mirrorOrigin: "codex-app-server" } } },
+  ])("does not let stopped $label hide a later aborted tool step", ({ fields }) => {
+    const receipt = assistant("nonterminal-message", { ...fields, stopReason: "stop" });
+    const work = assistant("unfinished-work", { stopReason: "toolUse" });
+    const messages = [receipt, work].flatMap((part) => part.messages.map(({ message }) => message));
+    for (const active of [false, true]) {
+      const frame = requireFrame(
+        coalesceAgentRunFrames([userBoundary(), receipt, work, toolGroup("step")], {
+          messages: messages.map((message) => Object.assign({}, message, { runId: "run-1" })),
+          activeRunIds: active ? ["run-1"] : [],
+          session: { lastRunId: "run-1", abortedLastRun: true },
+        })[1],
+      );
+      expect(frame.outcome.kind).toBe(active ? "active" : "interrupted");
+    }
+  });
+
+  it.each(["interrupted", "yielded", "silent-terminal"] as const)(
     "classifies a persisted tool-use tail as %s without inventing a final answer",
     (state) => {
       const runId = "run-tail";
@@ -93,7 +113,7 @@ describe("coalesceAgentRunFrames", () => {
               ...commentary.messages.map(({ message }) => message),
               ...(state === "silent-terminal" ? [terminal] : []),
             ],
-            activeRunId: null,
+            session: { lastRunId: runId, abortedLastRun: state === "interrupted" },
           },
         )[1],
       );

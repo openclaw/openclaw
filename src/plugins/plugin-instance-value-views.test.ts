@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectLiveObjects } from "../test-utils/retention.js";
 import {
   createOwnedTestInstance,
-  expectLiveObjects,
   readRegistryLabel,
   selectRegistry,
   throwing,
@@ -12,8 +12,11 @@ import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gatew
 it.each(["ordinary", "consumer"] as const)(
   "retains an adopted registry through idle and pending %s iteration, then releases it",
   async (custody) => {
-    class StreamRegistry {
-      readonly fixtureLabel = "StreamRegistry";
+    const registries: WeakRef<object>[] = [];
+    function createStreamRegistry() {
+      const registry = {};
+      registries.push(new WeakRef(registry));
+      return registry;
     }
     const instance = createOwnedTestInstance("direct-values", "bundled");
     const record = instance.owner!.record;
@@ -33,20 +36,20 @@ it.each(["ordinary", "consumer"] as const)(
         observe();
       }
     }
-    selectRegistry(record, "selected", new StreamRegistry());
+    selectRegistry(record, "selected", createStreamRegistry());
     const iterator = (consumer ?? instance).wrap(stream())[Symbol.asyncIterator]();
     selectRegistry(record, "successor");
     let pending: ReturnType<typeof iterator.next> | undefined;
     try {
-      await expectLiveObjects(StreamRegistry, 1);
+      await expectLiveObjects(registries, 1);
       expect(await iterator.next()).toEqual({ done: false, value: "first" });
       pending = iterator.next();
-      await expectLiveObjects(StreamRegistry, 1);
+      await expectLiveObjects(registries, 1);
       resume.resolve();
       expect(await pending).toEqual({ done: false, value: "second" });
-      await expectLiveObjects(StreamRegistry, 1);
+      await expectLiveObjects(registries, 1);
       expect(await iterator.return()).toEqual({ done: true, value: undefined });
-      await expectLiveObjects(StreamRegistry, 0);
+      await expectLiveObjects(registries, 0);
       expect(observed).toEqual(["selected", "selected", "selected", "selected"]);
       expect((consumer ?? instance).run(readRegistryLabel)).toBe("successor");
     } finally {

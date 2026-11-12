@@ -353,6 +353,7 @@ async function downloadWorkspace(params: WorkspaceTransferOperation<"download">)
       const observed = overlay
         ? await overlay.apply(staging)
         : await captureManifest({
+            mode: manifest.baseCommit ? "eligible" : "all",
             workspaceDir: staging,
             manifestHome: params.manifestHome,
             baseCommit: manifest.baseCommit,
@@ -478,6 +479,7 @@ async function uploadWorkspace(params: WorkspaceTransferOperation<"upload">): Pr
   );
   params.setStage("capture");
   const currentRef = await captureManifest({
+    mode: "all",
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,

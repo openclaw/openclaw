@@ -549,7 +549,9 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     (): MenuEntry[] => {
       const current = inputs.compactView;
       if (mobile()) {
-        return current === "snooze" ? view.compact(current) : mobileMenu.root(root());
+        return current === "snooze" || current === "open-in"
+          ? view.compact(current)
+          : mobileMenu.root(root());
       }
       if (!props.compact || current === "root") {
         return root();
@@ -590,8 +592,8 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     if (nextView) {
       event.preventDefault();
       inputs.onCompactViewChange(nextView);
-      if (managementView === "icon") {
-        view.appearance.prepare();
+      if (managementView) {
+        view.prepareView(managementView);
       } else if (nextView === "sharing" && !props.sharing?.openDisabledReason) {
         props.sharing?.onOpen();
       }

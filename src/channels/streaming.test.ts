@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
 import {
   type AgentPlanStep,
@@ -495,4 +496,126 @@ it("updates keyed progress lines in place", () => {
 
   expect(updated).toMatchObject(["Exec", { id: "preamble-1", text: "Checking stream" }]);
   expect(render(updated, { label: false })).toBe("• Exec\n• Checking stream");
+});
+
+it.each([
+  ["read", { path: "/tmp/report.txt" }, "Read", "from /tmp/report.txt"],
+  [
+    "knowledge_record",
+    { id: "00000000-0000-4000-8000-000000000002" },
+    "Read knowledge record",
+    undefined,
+  ],
+  [
+    "knowledge_remember",
+    { requestId: "00000000-0000-4000-8000-000000000001", items: [{ text: "Private claim" }] },
+    "Remember knowledge",
+    undefined,
+  ],
+  [
+    "sessions_history",
+    { sessionKey: "agent:demo:subagent:opaque", limit: 8, includeTools: true },
+    "Read session history",
+    undefined,
+  ],
+  [
+    "sessions_spawn",
+    { label: "Check streaming", runTimeoutSeconds: 600, task: "Private instructions" },
+    "Start subagent",
+    "Check streaming",
+  ],
+  [
+    "sessions_send",
+    {
+      sessionKey: "agent:demo:subagent:opaque",
+      label: "Check streaming",
+      timeoutSeconds: 30,
+      message: "Private instructions",
+    },
+    "Send to session",
+    "Check streaming",
+  ],
+  [
+    "sessions_send",
+    {
+      sessionKey: "agent:demo:subagent:00000000-0000-4000-8000-000000002633",
+      label: "Check streaming",
+    },
+    "Send to session",
+    "Check streaming …2633",
+  ],
+  [
+    "sessions_history",
+    { sessionKey: "agent:demo:subagent:00000000-0000-4000-8000-00000000a4f0" },
+    "Read session history",
+    "…a4f0",
+  ],
+  [
+    "subagents",
+    { action: "steer", target: "Review browser" },
+    "Send to subagent",
+    "Review browser",
+  ],
+  [
+    "subagents",
+    {
+      action: "steer",
+      target: "00000000-0000-4000-8000-000000002633",
+      message: "Private instructions",
+    },
+    "Send to subagent",
+    "…2633",
+  ],
+  ["nodes", { action: "status" }, "List nodes", undefined],
+  ["sessions_send", { sessionKey: "agent:demo:subagent:opaque" }, "Send to session", undefined],
+  [
+    "nodes",
+    {
+      action: "invoke",
+      invokeCommand: "system.which",
+      node: "preview-node",
+      invokeParamsJson: JSON.stringify({ bins: ["git", "node", "pnpm"] }),
+    },
+    "Invoke node operation",
+    "invoke command system.which, node preview-node",
+  ],
+] as const)(
+  "prepares readable %s activity without diagnostic identifiers",
+  (name, args, label, detail) => {
+    const activity = projectAgentToolActivity({ toolCallId: "call", name, args, phase: "start" });
+    expect(activity.status).toBe("running");
+    for (const input of [
+      { event: "item" as const, ...activity, itemKind: activity.kind },
+      toolInput(name, args),
+    ]) {
+      const line = buildForEntry(undefined, input);
+      expect(line?.label).toBe(label);
+      expect(line?.detail).toBe(detail);
+      if (!detail) {
+        expect(formatForEntry(undefined, input)).toBe(
+          input.event === "item" ? `${label}: running` : label,
+        );
+      }
+      expect(line?.text).not.toMatch(/opaque|00000000|Private|timeout|tools true/);
+    }
+  },
+);
+
+it("keeps titled node execution private under status policy and diagnostic under raw policy", () => {
+  const activity = projectAgentToolActivity({
+    toolCallId: "command",
+    name: "exec",
+    phase: "start",
+    args: {
+      title: "Check runtime version",
+      command: "node --version",
+      host: "node",
+      node: "preview-node",
+    },
+  });
+  const input = { event: "item" as const, ...activity, itemKind: activity.kind };
+  expect(formatForEntry(undefined, input)).toBe("Exec: running");
+  expect(buildForEntry(rawCommandEntry, input)?.detail).toBe(
+    "Check runtime version, node: preview-node",
+  );
 });

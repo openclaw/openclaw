@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry } from "../../../api/types.ts";
+import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
@@ -10,6 +11,8 @@ import { formatContextTokenCapacity } from "../../../lib/format.ts";
 registerModelControlsEnglish();
 
 export type ChatModelPickerOption = {
+  /** Configured provider branding from the admitted catalog row. */
+  presentation?: ProviderPresentation;
   agentRuntimeId?: string;
   /** Null is an unknown configured base; undefined is an ordinary model-only row. Both clear a prior pin. */
   agentRuntime?: string | null;
@@ -52,12 +55,12 @@ export function formatModelContextMeta(
   const maximum = option.contextWindow;
   if (active && maximum && active < maximum) {
     return translate("chat.modelControls.contextActiveAndMax", {
-      active: formatContextTokenCapacity(active),
-      maximum: formatContextTokenCapacity(maximum),
+      active: formatContextTokenCapacity(active, 0),
+      maximum: formatContextTokenCapacity(maximum, 0),
     });
   }
   const capacity = active || maximum;
-  return capacity ? formatContextTokenCapacity(capacity) : "";
+  return capacity ? formatContextTokenCapacity(capacity, 0) : "";
 }
 
 /** Owners omit completed empty groups; a published group has rows or an active receipt. */
@@ -72,11 +75,11 @@ export type ChatModelPickerTargetGroup = {
 };
 
 export function formatModelLabel(
-  option: Pick<ChatModelPickerOption, "label" | "provider">,
+  option: Pick<ChatModelPickerOption, "label" | "provider" | "presentation">,
 ): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider),
+    providerDisplayLabel(option.provider, option.presentation),
   ].toSorted((left, right) => right.length - left.length);
   for (const prefix of prefixes) {
     if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {

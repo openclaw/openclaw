@@ -119,27 +119,32 @@ export async function openAssistantMedia(
   const mapped = !policy.remote && sandbox ? resolveSandboxPathMapping([sandbox], source) : null;
   const reference = await resolveMediaReferenceLocalPathInfo(mapped?.hostPath ?? source);
   let workspaceDir = sandbox?.hostRoot;
+  let assertWorkspaceCurrent = assertCurrent;
+  let filePath = reference.path;
+  let localRoots = policy.localRoots;
   if (policy.remote && reference.kind === "local") {
     throw new LocalMediaAccessError("invalid-path", "File is on another computer");
   }
   if (sandbox && reference.kind === "local" && isPathInside(sandbox.hostRoot, reference.path)) {
-    const { withSettledLocalWorkspacePath } =
-      await import("./worker-environments/local-workspace-projection.js");
+    const { readLocalWorkspacePath } =
+      await import("./worker-environments/local-workspace-read.js");
     assertCurrent();
-    workspaceDir = await withSettledLocalWorkspacePath(
-      { cwd: sandbox.hostRoot, assertCurrent },
-      async (custody) => {
-        if (mapped && custody?.worktreeId !== sandbox.worktreeId) {
-          throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
-        }
-        return custody?.projectionPath ?? sandbox.hostRoot;
-      },
-    );
-    assertCurrent();
+    const backing = await readLocalWorkspacePath({
+      cwd: sandbox.hostRoot,
+      worktreeId: sandbox.worktreeId,
+      assertCurrent,
+    });
+    if (mapped && backing.worktreeId !== sandbox.worktreeId) {
+      throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
+    }
+    workspaceDir = backing.root;
+    assertWorkspaceCurrent = backing.assertCurrent;
+    filePath = path.join(workspaceDir, path.relative(sandbox.hostRoot, reference.path));
+    localRoots = policy.localRoots.map((root) => (root === sandbox.hostRoot ? backing.root : root));
   }
   let outsideRoots = false;
   try {
-    await assertLocalMediaAllowed(reference.path, policy.localRoots);
+    await assertLocalMediaAllowed(filePath, localRoots);
   } catch (error) {
     if (!(error instanceof LocalMediaAccessError) || error.code !== "path-not-allowed") {
       throw error;
@@ -149,11 +154,11 @@ export async function openAssistantMedia(
       throw error;
     }
   }
-  const opened = await openLocalFileSafely({ filePath: reference.path });
+  const opened = await openLocalFileSafely({ filePath });
   try {
-    let assertSourceCurrent = assertCurrent;
+    let assertSourceCurrent = assertWorkspaceCurrent;
     if (mapped && sandbox && workspaceDir) {
-      if (!isPathInside(sandbox.hostRoot, opened.realPath)) {
+      if (!isPathInside(workspaceDir, opened.realPath)) {
         throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
       }
       const { prepareLocalWorkspaceFileRead } =
@@ -165,10 +170,10 @@ export async function openAssistantMedia(
           source,
           path.posix.join(
             sandbox.containerRoot,
-            ...path.relative(sandbox.hostRoot, opened.realPath).split(path.sep),
+            ...path.relative(workspaceDir, opened.realPath).split(path.sep),
           ),
         ],
-        assertCurrent,
+        assertCurrent: assertWorkspaceCurrent,
       });
     }
     let file: AssistantMediaFile | undefined;
@@ -188,7 +193,7 @@ export async function openAssistantMedia(
     }
     // Validate the descriptor target too: a symlink may change between containment and open.
     if (!outsideRoots) {
-      await assertLocalMediaAllowed(opened.realPath, policy.localRoots);
+      await assertLocalMediaAllowed(opened.realPath, localRoots);
     }
     const sniffBuffer = Buffer.alloc(Math.min(opened.stat.size, 8192));
     const bytesRead = sniffBuffer.length

@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
-import { Icon } from "./icon.tsx";
+import { IconButton } from "./icon-button.tsx";
 
 /** The shared top of an `.oc-dialog`: title, close and a muted description. */
 export function DialogHeader(props: {
@@ -15,15 +15,15 @@ export function DialogHeader(props: {
     <div class="oc-dialog__header">
       <h2 class="oc-dialog__title">{props.title}</h2>
       <Show when={props.onClose}>
-        <button
-          type="button"
+        <IconButton
+          size={28}
           class="oc-dialog__close"
-          aria-label={t("common.close")}
+          icon="x"
+          label={t("common.close")}
+          tooltip={false}
           disabled={props.closeDisabled}
           onClick={() => props.onClose?.()}
-        >
-          <Icon name="x" />
-        </button>
+        />
       </Show>
       <Show when={props.description}>
         <div class="oc-dialog__description">{props.description}</div>

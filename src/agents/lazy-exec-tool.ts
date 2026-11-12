@@ -13,6 +13,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { canInterruptExec } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import {
   createExecCompletionSchema,
@@ -47,6 +48,7 @@ export function createLazyExecTool(
     sessionId: defaults?.sessionId,
   });
   const processToolAvailabilityRef = defaults?.processToolAvailabilityRef ?? {};
+  let processToolOffered = processToolAvailabilityRef.value;
   const execSchema = createExecSchema(defaults);
   const execCompletionSchema = createExecCompletionSchema(defaults);
   let loadedTool: LoadedExecTool | undefined;
@@ -67,6 +69,7 @@ export function createLazyExecTool(
     {
       name: "exec",
       label: "exec",
+      interruptible: (args) => canInterruptExec(args, defaults),
       displaySummary: presentation?.displaySummary ?? EXEC_TOOL_DISPLAY_SUMMARY,
       getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
       get description() {
@@ -74,7 +77,7 @@ export function createLazyExecTool(
           presentation?.description ??
           describeExecTool({
             hasCronTool: defaults?.hasCronTool === true,
-            hasProcessTool: processToolAvailabilityRef.value,
+            hasProcessTool: processToolOffered,
             autoReview: defaults?.mode === "auto",
           })
         );
@@ -82,7 +85,7 @@ export function createLazyExecTool(
       get parameters() {
         return (
           presentation?.parameters ??
-          (processToolAvailabilityRef.value === false ? execCompletionSchema : execSchema)
+          (processToolOffered === false ? execCompletionSchema : execSchema)
         );
       },
       prepareBeforeToolCallParams: async (...args) =>
@@ -99,7 +102,9 @@ export function createLazyExecTool(
     } as AnyAgentTool,
     {
       prepareBeforeNormalization: true,
-      prepare: (_tool, callableTools) => {
+      prepare: (_tool, callableTools, offeredTools) => {
+        // Declarations follow the session catalog; execution retains this turn's authority.
+        processToolOffered = offeredTools.has("process");
         processToolAvailabilityRef.value = callableTools.has("process");
       },
       executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,

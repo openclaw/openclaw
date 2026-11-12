@@ -63,6 +63,9 @@ function press(pane: TestChatPane, init: KeyboardEventInit = {}) {
   return event;
 }
 
+const undoToast = () =>
+  vi.mocked(showToast).mock.calls.filter(([options]) => options.actionLabel === t("common.undo"));
+
 it.each(["success", "failure"])("archives via the keyboard with %s feedback", async (outcome) => {
   const { pane, state, patch, sessions, row } = fixture();
   if (outcome === "failure") {
@@ -70,31 +73,19 @@ it.each(["success", "failure"])("archives via the keyboard with %s feedback", as
   }
   const scope = { agentId: "main", expectedSessionId: row.sessionId };
   expect(press(pane).defaultPrevented).toBe(true);
-  await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  // The shortcut holds the archive behind the same Undo window as the header menu.
+  await vi.waitFor(() => expect(undoToast()).toHaveLength(1));
+  expect(sessions.archiveVisibility(row.key)).toBe("pending");
+  expect(patch).not.toHaveBeenCalled();
+  undoToast()[0]![0].onDismiss?.("timeout");
   await vi.waitFor(() =>
-    expect(
-      outcome === "failure" ? state.chatError : vi.mocked(showToast).mock.calls.length,
-    ).toBeTruthy(),
+    expect(patch).toHaveBeenCalledExactlyOnceWith(row.key, { archived: true }, scope),
   );
   expect(state.chatMessage).toBe("Keep the unsent foreground draft");
   expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
   if (outcome === "failure") {
-    expect(state.chatError).toContain("Archive rejected");
-    expect(showToast).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(state.chatError).toContain("Archive rejected"));
     expect(sessions.archiveVisibility(row.key)).toBeUndefined();
-  } else {
-    expect(showToast).toHaveBeenCalledWith(
-      expect.objectContaining({ actionLabel: t("common.undo") }),
-    );
-    expect(patch).toHaveBeenCalledExactlyOnceWith(row.key, { archived: true }, scope);
-    vi.mocked(showToast).mock.calls.at(-1)?.[0].onAction?.();
-    await vi.waitFor(() =>
-      expect(patch).toHaveBeenCalledWith(
-        row.key,
-        { archived: false },
-        { ...scope, deferListRefresh: true },
-      ),
-    );
   }
 });
 
@@ -104,9 +95,11 @@ it("deduplicates rapid requests through the shared archive owner", async () => {
   patch.mockImplementation(() => pending.promise);
   press(pane);
   press(pane);
-  await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
-  expect(sessions.archiveVisibility(row.key)).toBe("pending");
+  await vi.waitFor(() => expect(sessions.archiveVisibility(row.key)).toBe("pending"));
   expect(press(pane).defaultPrevented).toBe(false);
+  expect(undoToast()).toHaveLength(1);
+  undoToast()[0]![0].onDismiss?.("timeout");
+  await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
   pending.resolve({});
   await vi.waitFor(() => expect(sessions.archiveVisibility(row.key)).toBeUndefined());
   expect(patch).toHaveBeenCalledOnce();

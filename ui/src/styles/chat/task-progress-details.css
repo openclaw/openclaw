@@ -506,35 +506,8 @@
 }
 
 .task-progress-details__switch {
-  position: relative;
+  display: inline-flex;
   flex: none;
-  width: 35px;
-  height: 20px;
-  border: 1px solid var(--muted);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--border-strong) 60%, transparent);
-}
-
-.task-progress-details__switch::before {
-  position: absolute;
-  inset-block-start: 3px;
-  inset-inline-start: 3px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--muted);
-  content: "";
-}
-
-.task-progress-details__switch[data-checked="true"] {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.task-progress-details__switch[data-checked="true"]::before {
-  inset-inline-start: auto;
-  inset-inline-end: 3px;
-  background: var(--bg);
 }
 
 @media (prefers-reduced-motion: reduce) {

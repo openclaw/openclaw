@@ -120,6 +120,38 @@ function runNpmPolicy(spec: string) {
 describe("install-cli.sh", () => {
   const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
 
+  it.each(["--install-method npn", "--method npn", ""])(
+    "rejects invalid methods without switching the active runtime (%s)",
+    (args) => {
+      const f = makeFixture("invalid-method");
+      f.runtime("prefix/tools/node-v24.22.1/bin");
+      f.runtime("prefix/tools/previous/bin");
+      const activeNode = join(f.root, "prefix/tools/node");
+      symlinkSync("previous", activeNode);
+      const result = f.run(
+        `
+        main --json --node-version 24.22.1 --prefix "$ROOT/prefix" ${args}
+        `,
+        { OPENCLAW_INSTALL_METHOD: "npn" },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      expect(readlinkSync(activeNode)).toBe("previous");
+      expect(JSON.parse(result.stdout)).toEqual({
+        event: "error",
+        message: "Unknown install method: npn (use npm or git)",
+      });
+    },
+  );
+
+  it.each(["npm", "git"])("allows --%s to override an invalid method", (method) => {
+    const result = runInstallCliShell(
+      `prepare_tmpdir() { printf '%s' "$INSTALL_METHOD"; exit 0; }; main --install-method npn --${method}`,
+      { OPENCLAW_INSTALL_METHOD: "invalid" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(method);
+  });
+
   it.each(["24.21.0", "24.22.1", "26.12.0", "26.12.1"])(
     "reuses compatible private Node %s with one stderr security warning when needed",
     (version) => {
@@ -268,7 +300,7 @@ fs.writeFileSync(path.join(process.env.ROOT, "temporary-storage.json"), JSON.str
               *) cp "$ROOT/node.tgz" "$2" ;;
             esac
           }
-          main --json --node-only --git --onboard --node-version 24.22.1 --prefix "$ROOT/nested/state"
+          main --json --node-only --install-method npn --onboard --node-version 24.22.1 --prefix "$ROOT/nested/state"
           `,
           {
             HOME: root,

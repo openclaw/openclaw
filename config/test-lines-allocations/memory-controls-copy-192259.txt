@@ -1,2 +1,0 @@
-# Preserve memory import permission/error and curated-settings assertions during the copy integration.
-33

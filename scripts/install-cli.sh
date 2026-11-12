@@ -1303,6 +1303,10 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  # Node-only recovery ignores the method; normal installs validate before any writes.
+  if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
+    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
+  fi
   # Reject unsupported source installs before changing runtime links or checkouts.
   # Node-only recovery owns its separate platform refusal and ignores the method.
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" == "git" && "$(os_detect)" == "freebsd" ]]; then
@@ -1336,7 +1340,7 @@ main() {
   install_node "$(os_detect)" "$(arch_detect)"
   if [[ "$INSTALL_METHOD" == "git" ]]; then
     install_openclaw_from_git "$GIT_DIR"
-  elif [[ "$INSTALL_METHOD" == "npm" ]]; then
+  else
     if [[ "$RUNTIME_ONLY" -eq 0 ]]; then
       ensure_git
     fi
@@ -1344,8 +1348,6 @@ main() {
       fix_npm_prefix_if_needed
     fi
     install_openclaw
-  else
-    fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
   fi
 
   local installed_version

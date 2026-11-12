@@ -1,8 +1,9 @@
-import fs from "node:fs";
+import fs, { writeSync } from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
-import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
+import { exitCliAfterOutput, watchCliExitAfterOutput } from "../cli/one-shot-exit.js";
+import { getPendingCliDisposers } from "../cli/runtime-cleanup.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
@@ -21,6 +22,22 @@ export const showDoctorIntro = (message: string) =>
   clackIntro(stylePromptTitle(message) ?? message);
 export const showDoctorOutro = (message: string) =>
   clackOutro(stylePromptTitle(message) ?? message);
+
+export function showDoctorComplete(params: { watchExit: boolean }): void {
+  showDoctorOutro("Doctor complete.");
+  if (params.watchExit) {
+    // Cleanup after this line can outlive arming the settled-exit watchdog; name what it holds.
+    watchCliExitAfterOutput(() => {
+      writeSync(
+        2,
+        `Doctor finished but the process is still alive: ${JSON.stringify({
+          activeResources: [...new Set(process.getActiveResourcesInfo())].toSorted(),
+          unsettledDisposers: getPendingCliDisposers(),
+        })}\n`,
+      );
+    });
+  }
+}
 
 /** Keep slow checks visible without writing human progress into machine output. */
 export async function withDoctorProgress<T>(

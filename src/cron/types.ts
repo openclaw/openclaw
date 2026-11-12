@@ -259,7 +259,6 @@ export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
   state?: unknown;
-  busy?: true;
 };
 
 export type CronJobExecutionResult = CronRunOutcome &
@@ -352,6 +351,8 @@ export type CronJobState = Omit<
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
   runningReceiptId?: string;
+  /** Receipt of the active run while its condition is still being evaluated; see the run queue. */
+  conditionCheckReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
@@ -397,7 +398,6 @@ export type CronTriggerFailureCode =
 /** Result union returned by the cron trigger-script evaluator. */
 export type CronTriggerEvaluationResult =
   | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
-  | { kind: "busy" }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
 /** Public cron job contract with spec fields and mutable run state. */
@@ -475,6 +475,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     sessionId: string;
     lifecycleRevision?: string;
   };
+  /** Original native process grant, independent of mutable payload authority; store-private. */
+  streamOperatorSource?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
   /** Trusted logical sandbox and original access basis, never public create/patch input. */
   streamSandbox?: CronStreamSandboxTarget;
   /** Immutable revisions inherited from the authorized creator session, never human mutation authority. */
@@ -507,6 +509,7 @@ type CronJobStateInput = Partial<
     | "streamSourceIdentity"
     | "sourceIdentity"
     | "runningReceiptId"
+    | "conditionCheckReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"
