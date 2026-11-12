@@ -1,2 +1,0 @@
-# Watcher thread isolation, portable lifecycle, startup recovery, and affected consumer boundary proof.
-118
