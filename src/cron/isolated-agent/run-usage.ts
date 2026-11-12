@@ -75,8 +75,9 @@ export async function recordCronRunUsage(params: {
   if (billableRuns.length === 0) {
     return;
   }
-  const { estimateAggregateUsageCost, resolveModelCostConfig } =
+  const { estimateAggregateUsageCost, captureModelCostPricing } =
     await import("../../utils/usage-format.js");
+  const pricing = await captureModelCostPricing(prepared.cfgWithAgentDefaults, prepared.agentDir);
   let estimatedCostUsd: number | undefined = 0;
   let hasSessionUsage = false;
   for (const run of billableRuns) {
@@ -86,12 +87,7 @@ export async function recordCronRunUsage(params: {
     const diagnosticUsage = meta?.diagnosticUsage ?? usage;
     const provider = meta?.provider ?? run.fallbackProvider;
     const model = meta?.model ?? run.fallbackModel;
-    const costConfig = resolveModelCostConfig({
-      provider,
-      model,
-      config: prepared.cfgWithAgentDefaults,
-      agentDir: prepared.agentDir,
-    });
+    const costConfig = pricing.resolve(provider, model);
     if (hasBillableUsage(usage)) {
       hasSessionUsage = true;
       const cost = asNonNegativeFiniteNumber(

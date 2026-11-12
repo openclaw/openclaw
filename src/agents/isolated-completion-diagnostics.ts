@@ -6,7 +6,11 @@ import {
   emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled,
 } from "../infra/diagnostic-events.js";
-import { estimateAggregateUsageCost } from "../utils/usage-format.js";
+import {
+  captureModelCostPricing,
+  estimateAggregateUsageCost,
+  type CapturedModelCostPricing,
+} from "../utils/usage-format.js";
 import type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import { hasObservedModelUsage, normalizeUsage, toDiagnosticUsage } from "./usage.js";
@@ -27,11 +31,16 @@ type CompletionUsageOwner = {
   runtimeKind: "cli" | "harness";
   provider: string;
   model: string;
+  assertCurrent?: () => void;
 };
 
 /** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
 function emitIsolatedCompletionUsage(
-  params: CompletionUsageOwner & { attemptId: string; result?: CompletionUsage },
+  params: CompletionUsageOwner & {
+    attemptId: string;
+    result?: CompletionUsage;
+    pricing?: CapturedModelCostPricing;
+  },
 ): void {
   const { config, result } = params;
   if (params.purpose === "plugin-completion" || !isDiagnosticsEnabled(config)) {
@@ -58,10 +67,7 @@ function emitIsolatedCompletionUsage(
       ? {
           costUsd: estimateAggregateUsageCost({
             usage,
-            provider,
-            model,
-            config,
-            agentDir: params.agentDir,
+            cost: params.pricing?.resolve(provider, model),
           }),
         }
       : {}),
@@ -75,6 +81,11 @@ export async function observeIsolatedCompletionUsage<T>(
   project: (result: T) => CompletionUsage,
 ): Promise<T> {
   const attemptId = randomUUID();
+  const pricing =
+    params.purpose !== "plugin-completion" && isDiagnosticsEnabled(params.config)
+      ? await captureModelCostPricing(params.config, params.agentDir).catch(() => undefined)
+      : undefined;
+  params.assertCurrent?.();
   let observed = false;
   const observe = (result?: T) => {
     if (observed) {
@@ -85,6 +96,7 @@ export async function observeIsolatedCompletionUsage<T>(
       emitIsolatedCompletionUsage({
         ...params,
         attemptId,
+        pricing,
         ...(result === undefined ? {} : { result: project(result) }),
       });
     } catch {

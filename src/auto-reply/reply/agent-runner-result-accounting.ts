@@ -15,6 +15,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import { MODEL_FALLBACK_NOTICE_KIND } from "../../shared/model-fallback-notice.js";
+import { captureModelCostPricing } from "../../utils/usage-format.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
@@ -187,9 +188,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
   const compactions = runResult.meta?.agentMeta?.compactionCount;
   const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
+  const pricing = await captureModelCostPricing(cfg, followupRun.run.agentDir);
   const replyUsageState = buildReplyUsageState({
     config: cfg,
-    agentDir: followupRun.run.agentDir,
+    pricing,
     provider: providerUsed,
     model: modelUsed,
     fallbackExhausted,
@@ -402,8 +404,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
   }
   const hadPendingLiveModelSwitch = activeSessionEntry?.liveModelSwitchPending === true;
   const usageParams = {
-    cfg,
-    agentDir: followupRun.run.agentDir,
+    pricing,
     usage,
     lastCallUsage,
     currentContextSnapshot,
@@ -485,6 +486,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     promptTokens,
     providerUsed,
     replyUsageState,
+    pricing,
     runId,
     runResult,
     selectedModel,

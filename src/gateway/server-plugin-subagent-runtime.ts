@@ -31,6 +31,7 @@ import type { PluginOrigin } from "../plugins/types.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
+import { captureModelCostPricing } from "../utils/usage-format.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "./operator-scopes.js";
 import type { GatewayContextResolver, GatewayRequestOptions } from "./server-methods/types.js";
 import { runPluginForkedTurn } from "./server-plugin-forked-turn.js";
@@ -481,12 +482,14 @@ export function createGatewaySubagentRuntime(
                 },
               }),
             );
+            const pricing = await captureModelCostPricing(cfg);
             runSignal.throwIfAborted();
             assertCurrent();
             const result = fallbackResult.result;
             assertOperatorModelAllowed(execution.operatorAuthority, result);
             finalizePluginLlmCompletion({
               cfg,
+              pricing,
               hostPluginId: pluginId,
               rawUsage: result.usage,
               result: {

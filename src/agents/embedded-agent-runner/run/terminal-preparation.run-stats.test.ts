@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { captureModelCostPricing } from "../../../utils/usage-format.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import {
@@ -33,28 +34,30 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     }
     usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
-    return prepareEmbeddedRunTerminal(
-      createTerminalPreparationInput({
-        admittedRunContext: createTestAdmittedRunContext("run-1"),
-        runParams: {
-          sessionId: "session-1",
-          runId: "run-1",
-          ...(statsInput.config ? { config: statsInput.config as never } : {}),
-        },
-        attempt: attemptResult({
-          lastAssistant: assistant,
-          currentAttemptAssistant: assistant,
-          currentAttemptCompletedAssistant: assistant,
-          ...statsInput.attempt,
-        }),
+    const input = createTerminalPreparationInput({
+      admittedRunContext: createTestAdmittedRunContext("run-1"),
+      runParams: {
+        sessionId: "session-1",
+        runId: "run-1",
+        ...(statsInput.config ? { config: statsInput.config as never } : {}),
+      },
+      attempt: attemptResult({
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
         currentAttemptCompletedAssistant: assistant,
-        provider,
-        model,
-        activeErrorContext: { provider, model },
-        outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
-        usageAccumulator,
+        ...statsInput.attempt,
       }),
-    );
+      currentAttemptCompletedAssistant: assistant,
+      provider,
+      model,
+      activeErrorContext: { provider, model },
+      outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
+      usageAccumulator,
+    });
+    return prepareEmbeddedRunTerminal({
+      ...input,
+      pricing: await captureModelCostPricing(input.runParams.config, input.runParams.agentDir),
+    });
   }
 
   const modelConfig = <T extends object>(fields: T) => ({

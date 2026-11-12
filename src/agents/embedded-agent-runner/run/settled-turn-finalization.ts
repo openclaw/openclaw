@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import type { SessionTranscriptWriterFence } from "../../../config/sessions/transcript-write-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { captureModelCostPricing } from "../../../utils/usage-format.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
   buildAgentRunTerminalOutcome,
@@ -44,12 +45,13 @@ import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js"
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
+type UnpricedTerminalPreparationInput = Omit<TerminalPreparationInput, "pricing">;
 type CreateAttemptControls = ReturnType<
   typeof createEmbeddedRunLaneController
 >["createAttemptControls"];
 const MAX_EMPTY_SETTLED_FINALIZATION_ATTEMPTS = 2;
 type TerminalPreparationBase = Omit<
-  TerminalPreparationInput,
+  UnpricedTerminalPreparationInput,
   | "attempt"
   | "currentAttemptCompletedAssistant"
   | "sessionIdUsed"
@@ -66,10 +68,11 @@ type SettledTurnFinalizationOptions = {
 };
 
 async function prepareSettledTurnFinalization(
-  input: TerminalPreparationInput,
+  input: UnpricedTerminalPreparationInput,
   options: SettledTurnFinalizationOptions,
 ) {
   const { attempt } = input;
+  const pricing = await captureModelCostPricing(input.runParams.config, input.runParams.agentDir);
   const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
   const observeSourceDelivery = async () => {
     let sourceReplyDeliveryState: TerminalPreparationInput["sourceReplyDeliveryState"];
@@ -97,6 +100,7 @@ async function prepareSettledTurnFinalization(
   const prepared = prepareEmbeddedRunTerminal({
     ...input,
     ...delivery,
+    pricing,
   });
   const prompt = resolveSettledTurnFinalizationRequest({
     runParams: input.runParams,
@@ -116,12 +120,12 @@ async function prepareSettledTurnFinalization(
       !input.runParams.providerReviewAcknowledgment &&
       typeof options.harness.finalizeSettledTurn === "function",
   });
-  return { prepared, prompt, observeSourceDelivery };
+  return { prepared, prompt, observeSourceDelivery, pricing };
 }
 
 /** Requests projection only after the canonical delivery and finalization decision. */
 export async function requestSettledTurnFinalizationContext(
-  input: TerminalPreparationInput,
+  input: UnpricedTerminalPreparationInput,
   options: SettledTurnFinalizationOptions,
   captureContext: () => Promise<
     EmbeddedRunAttemptWithReceiptEvidence["settledTurnFinalizationContext"]
@@ -325,6 +329,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     ...completion,
     ...(await observeSourceDelivery()),
     lastRunPromptUsage,
+    pricing: preparation.pricing,
   });
   // A tool-free summary cannot show that the cut-off work finished, so the host
   // says the turn was cut short instead of presenting the summary as a clean finish.

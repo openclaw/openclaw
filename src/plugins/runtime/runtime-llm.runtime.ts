@@ -10,6 +10,10 @@ import { AsyncWorkScope, captureAsyncWorkTracker } from "../../shared/async-work
 import { createDeferredCore } from "../../shared/deferred.js";
 import { modelKey } from "../../shared/model-key.js";
 import {
+  captureModelCostPricing,
+  type CapturedModelCostPricing,
+} from "../../utils/usage-format.js";
+import {
   createLlmCompleteError as completionError,
   isLlmOperatorAuthorizationError,
   withLlmRuntimeLifecycleErrors,
@@ -119,6 +123,7 @@ function buildMessages(params: {
 
 export function finalizePluginLlmCompletion(params: {
   cfg: OpenClawConfig;
+  pricing: CapturedModelCostPricing;
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
@@ -126,6 +131,7 @@ export function finalizePluginLlmCompletion(params: {
 }): LlmCompleteResult {
   const usage = finalizePluginModelUsage({
     cfg: params.cfg,
+    pricing: params.pricing,
     hostPluginId: params.hostPluginId,
     suppressUsage: params.suppressUsage,
     rawUsage: params.rawUsage,
@@ -274,9 +280,11 @@ export function createRuntimeLlm(
           operatorAuthority,
           assertCurrent,
         });
+        const pricing = await captureModelCostPricing(cfg);
         assertCurrent();
         return finalizePluginLlmCompletion({
           cfg,
+          pricing,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
           result: {
@@ -336,6 +344,8 @@ export function createRuntimeLlm(
           throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
         await using prepared = preparation;
+        const pricing = await captureModelCostPricing(cfg);
+        assertCurrent();
         let assertPreparedCurrent = assertCurrent;
 
         const work = new AsyncWorkScope();
@@ -418,6 +428,7 @@ export function createRuntimeLlm(
                 .join("");
               return finalizePluginLlmCompletion({
                 cfg,
+                pricing,
                 hostPluginId: pluginPolicyId,
                 // Provider failures resolve as messages; only visible successful output owns usage.
                 suppressUsage:

@@ -515,10 +515,7 @@ export async function prepareReplyAgentPayloads(state: {
     });
     const costUsd = estimateAggregateUsageCost({
       usage: diagnosticUsage,
-      provider: providerUsed,
-      model: modelUsed,
-      config: cfg,
-      agentDir: followupRun.run.agentDir,
+      cost: accounting.pricing.resolve(providerUsed, modelUsed),
     });
     emitTrustedDiagnosticEvent({
       type: "model.usage",
@@ -689,8 +686,8 @@ export async function prepareReplyAgentPayloads(state: {
     activeSessionEntry?.responseUsage ??
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
   const responseUsageLine = resolveResponseUsageLine({
+    pricing: accounting.pricing,
     config: cfg,
-    agentDir: followupRun.run.agentDir,
     sessionRaw: responseUsageSessionRaw,
     channel: replyToChannel,
     usage,

@@ -13,6 +13,7 @@ import {
 } from "../plugins/provider-auth-authority.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
+import { captureModelCostPricing } from "../utils/usage-format.js";
 import {
   assertOperatorModelAllowed,
   prepareSystemAgentRunAdmission,
@@ -191,6 +192,7 @@ export async function runBtwSideQuestion(
       }
       return runtimeSelection;
     };
+    const pricing = await captureModelCostPricing(params.cfg, params.agentDir);
     const recordBtwUsage = (runtimeModel: Model, usage?: NormalizedUsage) => {
       params.onUsage?.(usage);
       if (params.onUsage) {
@@ -201,7 +203,7 @@ export async function runBtwSideQuestion(
       }
       const usageState = buildReplyUsageState({
         config: params.cfg,
-        agentDir: params.agentDir,
+        pricing,
         agentId: sessionAgentId,
         sessionId,
         provider: runtimeModel.provider,

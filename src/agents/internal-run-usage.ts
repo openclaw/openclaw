@@ -4,12 +4,12 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { estimateAggregateUsageCost } from "../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { hasBillableUsage, toDiagnosticUsage } from "./usage.js";
 
 /** Detached maintenance settles its own usage, never the foreground conversation's totals. */
-export function emitInternalRunUsageDiagnostic(
+export async function emitInternalRunUsageDiagnostic(
   result: EmbeddedAgentRunResult,
   params: {
     config: OpenClawConfig;
@@ -20,7 +20,7 @@ export function emitInternalRunUsageDiagnostic(
     provider?: string;
     model?: string;
   },
-): void {
+): Promise<void> {
   if (!isDiagnosticsEnabled(params.config)) {
     return;
   }
@@ -53,10 +53,12 @@ export function emitInternalRunUsageDiagnostic(
     },
     costUsd: estimateAggregateUsageCost({
       usage,
-      provider,
-      model,
-      config: params.config,
-      agentDir: params.agentDir,
+      cost: await resolveModelCostConfig({
+        provider,
+        model,
+        config: params.config,
+        agentDir: params.agentDir,
+      }),
     }),
     durationMs: result.meta?.durationMs,
   });

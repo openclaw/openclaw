@@ -1,6 +1,6 @@
 import { getRuntimeConfig } from "../../config/io.js";
 import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { hasBillableUsage, toDiagnosticUsage } from "../usage.js";
 import type { AgentCommandIngressOpts } from "./types.js";
@@ -13,11 +13,11 @@ type AgentCommandResult = {
 };
 
 /** Emit the ingress-only model usage diagnostic after a completed agent run. */
-export function emitIngressModelUsageDiagnostic(
+export async function emitIngressModelUsageDiagnostic(
   result: AgentCommandResult,
   opts: AgentCommandIngressOpts,
   agentDir: string,
-): void {
+): Promise<void> {
   const cfg = getRuntimeConfig();
   if (!isDiagnosticsEnabled(cfg)) {
     return;
@@ -32,10 +32,12 @@ export function emitIngressModelUsageDiagnostic(
   const modelUsed = agentMeta.model ?? "";
   const costUsd = estimateAggregateUsageCost({
     usage,
-    provider: providerUsed,
-    model: modelUsed,
-    config: cfg,
-    agentDir,
+    cost: await resolveModelCostConfig({
+      provider: providerUsed,
+      model: modelUsed,
+      config: cfg,
+      agentDir,
+    }),
   });
 
   emitTrustedDiagnosticEvent({

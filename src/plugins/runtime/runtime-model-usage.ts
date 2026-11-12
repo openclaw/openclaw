@@ -8,7 +8,7 @@ import { markHostPluginUsageDiagnosticEvent } from "../../infra/diagnostic-plugi
 import {
   estimateAggregateUsageCost,
   estimateUsageCost,
-  resolveModelCostConfig,
+  type CapturedModelCostPricing,
 } from "../../utils/usage-format.js";
 import type { LlmCompleteUsage } from "./runtime-llm.types.js";
 
@@ -33,17 +33,21 @@ function readExplicitCostUsd(raw: unknown): number | undefined {
 }
 
 /** One usage/cost owner; typed result domains need not impersonate a chat completion. */
-export function finalizePluginModelUsage(params: {
-  cfg: OpenClawConfig;
-  hostPluginId?: string;
-  suppressUsage?: boolean;
-  rawUsage: unknown;
-  estimate: "direct" | "aggregate" | "none";
-  /** Prepared route facts, never an ID-only lookup after request normalization. */
-  preparedBilling?: PreparedDecisionBillingFacts;
-  target: { provider: string; model: string; agentId?: string; sessionKey?: string };
-  onUsage?: (usage: LlmCompleteUsage) => void;
-}): LlmCompleteUsage {
+export function finalizePluginModelUsage(
+  params: {
+    cfg: OpenClawConfig;
+    hostPluginId?: string;
+    suppressUsage?: boolean;
+    rawUsage: unknown;
+    /** Prepared route facts, never an ID-only lookup after request normalization. */
+    preparedBilling?: PreparedDecisionBillingFacts;
+    target: { provider: string; model: string; agentId?: string; sessionKey?: string };
+    onUsage?: (usage: LlmCompleteUsage) => void;
+  } & (
+    | { estimate: "none"; pricing?: never }
+    | { estimate: "direct" | "aggregate"; pricing: CapturedModelCostPricing }
+  ),
+): LlmCompleteUsage {
   // SAFETY: normalizeUsage narrows each optional provider counter before returning typed facts.
   const normalized = normalizeUsage(params.rawUsage as UsageLike | undefined);
   // Isolated runtimes may report a whole run; only direct calls retain tier boundaries here.
@@ -70,11 +74,7 @@ export function finalizePluginModelUsage(params: {
         ? undefined
         : estimateCost({
             usage: normalized,
-            cost: resolveModelCostConfig({
-              provider: params.target.provider,
-              model: params.target.model,
-              config: params.cfg,
-            }),
+            cost: params.pricing.resolve(params.target.provider, params.target.model),
           }));
   const usage: LlmCompleteUsage = {
     ...(normalized?.input !== undefined ? { inputTokens: normalized.input } : {}),

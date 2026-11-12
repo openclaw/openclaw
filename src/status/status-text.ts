@@ -54,7 +54,7 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.read.js";
-import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
+import { captureModelCostPricing, formatTokenCount, formatUsd } from "../utils/usage-format.js";
 import {
   buildCodexSyntheticUsageAuth,
   resolveUsageCredentialType,
@@ -631,6 +631,7 @@ export async function buildStatusReplyParts(
   });
   return buildStatusMessageParts({
     config: cfg,
+    pricing: await captureModelCostPricing(cfg, undefined, false),
     preparedSandboxRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     agent: {

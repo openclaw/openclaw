@@ -9,7 +9,10 @@ import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives
 import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
-import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
+import {
+  estimateAggregateUsageCost,
+  type CapturedModelCostPricing,
+} from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
 import {
@@ -70,6 +73,7 @@ import {
 } from "./tool-media-payloads.js";
 
 export function prepareEmbeddedRunTerminal(input: {
+  pricing?: CapturedModelCostPricing;
   mergeToolMedia?: ReturnType<typeof createPendingToolMediaCarry>["merge"];
   runParams: RunEmbeddedAgentInternalParams;
   replyDeliveryState?: ReplyDeliveryState;
@@ -133,10 +137,7 @@ export function prepareEmbeddedRunTerminal(input: {
     finalAssistantStopReason !== "error" && finalAssistantStopReason !== "aborted";
   const costUsd = estimateAggregateUsageCost({
     usage: usageMeta.usage,
-    provider: reportedModelRef.provider,
-    model: reportedModelRef.model,
-    config: runParams.config,
-    agentDir: runParams.agentDir,
+    cost: input.pricing?.resolve(reportedModelRef.provider, reportedModelRef.model),
   });
   // Attempt normalization already folded every attempt (terminal included)
   // into the accumulator, so read it directly instead of re-adding the attempt.

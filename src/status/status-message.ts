@@ -71,7 +71,7 @@ import {
   estimateAggregateUsageCost,
   formatTokenCount,
   formatUsd,
-  resolveModelCostConfig,
+  type CapturedModelCostPricing,
 } from "../utils/usage-format.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
@@ -95,6 +95,7 @@ type QueueStatus = {
 
 type StatusArgs = {
   config: OpenClawConfig;
+  pricing?: CapturedModelCostPricing;
   preparedTtsPreferences?: PreparedTtsPreferences;
   modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
   agent: AgentConfig;
@@ -784,12 +785,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     cacheRead !== undefined ||
     cacheWrite !== undefined;
   const costConfig = hasUsage
-    ? resolveModelCostConfig({
-        provider: activeProvider,
-        model: activeModel,
-        config: args.config,
-        allowPluginNormalization: false,
-      })
+    ? args.pricing?.resolve(activeProvider, activeModel, false)
     : undefined;
   const cost =
     usageReport?.state === "unavailable"

@@ -74,6 +74,7 @@ export const createAccounting = (
   modelUsed: "claude",
   preserveUserFacingSessionState: false,
   replyUsageState: {},
+  pricing: { resolve: () => undefined, fingerprint: () => "unpriced-followup-fixture" },
   usage: undefined,
   terminalFailurePayload: undefined,
   ...overrides,

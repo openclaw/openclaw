@@ -68,11 +68,15 @@ type AsyncModelResolutionOptions = {
  * price, so the transport records the API-rate cost instead of $0. Authored prices, publisher
  * zeros and private endpoints resolve unchanged.
  */
-function withResolvedPricing(model: Model, cfg: OpenClawConfig | undefined, agentDir: string) {
+async function withResolvedPricing(
+  model: Model,
+  cfg: OpenClawConfig | undefined,
+  agentDir: string,
+) {
   if (hasKnownPricing(model.cost)) {
     return model;
   }
-  const cost = resolveModelCostConfig({
+  const cost = await resolveModelCostConfig({
     provider: model.provider,
     model: model.id,
     config: cfg,
@@ -239,8 +243,14 @@ export async function resolveModelAsync(
           : undefined;
       options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
+        const pricedModel = await withResolvedPricing(
+          suppressedRuntimeModel,
+          cfg,
+          resolvedAgentDir,
+        );
+        options?.assertCurrent?.();
         return {
-          model: withResolvedPricing(suppressedRuntimeModel, cfg, resolvedAgentDir),
+          model: pricedModel,
           logicalRef,
           authStorage,
           modelRegistry,
@@ -341,8 +351,10 @@ export async function resolveModelAsync(
       }
     }
     if (model) {
+      const pricedModel = await withResolvedPricing(model, cfg, resolvedAgentDir);
+      options?.assertCurrent?.();
       return {
-        model: withResolvedPricing(model, cfg, resolvedAgentDir),
+        model: pricedModel,
         logicalRef,
         authStorage,
         modelRegistry,

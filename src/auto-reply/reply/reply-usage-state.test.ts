@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeConfiguredModel } from "../../agents/test-helpers/provider-model-fixture.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureModelCostPricing } from "../../utils/usage-format.js";
 import {
   buildReplyUsageState,
   consumeReplyUsageState,
@@ -12,8 +13,8 @@ afterEach(() => {
 });
 
 describe("reply usage state handoff", () => {
-  it("reports flat-price runtime cost for the selected agent in an explicit fleet", () => {
-    const snapshot = buildReplyUsageState({
+  it("reports flat-price runtime cost for the selected agent in an explicit fleet", async () => {
+    const params = {
       config: {
         agents: {
           ownership: "explicit",
@@ -42,12 +43,15 @@ describe("reply usage state handoff", () => {
           },
         },
       } as OpenClawConfig,
-      agentDir: "/tmp/openclaw-main-agent",
       provider: "fixture",
       model: "priced",
       agentId: "main",
       sessionId: "session-priced",
       usage: { input: 1_000_000, output: 0 },
+    };
+    const snapshot = buildReplyUsageState({
+      ...params,
+      pricing: await captureModelCostPricing(params.config, "/tmp/openclaw-main-agent"),
     });
 
     expect(snapshot.turnUsd).toBe(1);

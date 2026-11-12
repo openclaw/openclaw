@@ -3,7 +3,7 @@ import { buildReplyUsageState } from "../../auto-reply/reply/reply-usage-state.j
 import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.js";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { captureModelCostPricing, estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import type { NormalizedUsage } from "../usage.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
@@ -50,12 +50,13 @@ const diagnosticUsage = [
   { input: 250, cost: { total: 1.1 } },
 ] as const;
 
-function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
+async function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
+  const pricing = await captureModelCostPricing(cfg, "/nonexistent-fallback-accounting");
   return {
     reply: buildReplyUsageState({
       ...meta,
       config: cfg,
-      agentDir: "/nonexistent-fallback-accounting",
+      pricing,
       agentId: "main",
       sessionId: "session-1",
       winnerProvider: meta.provider,
@@ -63,14 +64,14 @@ function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
     }),
     session: prepareSessionUsageUpdate({
       ...meta,
-      cfg,
+      pricing,
       providerUsed: meta.provider,
       modelUsed: meta.model,
     }),
     diagnosticCost: estimateAggregateUsageCost({
       ...meta,
-      config: cfg,
       usage: meta.diagnosticUsage,
+      cost: pricing.resolve(meta.provider, meta.model),
     }),
   };
 }
@@ -124,7 +125,10 @@ it.each([null, { input: 0, output: 0, usageReport: { state: "available" as const
       undefined,
       lastCallUsage,
     );
-    const { reply } = usageConsumers({ usage: meta.usage, lastCallUsage: meta.lastCallUsage });
+    const { reply } = await usageConsumers({
+      usage: meta.usage,
+      lastCallUsage: meta.lastCallUsage,
+    });
     expect(meta.usage?.input).toBe(300);
     expect(reply.contextUsedTokens).toBeUndefined();
     expect(meta.lastCallUsage).toEqual(lastCallUsage ?? undefined);
@@ -155,7 +159,7 @@ it.each([
       bridgeCalls: { search: 2, describe: 0, call: 4 },
     });
     const consumerMeta = unknown ? { ...meta, lastCallUsage: undefined } : meta;
-    const { reply, session, diagnosticCost } = usageConsumers(consumerMeta);
+    const { reply, session, diagnosticCost } = await usageConsumers(consumerMeta);
     expect(reply.usage).toMatchObject({ input: 300, ...(diagnostics ? {} : { output: 30 }) });
     expect(reply.contextUsedTokens).toBe(unknown ? undefined : 20);
     const cost = unknown ? undefined : expect.closeTo(expected, 9);

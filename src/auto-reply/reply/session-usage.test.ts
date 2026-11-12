@@ -24,6 +24,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import { captureModelCostPricing } from "../../utils/usage-format.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
@@ -35,7 +36,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("session actor usage accounting", () => {
-  type UsageUpdate = Parameters<typeof prepareSessionUsageUpdate>[0];
+  type UsageUpdate = Omit<Parameters<typeof prepareSessionUsageUpdate>[0], "pricing"> & {
+    cfg?: OpenClawConfig;
+    agentDir?: string;
+  };
   async function usageSession(seed: Partial<SessionEntry> = {}, sessionKey = "agent:main:main") {
     const root = tempDirs.make("openclaw-usage-");
     const env = { OPENCLAW_STATE_DIR: root };
@@ -67,7 +71,11 @@ describe("session actor usage accounting", () => {
               if (!completion) {
                 throw new Error("Missing usage completion owner");
               }
-              const prepared = prepareSessionUsageUpdate({ cfg: {}, ...update });
+              const { cfg, agentDir, ...usage } = update;
+              const prepared = prepareSessionUsageUpdate({
+                ...usage,
+                pricing: await captureModelCostPricing(cfg ?? {}, agentDir),
+              });
               if (prepared) {
                 completion.patch((current) => ({
                   kind: "usage",

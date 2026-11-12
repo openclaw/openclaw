@@ -6,6 +6,7 @@ import {
   estimateAggregateUsageCost,
   formatTokenCount,
   formatUsd,
+  type CapturedModelCostPricing,
 } from "../../utils/usage-format.js";
 import {
   copyReplyPayloadMetadata,
@@ -114,6 +115,9 @@ function buildUsageContract(state: PluginHookReplyUsageState, surface?: string):
 const formatResponseUsageLine = (
   params: Parameters<typeof estimateAggregateUsageCost>[0] & {
     showCost: boolean;
+    provider?: string;
+    model?: string;
+    pricing: CapturedModelCostPricing;
   },
 ): string | null => {
   const usage = params.usage;
@@ -132,7 +136,13 @@ const formatResponseUsageLine = (
   const cacheRead = usage.cacheRead;
   const cacheWrite = usage.cacheWrite;
   const canPriceUsage = usage.cost !== undefined || (input !== undefined && output !== undefined);
-  const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
+  const cost =
+    params.showCost && canPriceUsage
+      ? estimateAggregateUsageCost({
+          usage,
+          cost: params.pricing.resolve(params.provider, params.model, false),
+        })
+      : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
   const cacheSuffix =
     (cacheRead ?? 0) > 0 || (cacheWrite ?? 0) > 0
@@ -147,7 +157,7 @@ const formatResponseUsageLine = (
 
 export const resolveResponseUsageLine = (params: {
   config: OpenClawConfig;
-  agentDir: string;
+  pricing: CapturedModelCostPricing;
   sessionRaw?: string | null;
   channel?: string;
   usage?: NormalizedUsage;
@@ -172,9 +182,7 @@ export const resolveResponseUsageLine = (params: {
     showCost,
     provider: params.provider,
     model: params.model,
-    config: params.config,
-    agentDir: params.agentDir,
-    allowPluginNormalization: false,
+    pricing: params.pricing,
   });
   const usageTemplate =
     responseUsageMode === "full" && params.replyUsageState

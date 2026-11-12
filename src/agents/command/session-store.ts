@@ -15,7 +15,7 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -144,10 +144,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
     const runEstimatedCostUsd = asNonNegativeFiniteNumber(
       estimateAggregateUsageCost({
         usage,
-        provider: providerUsed,
-        model: modelUsed,
-        config: cfg,
-        agentDir: params.agentDir,
+        cost: await resolveModelCostConfig({
+          provider: providerUsed,
+          model: modelUsed,
+          config: cfg,
+          agentDir: params.agentDir,
+        }),
       }),
     );
     Object.assign(next, projectSessionUsageSnapshot(usage, runEstimatedCostUsd));

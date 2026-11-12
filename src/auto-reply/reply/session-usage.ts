@@ -2,15 +2,15 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { hasBillableUsage, hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntryUsageUpdate } from "../../config/sessions/session-entry-usage.js";
 import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import {
+  estimateAggregateUsageCost,
+  type CapturedModelCostPricing,
+} from "../../utils/usage-format.js";
 
 type SessionUsageUpdateParams = {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
+  pricing: CapturedModelCostPricing;
   usage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated). Supplies context
@@ -36,7 +36,6 @@ type SessionUsageUpdateParams = {
 
 /** Prepare host-owned pricing without choosing a persistence envelope. */
 export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
-  const cfg = params.cfg ?? getRuntimeConfig();
   const modelSelection = params.runtimeModelSelection ?? {
     provider: params.providerUsed,
     model: params.modelUsed,
@@ -88,11 +87,11 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
       ? undefined
       : asNonNegativeFiniteNumber(
           estimateAggregateUsageCost({
-            config: cfg,
-            agentDir: params.agentDir,
             usage: params.usage,
-            provider: params.providerUsed ?? entry?.modelProvider,
-            model: params.modelUsed ?? entry?.model,
+            cost: params.pricing.resolve(
+              params.providerUsed ?? entry?.modelProvider,
+              params.modelUsed ?? entry?.model,
+            ),
           }),
         );
   return { update, estimateCost };

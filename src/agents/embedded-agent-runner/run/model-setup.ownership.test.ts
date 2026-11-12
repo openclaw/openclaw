@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { captureModelCostPricing } from "../../../utils/usage-format.js";
 import * as authRows from "../../auth-profiles/sqlite-read.js";
 import { loadAuthProfileStoreForRuntimeAsync } from "../../auth-profiles/store-runtime.js";
 import { persistAuthProfileBatch } from "../../auth-profiles/upsert-with-lock.js";
@@ -354,7 +355,10 @@ describe("model chat and native model ownership", () => {
     for (const observation of [undefined, "codex", "openclaw"]) {
       if (observation) {
         const prepared = prepareSessionUsageUpdate({
-          cfg: fixture.runParams.config,
+          pricing: await captureModelCostPricing(
+            fixture.runParams.config,
+            fixture.runParams.agentDir,
+          ),
           modelUsed: "fixture-model",
           providerUsed: "openai",
           agentHarnessId: observation,

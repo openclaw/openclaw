@@ -5,6 +5,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureModelCostPricing } from "../utils/usage-format.js";
 
 vi.mock("../version.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../version.js")>();
@@ -178,28 +179,30 @@ describe("buildStatusMessage cost snapshot", () => {
     ["cost-only zero total", 0, true, "Cost: $0.0000", false],
   ] as const)(
     "uses %s without repricing combined calls",
-    (_name, recorded, tiered, expected, tokens) => {
+    async (_name, recorded, tiered, expected, tokens) => {
+      const config = providerConfig("fixture", "https://fixture.invalid", [
+        {
+          ...statusTestModel("priced", "Priced", 1_000_000),
+          cost: {
+            input: 1,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            ...(tiered
+              ? {
+                  tieredPricing: [
+                    { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+                  ],
+                }
+              : {}),
+          },
+        },
+      ]);
       const text = buildStatusMessage({
         modelRefs: statusModelRefs({ provider: "fixture", model: "priced" }),
         agent: { model: "fixture/priced" },
-        config: providerConfig("fixture", "https://fixture.invalid", [
-          {
-            ...statusTestModel("priced", "Priced", 1_000_000),
-            cost: {
-              input: 1,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              ...(tiered
-                ? {
-                    tieredPricing: [
-                      { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
-                    ],
-                  }
-                : {}),
-            },
-          },
-        ]),
+        config,
+        pricing: await captureModelCostPricing(config, undefined, false),
         sessionEntry: {
           sessionId: "status-cost",
           updatedAt: 0,
