@@ -75,6 +75,30 @@ async function buildCodexMemoryItems(params: {
       "codex",
       path.basename(memory.path),
     );
+    const details = {
+      sourceType: "codex-memory",
+      sourceLabel: memory.label,
+      collectionId: "codex",
+      collectionLabel: "Codex",
+      relativePath: path.basename(memory.path),
+    };
+    if (memory.probeError) {
+      items.push(
+        createMigrationItem({
+          id: memory.id,
+          kind: "memory",
+          action: "copy",
+          source: memory.path,
+          target,
+          status: "error",
+          reason: memory.probeError,
+          message:
+            "Codex memory could not be inspected; fix the source path and re-run the migration.",
+          details,
+        }),
+      );
+      continue;
+    }
     const targetStat = await lstatIfExists(target);
     const targetNotRegular = targetStat !== undefined && !targetStat.isFile();
     if (!targetNotRegular) {
@@ -107,13 +131,7 @@ async function buildCodexMemoryItems(params: {
             ? MIGRATION_REASON_TARGET_EXISTS
             : undefined,
         message: "Copy consolidated Codex memory into the OpenClaw memory index.",
-        details: {
-          sourceType: "codex-memory",
-          sourceLabel: memory.label,
-          collectionId: "codex",
-          collectionLabel: "Codex",
-          relativePath: path.basename(memory.path),
-        },
+        details,
       }),
     );
   }
