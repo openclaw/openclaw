@@ -10,6 +10,7 @@ import {
   resolveUpdateStateContentVersion,
 } from "../../infra/update-candidate-state.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
@@ -656,14 +657,7 @@ export async function compensateOriginalManagedService(
   return {
     result: {
       ...result,
-      recovery: {
-        ...result.recovery,
-        serviceRestartSafe: false,
-        reason:
-          result.recovery?.serviceRestartSafe === false
-            ? result.recovery.reason
-            : "runtime-verification-failed",
-      },
+      recovery: unsafeUpdateRecovery(result.recovery),
       steps: [
         ...result.steps,
         {

@@ -15,6 +15,7 @@ import type { GatewayServiceState } from "../../daemon/service.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
+import { updateRecoverySchema } from "../../infra/update-recovery.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
 import * as commandProcess from "../../process/exec.js";
@@ -40,6 +41,7 @@ import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
+import { compensateOriginalManagedService } from "./update-command-service-recovery.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 // Real update/state/lease owners; simulated native manager, HTTP, and package transport.
@@ -630,6 +632,56 @@ it("refuses B ledger admission independently from compatible service A state", a
   });
   expect(mocks.restart).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "compensation preserves the strict unsafe recovery union (already unsafe=%s)",
+  async (alreadyUnsafe) => {
+    const run: NonNullable<UpdateCommandOptions["run"]> = {
+      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
+      env: state.env,
+    };
+    await withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
+      const opts: UpdateCommandOptions = { json: true, run };
+      const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
+      if (!original) {
+        throw new Error("Expected original service observation");
+      }
+      const recovery = alreadyUnsafe
+        ? {
+            serviceRestartSafe: false as const,
+            reason: "state-migration-started" as const,
+            dataAtRisk: "retained database generation",
+          }
+        : {
+            serviceRestartSafe: true as const,
+            version: "2026.9.4",
+            buildId: "build-B",
+            service: "healthy" as const,
+          };
+      const compensated = await compensateOriginalManagedService(
+        {
+          result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0, recovery },
+          opts,
+          preManagedServiceStop: before,
+          originalManagedServiceRuntime: original,
+          allowGatewayRestart: false,
+          timeoutMs: 30000,
+        },
+        () => run.executorFence!.assertCurrent(),
+      );
+      expect(updateRecoverySchema.parse(compensated.result.recovery)).toEqual(
+        alreadyUnsafe
+          ? recovery
+          : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      );
+      expect(compensated.result.recovery).not.toHaveProperty("version");
+      expect(compensated.result.recovery).not.toHaveProperty("buildId");
+      expect(compensated.result.recovery).not.toHaveProperty("service");
+      expect(mocks.nativeRestart).not.toHaveBeenCalled();
+    });
+  },
+);
 
 // Component regression: an unavailable A certificate must stop preparation, not A.
 it.each([
