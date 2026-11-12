@@ -91,12 +91,14 @@ function bindToRun(raw: MemoryProviderHandle, audience: MemoryAudience) {
 }
 
 // Resolve both runtimes from the same admitted occurrence.
-async function runOccurrence(job: CronStoredJob) {
+async function runOccurrence(job: CronStoredJob, beforeRun?: () => void) {
   const owner = { cfg: {}, agentId: "main" };
   const identity = { agentId: "main", sessionKey: RUN_KEY };
   const runRow = { sessionId: RUN_SESSION, updatedAt: 1 };
   fakeSessionOwner.rows.set(RUN_KEY, runRow);
   const occurrence = await admitScheduledOccurrence({ ...owner, job, trigger: "cron" });
+  // Between admission and the run, as while a fired condition waits for a run slot.
+  beforeRun?.();
   const admission = prepareCronRunAdmission({
     ...owner,
     runId: "run-1",
@@ -226,6 +228,15 @@ it("drops owner-private memory on the next run after the requester loses owner s
     expect(audience).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
   }
   next.settle();
+});
+
+it("drops owner-private memory when the requester loses owner status while the run waits", async () => {
+  setParent("direct");
+  const run = await runOccurrence(storedJob(), () => profiles.revoked.add(OWNER_PROFILE));
+  for (const audience of run.audiences) {
+    expect(audience).toMatchObject({ kind: "conversation", sessionKey: PARENT_KEY });
+  }
+  run.settle();
 });
 
 it.each([
