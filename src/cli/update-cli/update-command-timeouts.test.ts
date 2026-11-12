@@ -1,9 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as gatewayService from "../../daemon/service.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
-import { createUpdateRun, finishUpdateRun } from "../../infra/update-run-ledger.js";
+import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -18,7 +20,7 @@ import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { updateCommand } from "./update-command.js";
 
-installFreshUpdateFixture();
+const { fixture } = installFreshUpdateFixture();
 
 function selectVersion(version = "2026.9.4") {
   vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version });
@@ -77,6 +79,54 @@ it.each([
         updateStepTimeoutMs: stepTimeoutMs,
       }),
     );
+  },
+);
+
+it.each([false, true])(
+  "keeps the invoking installation and retained service distinct with --timeout (capture=%s)",
+  async (captureOriginal) => {
+    prepareTimedUpdate();
+    if (captureOriginal) {
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+    }
+    const serviceRoot = path.join(path.dirname(fixture.root), "retained-service");
+    fs.mkdirSync(serviceRoot);
+    fs.writeFileSync(
+      path.join(serviceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
+    );
+    const prepare = vi.mocked(commandRun.prepareUpdateCommand).getMockImplementation()!;
+    vi.mocked(commandRun.prepareUpdateCommand).mockImplementation(async (opts) => ({
+      ...(await prepare(opts)),
+      servicePlan: { rootRedirect: null, serviceRoot },
+    }));
+    const marker = path.join(fixture.root, "admitted-update-effect");
+    let executedRunId: string | undefined;
+    vi.spyOn(execution, "executeMutableUpdate").mockImplementation(async (params) => {
+      const run = params.opts.run!;
+      const fence = run.executorFence!;
+      fence.assertCurrent();
+      expect(executorOwner.captureUpdateCommandExecutorAuthority(fence).installKey).toBe(
+        fs.realpathSync(fixture.root),
+      );
+      executorOwner.assertRetainedUpdateCommandRoot(fence, serviceRoot);
+      fs.writeFileSync(marker, "invoking installation admitted with retained service custody");
+      executedRunId = run.runId;
+      finishUpdateRun(run.runId, { status: "succeeded" }, { env: run.env });
+      return null;
+    });
+
+    const outcome = await runUpdate({ timeout: "60" }).catch((error: unknown) => error);
+    expect(
+      outcome,
+      JSON.stringify(vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]),
+    ).toBeUndefined();
+
+    expect(fs.readFileSync(marker, "utf8")).toBe(
+      "invoking installation admitted with retained service custody",
+    );
+    expect(getUpdateRun(executedRunId!)).toMatchObject({ status: "succeeded", phase: "finished" });
   },
 );
 
