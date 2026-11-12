@@ -2,6 +2,7 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { DiffReadTiming } from "./diff-read-timing.js";
 import { serializeGitWorkerFailure, withGitWorkerContext } from "./git-worker-context.js";
 import type { GitWorkerCommand, GitWorkerReply, GitWorkerResult } from "./git-worker-contract.js";
+import { withWorkerFsSafeNativeMode } from "./worker-fs-safe.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
 serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
@@ -19,6 +20,13 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>, GitWorkerCommand>(
         channel,
         () => {
           switch (command.type) {
+            case "github.profile-token":
+              return import("../agents/github-tool-profile-files.js").then(
+                ({ readManagedGitHubProfileToken }) =>
+                  withWorkerFsSafeNativeMode(command.input.nativeMode, () =>
+                    readManagedGitHubProfileToken(command.input.profileDir),
+                  ),
+              );
             case "workspace.inventory.select":
             case "workspace.inventory.existing":
             case "workspace.inventory.paths":

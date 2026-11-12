@@ -6,6 +6,10 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
+  /* Reasoning is reading text like .chat-text: keep macOS stem darkening so the
+     small muted prose does not render thin. App chrome keeps body antialiased. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .chat-message-disclosure {

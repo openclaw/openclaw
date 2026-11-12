@@ -322,7 +322,6 @@ export function prepareSessionSystemPrompt(params: {
   historyBoundaryCount?: number;
 }) {
   const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
-  const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
   const historyId = resolvePromptHistoryId(params);
   const markerIndex = params.entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
@@ -366,6 +365,10 @@ export function prepareSessionSystemPrompt(params: {
       params.state.systemPrompt = series;
     }
   }
+  const renderedPrefix =
+    series?.renderedPrefix === systemPrompt
+      ? series.renderedPrefix
+      : shareSystemPromptPrefix(systemPrompt);
   const restart = !series || series.routeKey !== params.routeKey || series.historyId !== historyId;
   const seriesStatus: SystemPromptSeriesStatus = !restart
     ? "pinned"
