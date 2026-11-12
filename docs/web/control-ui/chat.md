@@ -242,6 +242,40 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Inline command trail
+
+In the conversation menu, choose **View → Inline command trail (this browser)**
+to show commands, file reads, and searches in the conversation as they run.
+Each row keeps its status and a preview of its latest output; expand it
+for tool details and more captured output. Earlier omitted output and truncated
+capture have separate notices. Inline commands start compact even with Full
+verbosity, and your manual expand or collapse choices take precedence. Finished
+commands stay visible while the turn continues.
+Turning the trail off restores ordinary disclosure defaults and keeps your manual choices.
+Edits and other tools keep their existing views.
+Compact previews keep the captured text's line structure, including JSON.
+Expanded output retains its usual formatting.
+
+For running Codex commands, the preview continues following recent stdout after
+the 10,000-character capture limit. This live tail is bounded to 600 characters
+and three visible lines. **View captured beginning** opens the retained prefix;
+the omission and capture notices explain why it differs from the live tail.
+Completion and Stop retire the live tail. Completed output and saved history
+keep their existing capture limits. If an interrupted command has no saved tool
+result, its partial output may be unavailable after terminal reconciliation or
+reload.
+
+Completed dashboard turns still fold their intermediate work into **Worked for…**.
+Open that disclosure to inspect the chronological trail again. Channel sessions
+and speech bubbles keep their existing completion behavior. The preference
+persists in this browser for this Gateway; grouped activity remains the default.
+Live Codex stdout is delivered to panes that enable the inline trail. Switching
+it on during a running command recovers the latest bounded output, including
+when the command has stopped producing new text. The default grouped view does
+not subscribe to this live stdout stream. Channel verbosity stays independent.
+If the inline trail cannot load, the conversation stays available in grouped
+view and reports an error. Turn the option off and back on to retry.
+
 ## Slash-command feedback
 
 Type `/` to open the command menu. `/steer` guides the agent’s current reply;

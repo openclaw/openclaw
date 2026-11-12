@@ -31,8 +31,6 @@ const chatPresentationModules = new Set([
   "ui/src/pages/chat/components/chat-tool-outcome-summary.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-render-model.ts",
   "ui/src/pages/chat/components/chat-message-bubble-tools.tsx",
-  "ui/src/pages/chat/components/chat-permission-card.tsx",
-  "ui/src/pages/chat/components/chat-tool-content.solid.tsx",
   "ui/src/pages/chat/components/chat-tool-cards.solid.tsx",
   "ui/src/pages/chat/components/chat-message-activity-operation.tsx",
   "ui/src/pages/chat/components/chat-diff-stat.solid.tsx",
@@ -41,7 +39,6 @@ const chatPresentationModules = new Set([
   "ui/src/lib/chat/tool-call-input.ts",
   "src/agents/tool-display-name.ts",
   "ui/src/i18n/locales/en-chat-details.ts",
-  "ui/src/i18n/locales/en-chat-permissions.ts",
   "ui/src/pages/chat/components/chat-details-process-row.tsx",
   "ui/src/pages/chat/components/chat-environment-content.tsx",
 ]);

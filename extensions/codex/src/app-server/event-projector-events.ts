@@ -25,6 +25,7 @@ import {
   isCommandBearingToolItem,
   itemToolArgs,
   itemToolResult,
+  itemTranscriptResultText,
   projectCodexToolActivity,
   shouldSuppressChannelProgressForItem,
 } from "./event-projector-tool-items.js";
@@ -102,6 +103,7 @@ export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
   detailMode?: ToolProgressDetailMode;
+  outputTextByItem?: ReadonlyMap<string, string>;
 }): NormalizedToolItemProjection | undefined {
   const { item } = params;
   if (!item || !isProjectedNativeToolItem(item)) {
@@ -116,7 +118,15 @@ export function projectNormalizedToolItem(params: {
   const commandBearing = isCommandBearingToolItem(item, args);
   const meta = itemMeta(item, params.detailMode);
   const emit = shouldEmitTranscriptToolProgress(name);
-  const result = emit && params.phase === "result" ? itemToolResult(item) : undefined;
+  const metadata = emit && params.phase === "result" ? itemToolResult(item) : undefined;
+  const result =
+    emit && params.phase === "result" && item.type === "commandExecution"
+      ? {
+          text: itemTranscriptResultText(item, params.outputTextByItem),
+          exitCode: item.exitCode,
+          details: metadata,
+        }
+      : metadata;
   const event = emit
     ? {
         stream: "tool",
@@ -556,6 +566,7 @@ export class CodexEventProjection {
     const projection = projectNormalizedToolItem({
       ...params,
       detailMode: this.toolProgress.toolProgressDetailMode(),
+      outputTextByItem: this.toolProgress.outputTextByItem,
     });
     if (!projection || !params.item) {
       return;

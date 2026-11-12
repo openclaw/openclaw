@@ -164,6 +164,7 @@ const enChatSession = {
       speechBubbles: "Speech bubbles",
       reasoning: "Reasoning",
       toolCalls: "Tool calls",
+      inlineCommands: "Inline command trail (this browser)",
       commentary: "Keep commentary",
     },
     workspaceConflict: {

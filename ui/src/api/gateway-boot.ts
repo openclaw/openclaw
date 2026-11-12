@@ -1,5 +1,6 @@
 import {
   getGatewaySessionMessageSubscriptionCoordinator,
+  releaseGatewaySessionMessageSubscription,
   resetGatewaySessionMessageSubscriptionCoordinator,
   type GatewaySessionMessageSubscription,
   type GatewaySessionMessageSubscriptionOptions,
@@ -207,7 +208,7 @@ export class EarlyGateway {
     }
     const historyMatches = JSON.stringify(options.initialHistory) === JSON.stringify(this.history);
     try {
-      const subscription = await pending;
+      let subscription = await pending;
       if (!this.active) {
         throw new Error("Early Gateway retired");
       }
@@ -216,10 +217,41 @@ export class EarlyGateway {
         // Keep live delivery; its history owner will request the correct snapshot.
         delete subscription.initialHistory;
       }
+      if (
+        (options.includeApprovals && !subscription.includeApprovals) ||
+        (options.includeLiveToolOutput && !subscription.includeLiveToolOutput)
+      ) {
+        subscription = await this.upgradeSubscription(subscription, options);
+      }
       return subscription;
     } finally {
       this.drain();
     }
+  }
+
+  private async upgradeSubscription(
+    subscription: GatewaySessionMessageSubscription,
+    options: GatewaySessionMessageSubscriptionOptions,
+  ) {
+    const upgraded = await getGatewaySessionMessageSubscriptionCoordinator(this.client, {
+      keysEquivalent: areUiSessionKeysEquivalent,
+    }).acquire(this.sessionKey, {
+      includeApprovals: options.includeApprovals || subscription.includeApprovals,
+      includeLiveToolOutput: options.includeLiveToolOutput || subscription.includeLiveToolOutput,
+    });
+    if (
+      !this.active ||
+      (upgraded.approvalReplay !== undefined && !this.retain(upgraded.approvalReplay))
+    ) {
+      throw new Error("Early Gateway connection retired");
+    }
+    // A quiet command may have emitted after the early snapshot but before
+    // output interest was admitted. Let the history owner read a current one.
+    if (!options.includeLiveToolOutput || subscription.includeLiveToolOutput) {
+      upgraded.initialHistory = subscription.initialHistory;
+    }
+    await releaseGatewaySessionMessageSubscription(subscription);
+    return upgraded;
   }
 
   private drain() {

@@ -122,6 +122,54 @@ it("keeps live delivery when the pane needs a different initial history request"
   expect(wsInstances).toHaveLength(1);
 });
 
+it.each([false, true])(
+  "admits inline output and retires the early snapshot (approvals: %s)",
+  async (approvals) => {
+    const connection = await handshake();
+    const { socket } = connection;
+    const initial = await acceptHello(
+      connection,
+      approvals ? { role: "operator", scopes: ["operator.approvals"] } : undefined,
+    );
+    socket.emitMessage({
+      type: "res",
+      id: initial.id,
+      ok: true,
+      payload: { key, initialHistory: { ok: true, payload: { messages: ["early snapshot"] } } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(boot.adopt(options)).toBe(boot.client);
+    const pending = takeEarlyGatewaySubscription(boot.client, key, {
+      initialHistory,
+      includeLiveToolOutput: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const upgrade = socket.sent
+      .map((value) => JSON.parse(value))
+      .filter((frame) => frame.method === "sessions.messages.subscribe")[1];
+    expect(upgrade.params).toEqual({
+      key,
+      subscriptionId: initial.params.subscriptionId,
+      includeLiveToolOutput: true,
+      ...(approvals ? { includeApprovals: true } : {}),
+    });
+    socket.emitMessage({
+      type: "res",
+      id: upgrade.id,
+      ok: true,
+      payload: { key, ...(approvals ? { approvalReplay: { exec: ["current-approval"] } } : {}) },
+    });
+    const subscription = await pending;
+    expect(subscription?.includeLiveToolOutput).toBe(true);
+    if (approvals) {
+      expect(subscription?.includeApprovals).toBe(true);
+      expect(subscription?.approvalReplay).toEqual({ exec: ["current-approval"] });
+    }
+    expect(subscription).not.toHaveProperty("initialHistory");
+    expect(wsInstances).toHaveLength(1);
+  },
+);
+
 it("prepares authorized approval replay on the same observer before the pane attaches", async () => {
   const connection = await handshake();
   const { socket } = connection;
