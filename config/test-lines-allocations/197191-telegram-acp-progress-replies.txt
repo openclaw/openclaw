@@ -1,2 +1,0 @@
-# Regression coverage for Telegram ACP buffered-block visibility.
-28

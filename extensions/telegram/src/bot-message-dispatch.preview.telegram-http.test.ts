@@ -82,6 +82,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   it.each([
     ["partial", ""],
     ["block", ""],
+    ["progress", ""],
     ["partial", "[bot] "],
     ["block", "[bot] "],
   ] as const)(
@@ -99,8 +100,9 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
           dispatcher.sendBlockReply({ text: chunk, textMode: "delta" });
           await dispatcher.waitForIdle();
           dispatcher.sendBlockReply({ text: first, textMode: "delta" });
-          await dispatcher.waitForIdle();
-          expect(http.texts()).toEqual([(prefix + first + chunk + first).trimEnd()]);
+          const streamed = mode === "progress" ? [] : [(prefix + first + chunk + first).trimEnd()];
+          expect((await dispatcher.waitForIdle()).anyVisibleDelivered).toBe(streamed.length > 0);
+          expect(http.texts()).toEqual(streamed);
           dispatcher.sendFinalReply({ text: finalText });
           dispatcher.sendFinalReply({ text: "Separate status." });
           return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
@@ -109,34 +111,6 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
       expect(http.texts()).toEqual([prefix + finalText, prefix + "Separate status."]);
     },
   );
-
-  it("reports buffered progress answer blocks as non-visible until final delivery", async () => {
-    const first = "First ACP answer chunk. ";
-    const second = "Second ACP answer chunk completes the answer.";
-    const finalText = first + second;
-    await produce(
-      async ({ dispatcher }) => {
-        dispatcher.sendBlockReply({ text: first, textMode: "delta" });
-        dispatcher.sendBlockReply({ text: second, textMode: "delta" });
-        const receipt = await dispatcher.waitForIdle();
-
-        expect(http.texts()).toEqual([]);
-        expect(receipt).toMatchObject({
-          anyVisibleDelivered: false,
-          counts: {
-            block: { delivered: 0, deliveredNotVisible: 2 },
-          },
-        });
-
-        dispatcher.sendFinalReply({ text: finalText });
-        return { queuedFinal: true, counts: dispatcher.getQueuedCounts() };
-      },
-      { mode: "progress" },
-    );
-
-    expect(http.texts()).toEqual([finalText]);
-    expect(sends()).toHaveLength(1);
-  });
 
   it("preserves accumulated ACP answer chunks when a final status notice follows", async () => {
     const first = "First ACP answer chunk with enough text for a preview. ";
@@ -625,9 +599,7 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
         async (options, channelOptions) => {
           const beforeEmpty = calls.length;
           expect(await channelOptions?.onToolResult?.({ text: " \n " })).toBe(false);
-          expect(calls.slice(beforeEmpty).filter((call) => call.method === "sendMessage")).toEqual(
-            [],
-          );
+          expect(calls.slice(beforeEmpty).map((call) => call.method)).not.toContain("sendMessage");
           if (mode === "progress") {
             // A preamble replaces reasoning rows, so verify token updates before it arrives.
             await options?.onReasoningProgress?.({ progressTokens: 50 });
