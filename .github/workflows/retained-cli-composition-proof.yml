@@ -14,9 +14,11 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   BASE_SHA: 89f5912fbe1d26ad81758d6f07e116b39a4e45f9
-  CANDIDATE_SHA: 258908e6b943c0197bca8d0306dbbbbf503bcb22
+  CANDIDATE_SHA: 7af9ee549e45948707162d9d8cfa8c068a084fe6
+  PREREQUISITE_PARENT: 258908e6b943c0197bca8d0306dbbbbf503bcb22
+  PREREQUISITE_PATCH_SHA256: 5d8f8bb9a93331eb4a01ca2aefcf2d655dd0e36821f44353663e62d2751f7dc5
   BEFORE_SHA: f38131f934b45447558cf6f431353a49656198d5
-  SOURCE_TREE: 280d7a25d8303d9d753735862c4df49a5ddf609a
+  SOURCE_TREE: a63db9c73534279f63f03c2043565927c97c9a7a
   PATHS_SHA256: 85e3d04cb739af85ae7cb6fd69ea047c07e39aec92c526b28bfec6da3edd053e
 jobs:
   checks:
@@ -122,7 +124,7 @@ jobs:
           ref: f38131f934b45447558cf6f431353a49656198d5
           fetch-depth: 0
           persist-credentials: false
-      - name: Bind BEFORE source and overlay only identical regression inputs
+      - name: Bind BEFORE source and identical prerequisite plus regression inputs
         env:
           TARGET_SHA: ${{ inputs.target_ref }}
           WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -133,19 +135,28 @@ jobs:
           test "$(git rev-parse HEAD^{tree})" = a2b41999e8f0ac728cec97457e0500a76a7fd71e
           test -z "$(git status --porcelain)"
           test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$SOURCE_TREE"
-          test "$(git rev-parse "$CANDIDATE_SHA^")" = "$BEFORE_SHA"
+          test "$(git rev-parse "$CANDIDATE_SHA^")" = "$PREREQUISITE_PARENT"
+          test "$(git rev-parse "$PREREQUISITE_PARENT^")" = "$BEFORE_SHA"
           mkdir -p .artifacts/before-capacity
           printf 'candidate=%s\nbefore=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$CANDIDATE_SHA" "$BEFORE_SHA" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > .artifacts/before-capacity/identity.txt
+          # Apply only the reviewed build prerequisites, identically to the AFTER tree.
+          git diff --binary --full-index "$PREREQUISITE_PARENT" "$CANDIDATE_SHA" > .artifacts/before-capacity/prerequisite.patch
+          echo "$PREREQUISITE_PATCH_SHA256  .artifacts/before-capacity/prerequisite.patch" | sha256sum -c -
+          git apply --check .artifacts/before-capacity/prerequisite.patch
+          git apply .artifacts/before-capacity/prerequisite.patch
+          for path in src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts src/system-agent/delegated-change-policy.ts; do
+            test "$(git hash-object "$path")" = "$(git rev-parse "$CANDIDATE_SHA:$path")"
+          done
           for path in src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs; do
             git show "$CANDIDATE_SHA:$path" > "$path"
             test "$(git hash-object "$path")" = "$(git rev-parse "$CANDIDATE_SHA:$path")"
           done
-          printf '%s\n' src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs > .artifacts/before-capacity/expected-overlay.txt
+          printf '%s\n' src/agents/code-mode.catalog-lifetime.test.ts src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts src/system-agent/delegated-change-policy.ts test/vitest/vitest.database-worker-core-paths.mjs > .artifacts/before-capacity/expected-overlay.txt
           git diff --name-only | LC_ALL=C sort > .artifacts/before-capacity/actual-overlay.txt
           diff -u .artifacts/before-capacity/expected-overlay.txt .artifacts/before-capacity/actual-overlay.txt
           git diff --exit-code -- src/agents/code-mode-execution.ts src/agents/code-mode-state.ts
           git diff --binary > .artifacts/before-capacity/overlay.patch
-          sha256sum src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs src/agents/code-mode-execution.ts src/agents/code-mode-state.ts > .artifacts/before-capacity/source-sha256.txt
+          sha256sum src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts src/system-agent/delegated-change-policy.ts src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs src/agents/code-mode-execution.ts src/agents/code-mode-state.ts > .artifacts/before-capacity/source-sha256.txt
       - uses: ./.github/actions/setup-node-env
         with:
           semantic-checks: "true"
