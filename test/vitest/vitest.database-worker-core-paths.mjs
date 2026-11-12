@@ -1390,6 +1390,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-state/plugin-state-operation.test.ts",
   "src/plugin-state/plugin-state-worker.test.ts",
   "src/plugin-state/plugin-state-publication.test.ts",
+  "src/plugin-state/plugin-state-publication.reconciliation.test.ts",
   "src/plugin-state/plugin-state-native-binding-facts.test.ts",
   "src/plugin-state/plugin-state-guard.test.ts",
   "test/visitor-access-revocation.test.ts",
