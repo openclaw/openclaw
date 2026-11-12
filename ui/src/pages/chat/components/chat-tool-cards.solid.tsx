@@ -1,5 +1,6 @@
 import type { ProgressCardStep } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { dynamic } from "@solidjs/web";
 import { For, Show, createMemo, lazy } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
@@ -27,6 +28,9 @@ import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
+const OpenClawCard = lazy(() => import("./chat-openclaw-card.solid.tsx"), {
+  export: "OpenClawCard",
+});
 
 function progressReceiptSteps(value: unknown): ProgressCardStep[] {
   if (!Array.isArray(value)) {
@@ -190,6 +194,8 @@ function ToolCardView(props: ToolCardProps) {
   const permission = () =>
     readNodePermissionRequest(asNullableRecord(card().details)?.permissionMissing);
   const outcome = () => resolveToolCardOutcome(card(), props.options.runActive);
+  const isOpenClaw = () => card().name.trim().toLowerCase() === "openclaw";
+  const Row = dynamic(() => (isOpenClaw() ? OpenClawCard : ToolCardRow));
   return (
     <Show
       when={permission()}
@@ -215,13 +221,9 @@ function ToolCardView(props: ToolCardProps) {
                   />
                 )}
               >
-                <ToolCardRow
-                  card={card()}
-                  options={props.options}
-                  hasChildren={props.hasChildren}
-                />
+                <Row card={card()} options={props.options} hasChildren={props.hasChildren} />
               </ChatImportBoundary>
-              <Show when={props.options.expanded}>
+              <Show when={props.options.expanded && !isOpenClaw()}>
                 <Show
                   when={props.hasChildren}
                   fallback={
