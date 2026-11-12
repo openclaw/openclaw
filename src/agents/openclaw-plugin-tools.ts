@@ -283,7 +283,7 @@ function applySkillLibraryGrant(
   registry: ReturnType<typeof getActivePluginRegistry> | undefined,
 ): AnyAgentTool[] {
   const grant = options?.skillLibraryAuthoring;
-  if (!grant) {
+  if (!grant || (grant.turnRefusal && !grant.assertWorkspaceCurrent)) {
     return tools;
   }
   const skillAuthors = new Set(
@@ -294,7 +294,9 @@ function applySkillLibraryGrant(
     if (!pluginId || !skillAuthors.has(pluginId)) {
       return [tool];
     }
-    if (grant.defaultTarget === "personal") {
+    // Refused turns retain CLI's sandbox guard, but have no personal grant
+    // that could remove an ordinary plugin tool.
+    if (grant.defaultTarget === "personal" && !grant.turnRefusal) {
       return [];
     }
     const guarded: AnyAgentTool = {

@@ -471,6 +471,7 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
     }))!;
   const human = await grant(true);
   const settle = await grant(false);
+  expect(settle.assertWorkspaceCurrent).toBeUndefined();
   const nextHuman = await grant(true);
   const toolFor = (capability: NonNullable<Awaited<ReturnType<typeof grant>>>) =>
     createSkillLibraryTool(capability);

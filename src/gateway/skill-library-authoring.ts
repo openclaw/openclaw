@@ -110,9 +110,6 @@ function createRefusedSkillLibraryAuthoring(
     defaultTarget: listing.defaultTarget,
     multipleProfiles: listing.multipleProfiles,
     turnRefusal: SKILL_LIBRARY_TURN_REFUSAL,
-    assertWorkspaceCurrent() {
-      throw refusal;
-    },
     bind() {},
     invoke: async () => {
       throw refusal;
