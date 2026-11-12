@@ -1,2 +1,0 @@
-# Preserve the full live-authority tuple in the settlement observer.
-1

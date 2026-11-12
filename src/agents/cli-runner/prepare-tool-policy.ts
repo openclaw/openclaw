@@ -104,9 +104,11 @@ export async function resolveCliRuntimeToolPolicy(input: {
         ).policy;
   const senderRestricted = requesterPolicy?.inheritedToolPolicySource === "sender";
   const delegatedExecution = Boolean(requesterPolicy?.delegatedToolPolicy);
-  // Internal controls and backend-enforced tool-free questions have no file authority.
+  // Controls that skip turn preparation and backend-enforced tool-free questions have no
+  // file authority. Compaction lists the turn's exact tools (its calls are refused), so it
+  // takes the same workspace restriction or its tools block would differ from the turns'.
   const workspaceOnly =
-    params.controlOperation === undefined &&
+    (params.controlOperation === undefined || !input.skipsTurnPreparation) &&
     !(input.isSideQuestion && input.sideQuestionToolMode === "disabled") &&
     resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: input.policyAgentId });
   const ordinaryClaudeMediation =

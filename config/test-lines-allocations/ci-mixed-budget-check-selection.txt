@@ -1,2 +1,0 @@
-# Exercise mixed source/test/budget admission and shared-helper fallback in the existing manifest harness.
-15
