@@ -2,13 +2,11 @@ import CryptoKit
 import Foundation
 import Security
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Atomic create-if-absent storage. A missing item differs from inaccessible/corrupt storage.
 public protocol OpenClawIDNodeIdentityStore: Sendable {
     func loadOrCreateSeed() async throws -> Data
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Device-only Keychain owner for W, separate from native pairing and owner/member identities.
 public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     private let service: String
@@ -59,7 +57,6 @@ public actor OpenClawIDNodeIdentityKeychainStore: OpenClawIDNodeIdentityStore {
     }
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Swift-owned W signing material. It is never Codable and has no public seed getter.
 public struct OpenClawIDNodeIdentity: Sendable {
     private let key: Curve25519.Signing.PrivateKey

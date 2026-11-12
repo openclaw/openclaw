@@ -153,7 +153,6 @@ public struct WebSocketTaskBox: @unchecked Sendable {
     }
 }
 
-// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 public enum WebSocketGatewayRoleError: Error { case incompatibleRole }
 
 public protocol WebSocketSessioning: AnyObject {
