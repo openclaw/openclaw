@@ -46,12 +46,60 @@ export async function linkUpdateCandidatePluginTrees(
     onMaterialized?: () => void;
   },
 ): Promise<{ linked: number; copied: number }> {
+  // Temporary isolated-composition probe; remove with OPENCLAW_RETAINED_CLI_TRACE.
+  const traceEnabled = process.env.OPENCLAW_RETAINED_CLI_TRACE === "1";
+  const startedAt = traceEnabled ? performance.now() : 0;
+  type Operation =
+    | "source-stat"
+    | "source-check"
+    | "parent-ready"
+    | "link"
+    | "copy"
+    | "destination-stat"
+    | "destination-check";
+  const timings = new Map<Operation, { count: number; totalMs: number; maxMs: number }>();
+  const start = () => (traceEnabled ? performance.now() : 0);
+  const record = (operation: Operation, started: number) => {
+    if (!traceEnabled) {
+      return;
+    }
+    const elapsedMs = performance.now() - started;
+    const value = timings.get(operation) ?? { count: 0, totalMs: 0, maxMs: 0 };
+    value.count += 1;
+    value.totalMs += elapsedMs;
+    value.maxMs = Math.max(value.maxMs, elapsedMs);
+    timings.set(operation, value);
+  };
+  let completed = 0;
+  const snapshot = () => {
+    if (traceEnabled) {
+      // Three records at most. Concurrent/nested totals overlap and include continuations.
+      console.error(JSON.stringify({
+        phase: "cli-composition-retention-trace",
+        stage: "materialization-costs",
+        elapsedMs: Math.round(performance.now() - startedAt),
+        completed,
+        preparedDirectories: preparedDirectories.size,
+        ...counts,
+        timings: Array.from(timings, ([operation, value]) => ({
+          operation,
+          count: value.count,
+          totalMs: Math.round(value.totalMs),
+          maxMs: Math.round(value.maxMs),
+        })),
+      }));
+    }
+  };
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     await params.onProgress?.();
+    const sourceStatStartedAt = start();
     const current = await fs.lstat(entry.path, { bigint: true });
+    record("source-stat", sourceStatStartedAt);
+    const sourceCheckStartedAt = start();
     assertUpdateCandidatePluginEntryStat(entry, current);
+    record("source-check", sourceCheckStartedAt);
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
@@ -120,7 +168,9 @@ export async function linkUpdateCandidatePluginTrees(
     const destination = destinationFor(entry.path);
     const directory = entry.kind === "directory" ? destination : path.dirname(destination);
     // A file may precede its parent's inventory entry; reuse only completed creation.
+    const parentStartedAt = start();
     await prepareDirectory(directory, entry.kind === "directory" ? entry.mode | 0o700 : 0o700);
+    record("parent-ready", parentStartedAt);
     if (entry.kind === "directory") {
       directories.push(entry);
     } else if (entry.kind === "symlink") {
@@ -145,6 +195,7 @@ export async function linkUpdateCandidatePluginTrees(
         (await requiresCopy(entry));
       if (!copy) {
         params.assertCurrent();
+        const linkStartedAt = start();
         try {
           await fs.link(entry.path, destination);
         } catch (error) {
@@ -152,14 +203,21 @@ export async function linkUpdateCandidatePluginTrees(
             throw error;
           }
           copy = true;
+        } finally {
+          record("link", linkStartedAt);
         }
       }
       if (copy) {
+        const copyStartedAt = start();
         await copyEntry(entry, destination);
+        record("copy", copyStartedAt);
         counts.copied += 1;
       } else {
         // The private name must reference the inventoried inode, never a newer file.
+        const destinationStatStartedAt = start();
         const linked = await fs.lstat(destination, { bigint: true });
+        record("destination-stat", destinationStatStartedAt);
+        const destinationCheckStartedAt = start();
         if (
           !linked.isFile() ||
           linked.dev.toString() !== entry.dev ||
@@ -170,6 +228,7 @@ export async function linkUpdateCandidatePluginTrees(
             `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
           );
         }
+        record("destination-check", destinationCheckStartedAt);
         // Our link changes ctime without changing bytes. Accept that change;
         // concurrent equal-size writes restoring mtime during this await are
         // outside this retention check. Later aliases still validate inventory.
@@ -177,6 +236,12 @@ export async function linkUpdateCandidatePluginTrees(
       }
     }
     params.onMaterialized?.();
+    if (traceEnabled) {
+      completed += 1;
+      if (completed === 4096 || completed === 16384) {
+        snapshot();
+      }
+    }
   };
   const files: Array<Extract<UpdateCandidatePluginEntry, { kind: "file" }>> = [];
   const inodes = new Set<string>();
@@ -218,5 +283,6 @@ export async function linkUpdateCandidatePluginTrees(
     await fs.chmod(destinationFor(entry.path), entry.mode);
     params.onMaterialized?.();
   }
+  snapshot();
   return counts;
 }
