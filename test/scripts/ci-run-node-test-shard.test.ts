@@ -312,6 +312,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       configs: ["test/vitest/vitest.infra.config.ts"],
       files: [
         "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+        "src/agents/subagents/registry/subagent-control.accounting.test.ts",
+        "src/agents/tools/sessions-send-communication.test.ts",
         "src/plugins/loader.runtime-registry.test.ts",
         "src/state/dreaming-startup-admission.test.ts",
         "test/canonical-descendant.integration.test.ts",
@@ -336,13 +338,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: [
         "src/gateway/talk/client-permission-parity.test.ts",
         "src/gateway/tool-resolution.swarm-collector.test.ts",
+        "src/gateway/session-row-projection.subagent-index.test.ts",
+        "src/gateway/session-subagent-resume.test.ts",
+        "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
         "test/plugins/deep-research-routing.gateway.test.ts",
       ],
       preset: "runtime",
     },
     {
       configs: ["test/vitest/vitest.gateway-methods.config.ts"],
-      files: ["src/gateway/server-methods/session-catalog-privacy.test.ts"],
+      files: [
+        "src/gateway/server-methods/session-catalog-privacy.test.ts",
+        "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
+      ],
       preset: "runtime",
     },
     {
@@ -376,7 +384,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
     {
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
-      files: ["src/gateway/server.beam-owned-view.test.ts"],
+      files: [
+        "src/gateway/server.beam-owned-view.test.ts",
+        "src/gateway/server.subagent-transcript-conflict.test.ts",
+      ],
       preset: "runtime",
     },
     {
@@ -445,6 +456,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/scripts/ci-changed-build-selection.test.ts",
         "test/scripts/ci-changed-node-test-plan.integration.test.ts",
         "test/scripts/test-projects.test.ts",
+        "test/scripts/check-database-worker-ratchet.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+        "test/scripts/database-worker-compat.test.ts",
+        "test/scripts/personal-credential-writer-guard.test.ts",
       ],
       preset: "tooling",
     },
@@ -574,7 +590,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
-    { extra: [], args: [], jobArgs: undefined, preset: "runtime" },
+    {
+      extra: [
+        "src/agents/provider-auth-websocket.test.ts",
+        "src/cron/session-run.session-model-strictness.integration.test.ts",
+        "src/agents/sessions/agent-session-steering-context.test.ts",
+      ],
+      preset: "runtime",
+    },
     {
       targets: [
         "src/flows/doctor-health.update-schema.test.ts",
@@ -584,8 +607,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "src/commands/doctor-plugin-package-consent.test.ts",
         "test/scripts/type-suppression-inventory.test.ts",
       ],
-      args: [],
-      jobArgs: undefined,
       preset: "runtime",
     },
     {
@@ -596,22 +617,25 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/scripts/ci-test-timings-tooling.test.ts",
         "test/scripts/type-suppression-inventory.test.ts",
       ],
-      args: [],
-      jobArgs: undefined,
       preset: "runtime",
     },
     {
-      targets: ["test/scripts/run-vitest.test.ts"],
-      args: [],
-      jobArgs: undefined,
+      targets: [
+        "test/scripts/run-vitest.test.ts",
+        "test/scripts/check-database-worker-ratchet.test.ts",
+        "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+        "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+        "test/scripts/database-worker-compat.test.ts",
+        "test/scripts/personal-credential-writer-guard.test.ts",
+      ],
       preset: "tooling",
     },
-    { extra: [nodeTarget], args: [], jobArgs: undefined, preset: "full" },
-    { extra: [], args: ["--root", "custom-root"], jobArgs: undefined, preset: "full" },
+    { extra: [nodeTarget], preset: "full" },
+    { extra: [], args: ["--root", "custom-root"], preset: "full" },
     { extra: [], args: ["--root", "custom-root"], jobArgs: [], preset: "full" },
   ])(
     "passes the $preset artifact owner through the CI child bootstrap",
-    async ({ targets, extra = [], args, jobArgs, preset }) => {
+    async ({ targets, extra = [], args = [], jobArgs, preset }) => {
       machine(8, 31);
       const createWorker = vi.spyOn(workerOwner, "createVitestWorkerRun");
       const plans = resolveShardPlans({
@@ -1020,17 +1044,24 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       concurrency: 0,
       error: "Shard plan concurrency must be a positive integer",
     },
-  ])("rejects invalid $name before scheduling any child", async ({ env, concurrency, error }) => {
-    const runChild = vi.fn(async () => 0);
-    await expect(
-      runPlans([group("one", [bunConfig])], {
-        env: env ?? {},
-        concurrency,
-        runChild,
-      }),
-    ).rejects.toThrow(error);
-    expect(runChild).not.toHaveBeenCalled();
-  });
+  ])(
+    "rejects invalid $name before preparing builds or scheduling children",
+    async ({ env, concurrency, error }) => {
+      const prepare = vi
+        .spyOn(buildPrerequisites, "prepareE2eVitestRuntime")
+        .mockRejectedValue(new Error("Invalid shard settings reached expensive build preparation"));
+      const runChild = vi.fn(async () => 0);
+      await expect(
+        runPlans([group("one", ["test/vitest/vitest.e2e.config.ts"])], {
+          env: env ?? {},
+          concurrency,
+          runChild,
+        }),
+      ).rejects.toThrow(error);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(runChild).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps exact native admission and Vitest-only arguments separate", () => {
     const selection = { targets: [nativeBunTarget] };
@@ -1342,6 +1373,39 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     const run = createWorker.mock.results[0]!.value;
     expect(existsSync(run.descriptor.directory)).toBe(false);
   });
+
+  it.each([2, 4, 8])(
+    "retains the %s CPU scheduling budget on a larger Boat host",
+    async (cpuBudget) => {
+      machine(16, 32);
+      let active = 0;
+      let peak = 0;
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const result = await runPlans(
+        groupPlans([{ configs: ["a.config.ts"] }, { configs: ["b.config.ts"] }]),
+        {
+          env: {
+            CI: "true",
+            RUNNER_ENVIRONMENT: "self-hosted",
+            OPENCLAW_NODE_TEST_CPU_BUDGET: String(cpuBudget),
+          },
+          runChild: async () => {
+            active += 1;
+            peak = Math.max(peak, active);
+            await nextTurn();
+            active -= 1;
+            return 0;
+          },
+        },
+      );
+      expect(result).toBe(0);
+      expect(peak).toBe(cpuBudget < 8 ? 1 : 2);
+      expect(log).toHaveBeenCalledWith(`[shard:cpu-budget] logicalCpuCount=${cpuBudget}`);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(`logicalCpuCount=16 totalMemoryBytes=${32 * 1024 ** 3}`),
+      );
+    },
+  );
 
   it("retains the measured group's fallback ceiling below its memory floor", async () => {
     vi.spyOn(os, "availableParallelism").mockReturnValue(8);

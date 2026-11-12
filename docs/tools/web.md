@@ -448,6 +448,16 @@ session fingerprint so a resumed process cannot keep the old search policy.
 Turning search off for a session also removes it from OpenClaw's MCP tool list
 and invocation grant, while leaving unrelated tools available.
 
+On OpenClaw-managed Claude Code (`claude-cli`) turns, Claude Code's native
+`WebSearch` is kept by default, billed to the Claude login. It is kept only when
+the agent's tool policy allows `web_search` (so `tools.deny: ["group:web"]`
+removes it), search is enabled, and no OpenClaw provider is pinned or configured.
+A configured provider keeps priority: the agent then gets OpenClaw's `web_search`
+and no native duplicate. Turn native search off with
+`plugins.entries.anthropic.config.managedNativeTools.default: []`. Native
+`WebFetch` stays unavailable; use OpenClaw's `web_fetch`. See
+[CLI backends](/gateway/cli-backends#keeping-claude-code-orchestration-tools-on-managed-turns).
+
 Other external harnesses own their native tool behavior; configuring OpenClaw's
 managed provider does not establish that a third-party harness uses it.
 

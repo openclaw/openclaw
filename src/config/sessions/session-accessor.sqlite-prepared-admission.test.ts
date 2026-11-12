@@ -10,6 +10,7 @@ import { readSessionArchiveText } from "../../../test/helpers/session-archive.js
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath as revokeAdmission } from "../../infra/sqlite-database-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -280,6 +281,13 @@ function invalidateAdmission(f: Fixture) {
   revokeAdmission(f.databasePath);
 }
 
+function requireSchemaRepair(f: Fixture) {
+  // Lifecycle revocation is bounded; a missing unique index still requires physical verification.
+  using database = new (requireNodeSqlite().DatabaseSync)(f.databasePath);
+  database.exec("DROP INDEX IF EXISTS idx_agent_transcript_message_idempotency");
+  invalidateAdmission(f);
+}
+
 async function closeForIntegrityAdmission(f: Fixture) {
   expect(await closeDatabase(f.databasePath)).toBe(true);
   invalidateAdmission(f);
@@ -400,7 +408,7 @@ it.each(cases)(
     if (workerProbe) {
       await own(
         workerProbe.expectHealthy({
-          executor: mode === "warm" ? 0 : 1,
+          executor: 0,
           reclamation: 0,
           other: 0,
         }),
@@ -565,6 +573,7 @@ it.each([false, true])(
       });
       // Evict the handle without revoking the lifecycle operation's captured execution owner.
       evictCachedHandleForIntegrityAdmission(f);
+      requireSchemaRepair(f);
     });
     const registry = nativeRegistry("prepared-native", prepare, commit, rollback);
     const probe = observeWorkerAdmission(f.databasePath, "cold");
@@ -643,7 +652,7 @@ it.each(
     ([false, true] as const).map((cold) => ({ owner, cold })),
   ),
 )(
-  "keeps $owner maintenance commits after validation without blocking writers (cold: $cold)",
+  "keeps $owner maintenance commits after schema validation without blocking writers (repair: $cold)",
   async ({ owner, cold }) => {
     const f = maintenanceFixture();
     const probe = observeWorkerAdmission(f.databasePath, cold ? "cold" : "warm");
@@ -658,6 +667,7 @@ it.each(
         } else {
           await closeWorkerForIntegrityAdmission(f);
         }
+        requireSchemaRepair(f);
       }
     };
     const work = own<void | SessionEntryLifecycleMutationResult>(
@@ -719,7 +729,7 @@ async function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
   }
 }
 
-it("revalidates expired proof before the maintenance finalizer commits", async () => {
+it("revalidates expired proof and schema repair before the maintenance finalizer commits", async () => {
   const f = maintenanceFixture();
   const plan = await maintenancePlan(f);
   const database = openDatabase(f.options);
@@ -728,8 +738,7 @@ it("revalidates expired proof before the maintenance finalizer commits", async (
   hooks.afterMaterialize = async () => {
     expect(cachedDatabase(f.options)).toBe(database);
     expect(validation(database)).toBeDefined();
-    invalidateValidation(f.databasePath);
-    revokeAdmission(f.databasePath);
+    requireSchemaRepair(f);
     expect(database.db.isOpen).toBe(true);
   };
   const work = own(f.finalize([plan]));
@@ -747,12 +756,13 @@ it("revalidates expired proof before the maintenance finalizer commits", async (
   await own(probe.expectHealthy({ executor: 1, reclamation: 1, other: 0 }));
 });
 
-it("rechecks maintenance lifetime after cold finalizer admission", async () => {
+it("rechecks maintenance lifetime after finalizer schema repair", async () => {
   const f = maintenanceFixture();
   const plan = await maintenancePlan(f);
   const probe = observeWorkerAdmission(f.databasePath, "cold");
   hooks.afterMaterialize = async () => {
     await closeForIntegrityAdmission(f);
+    requireSchemaRepair(f);
   };
   let current = true;
   const work = own(
@@ -771,7 +781,7 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
 });
 
 it.each([false, true])(
-  "rechecks native deletion ownership after cold maintenance admission (revoked: %s)",
+  "rechecks native deletion ownership after maintenance schema repair (revoked: %s)",
   async (revoked) => {
     const f = maintenanceFixture(true);
     const plan = await maintenancePlan(f);
@@ -779,7 +789,10 @@ it.each([false, true])(
     const rollback = vi.fn();
     const registry = nativeRegistry(
       "maintenance-native",
-      () => closeForIntegrityAdmission(f),
+      async () => {
+        await closeForIntegrityAdmission(f);
+        requireSchemaRepair(f);
+      },
       commit,
       rollback,
     );

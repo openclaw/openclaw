@@ -13,7 +13,6 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
-  readBoundedResponseBody,
 } from "./actions-artifact-archive.mjs";
 import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
@@ -74,6 +73,24 @@ function requestValue(request) {
   return { ...request, inputs: normalizedInputs(request.inputs), spec };
 }
 
+function githubFailureReason(error) {
+  // Classify the original response without exposing its body, identity, or credentials.
+  // Keep the ordinary gh route: --include selects a different Octopool transport.
+  const output = [error?.message, error?.stderr, error?.stdout].join("\n");
+  for (const [reason, pattern] of [
+    ["secondary-rate-limit", /secondary rate limit|abuse detection mechanism/iu],
+    ["primary-rate-limit", /API rate limit exceeded/iu],
+    ["permission", /Resource not accessible by (?:integration|personal access token)/iu],
+    ["saml-enforcement", /SAML enforcement|SAML SSO/iu],
+    ["bad-credentials", /Bad credentials/iu],
+  ]) {
+    if (pattern.test(output)) {
+      return reason;
+    }
+  }
+  return "unclassified";
+}
+
 function dependencies(repository, deps) {
   const deadlineMs = deps.deadlineMs ?? Date.now() + 120_000;
   const remaining = (stage = "verification") => {
@@ -111,7 +128,7 @@ function dependencies(repository, deps) {
                 `${error?.message ?? ""}\n${error?.stderr ?? ""}`,
               )?.[0] ?? (serverError ? "HTTP 5xx" : undefined);
             throw new Error(
-              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}`,
+              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}; reason=${githubFailureReason(error)}`,
             );
           }
           requireEvidence(delay < remaining(stage), `${stage} exceeded its time budget`);
@@ -134,28 +151,7 @@ function dependencies(repository, deps) {
         if (params.token) {
           return downloadExactActionsArtifactArchive({
             ...params,
-            ...(deps.immutableReads
-              ? {
-                  fetchImpl: async (url, options) => {
-                    const route = String(url).replace(
-                      "https://api.github.com/repos/" + repository + "/",
-                      "",
-                    );
-                    if (!route.endsWith("/zip")) {
-                      return fetch(url, options);
-                    }
-                    const bytes = await deps.immutableReads.bytes(route, async () => {
-                      const response = await fetch(url, options);
-                      return readBoundedResponseBody(response, {
-                        expectedBytes: params.expected.artifactSizeBytes,
-                        maxBytes: MAX_RELEASE_ARTIFACT_BYTES,
-                        label: "Child evidence archive",
-                      });
-                    });
-                    return new Response(bytes);
-                  },
-                }
-              : {}),
+            immutableReads: deps.immutableReads,
           });
         }
         // Local verifiers can use gh's authenticated session without exporting

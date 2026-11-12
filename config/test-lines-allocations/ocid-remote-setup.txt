@@ -1,0 +1,2 @@
+190
+# Remote setup: native submit and explicit kit acknowledgement, device-key custody before commit, cancellation and publication outcomes, and anonymous callback handoff. Exact net test growth after removing animation timing/easing assertions and the duplicate reduced-motion flow.

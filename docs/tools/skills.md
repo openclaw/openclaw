@@ -802,6 +802,8 @@ Unchanged roots need no discovery work between events and safety rescans.
 Sessions share immutable parsed skill facts for unchanged files while retaining
 their own eligibility, allowlists, and prompt selections. A changed file replaces
 those facts on refresh; snapshots already in use keep their original revision.
+When a fresh eligibility check produces an identical snapshot, sessions also
+share its metadata and rendered prompt within the existing bounded snapshot pool.
 
 Explicit OpenClaw actions request an immediate rescan: installing, updating,
 uninstalling, or editing a skill; changing configuration that affects skills;
