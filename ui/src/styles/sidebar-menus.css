@@ -3,17 +3,20 @@
 .people-menu__search {
   position: sticky;
   top: 0;
-  z-index: 1;
+  /* Focused menu rows use layer 1; they must not cover the search field. */
+  z-index: 2;
   margin-block-end: 4px;
   padding: 6px 8px 0;
   background: var(--popover);
 }
 
-/* Cover the menu's top gutter too; sticky stops at the content edge, where rows would peek. */
+/* Cover the menu gutters too, including a focused row's outline. */
 .oc-menu > .people-menu__search:first-child {
   top: calc(-1 * var(--menu-padding));
   margin-block-start: calc(-1 * var(--menu-padding));
+  margin-inline: calc(-1 * var(--menu-padding));
   padding-block-start: calc(6px + var(--menu-padding));
+  padding-inline: calc(8px + var(--menu-padding));
 }
 
 /* Owner rows lead with a 24px avatar slot. The divider is the sticky edge, so scrolled rows

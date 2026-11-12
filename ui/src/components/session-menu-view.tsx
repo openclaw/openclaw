@@ -167,11 +167,7 @@ export function useSessionMenuEntries(
       children: state.compact ? undefined : () => body(entry.view),
       closeOnSelect: false,
       onBeforeShow:
-        entry.view === "icon"
-          ? appearance.prepare
-          : entry.view === "group"
-            ? resetGroupSearch
-            : undefined,
+        entry.view === "icon" || entry.view === "group" ? () => prepareView(entry.view) : undefined,
     };
   };
   const archive = (): MenuItem =>
@@ -217,7 +213,13 @@ export function useSessionMenuEntries(
     });
   const [groupQuery, setGroupQuery] = createSignal("");
   // Each opening starts from the full list.
-  const resetGroupSearch = () => setGroupQuery("");
+  function prepareView(view: CompactSessionMenuView) {
+    if (view === "group") {
+      setGroupQuery("");
+    } else if (view === "icon") {
+      appearance.prepare();
+    }
+  }
   const groupSearchEntry: MenuEntry = content(
     "groups-search",
     <div
@@ -543,5 +545,5 @@ export function useSessionMenuEntries(
     backDivider,
     ...body(view),
   ];
-  return { appearance, primary, organization, advanced, deleteAction, compact };
+  return { appearance, prepareView, primary, organization, advanced, deleteAction, compact };
 }

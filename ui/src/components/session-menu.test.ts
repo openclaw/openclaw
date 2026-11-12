@@ -337,6 +337,21 @@ describe("session menu", () => {
     },
   );
 
+  it("clears the group search after compact Back and reentry", async () => {
+    const groups = Array.from({ length: 9 }, (_, i) => `Group ${i + 1}`);
+    const menu = await mountMenu({ compact: true, groups });
+    await selectMenuValue(menu, "compact:open-group");
+    const search = menu.querySelector<HTMLInputElement>("input[data-search]")!;
+    search.value = "zzz";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await settleSessionMenu(menu);
+    expect(menu.textContent).toContain("No groups match your search.");
+    await selectMenuValue(menu, "compact:back");
+    await selectMenuValue(menu, "compact:open-group");
+    expect(menu.querySelector<HTMLInputElement>("input[data-search]")!.value).toBe("");
+    expect(menuItemLabels(menu)).toContain("Group 9");
+  });
+
   it("navigates compact groups without side flyouts", async () => {
     const menu = await mountMenu({ compact: true, groups: ["Research"] });
     for (const view of ["copy", "open-in", "icon", "group"] as const) {
