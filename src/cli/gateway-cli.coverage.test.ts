@@ -519,7 +519,28 @@ describe("gateway-cli coverage", () => {
             await runGatewayCommand(["diagnostics", "export", "--output", outputPath, "--json"]);
             const zip = await JSZip.loadAsync(fs.readFileSync(outputPath));
             const logs = await zip.file("logs/openclaw-sanitized.jsonl")?.async("string");
-            expect(logs).toBe(expected);
+            let logContext: string | undefined;
+            if (logs !== expected) {
+              const diagnostics = JSON.parse(
+                (await zip.file("diagnostics.json")?.async("string")) ?? "{}",
+              ).logs;
+              logContext = JSON.stringify({
+                iteration: filename === "first.zip" ? 1 : 2,
+                selectedConfiguredFile:
+                  diagnostics?.file === `$OPENCLAW_STATE_DIR${path.sep}input.log`,
+                lineCount:
+                  typeof diagnostics?.lineCount === "number" ? diagnostics.lineCount : null,
+                size: typeof diagnostics?.size === "number" ? diagnostics.size : null,
+                cursor: typeof diagnostics?.cursor === "number" ? diagnostics.cursor : null,
+                status:
+                  typeof diagnostics?.file !== "string"
+                    ? "missing-metadata"
+                    : diagnostics.file === "unavailable"
+                      ? "failed"
+                      : "included",
+              });
+            }
+            expect(logs, logContext).toBe(expected);
             if (logs === undefined) {
               throw new Error("Diagnostics export is missing sanitized logs");
             }

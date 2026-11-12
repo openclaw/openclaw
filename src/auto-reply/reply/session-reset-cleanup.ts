@@ -31,6 +31,12 @@ import { clearSessionQueues } from "./queue/cleanup.js";
 
 export class SessionResetCleanupError extends Error {}
 
+export class SessionResetCleanupConflictError extends SessionResetCleanupError {
+  constructor() {
+    super("Reset did not complete because the session changed before cleanup. Retry /reset.");
+  }
+}
+
 /** Prepare parent facts once; cleanup observes the entry writer's in-process receipts. */
 export async function prepareSessionResetCleanupGuard(params: {
   agentId: string;
@@ -48,9 +54,7 @@ export async function prepareSessionResetCleanupGuard(params: {
       current?.sessionId !== params.expectedSession?.sessionId ||
       current?.lifecycleRevision !== params.expectedSession?.lifecycleRevision
     ) {
-      throw new SessionResetCleanupError(
-        "Reset did not complete because the session changed before cleanup. Retry /reset.",
-      );
+      throw new SessionResetCleanupConflictError();
     }
   };
   if (memory) {
@@ -82,9 +86,7 @@ export async function prepareSessionResetCleanupGuard(params: {
         assertCurrent: () => {
           const current = retained.readCurrent();
           if (current === undefined) {
-            throw new SessionResetCleanupError(
-              "Reset did not complete because the session changed before cleanup. Retry /reset.",
-            );
+            throw new SessionResetCleanupConflictError();
           }
           assertEntry(current);
         },
