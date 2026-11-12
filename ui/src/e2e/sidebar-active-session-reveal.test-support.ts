@@ -118,6 +118,7 @@ export async function runActiveSessionRevealScenario(page: Page, baseUrl: string
           },
         ],
         timestamp: now,
+        __openclaw: { id: "verification-reply" },
       },
     ],
     sessionId: leaf.sessionId,

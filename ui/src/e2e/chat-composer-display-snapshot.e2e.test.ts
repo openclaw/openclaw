@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createMockHistoryMaterializer } from "../test-helpers/control-ui-mock-scenario.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -14,6 +15,8 @@ suite.define(() => {
       async ({ page }) => {
         const sessionKey = "agent:main:chat:aabbccdd-1234-4321-9876-123456789abc";
         const text = "The synthetic conversation stays in place while its settings refresh.";
+        const materializeHistory = createMockHistoryMaterializer();
+        const historyMessages = materializeHistory([{ role: "assistant", content: text }]);
         const cached = createControlUiSessionRow(sessionKey, "Cached composer example", 1, {
           model: "reasoning-example",
           modelProvider: "openai",
@@ -48,7 +51,7 @@ suite.define(() => {
           deferredMethods: ["connect", "sessions.describe", "sessions.list", "agents.list"],
           agentModel: "openai/reasoning-example",
           sessions: [cached],
-          historyMessages: [{ role: "assistant", content: text }],
+          historyMessages,
           models: [
             {
               id: "reasoning-example",
@@ -80,6 +83,15 @@ suite.define(() => {
         const releaseAgents = async () => {
           await gateway.waitForRequest("agents.list");
           await gateway.resolveDeferred("agents.list");
+        };
+        const serveSession = async (session: typeof cached) => {
+          await gateway.setSessionsListResponse({ sessions: [session] });
+          await gateway.setMethodResponse("sessions.describe", { session });
+          await gateway.setMethodResponse("chat.startup", {
+            sessionId: session.sessionId,
+            sessionInfo: session,
+            messages: historyMessages,
+          });
         };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await setAgentDefault("full");
@@ -234,10 +246,10 @@ suite.define(() => {
         const freshHistory = "Live history arrived before the session row.";
         await gateway.setMethodResponse("chat.startup", {
           sessionId: cached.sessionId,
-          messages: [
-            { role: "assistant", content: text },
+          messages: materializeHistory([
+            ...historyMessages,
             { role: "assistant", content: freshHistory },
-          ],
+          ]),
         });
         await gateway.resolveDeferred("connect");
         await pane.locator("p").getByText(freshHistory, { exact: true }).waitFor();
@@ -287,13 +299,7 @@ suite.define(() => {
           totalTokens: 42_000,
         };
         await setAgentDefault("guarded");
-        await gateway.setSessionsListResponse({ sessions: [live] });
-        await gateway.setMethodResponse("sessions.describe", { session: live });
-        await gateway.setMethodResponse("chat.startup", {
-          sessionId: live.sessionId,
-          sessionInfo: live,
-          messages: [{ role: "assistant", content: text }],
-        });
+        await serveSession(live);
         await page.reload();
         await gateway.waitForRequest("connect");
         await page.getByText(text, { exact: true }).waitFor();
@@ -336,13 +342,7 @@ suite.define(() => {
           thinkingLevel: undefined,
           permissionMode: undefined,
         };
-        await gateway.setSessionsListResponse({ sessions: [cleared] });
-        await gateway.setMethodResponse("sessions.describe", { session: cleared });
-        await gateway.setMethodResponse("chat.startup", {
-          sessionId: cleared.sessionId,
-          sessionInfo: cleared,
-          messages: [{ role: "assistant", content: text }],
-        });
+        await serveSession(cleared);
         await page.reload();
         await gateway.waitForRequest("connect");
         await page.getByText(text, { exact: true }).waitFor();

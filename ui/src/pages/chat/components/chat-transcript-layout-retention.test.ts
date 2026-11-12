@@ -171,6 +171,7 @@ describe("transcript layout lifetime", () => {
               streamOptions: {},
               workPreviews: new Map(),
               renderGroupOptions: () => ({ showReasoning: false }),
+              partDependencies: (part) => [part],
               isWorkExpanded: () => false,
               onToggleWork: () => {},
             },

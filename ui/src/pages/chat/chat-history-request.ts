@@ -61,6 +61,11 @@ export async function loadChatHistoryPageRuntime(): Promise<ChatHistoryPageRunti
   return (chatHistoryPageRuntime = await chatHistoryPageRuntimeLoader.load());
 }
 
+// Continuity is cold module work; each history read retains its own abort race.
+export function loadChatHistoryTailPreparation() {
+  return import("./chat-history-page-preparation.ts");
+}
+
 export function captureChatHistoryRun(
   state: ChatState,
   isCurrent: () => boolean,

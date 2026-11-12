@@ -5,10 +5,12 @@ import { historyMessage as message } from "./chat-history.inflight.test-support.
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 
+// mock-isolation: module-delivery failure must reject before evaluating real exports.
 vi.mock("./chat-history-page-preparation.ts", async () => {
   throw new Error("Tail module delivery failed");
 });
 
+// mock-isolation: module-delivery failure must reject before evaluating real exports.
 vi.mock("./chat-history-inflight.runtime.ts", async () => {
   throw new Error("Active-run module delivery failed");
 });

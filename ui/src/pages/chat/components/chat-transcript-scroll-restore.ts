@@ -89,7 +89,6 @@ export function cancelTranscriptScroll(
     owner.initialRange.finishEnd();
   }
   if (
-    unissuedEnd ||
     (!command && !pendingOffset) ||
     owner.offsetState.hasPendingCommand ||
     element !== owner.getScrollElement() ||
@@ -97,11 +96,13 @@ export function cancelTranscriptScroll(
   ) {
     return;
   }
-  // An issued smooth journey keeps its established measurement/instant-stop order.
+  // Even an unissued smooth journey may have skipped row measurements.
+  // Replay them before reader input; only an issued target needs a native stop.
   if (command?.behavior === "smooth") {
     owner.measureRowsWithoutScrollAdjustment();
   }
   if (
+    !unissuedEnd &&
     element &&
     !owner.offsetState.hasPendingCommand &&
     element === owner.getScrollElement() &&

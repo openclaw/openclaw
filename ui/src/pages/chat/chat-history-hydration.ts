@@ -15,6 +15,7 @@ import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   captureChatHistoryRun,
   chatHistoryRequestParams,
+  loadChatHistoryTailPreparation,
   requestSharedHistory,
 } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
@@ -288,7 +289,7 @@ export async function hydrateChatHistory(
       state.currentSessionId === historySessionId(response)
         ? await subscribeToSharedRequest(
             {
-              promise: import("./chat-history-page-preparation.ts"),
+              promise: loadChatHistoryTailPreparation(),
               subscribers: new Set<AbortController>(),
             },
             read,

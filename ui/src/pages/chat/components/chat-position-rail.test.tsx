@@ -3,7 +3,7 @@
 import { createMemo, createSignal } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript, stubSettledAnimationFrames } from "../chat-view.test-helpers.ts";
 import {
   mountChatThread as mountThread,
@@ -541,8 +541,12 @@ describe("conversation position rail", () => {
     );
     rerender();
     transcript.start();
-    // The stable DOM ref attaches native input observers in its queued microtask.
-    await Promise.resolve();
+    // The rail can precede a cold transcript's yielded row frame. Input needs
+    // the connected viewport whose stable ref owns the native observers.
+    await waitForSolid(() => {
+      expect(query(".chat-thread-inner--virtual")?.isConnected).toBe(true);
+      expect(transcript.scrollElement).toBe(query(".chat-thread"));
+    });
     const marks = part(container, "marks")!;
     measure(marks, { clientHeight: 600 });
     emitTranscriptResize(marks, 44, 600);

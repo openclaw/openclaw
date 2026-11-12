@@ -12,7 +12,6 @@ import {
   scrollTranscriptToEnd,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
-import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import type { TranscriptNativeScroll } from "./chat-transcript-scroll-events.ts";
 import { clampedMeasurements, offsetOwner } from "./chat-transcript.test-support.ts";
 
@@ -84,26 +83,7 @@ function createWheelForecastObserver() {
   const onOffset = vi.fn();
   onTestFinished(
     observeTranscriptOffset(
-      {
-        state,
-        getScrollElement: () => element,
-        endAnchor: new TranscriptEndAnchor(() => {}),
-        prependAnchor: new TranscriptPrependAnchor(
-          new Map(),
-          () => {},
-          () => false,
-        ),
-        canFollowEnd: () => false,
-        isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-        cancelScroll: () => {},
-        onLayoutCorrection: () => {},
-        invalidate: () => {},
-        onOffset,
-        onWheel,
-        onHistoryIntent,
-        onReaderScroll: () => {},
-        onComposerLayout: () => {},
-      },
+      offsetOwner(state, element, { onOffset, onWheel, onHistoryIntent }),
       virtualizer,
       (offset) => {
         virtualizer.scrollOffset = offset;

@@ -31,7 +31,7 @@ const models = [
   },
 ];
 type Field = "thinkingDefault" | "fastModeDefault";
-type Value = "low" | "high" | boolean | "auto";
+type Value = "low" | "high" | boolean | "auto" | "ultrafast";
 const defaultsFor = (field: Field, value: Value) => ({ thinkingDefault: "low", [field]: value });
 function configResponse(field: Field, value: Value, hash: string) {
   const defaults = defaultsFor(field, value);
@@ -73,18 +73,7 @@ suite.define(() => {
         },
       ];
       const snapshot = (value: boolean | "ultrafast", hash: string) =>
-        configSnapshot(
-          {
-            agents: {
-              defaults: {
-                model: "openai/gpt-5.5",
-                thinkingDefault: "low",
-                fastModeDefault: value,
-              },
-            },
-          },
-          hash,
-        );
+        configResponse("fastModeDefault", value, hash);
       const gateway = await installMockGateway(page, {
         models: speedModels,
         methodResponses: {
@@ -109,18 +98,23 @@ suite.define(() => {
           frame.png,
         );
       }
-      await radio(speed, "Fast").click();
-      expect(requestRaw(await gateway.waitForRequest("config.patch"))).toMatchObject({
-        agents: { defaults: { fastModeDefault: true } },
-      });
-      await expectChecked(radio(speed, "Fast"));
-      await gateway.setMethodResponse("config.patch", snapshot("ultrafast", "speed-3"));
-      await radio(speed, "Ultrafast").click();
-      await expect.poll(async () => (await gateway.getRequests("config.patch")).length).toBe(2);
-      const requests = await gateway.getRequests("config.patch");
-      expect(requestRaw(requests[1]!)).toMatchObject({
-        agents: { defaults: { fastModeDefault: "ultrafast" } },
-      });
+      for (const [label, value, hash] of [
+        ["Fast", true, "speed-2"],
+        ["Ultrafast", "ultrafast", "speed-3"],
+      ] as const) {
+        const saved = snapshot(value, hash);
+        await gateway.setMethodResponse("config.patch", saved);
+        const after = await gateway.deferNext("config.patch");
+        await radio(speed, label).click();
+        expect(requestRaw(await gateway.waitForRequest("config.patch", { after }))).toMatchObject({
+          agents: { defaults: { fastModeDefault: value } },
+        });
+        // PATCH custody and the later applied-state GET must describe the same save.
+        await gateway.setMethodResponse("config.get", saved);
+        await gateway.resolveDeferred("config.patch");
+        await expect.poll(() => radio(speed, label).isChecked()).toBe(true);
+      }
+      expect(await gateway.getRequests("config.patch")).toHaveLength(2);
       const fresh = await context.newPage();
       await installMockGateway(fresh, {
         models: speedModels,

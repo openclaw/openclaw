@@ -3,6 +3,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it, vi } from "vitest";
 import { createEnginePageScenarios } from "../../scripts/lib/control-ui-engine-page-scenarios.ts";
 import { createMockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-controls.ts";
+import { normalizeScenario } from "../../ui/src/test-helpers/control-ui-mock-scenario.ts";
 
 it.each([
   { id: "page-cron-visit", origin: "new-session" },
@@ -127,7 +128,8 @@ it.each([
     };
     // SAFETY: Run the production readiness callback; later Playwright waits are outside its clock.
     const page = pageMethods as Page;
-    const measurement = scenario.run(page, createMockGatewayControls(page, "synthetic", [], {}));
+    const options = normalizeScenario({ sessionKey: "synthetic" });
+    const measurement = scenario.run(page, createMockGatewayControls(page, options, []));
     const advance = () => {
       now += 16;
       const callback = frames.shift();

@@ -1,4 +1,5 @@
 # Adopt canonical Files authority, filtering, active downloads and keyboard regressions.
 # Includes accepted Mobile refresh and attachment coverage with M3 newer-history retention.
-# Exactly 924 net test LF over incoming 8ee6209724a4a01816e021b813105b967c14d9fe.
-924
+# Adoption adds 924 test LF; retained history corrections remove 1 LF.
+# Exactly 923 net test LF over incoming 8ee6209724a4a01816e021b813105b967c14d9fe.
+923
