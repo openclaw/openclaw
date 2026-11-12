@@ -29,7 +29,10 @@ import {
   prepareOpenAITools,
   reconcileOpenAICompletionsToolChoice,
 } from "../providers/openai-tool-projection.js";
-import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+import {
+  isStrictOpenAIJsonSchemaCompatible,
+  normalizeOpenAIStrictToolParameters,
+} from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
 import { normalizeToolSchema } from "../providers/tool-schema-normalization.js";
 import { shortHash } from "../utils/hash.js";
@@ -160,35 +163,41 @@ function convertTools(
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
   const convert = () => {
-    const strict =
+    const strictSetting =
       mode === "direct"
         ? compat.supportsStrictMode
           ? false
           : undefined
-        : resolveOpenAIStrictToolFlagWithDiagnostics(
-            projection,
-            getAiTransportHost().resolveOpenAIStrictToolSetting(model, {
-              transport: "stream",
-              supportsStrictMode: compat?.supportsStrictMode,
-            }),
-            {
-              transport: "completions",
-              model,
-            },
-          );
+        : getAiTransportHost().resolveOpenAIStrictToolSetting(model, {
+            transport: "stream",
+            supportsStrictMode: compat?.supportsStrictMode,
+          });
+    const strict =
+      mode === "direct"
+        ? strictSetting
+        : resolveOpenAIStrictToolFlagWithDiagnostics(projection, strictSetting, {
+            transport: "completions",
+            model,
+          });
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
         const parameters = compat.requiresTypedUnionBranches
           ? normalizeToolSchema(tool.parameters, "moonshot")
           : tool.parameters;
+        // Strict is resolved per tool so a single incompatible schema (e.g. oneOf)
+        // does not strip strict mode from otherwise compatible tools.
+        const toolStrict =
+          mode === "managed" && strictSetting === true
+            ? isStrictOpenAIJsonSchemaCompatible(tool.parameters)
+            : strict;
         return prepareOpenAIFunctionTool(
           tool.name,
           tool.description,
           mode === "direct"
             ? parameters
-            : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
-          strict,
+            : normalizeOpenAIStrictToolParameters(parameters, toolStrict === true, model.compat),
+          toolStrict,
           mutableParameters,
         ).completions;
       }),
