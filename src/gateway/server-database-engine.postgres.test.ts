@@ -368,14 +368,23 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const serverUrl = await listenLoopback(server);
       resources.defer(() => closeHttpServer(server));
       // Hold the request before execution, unlike committed ACK reply-loss coverage.
-      // On restart, observe the real ACK response and advance only the Gateway clock.
+      // On restart, observe the real ACK response with one clock across Gateway threads.
       const preload = (id: string, observe = false, offset = 0) =>
         `data:text/javascript,${encodeURIComponent(`
-          import { Worker, isMainThread } from "node:worker_threads";
+          import threads, { Worker, isMainThread } from "node:worker_threads";
+          import { syncBuiltinESMExports } from "node:module";
           import { deserialize } from "node:v8";
+          const now = Date.now.bind(Date);
+          Date.now = () => now() + ${offset};
+          threads.Worker = class extends Worker {
+            constructor(url, options = {}) {
+              super(url, { ...options, execArgv: [
+                ...(options.execArgv ?? process.execArgv), "--import", import.meta.url,
+              ] });
+            }
+          };
+          syncBuiltinESMExports();
           if (isMainThread) {
-            const now = Date.now.bind(Date);
-            Date.now = () => now() + ${offset};
             const post = Worker.prototype.postMessage;
             const emit = Worker.prototype.emit;
             let target;
@@ -570,7 +579,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       const crashed: QueuedDelivery = JSON.parse(afterCrash[0]!.entry_json);
       expect(crashed.availableAt).toEqual(expect.any(Number));
       // Simulate elapsed lease time without rewriting custody or waiting a real minute.
-      // Workers keep their native clock; terminal-owner recovery needs no platform reclaim.
+      // The heartbeat owner and its worker must observe the same epoch clock.
       gatewayPrefix[2] = preload(
         boundary.id,
         true,

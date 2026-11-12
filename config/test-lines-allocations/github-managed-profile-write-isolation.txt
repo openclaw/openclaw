@@ -1,0 +1,3 @@
+# Install/refresh regressions prove main-thread fs isolation and required/off native policy.
+# Funds this follow-up's 101 net test lines; reader allocation and inherited main debt stay separate.
+101

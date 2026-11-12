@@ -182,6 +182,11 @@ prevent the turn from completing still appear through normal error delivery.
 Set it to `true` for the rolling tool log. Successful background-process polls
 and internal waits do not add routine rows. Failed calls still follow the
 selected tool-progress policy; `/verbose` retains their diagnostic summaries.
+Known operations use concise action labels and relevant context rather than
+request IDs and timeout flags: for example, `Remember knowledge`,
+`Read session history`, or `Start subagent: Check streaming`. Node invocations
+include the requested operation and target, without their argument payload.
+These labels describe a tool operation, not a successful task or publication.
 
 On Telegram, the quiet draft keeps one current-operation status and bounded
 delegated-task status rows. These use public operation names and

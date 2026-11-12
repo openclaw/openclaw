@@ -2,11 +2,12 @@ import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-terminatio
 import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
 import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
-import { resolveCronSessionTargetSessionKey } from "../session-target.js";
+import { resolveCronContinuationSessionKey } from "../session-target.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
@@ -16,7 +17,9 @@ import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
+import { wakeCronRunQueues } from "./run-queue-wake.js";
 import { createCronReceiptExecutionIdentity, markServiceCronJobActive } from "./run-receipts.js";
+import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import {
   emit,
   isImmediateCronRunMode,
@@ -45,6 +48,35 @@ export type CronLaunchContext = {
   receiptSettlement?: Promise<void>;
 };
 
+/** Best effort: if this write fails, the fired run counts as a check until it ends. */
+async function settleConditionCheck(
+  state: CronServiceState,
+  entry: CronQueuedRun,
+  context: OpenClawStateWorkerContext,
+): Promise<void> {
+  try {
+    const { job } = await runOpenClawStateWorkerOperation(context, (scope) =>
+      scope.execute({
+        type: "cron.settleConditionCheck",
+        input: {
+          storeKey: state.deps.storeKey,
+          jobId: entry.job.id,
+          receiptId: entry.runReceipt.receiptId,
+        },
+      }),
+    );
+    if (job) {
+      applyCronRuntimeRowsToState(state, [job]);
+      wakeCronRunQueues(state);
+    }
+  } catch (error) {
+    state.deps.log.warn(
+      { jobId: entry.job.id, err: String(error) },
+      "cron: fired condition still counted as a check",
+    );
+  }
+}
+
 export async function launchCronRun(
   state: CronServiceState,
   entry: CronQueuedRun,
@@ -52,9 +84,11 @@ export async function launchCronRun(
   cancel: (reason: string) => Promise<void>,
 ) {
   const { options } = pending;
-  const continuationSession =
-    entry.job.operatorSource && resolveCronSessionTargetSessionKey(entry.job.sessionTarget);
+  const continuationSession = resolveCronContinuationSessionKey(entry.job);
   if (continuationSession) {
+    // The queue parks a timed occurrence while its conversation is busy, so for those this
+    // normally returns at once. Requested and event runs, and a turn that starts between the
+    // drain and this launch, wait here with their slot held.
     await waitForSessionRunIdle(continuationSession, undefined, {
       signal: state.schedulerScope.signal,
     });
@@ -177,6 +211,7 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
+      onConditionFired: () => settleConditionCheck(state, entry, pending.context),
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(
@@ -207,8 +242,7 @@ export async function launchCronRun(
     });
   }
   options.onTriggerDisposition?.(
-    result.triggerEval?.busy ||
-      (hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy")
+    hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy"
       ? "busy"
       : result.status === "error"
         ? "error"

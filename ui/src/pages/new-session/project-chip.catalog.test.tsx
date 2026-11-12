@@ -187,7 +187,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(request).toHaveBeenCalledTimes(5);
 });
 
-it("keeps automatic search on reopening, respects explicit collapse, and matches Unicode", async () => {
+it("keeps search visible across reopening, routes row typing to it, and matches Unicode", async () => {
   // The real composer registers its document capture before the lazy picker does.
   const composer = document.body.appendChild(document.createElement("textarea"));
   const redirectToComposer = (event: KeyboardEvent) =>
@@ -237,15 +237,7 @@ it("keeps automatic search on reopening, respects explicit collapse, and matches
     ],
   });
   await waitForSolid(() => expect(rows()).toHaveLength(6));
-  const toggle = () => view.container.querySelector<HTMLButtonElement>(".header-search__toggle")!;
-  toggle().click();
-  flush();
-  expect(view.container.querySelector('input[type="search"]')).toBeNull();
-  changed();
-  flush();
-  expect(view.container.querySelector('input[type="search"]')).toBeNull();
-  toggle().click();
-  flush();
+  expect(view.container.querySelector('input[type="search"]')).not.toBeNull();
   popoverOpen.mockReturnValue(false);
   changed();
   await waitForSolid(() =>
@@ -264,12 +256,17 @@ it("keeps automatic search on reopening, respects explicit collapse, and matches
   expect(input).not.toBeNull();
   const projectRow = rows()[0]!;
   projectRow.focus();
-  projectRow.dispatchEvent(
-    new KeyboardEvent("keydown", { key: "C", bubbles: true, composed: true, cancelable: true }),
-  );
+  const typed = new KeyboardEvent("keydown", {
+    key: "C",
+    bubbles: true,
+    composed: true,
+    cancelable: true,
+  });
+  projectRow.dispatchEvent(typed);
   flush();
-  expect(input.value).toBe("C");
+  // The key moves focus into the field and stays uncancelled, so the browser types it there.
   expect(document.activeElement).toBe(input);
+  expect(typed.defaultPrevented).toBe(false);
   input.value = nfcQuery;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   flush();

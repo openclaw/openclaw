@@ -453,6 +453,10 @@ openclaw-appearance-background .settings-background-preview .session-background_
   margin: var(--space-2) 0;
   /* Chat transcript line-height, so the sample reads like real messages. */
   font: 400 var(--chat-text-size) / 1.65 var(--font-chat);
+  /* Match chat prose: macOS stem darkening keeps reading text from rendering
+     thin. App chrome keeps the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 @media (max-width: 768px) {
