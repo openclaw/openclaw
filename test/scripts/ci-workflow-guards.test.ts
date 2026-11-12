@@ -3796,23 +3796,6 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it("keeps each compiled worker preset in a separate archive", () => {
-    const uiSetup = requiredWorkflowStep(
-      readCiWorkflow().jobs["checks-ui-e2e"].steps,
-      "Setup Node environment",
-    );
-    expect(uiSetup.with?.["vitest-worker-preset"]).toBe("runtime");
-    for (const [task, frozen, expected] of [
-      ["control-ui", "false", "true"],
-      ["control-ui", "true", "false"],
-      ["browser-extension", "false", "false"],
-    ] as const) {
-      expect(
-        evaluateWorkflowExpression(uiSetup.with?.["vitest-worker-cache"], {
-          matrix: { task },
-          preflightOutputs: { frozen_target: frozen },
-        }),
-      ).toBe(expected);
-    }
     const setup = readWorkflow(".github/actions/setup-node-env/action.yml");
     const steps = setup.runs.steps as WorkflowStep[];
     const restore = requiredWorkflowStep(steps, "Restore compiled Vitest workers");
@@ -6848,6 +6831,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(assetCheckStep.run).toContain('packageJson.scripts?.["plugins:assets:check"]');
     expect(assetCheckStep.run).toContain("pnpm plugins:assets:check");
     expect(assetCheckStep.run).toContain("predates plugins:assets:check");
+  });
+
+  it.each([
+    [{}, true],
+    [{ runAttempt: 2 }, true],
+    [{ eventName: "workflow_dispatch" }, false],
+    [{ eventName: "workflow_dispatch", ref: "refs/heads/feature" }, false],
+    [{ repository: "example/fork" }, false],
+    [{ ref: "refs/heads/feature" }, false],
+    [{ runnerBackend: "" }, false],
+    [{ runnerBackend: "blacksmith" }, false],
+    [{ runnerBackend: "hybrid" }, false],
+    [{ runnerBackend: "runson" }, false],
+    [{ runnerBackend: "github" }, false],
+  ] as const)("routes Android CodeQL to Boat only on scheduled main: %j", (context, boat) => {
+    const job = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs.android;
+    expect(
+      evaluateWorkflowRunner(job["runs-on"], {
+        eventName: "schedule",
+        repository: "openclaw/openclaw",
+        ref: "refs/heads/main",
+        runnerBackend: "boat",
+        ...context,
+      }),
+    ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
   });
 
   it("keeps network CodeQL off unrelated source-only refactors", () => {

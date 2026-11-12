@@ -1,2 +1,0 @@
-# Plugin metadata/policy regression rejects main-thread synchronous credential probes.
-48
