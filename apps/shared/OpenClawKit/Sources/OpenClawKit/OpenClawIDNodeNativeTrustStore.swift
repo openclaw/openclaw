@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawNativeState
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Restart inputs, NOT dialing authority. Refresh Discovery and verify membership against current
 /// high-water state before dialing. Stored evidence never constructs an OpenClawIDNodeTrustTarget.
 public struct OpenClawIDNodeSavedEnrollment: Sendable {
@@ -12,6 +13,7 @@ public struct OpenClawIDNodeSavedEnrollment: Sendable {
     public let evidence: Data
 }
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Durable adapter using the native SQLite owner. A per-attempt adapter captures its app lifecycle
 /// guard; multiple adapters still merge/check the CURRENT row in one SQLite transaction.
 public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {

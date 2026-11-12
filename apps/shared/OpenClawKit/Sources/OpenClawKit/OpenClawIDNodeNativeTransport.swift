@@ -217,6 +217,7 @@ private struct OpenClawIDNodeNativeStream: OpenClawIDNodeStream {
     }
 }
 #else
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// The default app build does not package the experimental native transport.
 public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendable {
     private init() {}
@@ -236,6 +237,7 @@ public final class OpenClawIDNodeNativeEndpoint: OpenClawIDNodeEndpoint, Sendabl
     public func shutdown() async {}
 }
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 public enum OpenClawIDNodeNativePackagingError: Error, LocalizedError {
     case notPackaged
 

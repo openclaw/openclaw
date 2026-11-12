@@ -9,9 +9,11 @@ public protocol OpenClawIDNodeEndpoint: Sendable {
 }
 
 public struct OpenClawIDNodeRelayStatus: Sendable, Equatable {
+    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     public let connected: Bool
     public let admissionDenied: Bool
 
+    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     public init(connected: Bool, admissionDenied: Bool) {
         self.connected = connected
         self.admissionDenied = admissionDenied
@@ -23,6 +25,7 @@ public struct OpenClawIDNodeClose: Sendable, Equatable {
     public let code: Int64?
     public let kind: Kind
 
+    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     public enum Kind: Sendable, Equatable { case application, local, timedOut, reset, transport }
 
     public init(code: Int64?, kind: Kind) {
@@ -69,6 +72,7 @@ public enum OpenClawIDNodeTransportError: Error, Sendable, Equatable {
 /// The platform adapter binds with Minimal, a single selected relay and this keep-alive.
 public enum OpenClawIDNodeTunnelProtocol {
     public static let alpn = Data("openclaw/tunnel/1".utf8)
+    // periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
     public static let keepAliveMilliseconds: UInt32 = 1000
     public static let maximumFrameBytes = 32 * 1024 * 1024
     public static let maximumHeadBytes = 64 * 1024

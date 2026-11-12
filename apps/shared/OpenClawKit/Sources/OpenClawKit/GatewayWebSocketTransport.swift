@@ -28,7 +28,6 @@ public final class WebSocketRequestLifetime: @unchecked Sendable {
 
     public init() {}
 
-    // periphery:ignore - External transports use this to order send admission with cancellation.
     /// Enqueue the request while holding the same lock that orders its retirement.
     /// The actions must only enqueue work; running I/O here would block cancellation.
     public func performIfActive(
@@ -154,6 +153,7 @@ public struct WebSocketTaskBox: @unchecked Sendable {
     }
 }
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 public enum WebSocketGatewayRoleError: Error { case incompatibleRole }
 
 public protocol WebSocketSessioning: AnyObject {

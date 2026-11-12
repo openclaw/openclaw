@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Bounded Discovery response, injectable without granting test transports trust authority.
 public struct OpenClawIDNodeEnrollmentHTTPResponse: Sendable {
     public let status: Int
@@ -11,11 +12,13 @@ public struct OpenClawIDNodeEnrollmentHTTPResponse: Sendable {
     }
 }
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Implementations must honor cancellation/deadline, refuse redirects and cap response bytes.
 public protocol OpenClawIDNodeEnrollmentHTTP: Sendable {
     func send(_ request: URLRequest) async throws -> OpenClawIDNodeEnrollmentHTTPResponse
 }
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Ephemeral, redirect-free URLSession transport with a one-MiB streaming response limit.
 public struct OpenClawIDNodeEnrollmentURLSession: OpenClawIDNodeEnrollmentHTTP {
     public init() {}
@@ -57,6 +60,7 @@ public struct OpenClawIDNodeEnrollmentURLSession: OpenClawIDNodeEnrollmentHTTP {
     }
 }
 
+// periphery:ignore - Mac app wiring consumes this OpenClaw ID node API (#196759).
 /// Accountless enrollment only: mail W's manifest and wait for verified explicit owner admission.
 public struct OpenClawIDNodeEnrollmentClient: Sendable {
     private let http: any OpenClawIDNodeEnrollmentHTTP
