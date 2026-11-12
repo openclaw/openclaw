@@ -19,7 +19,6 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
   maintainRetainedUpdateRuntimes,
-  recordRetainedUpdateRuntimeCreator,
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
@@ -167,7 +166,6 @@ async function runWithRetainedUpdateRuntime<T>(
               if (sourceStat.dev === parentStat.dev) {
                 directory = await fs.mkdtemp(path.join(parent, "openclaw-update-runtime-"));
                 unregister = registerRetainedUpdateRuntime(directory);
-                await recordRetainedUpdateRuntimeCreator(directory);
               }
             } catch (error) {
               if (
@@ -191,7 +189,6 @@ async function runWithRetainedUpdateRuntime<T>(
             assertCurrent();
             directory = await fs.mkdtemp(path.join(temporary, "openclaw-update-runtime-"));
             unregister = registerRetainedUpdateRuntime(directory);
-            await recordRetainedUpdateRuntimeCreator(directory);
           }
           const privateRoot = await fs.realpath(directory);
           assertCurrent();

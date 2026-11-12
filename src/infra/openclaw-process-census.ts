@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { readProcessAncestry, readProcessIdentity } from "@openclaw/proc-safe/identity";
+import { readProcessAncestry } from "@openclaw/proc-safe/identity";
 import {
   isBunRuntime,
   isNodeRuntime,
@@ -341,73 +341,12 @@ function classifyWindowsHandoffAncestry(
   return "unknown";
 }
 
-/** Process start recorded by the updater that created a retained runtime. */
-export type RetainedRuntimeCreator = {
-  pid: number;
-  startTimeMicros: number;
-  /** Linux boot-relative start; unlike startTimeMicros it does not move with clock corrections. */
-  startTimeSinceBootMicros?: number;
-};
-
-/** What is known about who created a retained runtime directory, and when. */
-export type RetainedRuntimeCreation = {
-  /** Upper bound on the directory's creation time. */
-  createdNoLaterThanMs: number;
-  creator?: RetainedRuntimeCreator;
-};
-
-// Linux derives epoch process start times from boot ticks and the current wall
-// clock, so they can drift from filesystem timestamps after clock adjustments.
-// Directories without a creator record compare against their birth time with
-// this margin; a larger wall-clock step while their updater is still alive can
-// release it early. Accepted: such steps are rare and a failed update retries.
-const PROCESS_START_CLOCK_MARGIN_MICROS = 60_000_000;
-
-/**
- * Without a reference to the directory, only its creating updater can hold it.
- * True only with positive evidence that this process is not that updater.
- */
-function cannotBeRuntimeCreator(pid: number, creation: RetainedRuntimeCreation): boolean {
-  const { creator } = creation;
-  if (creator && pid !== creator.pid) {
-    return true;
-  }
-  let identity: ReturnType<typeof readProcessIdentity>;
-  try {
-    identity = readProcessIdentity(pid);
-  } catch {
-    return false;
-  }
-  // A process that vanished after the census read it is settled by the next pass.
-  if (!identity) {
-    return false;
-  }
-  if (identity.exited) {
-    return true;
-  }
-  const resolution = identity.startTimeResolutionMicros;
-  const margin = resolution + PROCESS_START_CLOCK_MARGIN_MICROS;
-  if (creator) {
-    // A recorded creator PID that now names a different process was reused.
-    // Boot-relative starts are clock-independent, so they need no clock margin.
-    return creator.startTimeSinceBootMicros !== undefined &&
-      identity.startTimeSinceBootMicros !== undefined
-      ? Math.abs(identity.startTimeSinceBootMicros - creator.startTimeSinceBootMicros) > resolution
-      : Math.abs(identity.startTimeMicros - creator.startTimeMicros) > margin;
-  }
-  return identity.startTimeMicros - margin > creation.createdNoLaterThanMs * 1000;
-}
-
 /** Default custody decisions stay conservative; reference inspection also reports partial evidence. */
 export function inspectOtherOpenClawProcesses(references: HandoffReferences): CensusResult;
 export function inspectOtherOpenClawProcesses(
   runtimeDirectory?: string,
-  creation?: RetainedRuntimeCreation,
 ): { pids: number[]; warnings?: string[] } | { error: string };
-export function inspectOtherOpenClawProcesses(
-  references?: HandoffReferences | string,
-  creation?: RetainedRuntimeCreation,
-) {
+export function inspectOtherOpenClawProcesses(references?: HandoffReferences | string) {
   const handoff = typeof references === "object" ? references : undefined;
   const runtimeDirectory = typeof references === "string" ? references : undefined;
   const warnings: string[] = [];
@@ -667,29 +606,6 @@ export function inspectOtherOpenClawProcesses(
         (custody.paths
           ? !custody.paths.some((value) => matches.test(normalize(value)))
           : custody.gateway)
-      ) {
-        continue;
-      }
-      // Without a reference to the directory, only its creating updater can hold
-      // it. Other OpenClaw processes (other worktree gateways, service relays,
-      // dev servers) are not holders once proven not to be that updater: by the
-      // recorded creator identity, or for older directories by starting after
-      // the directory existed. References keep custody strict.
-      if (
-        runtimeDirectory &&
-        creation &&
-        // Unknown custody means the census could not inspect its references.
-        custody.kind === "holder" &&
-        !custody.paths &&
-        ![
-          ...(argv ?? []),
-          directories.get(pid) ?? "",
-          command && "executable" in command ? (command.executable ?? "") : "",
-          observation?.commandLine ?? "",
-          observation?.executable ?? "",
-          observation?.cwd ?? "",
-        ].some((value) => value && matches.test(normalize(value))) &&
-        cannotBeRuntimeCreator(pid, creation)
       ) {
         continue;
       }

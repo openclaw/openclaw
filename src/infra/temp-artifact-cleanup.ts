@@ -9,7 +9,6 @@ import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
-import type { RetainedRuntimeCreator } from "./openclaw-process-census.js";
 import { isPathInside } from "./path-guards.js";
 
 const log = createSubsystemLogger("infra:temp-artifacts");
@@ -22,67 +21,6 @@ const retainedRuntimes = resolveGlobalSingleton(
 export function registerRetainedUpdateRuntime(directory: string): () => void {
   retainedRuntimes.add(directory);
   return () => void retainedRuntimes.delete(directory);
-}
-
-const RETAINED_RUNTIME_CREATOR = "creator.json";
-
-/**
- * Records the creating updater so cleanup can tell it apart from unrelated
- * OpenClaw processes. Best effort: without a record, cleanup falls back to the
- * directory's creation time.
- */
-export async function recordRetainedUpdateRuntimeCreator(directory: string): Promise<void> {
-  try {
-    const { readProcessIdentity } = await import("@openclaw/proc-safe/identity");
-    const identity = readProcessIdentity(process.pid);
-    if (!identity) {
-      return;
-    }
-    const creator: RetainedRuntimeCreator = {
-      pid: identity.pid,
-      startTimeMicros: identity.startTimeMicros,
-      ...(identity.startTimeSinceBootMicros !== undefined
-        ? { startTimeSinceBootMicros: identity.startTimeSinceBootMicros }
-        : {}),
-    };
-    await fs.writeFile(path.join(directory, RETAINED_RUNTIME_CREATOR), JSON.stringify(creator), {
-      mode: 0o600,
-      flag: "wx",
-    });
-  } catch (error) {
-    log.warn(`Could not record updater runtime creator: ${formatErrorMessage(error)}`);
-  }
-}
-
-async function readRetainedUpdateRuntimeCreator(
-  directory: string,
-): Promise<RetainedRuntimeCreator | undefined> {
-  const file = path.join(directory, RETAINED_RUNTIME_CREATOR);
-  let value: unknown;
-  try {
-    if ((await fs.realpath(file)) !== file) {
-      return undefined;
-    }
-    value = JSON.parse(await fs.readFile(file, "utf8"));
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const { pid, startTimeMicros, startTimeSinceBootMicros } = value;
-  if (
-    typeof pid !== "number" ||
-    !Number.isSafeInteger(pid) ||
-    pid <= 0 ||
-    typeof startTimeMicros !== "number" ||
-    !Number.isFinite(startTimeMicros)
-  ) {
-    return undefined;
-  }
-  return typeof startTimeSinceBootMicros === "number" && Number.isFinite(startTimeSinceBootMicros)
-    ? { pid, startTimeMicros, startTimeSinceBootMicros }
-    : { pid, startTimeMicros };
 }
 
 export function reportRetainedUpdateRuntime(directory: string, reason: string): string {
@@ -117,15 +55,6 @@ export function resolveRetainedUpdateRuntimeParents(
     parents.push(parent);
   }
   return parents;
-}
-
-/** Birth time where the filesystem records one; mtime and ctime only move later. */
-function retainedRuntimeCreatedNoLaterThan(stat: {
-  birthtimeMs: number;
-  mtimeMs: number;
-  ctimeMs: number;
-}): number {
-  return stat.birthtimeMs > 0 ? stat.birthtimeMs : Math.min(stat.mtimeMs, stat.ctimeMs);
 }
 
 async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
@@ -239,11 +168,7 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const creator = await readRetainedUpdateRuntimeCreator(directory);
-          const census = inspectOtherOpenClawProcesses(directory, {
-            createdNoLaterThanMs: retainedRuntimeCreatedNoLaterThan(before),
-            ...(creator ? { creator } : {}),
-          });
+          const census = inspectOtherOpenClawProcesses(directory);
           if ("error" in census) {
             throw new Error(census.error);
           }
