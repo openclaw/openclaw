@@ -12,7 +12,6 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { selectMenuValue } from "../../test-helpers/session-menu.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   createContext,
@@ -311,13 +310,8 @@ describe("sessions page lifecycle", () => {
     const managed = createManagedSessions();
     const context = createContext(createGateway().gateway, managed.sessions);
     const page = await createRenderedPage(context, initial);
-    const searchInput = () => {
-      if (!page.querySelector(".sessions-filter-popover__search input")) {
-        page.querySelector<HTMLButtonElement>(".sessions-filter-popover__search button")?.click();
-        flush();
-      }
-      return page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
-    };
+    const searchInput = () =>
+      page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
     const [query] = managed.subscribeList.mock.calls[0]!;
     const input = searchInput();
     const row = page.querySelector(".session-data-row");

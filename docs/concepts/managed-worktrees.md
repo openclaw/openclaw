@@ -223,6 +223,11 @@ transport runs. Origin's effective transport settings, other branches, and the
 source `FETCH_HEAD` remain unchanged. An unavailable cached base is fetched through
 the same isolated transport; ordinary explicit fetches still own broader ref
 refresh and repository repair.
+Isolated fetches snapshot the selected remote and effective transport policy in
+a private temporary Git config file. Branch settings and unrelated remotes stay
+out of that snapshot, so large shared-clone configs do not exceed process-launch
+environment limits. Conditional includes resolve against the source checkout;
+the isolated fetch does not reread user or system config.
 Only sessions with a writable managed sandbox are offered this action; direct
 host sessions merge the base with git in their workspace before publishing.
 Resolve reported conflicts and repeat it with `conflictsResolved: true` and the
