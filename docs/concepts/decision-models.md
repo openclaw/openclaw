@@ -427,7 +427,7 @@ identify the contract; `evaluate(batch, context)` returns validated typed answer
 or a supported unavailable reason. The context includes the selected model,
 optional agent ID, composed cancellation signal, monotonic deadline, and an optional
 host-owned `isAdmissible()` predicate for automatic consumers. External transports
-check that predicate at final synchronous I/O, after awaited preparation; see the
+check that predicate when the request starts; see the
 [provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
 
 Declare provider ownership and static model metadata in the plugin manifest:
