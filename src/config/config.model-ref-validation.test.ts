@@ -24,30 +24,22 @@ const provider = { baseUrl: "https://proxy.example/v1", api: "openai-completions
 
 it("rejects statically suppressed pairs but leaves retired ones to Doctor", () => {
   const reason = "This model is no longer exposed. Use openai/gpt-5.5.";
+  const retired = { provider: "openai", model: "retired", retirement: {} };
   const manifestRegistry = registry({
     id: "openai",
     providers: ["openai", "openai"],
     modelCatalog: {
-      suppressions: [
-        { provider: "openai", model: "gpt-5.3-codex-spark", reason },
-        { provider: "openai", model: "retired", retirement: {} },
-      ],
+      suppressions: [{ provider: "openai", model: "gpt-5.3-codex-spark", reason }, retired],
     },
   });
+  const defaults = { model: "openai/gpt-5.3-codex-spark", decisionModel: "openai/retired" };
   const result = validate(
-    {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.3-codex-spark" },
-          decisionModel: "openai/retired",
-        },
-      },
-    },
+    { agents: { defaults } },
     { pluginMetadataSnapshot: { manifestRegistry } },
   );
   expect(result.ok ? undefined : result.issues).toEqual([
     {
-      path: "agents.defaults.model.primary",
+      path: "agents.defaults.model",
       message: `Unknown model: openai/gpt-5.3-codex-spark. ${reason}`,
     },
   ]);

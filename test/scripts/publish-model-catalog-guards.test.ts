@@ -273,8 +273,7 @@ describe("task facts", () => {
       });
     });
     // Five list at runtime; ONNX is local, Rerank has no fixed list, SubQ retired its only model.
-    const fixed = "baseten,clawrouter,levanto,onnx,openai,openrouter,rerank,subq";
-    expect(unhosted.join(",")).toBe(fixed);
+    expect(String(unhosted)).toBe("baseten,clawrouter,levanto,onnx,openai,openrouter,rerank,subq");
   });
 
   it("does not use native-only rows to satisfy the released chat catalog floor", async () => {
