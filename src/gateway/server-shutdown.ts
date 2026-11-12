@@ -163,11 +163,19 @@ export async function runGatewayCloseSteps(params: {
   // Collect owner failures, but never release dependencies beyond a failed required join.
   const errors: Error[] = [];
   const leftovers: unknown[] = [];
+  const graceLeftovers: Array<{ error: Error; settled: () => boolean }> = [];
   for (const step of steps) {
     try {
       // Trace consumers parse one phase token; keep the human label for errors.
       const phase = `shutdown.${step.name.replace(/\s+/gu, "-")}`;
       const pending = measureGatewayCloseStep(phase, () => step.run());
+      let settled = false;
+      void pending.then(
+        () => {
+          settled = true;
+        },
+        () => {},
+      );
       // Embedded hosts retain the runtime and must join every owned cleanup operation.
       if (!params.exitAfterClose) {
         await pending;
@@ -183,7 +191,7 @@ export async function runGatewayCloseSteps(params: {
           await pending;
           continue;
         }
-        leftovers.push(new Error(message));
+        graceLeftovers.push({ error: new Error(message), settled: () => settled });
       }
     } catch (error) {
       const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;
@@ -201,6 +209,9 @@ export async function runGatewayCloseSteps(params: {
       }
     }
   }
+  // A later required owner join may have completed an earlier slow stop.
+  // Only successful settlement clears a grace warning; explicit failures remain.
+  leftovers.push(...graceLeftovers.filter((entry) => !entry.settled()).map((entry) => entry.error));
   if (leftovers.length > 0) {
     const retained = new GatewayShutdownCleanupRetainedError(
       leftovers,
