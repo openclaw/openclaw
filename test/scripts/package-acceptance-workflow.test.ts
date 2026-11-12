@@ -4235,6 +4235,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
       PLUGINS: "",
       PLUGIN_PUBLISH_SCOPE: "all-publishable",
       PREFLIGHT_RUN_ID: "111",
+      PREPARED_PLUGINS: "",
       PUBLISH_DOCKER_ONLY: "false",
       PUBLISH_OPENCLAW_NPM: "true",
       RELEASE_NPM_DIST_TAG: "beta",
@@ -7338,6 +7339,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     expect(androidJob.if).toContain("needs.qualify_android_native.outputs.qualified == 'true'");
     expect(publishJob.needs).toEqual(["resolve_release_target"]);
     expect(workflowJob(RELEASE_PUBLISH_WORKFLOW, "finalize_github_release").needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",
@@ -7813,7 +7815,7 @@ NODE
         });
       }
       writeJson(runPath, {
-        workflowName: "OpenClaw Release Publish",
+        path: ".github/workflows/openclaw-release-publish.yml",
         event: "workflow_dispatch",
         status: "completed",
         conclusion: "failure",
@@ -15037,7 +15039,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
       PLUGIN_PUBLISH_SCOPE: "${{ inputs.plugin_publish_scope }}",
       RELEASE_PLUGINS: "${{ inputs.plugins }}",
-      PREPARED_PLUGINS: "${{ inputs.prepared_plugins }}",
+      PREPARED_PLUGINS: "${{ steps.inputs.outputs.prepared_plugins }}",
       WINDOWS_NODE_TAG: "${{ inputs.windows_node_tag }}",
       WINDOWS_NODE_INSTALLER_DIGESTS: "${{ inputs.windows_node_installer_digests }}",
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
@@ -15102,13 +15104,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(verifyReleaseIndex).toBeGreaterThan(createReleaseIndex);
     expect(appendProofIndex).toBeGreaterThan(verifyReleaseIndex);
     expect(finalizeJob.needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",
       "finalize_github_release_before_docker",
     ]);
     expect(finalizeJob.if).toContain("needs.publish_docker.result == 'success'");
-    expect(finalizeJob.if).toContain("inputs.prepared_plugins == ''");
+    expect(finalizeJob.if).toContain("needs.resolve_release_target.outputs.prepared_plugins == ''");
     expect(finalizeJob.if).toContain("needs.approve_github_release.result == 'success'");
     expect(finalizeRelease.env).toMatchObject({
       RELEASE_TAG: "${{ inputs.tag }}",
@@ -15288,6 +15291,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' }}",
     );
     expect(finalize.needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
       "approve_github_release",

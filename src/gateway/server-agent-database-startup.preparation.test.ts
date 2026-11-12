@@ -862,10 +862,12 @@ it.for(["agent removal", "database move"] as const)(
       await withinTest(admission.pendingPreparation!, signal);
       expectAdmission(fleet, "large");
       expect(mocks.corruption).not.toHaveBeenCalled();
-      expectLog(mocks.warn, "agent database background integrity verification incomplete", {
-        agentId: "large",
-        reason: expect.stringContaining("database configuration changed"),
-      });
+      const reason = "Agent large database configuration changed during startup inspection";
+      expectLog(
+        mocks.warn,
+        `agent database background integrity verification incomplete: ${reason}`,
+        { agentId: "large", reason },
+      );
     });
   },
 );

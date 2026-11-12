@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #197105 (deterministic compaction floor on the summary-refusal path) that left main over the ceiling.
+49

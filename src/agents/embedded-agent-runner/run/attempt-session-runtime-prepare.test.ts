@@ -506,7 +506,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.sessionManager[sessionManagerReadTranscriptBranch](),
     );
     expect(fixture.order.join(" ")).toBe(
-      "manager own-sessionManager prompt-state own-promptStateLease own-getUserTranscriptContexts " +
+      "manager own-sessionManager own-ownsSessionManager prompt-state own-promptStateLease own-getUserTranscriptContexts " +
         "agent-session own-session owned-boundary boundary settle-tracker arm-session-abort " +
         "own-buildAbortSettlePromise own-yield context-guards own-removeToolResultContextGuard cache-trace " +
         "payload-logger trajectory own-trajectoryRecorder transport",
