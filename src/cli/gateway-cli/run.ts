@@ -86,6 +86,7 @@ import {
   toOptionString,
 } from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
+import { inspectSystemdGatewayDuelingScope } from "./run-systemd.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
   handleGatewayLockFailure,
@@ -524,15 +525,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       // other in a restart loop (issue #79375). Surface the dueling condition
       // with concrete remediation instead of letting it look like routine
       // cleanup. Gated on an actual eviction so clean starts pay no cost.
-      if (process.platform === "linux") {
-        const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
-          await import("../../daemon/systemd.js");
-        const installation = await findSystemdGatewayInstallation(process.env).catch(() => null);
-        const warning = installation ? formatDuelingScopesWarning(installation, port) : null;
-        if (warning) {
-          gatewayLog.warn(`service-mode: ${warning}`);
-        }
-      }
+      await inspectSystemdGatewayDuelingScope({ processEnv: process.env, port, gatewayLog });
     }
   }
   if (opts.force) {

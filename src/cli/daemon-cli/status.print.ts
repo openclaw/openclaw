@@ -52,6 +52,7 @@ import {
   renderPortDiagnosticsForCli,
   resolvePortListeningAddresses,
 } from "./status.gather.js";
+import { printDuelingScopesWarnings } from "./status.print.systemd.js";
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
@@ -318,9 +319,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   for (const line of formatGatewayCrashHistory(status.gateway)) {
     printWarning(line);
   }
-  if (status.gateway?.duelingScopesWarning) {
-    printWarning(terminalText`${status.gateway.duelingScopesWarning}`);
-  }
+  printDuelingScopesWarnings(status, printWarning);
 
   if (
     rpc &&
