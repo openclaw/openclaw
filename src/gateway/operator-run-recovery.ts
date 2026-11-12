@@ -34,7 +34,7 @@ import {
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   onOpenClawIdTunnelPrincipalsChanged,
-  openclawIdTunnelRolePolicy,
+  openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import {
@@ -159,7 +159,6 @@ async function restoreGatewayOperatorSnapshot(params: {
       subscriptions.push(() => ingress.signal.removeEventListener("abort", revoke));
     }
     const principal = snapshot.openclawIdPrincipal;
-    const membershipPolicy = openclawIdTunnelRolePolicy(principal);
     if (principal) {
       await prepareOpenClawIdTunnelPrincipal(principal);
     }
@@ -213,13 +212,14 @@ async function restoreGatewayOperatorSnapshot(params: {
           !isOperatorRoleSourcePolicyCurrent(
             snapshot.rolePolicy,
             sourceRolePolicy(
-              membershipPolicy ??
+              openclawIdSubjectRolePolicy(principal, () =>
                 resolveOperatorRolePolicyForAssignment(
                   snapshot.profileId,
                   snapshot.assignedRole,
                   cfg,
                   snapshot.githubLogin,
                 ),
+              ),
             ),
             snapshot.scopes,
           )) ||
@@ -259,7 +259,15 @@ async function restoreGatewayOperatorSnapshot(params: {
     // even if another update restores the same role or authentication policy.
     subscriptions.push(
       onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "assignment" && change.profileId === snapshot.profileId) {
+        if (
+          change.kind === "assignment" &&
+          change.profileId === snapshot.profileId &&
+          change.roleOnly &&
+          principal?.kind === "owner"
+        ) {
+          // A linked owner device's authority is its certificate; its person's role is not.
+          recheck();
+        } else if (change.kind === "assignment" && change.profileId === snapshot.profileId) {
           revoke(new GatewayOperatorRecoveryAuthorizationError());
         } else if (change.kind === "config" && change.context === gatewayOwner) {
           recheck();
@@ -281,9 +289,12 @@ async function restoreGatewayOperatorSnapshot(params: {
       const revision = profileIdentity.readCurrentRevision(snapshot.aliasBindingIds);
       if (!profileFacts || revision !== profileRevision) {
         const profile = profileIdentity.readCurrentFacts(snapshot.aliasBindingIds).profile;
+        // A current owner certificate, not the linked person's stored role, bounds owner work.
+        const ownerCertificate =
+          principal?.kind === "owner" && isOpenClawIdTunnelPrincipalCurrent(principal);
         if (
           profile.profileId !== snapshot.profileId ||
-          profile.assignedRole !== snapshot.assignedRole ||
+          (!ownerCertificate && profile.assignedRole !== snapshot.assignedRole) ||
           (profile.githubLogin ?? null) !== snapshot.githubLogin ||
           githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
         ) {
@@ -325,6 +336,7 @@ async function restoreGatewayOperatorSnapshot(params: {
           cfg,
           snapshot.grant,
           accessAuthority,
+          principal,
         );
         if (access && !accessAuthority) {
           accessAuthority = access;

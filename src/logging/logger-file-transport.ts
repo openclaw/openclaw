@@ -1,10 +1,19 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
+import { resolveStateDir } from "../config/state-dir.js";
 import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
-import { prepareFileLogTarget, rotateLogFile } from "./logger-file-io.js";
-import type { FileLogIORequest, FileLogIOResults } from "./logger-file-io.js";
+import {
+  prepareFileLogTarget,
+  resolveDefaultFileLogTarget,
+  rotateLogFile,
+  type DefaultFileLogRoot,
+  type FileLogIORequest,
+  type FileLogIOResults,
+} from "./logger-file-io.js";
 import { redactSensitiveText } from "./redact.js";
 import { formatTimestamp } from "./timestamps.js";
 
@@ -15,12 +24,50 @@ async function runFileLogIO<Request extends FileLogIORequest>(
   return runFileLogIOInWorker(request);
 }
 
+type DefaultFileLogRootPreparation = {
+  options: DefaultFileLogRoot;
+  directory?: string;
+  resolution?: Promise<string>;
+};
+
 type FileLogTargetPreparation = {
   ready?: Promise<void>;
   prepared: boolean;
   file: string;
   rolling: boolean;
+  defaultRoot?: DefaultFileLogRootPreparation;
 };
+
+function resolveTarget(target: FileLogTargetPreparation, synchronous: true): string;
+function resolveTarget(target: FileLogTargetPreparation, synchronous?: false): Promise<string>;
+function resolveTarget(
+  target: FileLogTargetPreparation,
+  synchronous = false,
+): string | Promise<string> {
+  const root = target.defaultRoot;
+  if (!root) {
+    return synchronous ? target.file : Promise.resolve(target.file);
+  }
+  if (root.directory !== undefined) {
+    const file = path.join(root.directory, target.file);
+    return synchronous ? file : Promise.resolve(file);
+  }
+  if (synchronous) {
+    const file = resolveDefaultFileLogTarget(target.file, root.options);
+    root.directory = path.dirname(file);
+    return file;
+  }
+  return (root.resolution ??= runFileLogIO({
+    type: "resolveDefault",
+    file: target.file,
+    root: root.options,
+  })
+    .then((file) => (root.directory = path.dirname(file)))
+    .catch((error: unknown) => {
+      root.resolution = undefined;
+      throw error;
+    })).then((directory) => path.join(directory, target.file));
+}
 
 function prepareTarget(target: FileLogTargetPreparation, synchronous: true): void;
 function prepareTarget(target: FileLogTargetPreparation, synchronous: false): Promise<void>;
@@ -33,16 +80,19 @@ function prepareTarget(
   }
   if (synchronous) {
     try {
-      prepareFileLogTarget(target.file, target.rolling);
+      prepareFileLogTarget(resolveTarget(target, true), target.rolling);
       target.prepared = true;
     } catch {}
     return;
   }
-  return (target.ready ??= runFileLogIO({
-    type: "prepare",
-    file: target.file,
-    rolling: target.rolling,
-  })
+  return (target.ready ??= resolveTarget(target)
+    .then((file) =>
+      runFileLogIO({
+        type: "prepare",
+        file,
+        rolling: target.rolling,
+      }),
+    )
     .then(() => {
       target.prepared = true;
     })
@@ -194,7 +244,12 @@ function prepareWrite(
   // An oversized record remains one append; ordinary bursts share bounded secured I/O.
   for (; nextIndex < entries.length; nextIndex += 1) {
     const next = entries[nextIndex];
-    if (!next || next.file !== entry.file || next.maxFileBytes !== entry.maxFileBytes) {
+    if (
+      !next ||
+      next.file !== entry.file ||
+      next.maxFileBytes !== entry.maxFileBytes ||
+      next.targetPreparation !== entry.targetPreparation
+    ) {
       break;
     }
     const nextBytes = Buffer.byteLength(next.payload, "utf8");
@@ -220,16 +275,25 @@ async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
     if (!entry) {
       return;
     }
+    let file: string;
+    try {
+      file = entry.targetPreparation ? await resolveTarget(entry.targetPreparation) : entry.file;
+    } catch {
+      warnAboutAppendFailure(entry, false);
+      entry.payload = "";
+      activeIndex = ++index;
+      continue;
+    }
     if (entry.targetPreparation) {
       await prepareTarget(entry.targetPreparation, false);
     }
-    let cursor = cursors.get(entry.file);
+    let cursor = cursors.get(file);
     if (!cursor) {
-      cursor = { bytes: await runFileLogIO({ type: "size", file: entry.file }).catch(() => 0) };
+      cursor = { bytes: await runFileLogIO({ type: "size", file }).catch(() => 0) };
       if (processExiting) {
         return;
       }
-      cursors.set(entry.file, cursor);
+      cursors.set(file, cursor);
     }
     const rotate =
       cursor.bytes > 0 && cursor.bytes + Buffer.byteLength(entry.payload) > entry.maxFileBytes;
@@ -239,7 +303,7 @@ async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
     try {
       const result = await runFileLogIO({
         type: "append",
-        file: entry.file,
+        file,
         payload: batch.payload,
         rotate,
       });
@@ -257,7 +321,7 @@ async function writeEntries(entries: FileLogQueueEntry[]): Promise<void> {
       }
     } catch {
       // A lost worker result leaves the file size unknown; the next batch observes it once.
-      cursors.delete(entry.file);
+      cursors.delete(file);
       warnAboutAppendFailure(entry, false);
     } finally {
       // Drains share entries; release settled text even while a later append is still pending.
@@ -276,16 +340,25 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
     if (!entry) {
       return;
     }
-    let cursor = cursors.get(entry.file);
+    let file: string;
+    try {
+      file = entry.targetPreparation ? resolveTarget(entry.targetPreparation, true) : entry.file;
+    } catch {
+      warnAboutAppendFailure(entry, true);
+      entry.payload = "";
+      index++;
+      continue;
+    }
+    let cursor = cursors.get(file);
     if (!cursor) {
-      cursor = { bytes: getCurrentLogFileBytesSync(entry.file) };
-      cursors.set(entry.file, cursor);
+      cursor = { bytes: getCurrentLogFileBytesSync(file) };
+      cursors.set(file, cursor);
     }
     if (entry.targetPreparation) {
       prepareTarget(entry.targetPreparation, true);
     }
     if (cursor.bytes > 0 && cursor.bytes + Buffer.byteLength(entry.payload) > entry.maxFileBytes) {
-      if (rotateLogFile(entry.file)) {
+      if (rotateLogFile(file)) {
         cursor.bytes = 0;
         warnedRotationFiles.delete(entry.file);
       } else {
@@ -294,7 +367,7 @@ function writeEntriesSync(entries: FileLogQueueEntry[]): void {
     }
     const batch = prepareWrite(entry, cursor.bytes, true, entries, index);
     try {
-      appendRegularFileSync({ filePath: entry.file, content: batch.payload });
+      appendRegularFileSync({ filePath: file, content: batch.payload });
       cursor.bytes += batch.payloadBytes;
       clearAppendFailure(entry);
     } catch {
@@ -431,11 +504,24 @@ export const fileLogTransport = resolveGlobalSingleton(
       installProcessHooks();
     }
     return {
-      prepareTarget: (file: string, rolling: boolean): FileLogTargetPreparation => ({
+      prepareTarget: (
+        file: string,
+        rolling: boolean,
+        defaultRoot: boolean | DefaultFileLogRootPreparation = false,
+      ): FileLogTargetPreparation => ({
         file,
         rolling,
         prepared: false,
+        ...(defaultRoot
+          ? {
+              defaultRoot:
+                typeof defaultRoot === "boolean"
+                  ? { options: { tmpDir: os.tmpdir(), stateDir: resolveStateDir() } }
+                  : defaultRoot,
+            }
+          : {}),
       }),
+      resolveTarget,
       drainSync: drainFileLogQueueSync,
       enqueue: enqueueFileLog,
       flush: flushFileLogQueue,

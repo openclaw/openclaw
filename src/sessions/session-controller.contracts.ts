@@ -7,6 +7,7 @@ import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
+import type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
@@ -31,7 +32,6 @@ import type { AgentWorkAdmissionIdentity } from "./session-agent-work-admission.
 import type {
   ReplyBackendQueueMessageOptions,
   ReplyMessageInjectionResolution,
-  ReplyMessageInjectionRejectionReason,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -52,6 +52,8 @@ import type {
   SessionControllerWatchdog,
 } from "./session-controller.watchdog.js";
 import type { SessionForkContextSnapshot } from "./session-fork-context.types.js";
+
+export type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 
 export type {
   ReplyBackendCancelReason,
@@ -125,13 +127,6 @@ export const replyRunInterruptTargetOperation = Symbol.for(
 export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
-
-export type ReplyMessageInjectionOutcome =
-  | { status: "indeterminate"; errorMessage: string }
-  | { status: "accepted" }
-  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
-  | { status: "failed"; error: Error }
-  | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque execution owner. */
