@@ -1,2 +1,0 @@
-# Assert the effective deadline of the existing selected serial bundle.
-2

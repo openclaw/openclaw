@@ -1,3 +1,0 @@
-# Exact regression growth for Firefox trailing scroll padding, supported reading-width
-# caps beside Details, and the nested range native-clamp fixture migration.
-121

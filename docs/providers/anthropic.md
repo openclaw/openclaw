@@ -1171,8 +1171,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```bash
     claude auth status --text
     claude auth login
-    openclaw gateway restart
     ```
+
+    Retry the turn after signing in. The running Gateway rechecks expired login
+    captures when you open a model picker or use `/model`. A picker may show
+    the previous sign-in state on its first read while the check runs.
 
     Claude Code owns its login and refresh lifecycle; do not copy an OAuth token into OpenClaw.
 

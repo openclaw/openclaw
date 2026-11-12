@@ -16,7 +16,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 39,
+      "state": 40,
       "agent": 41
     }
   },
@@ -2415,6 +2415,7 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
+    "acorn",
     "chrome-devtools-mcp",
     "playwright-core"
   ],

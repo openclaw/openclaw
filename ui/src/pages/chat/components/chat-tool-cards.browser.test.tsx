@@ -1,12 +1,17 @@
 import { createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import { ToolCardRow } from "./chat-tool-card-row.solid.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 import { ToolPreview } from "./widget-card-view.tsx";
+
+vi.mock("../../../lib/chat/tool-display.ts", { spy: true });
 
 function containerFor(cssText: string) {
   const container = document.body.appendChild(document.createElement("div"));
@@ -16,6 +21,73 @@ function containerFor(cssText: string) {
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("tool activity layout", () => {
+  it("derives details only for a visible generic row while retaining command identity and transitions", () => {
+    const direct: ToolCard = {
+      id: "retained-row",
+      name: "exec",
+      args: { command: "export DEMO=1; cd /tmp; printf first" },
+    };
+    const [card, setCard] = createSignal(direct);
+    const onToggleExpanded = vi.fn();
+    const display = vi.mocked(resolveToolDisplay);
+    display.mockClear();
+    const { container } = mountSolid(() => (
+      <ToolCardRow
+        card={card()}
+        options={{ messageKey: "dedicated-row", expanded: false, onToggleExpanded }}
+      />
+    ));
+    flush();
+    const row = container.querySelector<HTMLButtonElement>(".chat-tool-row")!;
+    const command = () => container.querySelector(".chat-tool-row__cmd")?.textContent;
+    const icon = () => container.querySelector('[role="img"]')?.getAttribute("aria-label");
+    expect(command()).toBe("printf first");
+    expect(icon()).toBe("exec");
+    expect.soft(display.mock.calls.length, "unused command detail derivation").toBe(0);
+    row.focus();
+
+    display.mockClear();
+    setCard({
+      ...direct,
+      name: "dispatch_action",
+      args: { id: "openclaw:core:exec", args: { command: "cd /tmp && printf wrapped" } },
+    });
+    flush();
+    expect(command()).toBe("printf wrapped");
+    expect(icon()).toBe("exec");
+    expect(container.querySelector(".chat-tool-row")).toBe(row);
+    expect(document.activeElement).toBe(row);
+    expect.soft(display.mock.calls.length, "unused wrapped command detail derivation").toBe(0);
+
+    display.mockClear();
+    setCard({ ...direct, args: { command: "printf titled", title: "Inspect the result" } });
+    flush();
+    expect(container.querySelector(".chat-tool-row__title")?.textContent).toBe(
+      "Inspect the result",
+    );
+    expect.soft(display.mock.calls.length, "unused titled command detail derivation").toBe(0);
+
+    for (const message of ["First widget", "Updated widget"]) {
+      display.mockClear();
+      setCard({ ...direct, name: "inspect_widget", args: { message } });
+      flush();
+      expect(container.querySelector(".chat-tool-msg-summary__label")).toBeNull();
+      expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(message);
+      expect(display.mock.calls.length).toBeGreaterThan(0);
+      expect(icon()).toBe("inspect_widget");
+      expect(container.querySelector(".chat-tool-row")).toBe(row);
+    }
+
+    display.mockClear();
+    setCard({ ...direct, args: { command: "printf returned" } });
+    flush();
+    expect(command()).toBe("printf returned");
+    expect(container.querySelector(".chat-tool-msg-summary__names")).toBeNull();
+    expect.soft(display.mock.calls.length, "retired generic detail derivation").toBe(0);
+    row.click();
+    expect(onToggleExpanded).toHaveBeenCalledWith("retained-row");
+  });
+
   it("truncates long progress receipts while keeping tool identity visible", async () => {
     const container = containerFor("width: 220px");
     const step = "Verify the implementation and report the result. ".repeat(12).slice(0, 512);

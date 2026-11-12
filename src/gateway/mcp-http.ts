@@ -51,7 +51,7 @@ import {
   setActiveMcpLoopbackRuntime,
   updateMcpLoopbackToolCallCapture,
 } from "./mcp-http.loopback-runtime.js";
-import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
+import { jsonRpcError, jsonRpcResult, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
   logMcpLoopbackTraffic,
   resolveMcpCliCaptureKey,
@@ -427,6 +427,17 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                     -32000,
                     "Native tool authority is not initialized. Retry after native startup, or start a fresh session; no tool action was taken.",
                   ),
+                );
+              }
+              continue;
+            }
+            if (message.method === "tools/call" && requestContext.toolCallsRefused) {
+              if (shouldSendJsonRpcResponse(message)) {
+                responses.push(
+                  jsonRpcResult(readJsonRpcRequestId(message), {
+                    content: [{ type: "text", text: "Tools are not callable during compaction." }],
+                    isError: true,
+                  }),
                 );
               }
               continue;

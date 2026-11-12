@@ -56,6 +56,7 @@ import {
   startEmbeddedAttemptDiagnostics,
   type EmitDiagnosticRunCompleted,
 } from "./attempt-setup.js";
+import { logEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -336,6 +337,14 @@ async function runEmbeddedAttemptOwned(
     );
     // Close the inclusive checkpoint; the owner spans exclude preparation admission.
     prepStages.mark("tool-preparation");
+    corePluginToolStages.mark("bootstrap-bundle-catalog");
+    logEmbeddedRunStageSummary(
+      corePluginToolStages.snapshot(),
+      log,
+      () =>
+        `[trace:embedded-run] tool preparation completed: runId=${params.runId} sessionId=${params.sessionId}`,
+      { totalThresholdMs: 5_001, stageThresholdMs: Number.POSITIVE_INFINITY },
+    );
     const { effectiveTools, toolSearch, toolSearchRunPlan, deferredDirectoryToolsCallable } =
       preparedToolCatalog;
     toolSearchCatalogApplied = toolSearch.catalogRegistered;
@@ -436,6 +445,11 @@ async function runEmbeddedAttemptOwned(
         }),
       );
       const promptToolPolicy = createPromptBuildToolPolicy({
+        diagnosticIdentity: {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+        },
         session: preparedSessionRuntime.agentSession.activeSession,
         effectiveTools,
         uncompactedEffectiveTools,

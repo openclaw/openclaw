@@ -1,2 +1,0 @@
-# Harness-boundary startup stalls, active-work control, persisted binding continuation.
-144

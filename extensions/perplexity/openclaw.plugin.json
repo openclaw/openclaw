@@ -102,9 +102,6 @@
     }
   ],
   "modelCatalog": {
-    "discovery": {
-      "perplexity-decisions": "runtime"
-    },
     "providers": {
       "perplexity-decisions": {
         "baseUrl": "https://api.perplexity.ai/v1",

@@ -1,2 +1,0 @@
-# Cover rejecting a foreign capture before hashing its payload.
-18
