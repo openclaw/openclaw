@@ -183,9 +183,10 @@ vi.doMock("../tools/message-tool-execution.js", async () => {
     },
   };
 });
-vi.doMock("../../plugins/tools.js", async () => ({
-  ...(await vi.importActual<typeof import("../../plugins/tools.js")>("../../plugins/tools.js")),
-  resolvePluginTools: () => [
+vi.doMock("../../plugins/tools.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../plugins/tools.js")>("../../plugins/tools.js");
+  const resolvePluginTools = () => [
     pluginToolWithExecute(
       "reload_runtime",
       "Request a deferred plugin refresh",
@@ -194,8 +195,16 @@ vi.doMock("../../plugins/tools.js", async () => ({
         return { ...jsonResult({ requested: true }), terminate: true };
       },
     ),
-  ],
-}));
+  ];
+  return {
+    ...actual,
+    resolvePluginTools,
+    // oxlint-disable-next-line require-yield -- The resolver requires a generator; this fixture has no pending preparation.
+    *resolvePluginToolsSteps(): ReturnType<typeof actual.resolvePluginToolsSteps> {
+      return resolvePluginTools();
+    },
+  };
+});
 const { runEmbeddedAgent } = await import("./run.js");
 
 beforeEach(async () => {

@@ -42,6 +42,12 @@ vi.mock("../plugins/tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/tools.js")>()),
   resolvePluginTools: (...args: Parameters<typeof resolvePluginTools>) =>
     hoisted.resolvePluginTools(...args),
+  // oxlint-disable-next-line require-yield -- The resolver requires a generator; this fixture has no pending preparation.
+  *resolvePluginToolsSteps(
+    ...args: Parameters<typeof resolvePluginTools>
+  ): ReturnType<typeof import("../plugins/tools.js").resolvePluginToolsSteps> {
+    return hoisted.resolvePluginTools(...args);
+  },
 }));
 const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
 const SESSION_KEY = "agent:main:telegram:group:123";

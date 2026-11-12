@@ -1982,7 +1982,6 @@
 ["src/agents/test-helpers/fast-openclaw-tools-sessions.ts","../tools/pdf-tool.js","b3cc609eabc2247d672f71178c1dd58899e75872cb9a3e360cf9e607944764e6",1]
 ["src/agents/test-helpers/fast-openclaw-tools-sessions.ts","../tools/session-status-tool.js","85f6095a5b1e32c385c98ed56dcc1b575a6f28a068f156d60c218141fe269938",1]
 ["src/agents/test-helpers/fast-openclaw-tools-sessions.ts","../tools/tts-tool.js","8a92a0ac0b501ef92a668109fa3eae55387a5fdba181145096b0545ec9bc7ab2",1]
-["src/agents/test-helpers/fast-tool-stubs.ts","../../plugins/tools.js","7291decd07608783007c60ea41f49d40e039f0e0f059c42b3a29c0f81a96bef8",1]
 ["src/agents/test-helpers/fast-tool-stubs.ts","../tools/image-generate-tool.js","ac22c79f23d735066d93304410599a3247bc047c201c7c9244771a472bf88518",1]
 ["src/agents/test-helpers/fast-tool-stubs.ts","../tools/image-tool.js","6a247fba0ebf683e25ec54a4b5f6cc2f3bb501a99f4c14d648b29692d8379ac4",1]
 ["src/agents/test-helpers/fast-tool-stubs.ts","../tools/video-generate-tool.js","8daf2ef07431593f92abe14076b53589b3ac95882eb1b4a5459456280e999c10",1]

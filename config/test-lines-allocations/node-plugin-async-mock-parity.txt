@@ -1,0 +1,2 @@
+# Preserve existing delivery/auth/refresh assertions across sync and prepared plugin resolution.
+29
