@@ -54,8 +54,8 @@ const sendRun = (
 const gitUrl = "https://github.com/openclaw/openclaw.git";
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
 
-test.each([undefined, false])(
-  "sessions.create isolates a cloned project when worktree is %s",
+test.each([undefined, false, true])(
+  "sessions.create preserves cloned project checkout intent when worktree is %s",
   async (worktree) => {
     const { root, storePath } = await workspaceFixture("shared-clone");
     const projectRoot = await initializeRepository(root, "project");
@@ -72,12 +72,38 @@ test.each([undefined, false])(
         controlUiClient,
       );
       const entry = readSession(storePath, key);
-      expect(entry?.worktree?.id).toBeDefined();
       const owned = await managedWorktrees.findLiveByOwner("session", key);
+      if (worktree === false) {
+        expect(entry?.worktree).toBeUndefined();
+        expect(owned).toBeUndefined();
+        expect(entry?.spawnedCwd).toBe(projectRoot);
+        expect(entry?.sessionRoot).toBe(projectRoot);
+        expect((await git(projectRoot, "branch", "--show-current")).stdout.trim()).toBe("main");
+        await requestOk(
+          "sessions.create",
+          { agentId: "main", key, projectId: project.id, worktree: false },
+          controlUiClient,
+        );
+        expect(readSession(storePath, key)?.spawnedCwd).toBe(projectRoot);
+        expect(await managedWorktrees.findLiveByOwner("session", key)).toBeUndefined();
+        return;
+      }
+      expect(entry?.worktree?.id).toBeDefined();
       expect(owned).toBeDefined();
       expect(entry?.spawnedCwd).toBe(owned?.path);
       expect(entry?.sessionRoot).toBe(owned?.path);
       expect(entry?.spawnedCwd).not.toBe(projectRoot);
+      const switched = await directSessionReq(
+        "sessions.create",
+        { agentId: "main", key, projectId: project.id, worktree: false },
+        controlUiClient,
+      );
+      expect(switched).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+      expect(readSession(storePath, key)).toMatchObject({
+        worktree: { id: owned!.id },
+        spawnedCwd: owned!.path,
+        sessionRoot: owned!.path,
+      });
       await fs.mkdir(path.join(entry!.spawnedCwd!, ".openclaw/tmp/build"), { recursive: true });
       await fs.writeFile(path.join(entry!.spawnedCwd!, ".openclaw/tmp/build/output"), "scratch");
       await expect(fs.stat(path.join(projectRoot, ".openclaw/tmp"))).rejects.toMatchObject({

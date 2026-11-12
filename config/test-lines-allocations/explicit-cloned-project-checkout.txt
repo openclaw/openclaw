@@ -1,0 +1,3 @@
+# Exact regression growth for explicit cloned-project Current checkout restoration.
+# Covers source-scoped preferences, API/sandbox admission and real browser/agent execution.
+396

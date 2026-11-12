@@ -106,6 +106,8 @@ export function buildSelectedSessionCreateParams(
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),
+    // A URL that acquired a project ID still requests isolation, not a local Current choice.
+    ...(projectId && !draft.projectGitUrl && !draft.worktree ? { worktree: false } : {}),
     ...(projectGitUrl ? { projectGitUrl } : {}),
     ...(repository ? { repository: { ...repository } } : {}),
     ...(deviceFolder ? { deviceFolder: { ...deviceFolder, path: deviceFolder.path.trim() } } : {}),

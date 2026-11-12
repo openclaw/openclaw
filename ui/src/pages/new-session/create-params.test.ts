@@ -78,6 +78,18 @@ function expectParams(input: Partial<Draft>, output: object) {
 }
 
 describe("buildSelectedSessionCreateParams", () => {
+  it("keeps a repository URL isolated after project admission supplies its id", () => {
+    const { state, browser } = createRepositoryFixture();
+    const cloneUrl = "https://github.com/example/project.git";
+    state.selectRemoteProject({ identity: "example/project", cloneUrl });
+    browser.recordRemoteProjectId(cloneUrl, "admitted-clone");
+    expect(buildSelectedSessionCreateParams(state, { message: "", visibility: "normal" })).toEqual({
+      agentId: "main",
+      message: "",
+      projectId: "admitted-clone",
+    });
+  });
+
   const repository = { url: "https://github.com/openclaw/openclaw.git", ref: "release" };
   const checkout = {
     projectId: "old-clone",

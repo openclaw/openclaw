@@ -184,7 +184,7 @@ export function prepareSessionForkFilesystemRoot(params: {
 
 /** Existing sessions keep their accepted workspace source across keyed create retries. */
 export function sessionWorkspaceReuseError(
-  params: Pick<SessionsCreateParams, "deviceFolder" | "repository">,
+  params: Pick<SessionsCreateParams, "deviceFolder" | "repository" | "worktree">,
   automaticEmptyWorkspace: boolean,
   existingTargetEntry: InternalSessionEntry | undefined,
 ): ErrorShape | undefined {
@@ -206,6 +206,17 @@ export function sessionWorkspaceReuseError(
     return errorShape(
       ErrorCodes.INVALID_REQUEST,
       "Repository sessions require their original repository source; dispatch the existing session to continue.",
+    );
+  }
+  if (
+    params.worktree === false &&
+    (existingTargetEntry?.worktree ||
+      existingTargetEntry?.pendingWorktree ||
+      existingTargetEntry?.pendingProjectGitUrl)
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "Managed workspace sessions cannot switch to Current checkout; continue the existing session or create a new one.",
     );
   }
   return undefined;
