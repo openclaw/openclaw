@@ -31,6 +31,8 @@
  * candidate positive progress, no commit/loop latency regression beyond A/A spread.
  * PSI runs flush setup writes, settle for 30 seconds, then commit a small marker before
  * timing. Report both flush durations; bulk fixture writeback is not cleanup IO.
+ * Warm the removal runtime's imports before timing so source-mode compilation is not
+ * mistaken for steady-state Gateway latency. Cold-process figures remain separate.
  * Seed a large isolated DB with generateTeamShapeFixture from team-shape-fixture.ts,
  * using session keys agent:main:synthetic-0 through agent:main:synthetic-4999, then
  * reuse its closed agent database with --agent-db-fixture for every measured arm.
@@ -378,6 +380,12 @@ let observationTimer: ReturnType<typeof setTimeout> | undefined;
 const broker = process.platform === "linux" ? createSpawnBrokerHost() : undefined;
 try {
   await broker?.ready();
+  const runtimeImportStarted = performance.now();
+  await runWithSpawnBroker(
+    broker,
+    () => import("../../src/gateway/worker-environments/local-workspace-projection.js"),
+  );
+  const runtimeImportWarmupMs = performance.now() - runtimeImportStarted;
   global.gc();
   if (values.profile) {
     inspector.connect();
@@ -482,6 +490,7 @@ try {
     node: process.version,
     platform: process.platform,
     spawnBroker: Boolean(broker),
+    runtimeImportWarmupMs,
     filesPerWorktree: fixture.files,
     bytesPerWorktree: fixture.files * fixture.fileBytes,
     worktrees,
