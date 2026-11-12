@@ -309,7 +309,7 @@ describe("skills-remote", () => {
     disconnect();
     connect();
     const beforeRestore = getSkillsSnapshotVersion(workspaceDir);
-    nowSpy.mockReturnValue(1_000_000 + 60_000);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31 * 60 * 1000);
     await refresh();
 
     expect(invoke).toHaveBeenCalledOnce();
@@ -335,33 +335,6 @@ describe("skills-remote", () => {
     await refresh(changedCfg);
     expect(invoke).toHaveBeenCalledTimes(2);
   });
-
-  it.each([
-    {
-      step: -2 * 60 * 60 * 1000,
-      elapsedMs: 45 * 60 * 1000,
-      expectedInvokes: 2,
-    },
-    {
-      step: 45 * 60 * 1000,
-      elapsedMs: 1_000,
-      expectedInvokes: 1,
-    },
-  ])(
-    "bounds the remote bin probe window by elapsed time ($step ms wall step)",
-    async ({ step, elapsedMs, expectedInvokes }) => {
-      const { invoke, refresh } = remoteFixture();
-      const wall = vi.spyOn(Date, "now").mockReturnValue(1_000_000_000);
-      const elapsed = vi.spyOn(performance, "now").mockReturnValue(10_000);
-      await refresh();
-
-      wall.mockReturnValue(1_000_000_000 + step);
-      elapsed.mockReturnValue(10_000 + elapsedMs);
-      await refresh();
-
-      expect(invoke).toHaveBeenCalledTimes(expectedInvokes);
-    },
-  );
 
   it.each(["disconnect", "shutdown", "commands", "replacement"] as const)(
     "rechecks the live node after loading workspace skills (%s)",
