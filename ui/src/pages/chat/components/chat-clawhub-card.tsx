@@ -54,14 +54,16 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
                   <span class="chat-clawhub-card__identity">
                     <span class="card-title chat-clawhub-card__name">
                       <span>{card().name}</span>{" "}
-                      <span
-                        class="plugin-official-badge"
-                        role="img"
-                        aria-label={t("pluginsPage.official")}
-                        title={t("pluginsPage.official")}
-                      >
-                        <Icon name="badgeCheck" />
-                      </span>
+                      <Show when={card().official}>
+                        <span
+                          class="plugin-official-badge"
+                          role="img"
+                          aria-label={t("pluginsPage.official")}
+                          title={t("pluginsPage.official")}
+                        >
+                          <Icon name="badgeCheck" />
+                        </span>
+                      </Show>
                     </span>
                     <Show when={card().description}>
                       {(description) => <span class="card-sub">{description()}</span>}

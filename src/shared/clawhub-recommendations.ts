@@ -3,7 +3,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 export const CLAWHUB_RECOMMENDATION_LIMIT = 3;
 export const CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY = "openclawClawHubRecommendations";
 
-/** Gateway-authored catalog identity and install facts; models supply only a search query. */
+/**
+ * Gateway-authored catalog identity and install facts; models supply only a search query or an
+ * exact plugin package name. Search yields official entries; an exactly named plugin may be a
+ * community one, which the card presents without the official badge or direct install action.
+ */
 export type ClawHubRecommendation = {
   type: "clawhub";
   id: string;
@@ -11,8 +15,10 @@ export type ClawHubRecommendation = {
   description?: string;
   iconUrl?: string;
   installed: boolean;
-  official: true;
-} & ({ kind: "plugin"; pluginId?: string } | { kind: "skill"; registry: string; skillRef: string });
+} & (
+  | { kind: "plugin"; official: boolean; pluginId?: string }
+  | { kind: "skill"; official: true; registry: string; skillRef: string }
+);
 
 const sharedKeys = [
   "type",
@@ -57,7 +63,7 @@ export function readClawHubRecommendation(value: unknown): ClawHubRecommendation
     !boundedText(value.name, 120, 1) ||
     !optionalText(value.description, 240) ||
     typeof value.installed !== "boolean" ||
-    value.official !== true
+    typeof value.official !== "boolean"
   ) {
     return undefined;
   }
@@ -86,13 +92,14 @@ export function readClawHubRecommendation(value: unknown): ClawHubRecommendation
       ...("description" in value ? { description: value.description } : {}),
       ...("iconUrl" in value ? { iconUrl } : {}),
       installed: value.installed,
-      official: true,
+      official: value.official,
       kind: "plugin",
       ...("pluginId" in value ? { pluginId: value.pluginId } : {}),
     };
   }
   if (
     value.kind !== "skill" ||
+    !value.official ||
     !boundedText(value.id, 256) ||
     !skillReference.test(value.id) ||
     value.skillRef !== value.id
