@@ -108,7 +108,11 @@ export async function resolveReplyAgentScope(params: {
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
-  await waitForAgentInputAdmission(agentId, { cfg, signal: params.signal });
+  await waitForAgentInputAdmission(agentId, {
+    cfg,
+    sessionKey: agentSessionKey,
+    signal: params.signal,
+  });
   return { agentSessionKey, agentId };
 }
 

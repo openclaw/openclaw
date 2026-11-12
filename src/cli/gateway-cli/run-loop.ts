@@ -1280,10 +1280,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     onSettled: (outcome) =>
       params.onProcessResourcesSettled?.(runtimeResourcesRetained ? "retained" : outcome),
   });
-  if (loopFailure) {
-    failures.unshift(loopFailure.error);
-  }
   const code = hostExitRequested && terminalExitCode === 0 ? hostExitCode : (terminalExitCode ?? 0);
-  return cleanup.finish(code, failures);
+  return cleanup.finish(code, failures, loopFailure);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

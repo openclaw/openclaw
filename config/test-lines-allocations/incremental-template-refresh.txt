@@ -1,0 +1,2 @@
+# Sandbox idle reuse avoids a repeated Git status scan; retain mutable-template fixture validation.
+3

@@ -89,19 +89,7 @@ export async function channelsRemoveCommand(
         return;
       }
 
-      if (useWizard || !deleteConfig) {
-        const confirm = prompter ?? createClackPrompter();
-        const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
-        const ok = await confirm.confirm({
-          message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
-          initialValue: true,
-        });
-        if (!ok) {
-          await prompter?.outro("Cancelled.");
-          return;
-        }
-      }
-
+      // Resolve the channel before asking anything, so an unknown id fails instead of prompting.
       const shouldResolveInstallablePlugin = Boolean(lookupChannel || channel);
       const resolvedPluginState = shouldResolveInstallablePlugin
         ? await (async () => {
@@ -131,6 +119,17 @@ export async function channelsRemoveCommand(
         );
         runtime.exit(1);
         return;
+      }
+      if (useWizard || !deleteConfig) {
+        const confirm = prompter ?? createClackPrompter();
+        const ok = await confirm.confirm({
+          message: `Disable ${channelLabel(resolvedChannel)} account "${accountId}"? (keeps config)`,
+          initialValue: true,
+        });
+        if (!ok) {
+          await prompter?.outro("Cancelled.");
+          return;
+        }
       }
       const removal = await applyChannelAccountRemoval({
         cfg,

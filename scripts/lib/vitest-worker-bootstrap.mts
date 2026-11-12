@@ -7,8 +7,13 @@ if (import.meta.main) {
   void (async () => {
     try {
       const [directory, ...args] = process.argv.slice(2);
-      const preset = args[0] === "--worker-preset=runtime" ? "runtime" : "full";
-      if (preset === "runtime") {
+      const preset =
+        args[0] === "--worker-preset=tooling"
+          ? "tooling"
+          : args[0] === "--worker-preset=runtime"
+            ? "runtime"
+            : "full";
+      if (preset !== "full") {
         args.shift();
       }
       const cli = args.shift();

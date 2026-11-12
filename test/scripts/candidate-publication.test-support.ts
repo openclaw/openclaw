@@ -12,6 +12,7 @@ import {
   publicationSourceRequest,
   type PublicationSelection,
 } from "../../scripts/full-release-publication-contract.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/full-release-receipt-recovery.mjs";
 import {
   composeReleaseAttemptJobs,
   releaseExecutionPlanSha256,
@@ -314,12 +315,15 @@ export function candidatePublicationFixture(
         runGh: admission.runGh,
         downloadArchive: admission.archive,
       }),
+    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
+      return verifyReceiptRecoveryAuthority(repository, producer);
+    },
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
     getWorkflowSource: () => workflowSource,
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
-    getRunView: (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
+    getRunView: async (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
     getRun: async (id: string) => (id === runId ? parent : mapped(fixture.client.getRun(id))),
     getRunAttempt: (id: string, attempt: number) => {
       if (attempt !== 1) {

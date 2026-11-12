@@ -389,7 +389,8 @@ export async function handleControlUiAssistantMediaRequest(
     const stream = byteStream;
     await publishResponse(() => {
       media.assertSourceCurrent();
-      if (media.outsideRoots && mediaKind === "image") {
+      // Allowed roots authorize file reads, not active document content.
+      if (mediaKind === "image") {
         applyHttpImageContentSecurityPolicy(res);
       }
       res.setHeader("Content-Type", contentType);

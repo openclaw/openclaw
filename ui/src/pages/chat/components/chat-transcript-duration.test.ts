@@ -109,7 +109,7 @@ it.each([
   [true, "live"],
   [true, "cached"],
 ] as const)(
-  "shows no duration line for an answer without a work rollup (bubble=%s, source=%s)",
+  "shows elapsed time only in metadata without a work rollup (bubble=%s, source=%s)",
   async (bubbleMode, source) => {
     const runId = "restored-duration";
     const props = propsFor(runId, [
@@ -129,8 +129,56 @@ it.each([
     expect(container.textContent).toContain("Finished " + runId);
     expect(container.textContent).not.toContain("Done in");
     expect(container.textContent).not.toContain("13 seconds");
+    expect(container.querySelector(".msg-meta__duration")?.textContent).toBe("Worked for 13s");
   },
 );
+
+it("keeps consecutive plain replies tied to their own timing facts", async () => {
+  const messages = [
+    prompt("first", 1_000),
+    { ...reply("first", 2_000), __openclaw: { recordTimestampMs: 9_000 } },
+    prompt("second", 10_000),
+    { ...reply("second", 11_000), __openclaw: { recordTimestampMs: 15_000 } },
+  ];
+  const props = propsFor("second", messages);
+  props.selectedSession = session("second", 20_000);
+  const { container, rerender } = mount(props);
+  await flushDeferredRowPrune();
+  const durations = () =>
+    [...container.querySelectorAll(".msg-meta__duration")].map((node) => node.textContent);
+  expect(durations()).toEqual(["Worked for 8s", "Worked for 20s"]);
+  props.selectedSession = session("unrelated", 99_000, { key: props.sessionKey });
+  rerender();
+  expect(durations()).toEqual(["Worked for 8s", "Worked for 5s"]);
+  for (const runtimeMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    props.selectedSession = { ...session("second", 0), runtimeMs };
+    rerender();
+    expect(durations()).toEqual(["Worked for 8s"]);
+  }
+  props.selectedSession = session("second", 20_000, { status: "running" });
+  rerender();
+  expect(durations()).toEqual(["Worked for 8s"]);
+  props.selectedSession = session("second", 20_000, { key: "agent:main:dashboard:other" });
+  rerender();
+  expect(durations()).toEqual([]);
+  props.selectedSession = session("unrelated", 99_000, { key: props.sessionKey });
+  props.messages = [prompt("first", 1_000), reply("first", 2_000)];
+  rerender();
+  expect(durations()).toEqual([]);
+  props.selectedSession = session("first", 20_000, { key: props.sessionKey });
+  props.messages = [
+    {
+      ...reply("first", 2_000),
+      provenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_send",
+        sourceSessionKey: "agent:other:main",
+      },
+    },
+  ];
+  rerender();
+  expect(durations()).toEqual([]);
+});
 
 it("uses matching lifecycle duration, not final-message creation time", async () => {
   const status = "done";
@@ -155,6 +203,7 @@ it("uses matching lifecycle duration, not final-message creation time", async ()
     expect(duration()).toBe(expected);
   };
   expect(duration()).toBe("Worked for 27m 35s");
+  expect(container.querySelector(".msg-meta__duration")?.textContent).toBe("Worked for 27m 35s");
   props.transcriptMetadata = undefined;
   props.selectedSession = liveSession;
   props.selectedSession.runtimeMs = 1_660_000;

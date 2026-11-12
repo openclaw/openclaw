@@ -14,6 +14,12 @@ who contributed, with links to the source changes.
 ### November 2026
 
 <CardGroup cols={2}>
+  <Card title="v2026.11.3" href="/releases/2026.11.3">
+    Fixes for update recovery, backup discovery, privacy and reliability.
+  </Card>
+  <Card title="v2026.11.2" href="/releases/2026.11.2">
+    Fixes for updates, scheduled reminders, chat and model connections.
+  </Card>
   <Card title="v2026.11.1" href="/releases/2026.11.1">
     Patch fixes for updates, conversations, apps and model connections
   </Card>

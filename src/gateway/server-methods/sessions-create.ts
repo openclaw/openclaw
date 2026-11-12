@@ -59,7 +59,7 @@ import {
 } from "./session-create-initial-turn.js";
 import {
   normalizeSessionProjectGitUrl,
-  resolveRequestedSessionProjectRoot,
+  resolveRequestedSessionProject,
   resolveSessionRepositoryCreation,
   validateSessionProjectPreparation,
   validateSessionWorktreeSelection,
@@ -357,14 +357,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       respond(false, undefined, reuseError);
       return;
     }
-    const deferWorktree =
-      p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
-    const requestedProject = await resolveRequestedSessionProjectRoot(cfg, p, client);
+    const requestedProject = await resolveRequestedSessionProject(cfg, p, client);
     if (!requestedProject.ok) {
       respond(false, undefined, requestedProject.error);
       return;
     }
-    const projectRoot = requestedProject.value;
+    const projectRoot = requestedProject.value.root;
+    if (requestedProject.value.worktree || requestedProjectGitUrl) {
+      p.worktree = true;
+    }
+    const deferWorktree =
+      p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
     let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     if (repository) {
       // Mention validation and later creation must use the same real child target.

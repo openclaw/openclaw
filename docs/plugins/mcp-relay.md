@@ -110,6 +110,11 @@ single-user Gateways, operators with administrator access can create owner
 grants. On Gateways with verified profiles, each grant belongs to the person
 who approved it, including grants approved by an administrator.
 
+OpenClaw ID members use their own person grants even when the Gateway uses
+token authentication and has no local roles configured. Their membership role
+limits app operations and the embedded Control UI. Approvals made through a
+connected app also retain that person's original sign-in authority.
+
 ## Use several Gateways
 
 One ChatGPT or Codex connection can hold several Gateways, such as a personal
@@ -228,6 +233,16 @@ is the intersection of the ceiling and the principal's current authority, so a
 role change also limits existing grants. Grants are not restricted to one
 conversation; normal principal and role visibility still applies.
 
+New person grants approved through OpenClaw ID also retain the approving
+membership and device listing. Removing the member or approving key, changing
+that member's role, or disabling OpenClaw ID closes active access. Re-adding a
+removed member or key requires a fresh approval. The same restriction follows
+an approval made through an already-connected app, including after restart.
+Local roles and approvals made through other sign-in paths remain independent.
+Before rollout, revoke and approve again any existing ID-origin grants created
+without this source binding; their original sign-in source cannot be inferred
+from the stored profile.
+
 Person grants approved through Gateway sign-in have an absolute refresh-token
 lifetime of 30 days. After that, sign in and approve again. Owner grants and
 pairing-code grants retain their existing relay token lifetime. Revocation,
@@ -256,8 +271,9 @@ own person grants require write access. Creating owner grants or revoking
 another person's grant requires administrator access. Grant listings include
 the principal and scope ceiling.
 
-Revocation is persisted locally before the Gateway notifies the relay. If the
-relay is offline, the Gateway still refuses further requests using that grant;
+Revocation is persisted locally before the Gateway notifies the relay. It also
+cancels runs under that grant, including work resumed after a Gateway restart. If
+the relay is offline, the Gateway still refuses further requests using that grant;
 the command reports whether the relay was notified. A revoked client must pair
 again to regain access.
 

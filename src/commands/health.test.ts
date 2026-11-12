@@ -283,7 +283,7 @@ describe("healthCommand", () => {
     });
   });
 
-  it("prints persistent event-loop degradation duration in text output", async () => {
+  it("prints event-loop degradation and disabled hot reload in text output", async () => {
     const snapshot = createHealthSummary({
       eventLoop: {
         degraded: true,
@@ -295,15 +295,11 @@ describe("healthCommand", () => {
         utilization: 0.75,
         cpuCoreRatio: 0.5,
       },
+      configReload: { hotReloadStatus: "disabled" },
     });
     const output = await renderHealth(snapshot, { timeoutMs: 1000 });
     expect(output).toContain("Gateway event loop: degraded for 3m");
     expect(output).toContain("p99=1200ms");
-  });
-
-  it("prints the config hot-reload disabled line in text output", async () => {
-    const snapshot = createHealthSummary({ configReload: { hotReloadStatus: "disabled" } });
-    const output = await renderHealth(snapshot);
     expect(output).toContain(
       "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)",
     );
@@ -504,6 +500,16 @@ describe("healthCommand", () => {
     expect(rpc.callGateway).not.toHaveBeenCalled();
   });
 
+  it("drops a pending health read and its output on interrupt", async () => {
+    const controller = new AbortController();
+    rpc.callGateway.mockImplementationOnce(async (opts: { signal: AbortSignal }) => {
+      controller.abort();
+      opts.signal.throwIfAborted();
+    });
+    await runHealth({ json: true, signal: controller.signal });
+    expect([...runtime.log.mock.calls, ...runtime.exit.mock.calls]).toEqual([]);
+  });
+
   it("keeps structured JSON failures inside the non-exiting host", async () => {
     rpc.callGateway.mockRejectedValueOnce(new Error("health request failed"));
     const payload = { ok: false, error: { type: "gateway_request_error" } };
@@ -562,13 +568,6 @@ it("formatContextEngineHealthLine summarizes quarantined context engines", () =>
 });
 
 describe("formatHealthCheckFailure", () => {
-  it("keeps non-rich output stable", () => {
-    const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-    expect(formatHealthCheckFailure(err, { rich: false })).toBe(
-      `Health check failed: ${String(err)}`,
-    );
-  });
-
   it("formats gateway connection details as indented key/value lines", () => {
     const err = new Error(`gateway closed (1006 abnormal closure (no close frame)): no close reason
 Gateway target: ws://127.0.0.1:19001

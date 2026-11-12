@@ -805,6 +805,7 @@ if (
 }
 let measuredPhaseRound: number | undefined;
 const turnStartPhases: Array<Record<string, unknown>> = [];
+const unmeasuredTurnStartPhases: Array<Record<string, unknown>> = [];
 const turnStartSamples: TurnStartSample[] = [];
 const turnStartTimeline: Array<Record<string, unknown>> = [];
 let turnStartTimelineDropped = 0;
@@ -1481,7 +1482,7 @@ applyMockOpenAiModelConfig(cfg, {
 if (values["auth-availability-storm"]) {
   cfg.models.providers.openai.apiKey = "openai:auth-availability-storm";
 }
-if (verifyHistoryReplay) {
+if (verifyHistoryReplay || (values["turn-start-phases"] && historyTurns > 0)) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
     model.contextWindow = 2_097_152;
@@ -3829,7 +3830,7 @@ if (values["seed-history"]) {
   process.env = { ...env };
   const [
     { SessionManager },
-    { upsertSessionEntryCore, loadExactSessionEntry },
+    { replaceSessionEntrySync, loadExactSessionEntry },
     { resolveOpenClawAgentSqlitePath },
     agentDb,
     stateDb,
@@ -3856,7 +3857,7 @@ if (values["seed-history"]) {
     if (loadExactSessionEntry(parentTarget)) {
       throw new Error(`Synthetic ${historyNamespace} parent already exists`);
     }
-    await upsertSessionEntryCore(parentTarget, {
+    replaceSessionEntrySync(parentTarget, {
       sessionId: `${historyNamespace}-parent`,
       updatedAt: timestamp,
       createdAt: timestamp,
@@ -3879,7 +3880,7 @@ if (values["seed-history"]) {
       if (loadExactSessionEntry(target)) {
         throw new Error(`Synthetic ${historyNamespace} session already exists: ${sessionKey}`);
       }
-      await upsertSessionEntryCore(target, {
+      replaceSessionEntrySync(target, {
         sessionId,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -5848,12 +5849,10 @@ try {
           turnStartTimelineDropped = message.dropped;
         }
       }
-      if (
-        isRecord(message) &&
-        isRecord(message.turnStartPhase) &&
-        measuredPhaseRound !== undefined
-      ) {
-        turnStartPhases.push({ round: measuredPhaseRound, ...message.turnStartPhase });
+      if (isRecord(message) && isRecord(message.turnStartPhase)) {
+        const phases =
+          measuredPhaseRound === undefined ? unmeasuredTurnStartPhases : turnStartPhases;
+        phases.push({ round: measuredPhaseRound, ...message.turnStartPhase });
       }
     });
   }
@@ -9104,7 +9103,13 @@ try {
     writeFileSync(
       path.join(output, "turn-start-phases.json"),
       JSON.stringify(
-        { providerDelayMs, coldSessionRounds, phases: turnStartPhases, turns: turnStartSamples },
+        {
+          providerDelayMs,
+          coldSessionRounds,
+          phases: turnStartPhases,
+          unmeasuredPhases: unmeasuredTurnStartPhases,
+          turns: turnStartSamples,
+        },
         null,
         2,
       ),
