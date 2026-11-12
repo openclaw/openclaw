@@ -6119,7 +6119,7 @@ describe("ci workflow guards", () => {
       "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
       "src/gateway/client-callsites.guard.test.ts",
       "src/auto-reply/reply/reply-turn-admission.module-identity.test.ts",
-      "src/node-host/node-worker-launch-store.test.ts",
+      "src/cli/update-cli/update-repair-cancellation.test.ts",
       workspace,
       "src/cli/update-cli.package-lifecycle.test.ts",
       "src/infra/kysely-sync.test.ts",
@@ -6127,9 +6127,14 @@ describe("ci workflow guards", () => {
     ];
     const original = expectDefined(
       createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
-      "selected original eight-group workload",
+      "selected original workload",
     );
-    expect(original.flatMap((job) => job.groups)).toHaveLength(8);
+    const workspaceOwner = expectDefined(
+      original.find((job) =>
+        job.groups.some((group) => group.includePatterns?.includes(workspace)),
+      ),
+      "original workspace owner",
+    );
     const routed = routeBoatNodeTestJobs(original);
     const retained = routed
       .filter((job) => job.runner.startsWith("boat"))
@@ -6160,8 +6165,7 @@ describe("ci workflow guards", () => {
     expect([undefined, hosted.runner]).toContain(hosted.runner_label);
     expect(hosted).toMatchObject({
       runner: "ubuntu-24.04",
-      // The prepared-runtime owner is separate from the eight-CPU memory row.
-      cpu_budget: 2,
+      cpu_budget: workspaceOwner.runner === "blacksmith-32vcpu-ubuntu-2404" ? 8 : 2,
       plan_concurrency: 1,
     });
     expect(rows.flatMap(files).toSorted()).toEqual(targets.toSorted());

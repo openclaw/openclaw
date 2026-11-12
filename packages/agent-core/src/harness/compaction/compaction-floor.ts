@@ -28,13 +28,6 @@ const FLOOR_OUTCOMES = 3;
 const USER_SHARE = 0.55;
 const ANCHOR_SHARE = 0.25;
 
-const SECRET_PATTERNS = [
-  /\b(?:sk|pk|rk|ghp|gho|ghu|ghs|github_pat|xox[abprs]|glpat|AKIA|AIza)[-_A-Za-z0-9]{16,}/g,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}/g,
-  /\b(?:api[_-]?key|token|secret|password|passwd|authorization|bearer)\b\s*[:=]\s*["']?[^\s"']{8,}/gi,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-];
-
 const ANCHOR_PATTERNS: Array<[kind: string, pattern: RegExp]> = [
   [
     "repo",
@@ -45,10 +38,6 @@ const ANCHOR_PATTERNS: Array<[kind: string, pattern: RegExp]> = [
   ["url", /(https?:\/\/[^\s"'<>)\]]{6,200})/g],
   ["path", /(?<![\w.-])((?:~|\.{1,2})?\/[\w.@-]+(?:\/[\w.@-]+){1,12})/g],
 ];
-
-function redactSecrets(text: string): string {
-  return SECRET_PATTERNS.reduce((value, pattern) => value.replace(pattern, "[redacted]"), text);
-}
 
 function clip(text: string, maxChars: number): string {
   const line = text.replace(/\s+/g, " ").trim();
@@ -81,8 +70,8 @@ export function buildCompactionFloor(
     if (message.role !== "user" && message.role !== "assistant") {
       return;
     }
-    // Redact once, before excerpts and anchors, so no detached credential fragment survives.
-    const text = redactSecrets(extractCompactionMessageText(message));
+    // Extraction redacts credentials before excerpts and anchors are cut from it.
+    const text = extractCompactionMessageText(message);
     if (!text) {
       return;
     }
@@ -171,27 +160,14 @@ export function resolveSummaryFloorChars(maxSummaryChars = MAX_COMPACTION_SUMMAR
   return SUMMARY_FLOOR_HEADING.length + Math.min(MAX_SUMMARY_FLOOR_CHARS, maxSummaryChars);
 }
 
-/**
- * Appends the floor after an already capped summary. The floor shrinks, then disappears,
- * before the combined artifact may exceed the foreground token budget.
- */
-function appendSummaryFloor(
-  summary: string,
-  messages: readonly AgentMessage[],
-  maxSummaryChars?: number,
-  tokenBudget?: number,
-): string {
-  const fitted = fitCompactionSummary(
-    tokenBudget,
-    (maxChars) => {
-      const floor =
-        maxChars >= MIN_SUMMARY_FLOOR_CHARS ? buildCompactionFloor(messages, maxChars) : "";
-      return floor ? { summary: `${summary}${SUMMARY_FLOOR_HEADING}${floor}` } : undefined;
-    },
-    resolveSummaryFloorChars(maxSummaryChars) - SUMMARY_FLOOR_HEADING.length,
-  );
-  return fitted.ok ? fitted.value.summary : summary;
-}
+/** A floor the token budget shrank (keptChars > 0) or dropped (keptChars 0). */
+type SummaryFloorReduction = Readonly<{
+  /** Foreground request budget, or the replay estimate of the window without one. */
+  source: "foreground" | "replay";
+  tokenBudget: number;
+  floorChars: number;
+  keptChars: number;
+}>;
 
 /**
  * The committed summary of every producer: capped at the summary ceiling, then followed by
@@ -207,19 +183,46 @@ export function commitCompactionSummary(
   > & { settings: { maxSummaryChars?: number } },
   withoutSummary: boolean,
   replayTokenBudget?: () => number | undefined,
+  onFloorReduced?: (reduction: SummaryFloorReduction) => void,
 ): string {
   const { maxSummaryChars } = preparation.settings;
   const summary = capCompactionSummary(result.summary, maxSummaryChars);
   if (withoutSummary || parseCompactionDetails(result.details)?.summaryRefused) {
     return summary;
   }
+  const messages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+  const renderFloor = (maxChars: number) =>
+    maxChars >= MIN_SUMMARY_FLOOR_CHARS ? buildCompactionFloor(messages, maxChars) : "";
+  const maxFloorChars = resolveSummaryFloorChars(maxSummaryChars) - SUMMARY_FLOOR_HEADING.length;
+  const foregroundBudget = preparation.summaryTokenBudget;
   // Accepted edge case: with an unknown window the floor is bounded only by its own budget.
-  return appendSummaryFloor(
-    summary,
-    [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
-    maxSummaryChars,
-    preparation.summaryTokenBudget ?? replayTokenBudget?.(),
+  const tokenBudget = foregroundBudget ?? replayTokenBudget?.();
+  // The floor shrinks, then disappears, before the artifact may exceed the token budget.
+  const fitted = fitCompactionSummary(
+    tokenBudget,
+    (maxChars) => {
+      const floor = renderFloor(maxChars);
+      return floor ? { summary: `${summary}${SUMMARY_FLOOR_HEADING}${floor}` } : undefined;
+    },
+    maxFloorChars,
   );
+  const committed = fitted.ok ? fitted.value.summary : summary;
+  if (onFloorReduced && tokenBudget !== undefined) {
+    const floorChars = renderFloor(maxFloorChars).length;
+    const keptChars =
+      committed.length === summary.length
+        ? 0
+        : committed.length - summary.length - SUMMARY_FLOOR_HEADING.length;
+    if (keptChars < floorChars) {
+      onFloorReduced({
+        source: foregroundBudget === undefined ? "replay" : "foreground",
+        tokenBudget,
+        floorChars,
+        keptChars,
+      });
+    }
+  }
+  return committed;
 }
 
 /** A carried summary drops its old floor; the next compaction builds one for its own region. */
