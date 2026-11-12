@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-read.js";
+import type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";

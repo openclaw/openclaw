@@ -21,6 +21,11 @@ export type {
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
 
+export type SqliteTranscriptSnapshotRow = {
+  eventJson: string;
+  seq: number;
+};
+
 export type TranscriptWriteSnapshot<T> = {
   result: T;
   lifecycleRevision?: string;

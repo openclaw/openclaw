@@ -393,6 +393,7 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/sessions/session-transcript-snapshot-digest.ts
 src/config/zod-schema.database.ts
 src/infra/directory-walk.ts
 src/infra/database-engine/adapters.ts
@@ -435,6 +436,7 @@ src/infra/postgres-sync/pool-state.ts
 src/infra/postgres-sync/pool.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
+src/infra/runtime-process-sealed-manifest.ts
 src/infra/sql-connection.ts
 src/infra/sql-query-compiler.ts
 src/sessions/communication-admission.ts

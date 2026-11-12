@@ -10,6 +10,7 @@ import { prepareModelPromptProjection } from "../../sessions/user-turn-transcrip
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type {
+  SqliteTranscriptSnapshotRow,
   SessionTranscriptContextVersion,
   SessionTranscriptWriteScope,
   TranscriptEvent,
@@ -28,7 +29,6 @@ import {
   readTranscriptIdentityByEventId,
   readTranscriptEventRows,
   readTranscriptSnapshot,
-  type SqliteTranscriptSnapshotRow,
   type SqliteTranscriptSnapshotState,
 } from "./session-accessor.sqlite-read.js";
 import {

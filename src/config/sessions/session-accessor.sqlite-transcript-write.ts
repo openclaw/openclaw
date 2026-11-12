@@ -5,6 +5,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type {
+  SqliteTranscriptSnapshotRow,
   SessionTranscriptAccessScope,
   SessionTranscriptWriteScope,
   TranscriptEvent,
@@ -18,7 +19,6 @@ import {
   isSqliteTranscriptSnapshotUnchanged,
   readTranscriptEventRows,
   readTranscriptSnapshot,
-  type SqliteTranscriptSnapshotRow,
   type SqliteTranscriptSnapshotState,
 } from "./session-accessor.sqlite-read.js";
 import {

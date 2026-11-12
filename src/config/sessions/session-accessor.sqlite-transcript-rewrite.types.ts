@@ -1,4 +1,4 @@
-import type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-read.js";
+import type { SqliteTranscriptSnapshotRow } from "./session-accessor.sqlite-contract.js";
 
 export type TranscriptReplacementOptions = {
   createdAtByIndex?: readonly number[];
