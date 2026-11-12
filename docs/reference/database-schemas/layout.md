@@ -194,7 +194,7 @@ The latest recap survives restart and archival. Deleting the session removes it;
 
 ### Scheduled run parent receipts
 
-A child-placement scheduled run stores one optional, private `scheduledMemoryParent` object in its `:run:` row's existing `session_nodes.entry_json`. It records the parent session the occurrence was admitted against (key, session ID, lifecycle revision) and the occurrence's admitted owner bit, so sessions the run spawns resolve memory through that parent. Only cron run preparation writes it; it adds no SQL table, column, or schema-version change. See [scheduled run parent receipts](/reference/database-schemas/storage-changes#scheduled-run-parent-receipts) for its writer, lifetime, and downgrade behavior.
+A child-placement scheduled run stores one optional, private `scheduledMemoryParent` object in its `:run:` row's existing `session_nodes.entry_json`. It records the parent session the occurrence was admitted against (key, session ID, lifecycle revision) and the occurrence's admitted owner bit, so sessions the run spawns resolve memory through that parent. Only cron run preparation writes it; it adds no SQL table, column, or schema-version change. See [scheduled run parent receipts](/reference/database-schemas/storage-changes#scheduled-run-parent-receipts) for its writer, lifetime, and upgrade and downgrade behavior.
 
 ### User-turn model prompt projections
 

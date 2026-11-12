@@ -3401,8 +3401,14 @@ one), and the occurrence's admitted owner bit.
   maintenance prunes it after `cron.sessionRetention` (24 hours by default).
   Reset, rollover, and carry-over never copy it; rotating the row through the
   public session writer clears it.
-- **Downgrade:** older Gateways keep the unknown optional field but ignore it,
-  so spawned sessions fall back to resolving from the run row, as before this
-  change.
+- **Upgrade:** existing run rows and sessions spawned before the upgrade carry
+  no receipt and an earlier non-owner spawn bit, so they keep resolving from
+  the run row. The next occurrence of an existing linked job records the
+  receipt.
+- **Downgrade:** older Gateways keep the unknown optional field but ignore it.
+  A session spawned after this change already recorded the occurrence's owner
+  bit, so until its run row expires it resolves from the run row's copied chat
+  type: owner-private for a direct-chat parent, without the parent-reset
+  check. Sessions spawned by the older Gateway behave as before this change.
 
 There is no SQL migration, table, column, index, or schema-version change.
