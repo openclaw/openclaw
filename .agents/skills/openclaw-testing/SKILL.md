@@ -110,7 +110,10 @@ stays exact). Never mask a real regression or user-data change. Blanket or
 unverified exceptions need approval. Exact shrink-only ratchet updates are
 maintenance. A PR may add up to 400 net test lines without a record. Above
 that, add a `config/test-lines-allocations/<change>.txt` record that covers the
-excess and state the reason in the squash body. See the
+excess and state the reason in the squash body. Required regression tests no
+longer need ledger records
+([#197519](https://github.com/openclaw/openclaw/pull/197519),
+[#197602](https://github.com/openclaw/openclaw/pull/197602)). See the
 [cost budget](../../../docs/help/testing/writing-tests.md#cost-budget).
 
 For module mocks, follow the
