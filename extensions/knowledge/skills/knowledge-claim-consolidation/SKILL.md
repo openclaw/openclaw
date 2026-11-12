@@ -30,9 +30,9 @@ current fingerprint. Then enumerate exactly one starting set:
   call reports at most 10 examples per outcome, so a limit of 10 returns every
   claim it examined.
 - **One page**, for a hub page or a page over its size budget. List its
-  current claims with `knowledge_connections` `id`, `direction: "claims"`,
-  `view: "full"` and `includeCards: true`, following `nextOffset` with the
-  same filters. Restart when `snapshot` changes. On a hub, group from the cards
+  current claims with `knowledge_connections` `id` and `direction: "claims"`;
+  each row carries the claim's text, kind, day, linked page titles and
+  16-character hash. Follow `nextOffset` with the same filters. Restart when `snapshot` changes. On a hub, group from the cards
   first and work one group at a time; do not read every claim in full up front.
 - **One subject, optionally since a date.** When the subject has a page, list
   its claims with `knowledge_timeline` `entity`, `timeField: "recorded_at"`
@@ -42,7 +42,7 @@ current fingerprint. Then enumerate exactly one starting set:
   `since`/`timeField`. Keep only claims that are actually about the subject.
 
 State the scope in the report. Read each claim you will change with
-`knowledge_record` and `metadataView: "full"`. Its `subject_hint`, when
+`knowledge_record`. Its `subjectHint`, when
 present, is the saver's own description of what the claim is about and the
 strongest clue to its subject. Group the claims by what they are about (one
 feature, PR, commit, decision thread, person or preference) before choosing
@@ -52,7 +52,7 @@ status snapshots about one PR usually ends in an outcome claim.
 ## 2. Choose subject pages
 
 For each group, find candidate pages with `knowledge_grep` and
-`knowledge_lookup`, and read their State and Timeline. Ignore withdrawn pages and
+`knowledge_lookup`, and read their State. Ignore withdrawn pages and
 fixture pages.
 
 - The **primary subject** is what the claim asserts something about; list it
@@ -80,7 +80,7 @@ superseded claims cannot be relinked.
 ## 3. Create missing pages and relink to them
 
 Linking every claim to the nearest existing page can bury a real subject in a
-broad page's Timeline. Create a page when:
+broad page. Create a page when:
 
 - a discrete subject (a feature, project, tool or substantial PR) has roughly
   five or more claims, or has its own design, proof and outcome history; or
@@ -88,11 +88,11 @@ broad page's Timeline. Create a page when:
   has no page, and has identity evidence (for example the PR author shown by
   `gh pr view`).
 
-Do not create a page for a single mention or a one-off fix that a Timeline entry
+Do not create a page for a single mention or a one-off fix that a dated claim
 covers. Use `knowledge_save_page` with the ontology `type`, aliases, and the
 identity evidence as `source`. Person pages use `identity.status: partial` unless
-the identity is fully established. Write a short State that cites the claims and
-a dated Timeline. Link the new page from its parent page.
+the identity is fully established. Write a short State that cites the claims; its
+Timeline is derived from them. Link the new page from its parent page.
 
 Then relink the group's claims, including the snapshots step 4 will supersede.
 The new page becomes each claim's primary subject. Keep the broad page the
@@ -148,7 +148,7 @@ decision, a preference, a landed or released change, a new capability, a
 resolved open question, or page text that later claims show to be wrong.
 
 - Collapse a series of progress snapshots into its outcome. Snapshots (CI runs,
-  open PRs, local commits) are at most dated Timeline entries, never State.
+  open PRs, local commits) are at most dated event claims, never State.
 - Check mutable status live before writing it as current (for example
   `gh pr view` for merge state) and say when you checked. A merge is not a
   deployment, and a deployment is not proof that a given Gateway runs the code.
@@ -161,7 +161,10 @@ resolved open question, or page text that later claims show to be wrong.
   edit saved nothing, but the linked claims already hold the facts. Move a
   section to its subject's page with `knowledge_extract_section` (creating the
   page per step 3 when needed), reread, and retry. Never shorten other prose to
-  make room.
+  make room. Extraction makes the destination the first subject of the claims
+  the section cites and keeps their existing subjects, including the page you
+  extracted from. Apply step 2 to each of those claims and drop the source page
+  with `knowledge_annotate` `entities` where the claim says nothing about it.
 
 Use `knowledge_edit_body` for section edits. Compute UTF-16 offsets from a fresh
 full read, and reread the revision and hash before every edit: other sessions
@@ -191,9 +194,14 @@ The **Knowledge Consolidation** scribe runs this review unattended over the
 unlinked residue, on the schedule in its prompt. Its prompt checks access and
 sets up its automation; this section is only the work of one run.
 
-- Run step 1 for the unlinked residue. When the residue is empty, stop there
-  and report zero claims examined.
+- Run step 1 for the unlinked residue. When the residue is empty, report zero
+  claims examined and go on to the written Timelines below.
 - Otherwise work through steps 2 to 6, and check the residue again before
   stopping, since claims saved during the run are part of the same backlog.
+- Then retire up to 10 written `## Timeline` sections, largest first
+  ([retire a written Timeline](references/profiles.md#retire-a-written-timeline)).
+  Find them with `knowledge_grep` for `Timeline` and confirm the heading in the
+  page body. Count the sections retired and the pages still carrying one.
 - Do not ask questions. Give the step 6 report; the closing status line counts
-  claims examined, linked, superseded, withdrawn and left.
+  claims examined, linked, superseded, withdrawn and left, then Timelines
+  retired and left.

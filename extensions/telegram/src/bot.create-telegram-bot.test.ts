@@ -2023,26 +2023,20 @@ describe("createTelegramBot", () => {
     },
   );
 
-  it("dedupes duplicate updates for callback_query, message, and channel_post", async () => {
-    loadConfig.mockReturnValue(
-      makeTelegramConfig({
-        dmPolicy: "open",
-        allowFrom: ["*"],
-        groupPolicy: "open",
-        groups: {
-          "-100777111222": {
-            enabled: true,
-            requireMention: false,
-          },
-        },
-      }),
-    );
-
-    await createTelegramBot({ token: "tok" });
+  it("dedupes updates and budgets authoritative bot-authored channel posts", async () => {
+    const cfg = makeTelegramConfig({
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "open",
+      groups: { "-100777111222": { enabled: true, requireMention: false } },
+    });
+    cfg.channels!.defaults = { botLoopProtection: { maxEventsPerWindow: 2 } };
+    cfg.messages!.groupChat = { visibleReplies: "automatic" };
+    loadConfig.mockReturnValue(cfg);
+    await createTelegramBot({ token: "tok", config: cfg });
     const callbackHandler = getCallbackHandler();
     const messageHandler = getMessageHandler();
     const channelPostHandler = getOnHandler("channel_post");
-
     const callbackCtx = (id: string, data: string) =>
       makeCallbackRetryContext({
         updateId: 222,
@@ -2072,7 +2066,6 @@ describe("createTelegramBot", () => {
     }
 
     replySpy.mockClear();
-
     for (let attempt = 0; attempt < 2; attempt++) {
       await messageHandler(
         makePrivateTextContext({
@@ -2086,23 +2079,30 @@ describe("createTelegramBot", () => {
       );
     }
     expect(replySpy).toHaveBeenCalledTimes(1);
-
-    replySpy.mockClear();
-
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await channelPostHandler({
-        channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
-          from: { id: 98765, is_bot: true, first_name: "wakebot", username: "wake_bot" },
-          message_id: 777,
-          text: "wake check",
-          date: 1736380800,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
-      });
+    const mention = `@${telegramBotInfoForTest.username}`;
+    const peer = { id: 98765, is_bot: true, first_name: "Peer", username: "peer_bot" };
+    const channel = { id: -100777111222, type: "channel", title: "Wake Channel" };
+    for (const [index, author] of ["human", "sender-chat", "bot"].entries()) {
+      harness.dispatchReplyWithBufferedBlockDispatcher.mockClear();
+      for (const messageId of [777, 777, 778, 779]) {
+        await channelPostHandler({
+          channelPost: {
+            chat: channel,
+            ...(author === "bot" ? { from: peer } : {}),
+            ...(author === "human" ? {} : { sender_chat: channel }),
+            message_id: messageId + index * 1000,
+            text: `${mention} wake check`,
+            entities: [{ type: "mention", offset: 0, length: mention.length }],
+            date: 1736380800 + messageId,
+          },
+          me: telegramBotInfoForTest,
+          getFile: async () => ({}),
+        });
+      }
+      expect(harness.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(
+        author === "bot" ? 2 : 3,
+      );
     }
-    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("dedupes a replayed Telegram message after handler recreation while dispatch is pending", async () => {

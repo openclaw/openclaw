@@ -86,13 +86,19 @@ it.each([
     await waitForFast(() =>
       expect(page.querySelector("input.settings-toggle__input")).not.toBeNull(),
     );
-    expect(Boolean(page.querySelector(".settings-account"))).toBe(primary);
+    expect(Boolean(page.querySelector(".identity-github-login"))).toBe(primary);
     const toggle = page.querySelector<HTMLInputElement>("input.settings-toggle__input");
     await waitForFast(() => {
       expect(toggle).toMatchObject({ disabled: false, checked: enabled });
     });
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
+      [
+        "users.self",
+        "users.listModelAccounts",
+        "users.prefs.get",
+        "users.channelIdentity",
+        "users.channelIdentity",
+      ].toSorted(),
     );
     expect(page.querySelector(".identity-github-form")).toBeNull();
     if (updated === undefined) {
@@ -105,7 +111,14 @@ it.each([
     );
     await waitForFast(() => expect(toggle?.checked).toBe(updated));
     expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
+      [
+        "users.self",
+        "users.listModelAccounts",
+        "users.prefs.get",
+        "users.prefs.set",
+        "users.channelIdentity",
+        "users.channelIdentity",
+      ].toSorted(),
     );
   },
 );
@@ -149,16 +162,22 @@ it.each([
     });
     if (owner) {
       const identity = page.querySelector("#settings-profile-identity")!;
-      expect(identity.textContent).toContain(
-        "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+      // Where the owner's identity comes from is under the section's "?", not in the row.
+      expect(identity.textContent).not.toContain("GitHub-backed sign-in through Cloudflare Access");
+      identity.querySelector<HTMLButtonElement>(".settings-section__help-button")!.click();
+      await waitForFast(() =>
+        expect(document.querySelector(".settings-section__help-panel")?.textContent).toContain(
+          "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+        ),
       );
-      expect(identity.textContent).toContain(
+      const attribution = page.querySelector("#settings-profile-attribution")!;
+      expect(attribution.textContent).toContain(
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       );
       expect(identity.textContent).not.toContain("Linked emails");
       expect(identity.textContent).not.toContain("Refresh to retry");
       expect(
-        identity.querySelector<HTMLInputElement>("input.settings-toggle__input"),
+        attribution.querySelector<HTMLInputElement>("input.settings-toggle__input"),
       ).toMatchObject({ checked: false, disabled: true });
     }
     const displayName = page.querySelector<HTMLInputElement>(".identity-name-control input")!;
@@ -261,7 +280,7 @@ it("does not offer personal PR attribution without a durable profile", async () 
     "unresolved-profile",
   );
   await waitForFast(() =>
-    expect(page.textContent).toContain("Your identity profile could not be loaded."),
+    expect(page.textContent).toContain("Couldn’t load your profile. Try again."),
   );
   expect(attributionToggle(page)).toBeUndefined();
   expect(request.mock.calls.some(([method]) => method.startsWith("users.prefs."))).toBe(false);
@@ -307,7 +326,7 @@ it("shows pending coauthor consent and restores the accepted value after failure
   harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
   const page = mountProfilePage(harness.context);
   const toggle = () =>
-    page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
+    page.querySelector<HTMLInputElement>('#settings-profile-attribution [role="switch"]');
   await waitForFast(() => {
     expect(toggle()?.checked).toBe(true);
     expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
@@ -345,7 +364,7 @@ it.each(["identity", "navigation"])(
     harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
     let page = mountProfilePage(harness.context);
     const toggle = () =>
-      page.querySelector<HTMLInputElement>('#settings-profile-identity [role="switch"]');
+      page.querySelector<HTMLInputElement>('#settings-profile-attribution [role="switch"]');
     await waitForFast(() => {
       expect(toggle()?.checked).toBe(true);
       expect(toggle()?.getAttribute("aria-disabled")).toBeNull();

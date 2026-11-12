@@ -58,6 +58,7 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
         preparedRuntimeMocks.releaseDispatch.mock.calls.length,
       );
       return {
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: preparedRuntimeMocks.releaseSelected,
         snapshot: input,
         pluginGeneration: options.pluginGeneration,
@@ -85,6 +86,7 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
       onRuntimeLease?.({
         snapshot,
         pluginGeneration: runtime.pluginGeneration,
+        run: <T>(run: () => T): T => run(),
         [Symbol.asyncDispose]: preparedRuntimeMocks.releaseDispatch,
       });
       return runtime;

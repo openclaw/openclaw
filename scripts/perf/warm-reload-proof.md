@@ -35,8 +35,114 @@ child directory and retains failed attempts. Output must therefore be under
 `.local/`. Never point the tool at `~/.openclaw`.
 
 For a small smoke run, use `--route chat --reloads 1`. `--route dashboard` selects
-the other route. Default coverage is **one cold navigation and eleven warm
-reloads per route**, each route in an independent initially empty browser context.
+the other route. Default coverage is **one cold navigation, one unmeasured warm
+prime, and eleven measured warm reloads per route**, each route in an independent
+initially empty browser context. `--prime-reloads 0` measures the first warm
+return; values 0–10 select primes. Reports retain primes separately and record
+each measured reload's ordinal.
+
+The default capture is timing only: Element Timing rows/Details, Paint Timing,
+hello, LoAF and CLS, with no geometry sampler, screencast or RPC census. Add
+`--visual-proofs` for the existing geometry, backtracking, compositor and pixel
+proofs described below. CPU profiling also selects that diagnostic path and
+defaults to no priming. Timing reports leave visual/geometry evidence unavailable;
+they cannot be imported as pixel audits. Use the same mode on both arms.
+
+For transcript late-paint attribution, add `--transcript-late-paint`. Both targets
+are archived dashboard-key sessions, opened through slug + full-UUID references
+in their respective chat and dashboard namespaces. They are pinned, and the
+transcript includes extended nested lists, bold text, code, tables, and links.
+The synthetic operator uses Involving me, category
+grouping, Created sorting, five collapsed categories, always-visible empty groups,
+and no previews; the catalog has 97 groups and 102 section-order entries. This
+mode with `--visual-proofs` records complete-message text hashes and heights, plus read-only IndexedDB
+request start/completion times and whether an exact snapshot read found a record,
+without recording cache keys or contents.
+`firstTranscriptDomMs` records visible text on either transcript placement,
+independently of a dashboard occupying the main region. These are DOM and I/O
+milestones; filmstrip inspection still owns paint claims.
+
+Details diagnostics record `firstDetailsDomMs`, `firstDetailsPaintMs`, and changed
+`detailsFrames` (population, docking, session height, and section count). Text
+Element Timing supplies the paint marker; compare it with `firstPaintedRowsMs`
+and inspect the corresponding compositor frame and its predecessor. The comparison
+reports `detailsPaintLagMs`; a zero lag alone does not establish complete section
+geometry. Optional rig LoAF/mutation and Details placement probes are retained in
+`probe.rig`; placement wrappers belong only in separate attribution captures.
+`probe.modules` retains JavaScript resource start and response-end times in the same
+navigation time domain as row paints. These are file arrivals, not module evaluation
+or import-promise completion. Details section frames also record cached branch visibility.
+
+For tall dashboard-side transcript anchoring, add `--visual-proofs --dashboard-end-anchor` with
+`--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side
+column, 33 short exchanges ending in a roughly 4.5k-character prose reply with
+collapsed tool activity, and twelve trailing hidden custom messages. Per-frame
+`transcriptGeometry` records scroll distance from the end, pane width/height,
+last assistant row height, and bottom paragraph intersection. The final paragraph
+has its own Element Timing marker, `bottomParagraphPaintMs`. Join the geometry
+samples to the inspected first transcript PNG; DOM sampling alone does not prove
+the first painted scroll position. Runtime code is unchanged by this diagnostic.
+
+Add `--dashboard-pane-chrome` to give the
+dashboard its own archived conversation with 160 trailing tool exchanges,
+so the loaded transcript window contains activity groups and an earlier-history
+boundary rather than assistant prose. `paneChrome.frames` records identity-action
+children, versions-button geometry, boundary text/geometry, and message/activity
+counts from navigation through settle. The dashboard retains its generated peer
+owner, outside the operator's Involving me roster. Its unpinned activity is seven
+days old, below the bounded agent-roster window, so its session menu arrives after
+cached header admission. The chat target remains archived.
+With plugin activation, the dashboard also contains a native Workboard summary
+and one synthetic backlog card, created through the existing Gateway RPCs.
+
+For active-session composer proof, add `--active-targets` with `--transcript-late-paint`.
+Targets stay unarchived with a fresh, versioned 1,800-token context total and 96,000-token
+limit. `contextRingFrames` retains changed composer/ring display samples, and
+`firstComposerDomHasFinalRing` requires the final ring label and dial at opacity one
+in the first visible composer DOM sample. Inspect the correlated compositor frame
+and its predecessor before claiming first-paint presence.
+
+For ordinary-child Details parity, also add `--details-subagent-activity`.
+It seeds three settled ordinary children on the active chat target;
+`--details-child-count 4` covers overflow beyond the saved three-row preview.
+Before warm captures, the tool requires the complete live child answer, checks
+the owner-written receipt in IndexedDB, and records its rows and settled height.
+The baseline may display every live row while a candidate uses a bounded preview;
+the recorded height preserves that difference instead of assuming parity.
+
+Add `--composer-controls` for the bundled Anthropic model's nondefault 200K window
+and High effort. It uses synthetic credentials and the static catalog without
+model requests. Preparation opens the real picker and requires its final values
+and persisted composer snapshot. Per-frame samples retain control x/width/text;
+use `--active-targets` for active chat and omit it for the archived secondary.
+
+For plugin-publication attribution, add `--plugin-activation`. This enables bundled
+Workboard and two isolated native modules: a neutral CSS theme with a header
+accessory, and a board-like module that awaits two lazy chunks before registering
+a page, navigation, panel, accessory, widget, and unselected transcript replacement.
+Bundled assets use `/assets/plugins/`; synthetic native assets use
+`/__openclaw__/plugins/control-ui/`. The fixture does not copy installed plugins,
+private styles, or stored surface selections. Before interpreting results, verify
+successful asset responses from both routes, complete `pluginStates` with zero
+errors, and the expected contribution counts. `pluginMarks` records synthetic
+module milestones; `pluginsCompleteMs` records registry completion.
+`transcriptTextPaintMs` records a paragraph reported by Largest Contentful Paint,
+which may be absent when another element remains the largest paint candidate.
+Use the compositor filmstrip for missing text-paint observations.
+
+Run this mode twice for the two visit sequences. The default repeats reloads.
+Adding `--reload-after-navigation` leaves the app, removes only the synthetic
+target's transcript snapshot and metadata, opens a fresh `/new` document, and
+navigates internally to the target. It reloads after a four-second first visit;
+sidebar snapshots and operator settings survive. The fixed visit duration is
+workload, not a cache-readiness condition. Each warm run records the target's
+cache inventory and elapsed visit time before capture. This tests short-visit
+persistence rather than a return visit to an already-persisted transcript. The
+initial cold capture remains separate from these independently reset visits.
+
+For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
+and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
@@ -63,6 +169,12 @@ window before starting warm reloads. A read-only cache inventory verifies that a
 owned transcript snapshot exists for the exact route; otherwise warm proof stops.
 Its inventory also records the serialized target-record bytes before warm captures
 so baseline/candidate storage growth can be compared outside measurement.
+The sidebar uses a nondefault agent, the involving-me filter, category grouping
+with 97 groups, created ordering, five collapsed groups, hidden empty groups,
+disabled previews, personal pins, and eight expanded parents with retained children.
+Both target conversations are archived dashboard sessions; the chat arm uses
+`/chat/<agent>/dashboard/<id>`. Per-frame sidebar diagnostics and the
+saved sidebar record's size distinguish cache admission from live handoff.
 Cold captures therefore show default Details
 visibility; warm chat captures show the last visit's Details state. Dashboard keeps
 its native closed Details state. The current router uses `/dashboard/...` for the
@@ -168,7 +280,7 @@ RPC takes 80 ms. These intervals include server work and renderer/CDP dispatch;
 they are not calibrated wire RTT measurements.
 No CPU throttling or CPU profiler runs.
 
-`Page.startScreencast` requests PNG, native viewport size, `everyNthFrame: 1`.
+With `--visual-proofs`, `Page.startScreencast` requests PNG, native viewport size, `everyNthFrame: 1`.
 Every delivered frame is saved and acknowledged; analysis runs after capture.
 Chromium may coalesce/drop compositor frames, so this is every **delivered** frame,
 not proof that every display-vsync frame was observed. Raw frames and capture
@@ -221,7 +333,7 @@ The report distinguishes these boundaries:
   window. A late transition means the window may be censored; it does not prove
   the page settled. Increase `--capture-ms` when inspection shows unfinished work.
 
-## Visual-state accounting
+## Visual-state accounting (`--visual-proofs`)
 
 The pixel threshold is an RGBA channel delta greater than **12**, over at least
 **max(32 pixels, 0.005% of the unmasked region)**. Each frame is compared with the
@@ -297,7 +409,7 @@ Run one command on a quiet, fixed-instance Crabbox lease:
 ```sh
 node --import ./scripts/tsx.mjs scripts/perf/warm-reload-proof.ts \
   --dist dist --base origin/main --candidate HEAD \
-  --output .local/warm-reload-comparison --reloads 11 --rtt-ms 80
+  --output .local/warm-reload-comparison --reloads 12 --rtt-ms 80
 ```
 
 `--base` and `--candidate` each accept a built UI directory containing
@@ -323,14 +435,14 @@ reads fresh bytes and only joins concurrent reads
 asset cache. The tool swaps complete copied directories, so a removed candidate
 asset cannot fall through to a leftover base file. The Gateway process, its
 resident data, and its caches stay warm throughout the comparison. Base and candidate keep separate browser contexts and caches. Each
-route records one signed-in client-data-cold navigation per arm, then interleaves
-base/candidate warm reloads in eleven pairs, alternating AB/BA order. Inactive
+route records one signed-in client-data-cold navigation and the requested primes
+per arm, then interleaves measured warm reloads, alternating AB/BA order. Inactive
 arm pages are frozen through CDP so they cannot generate competing UI work or
 RPCs during the active sample. State is seeded once; it is not
 regenerated between arms. The browser visits and normal read-side bookkeeping
 are part of both arms' real flow.
 
-The primary campaign state metric is **chronological visible-state occurrences**
+For `--visual-proofs`, the primary campaign state metric is **chronological visible-state occurrences**
 (`visibleStateOccurrences`, the visible census timeline length), including the
 carried old-page state on warm reloads. A revisit counts again: alternating
 between two unique images many times must not satisfy the old-page → complete-page
@@ -352,3 +464,73 @@ original frame sequence before judging a subtle transition. The visible-change
 census is a reported animation-collapse heuristic; unmasked pixels and explicit
 animation provenance remain available as controls. An A/A run qualifies noisy
 metrics before using this report to reject a small change.
+
+## Warm visibility join qualification
+
+The Team-scale benchmark's `--paint-holding` mode retains the real old surface,
+stops its measurement samplers before navigation, and reuses the capture session
+for frozen input restoration. Its synthetic pagehide drains exit writers before
+measurement; compare a natural reload before attributing exit cost to the app.
+
+A warm visibility join must qualify on current main before changing presentation:
+calibrate 300 ms old → complete and 900 ms old → blank → complete, then inspect
+four unprofiled reloads each of native archived chat, active chat, dashboard,
+and Team-scale active and archived chat. Stop if the Team complete cached frame
+is not reliably below approximately 480 ms (report median and IQR). The 480 ms
+timing prerequisite uses an unprofiled timing-only capture, with steady-state
+code cache, no geometry sampler, screencast or external census. Name that harness
+and the reload ordinals beside the result. Element Timing establishes eligible
+text paint, not complete-frame pixels: separately inspect `--visual-proofs`
+captures to qualify old → complete, layout and backtracking. Do not apply the
+timing threshold to the more expensive visual harness or substitute ET for its
+complete-frame inspection.
+
+Compare a candidate with twelve alternating-order pairs and an identical-build
+A/A control on one quiet AWS c7a.4xlarge. Inspect the masked visual census:
+Team chat must show old → complete as its first new-document state in at least
+ten of twelve reloads; native routes must never expose blank/background-only
+frames or exceed main's median unique-state count. First painted rows may cost
+at most one frame (17 ms), using each order's median candidate delta minus its
+A/A median, then averaging the two orders. Report raw deltas and both spreads.
+Hello, first post-hello RPC, final rows, LoAF, CLS, Details co-framing, stable
+Details section geometry, and zero transcript backtracking remain required.
+
+## Harness calibration
+
+The Team-scale benchmark also defaults to timing-only for ordinary untraced
+`--warm-reload-perf-probe` chat captures. With fixed-route `--paint-holding`, it
+defaults to one prime, excluded from `results` and retained under `priming`.
+`--prime-reloads 0` measures the first return. `--visual-proofs`, explicit geometry
+probes, tracing/profiling, and interactive/correctness diagnostics retain the
+full probe path. Details fixture flags alone do not enable geometry. Preparation
+still qualifies the saved cache with the full probe before timed navigation;
+post-window readiness reads do not supply paint metrics. `harness` and
+`captureMode` record the selected measurement scope.
+Without `--paint-holding`, the Team benchmark retains its legacy reset-document
+navigation; that mode does not establish real-old-page timing.
+
+See the [fixed-build calibration](warm-reload-harness-calibration.md) for the
+eight-pair A/A-adjusted probe comparisons, reload ordinals, trace clocks and
+twelve-reload steady baselines.
+
+Warm-reload comparisons must identify the instrumentation used on both arms.
+A geometry sampler, compositor screencast, RPC census, and CPU profiler are
+separate workloads; do not compare absolute paint times from captures with
+different instrumentation or source revisions. Keep geometry/backtracking and
+visual proofs available as separate attribution captures.
+
+Calibrate on one build, one quiet instance, and real old-page reloads. Record
+Element Timing rows, FCP, pane-start marks, hello, and long animation frames.
+Compare each probe with a minimal PerformanceObserver collector using eight
+alternating AB/BA pairs and a matching A/A control. For each order, subtract the
+median A/A candidate-minus-baseline delta from the comparison's median delta.
+Report both order-specific effects and spreads, their mean, raw paired medians,
+and arm medians/IQRs. Raw better-pair counts alone cannot separate harness cost
+from the run-order effect.
+
+Record the measured reload ordinal and trace code-cache consumption/production
+separately with `v8` and `devtools.timeline`, without the CPU sampler. An absolute
+480 ms qualification against the 500 ms paint hold must name its harness and
+cache state. Navigation-relative Element Timing and lifecycle-relative paint
+are different clocks: report the trace's first `BeginLifecycleUpdates` and
+`CommitLoad` offsets before comparing them with the hold deadline.

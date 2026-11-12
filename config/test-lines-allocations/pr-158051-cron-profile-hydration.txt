@@ -1,0 +1,2 @@
+# Recover the visible automation inventory after same-connection profile hydration.
+37

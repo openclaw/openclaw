@@ -3,13 +3,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FeatureInput } from "openclaw/plugin-sdk/feature-contract";
 import { expect, it } from "vitest";
-import { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import type { ExtractSectionInput } from "./mutation-contract.js";
 import { PAGE_BUDGET_CHARS } from "./page-budget.js";
 import { createKnowledgeService } from "./service.js";
 import { storeFixture, toolContext, useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
+const byText = (a: string, b: string) => a.localeCompare(b);
 
 // One isolated private vault driven through the agent tool handlers.
 async function fixture() {
@@ -20,14 +21,14 @@ async function fixture() {
     owner = toolContext(api);
   const call = async <K extends keyof typeof service>(
     op: K,
-    input: FeatureInput<typeof contract, K>,
+    input: FeatureInput<FullOutputContract, K>,
   ) => service[op](input, owner);
   const vaultId = (await call("status", {})).vault,
     fingerprint = (await call("ontology", {})).fingerprint;
   const save = (title: string, type: string, body: string, extra = {}) =>
     call("save_page", { requestId: randomUUID(), title, type, body, ...extra });
   const read = async (id: string, extra = {}) =>
-    (await call("record", { id, view: "summary", metadataView: "full", ...extra })).record!;
+    (await call("record_detail", { id, view: "summary", metadataView: "full", ...extra })).record!;
   const fence = async (id: string) => {
     const r = await read(id);
     return { id, expectedRevision: r.revision, expectedHash: r.hash };
@@ -126,6 +127,8 @@ it("rejects page growth on every prose path, never gates claims, and lets oversi
     ["Timeline", 20010, 10013],
   ]);
   expect(grown.message).toMatch(/knowledge_extract_section/);
+  expect(grown.message).toMatch(/Never extract a written Timeline section/);
+  expect(grown.message).toMatch(/dated event claim for every other entry/);
   expect((await f.call("mutation", { requestId: grown.requestId })).receipt).toBe(null);
   const big = "b".repeat(PAGE_BUDGET_CHARS + 1);
   const left = await f.save("Sam", "person", "s".repeat(13000)),
@@ -155,6 +158,8 @@ it("rejects page growth on every prose path, never gates claims, and lets oversi
   ]) {
     expect(result.state).toBe("rejected");
   }
+  // Pages without a written Timeline get no Timeline advice.
+  expect((await f.save("Too big again", "concept", big)).message).not.toMatch(/Timeline/);
   expect(await f.file(atlas.path)).toBe(bytes);
 
   // Facts about an oversized page are always saved as claims.
@@ -242,21 +247,23 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
       text.slice(start + billing.length),
   );
   const links = async (id: string) =>
-    (await f.call("connections", { id, direction: "links" })).connections
-      .map((c) => c.record.id)
-      .toSorted();
-  expect(await links(destination.id)).toStrictEqual([ledger.id, owner.id, provider.id].toSorted());
+    (await f.call("connections_detail", { id, direction: "links" })).connections
+      .map((c: any) => c.id)
+      .toSorted(byText);
+  expect(await links(destination.id)).toStrictEqual(
+    [ledger.id, owner.id, provider.id].toSorted(byText),
+  );
   expect(await links(atlas.id)).toStrictEqual([destination.id, ledger.id, search.id].toSorted());
-  const carried = await f.call("record", {
+  const carried = await f.call("record_detail", {
     id: destination.id,
     includeEvidence: true,
     view: "summary",
   });
   expect(JSON.stringify(carried.evidence)).toContain("We chose option B.");
 
-  // Cited claims move their primary subject; the source stays only where the claim names it.
+  // Cited claims gain the destination as primary subject and keep their established subjects.
   const entities = async (id: string) => (await f.read(id)).metadata!.entities;
-  expect(await entities(provider.id)).toStrictEqual([destination.id]);
+  expect(await entities(provider.id)).toStrictEqual([destination.id, atlas.id]);
   expect(await entities(owner.id)).toStrictEqual([destination.id, atlas.id]);
   expect(await entities(search.id)).toStrictEqual([atlas.id]);
 
@@ -266,4 +273,36 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
   expect(
     (await f.call("revision", { sequence: previous.sequence, maxChars: 65536 })).raw,
   ).toContain(billing);
+});
+
+it("moves only parsed links, checks them in both complete pages, and keeps a short-named subject", async () => {
+  const f = await fixture();
+  const ledger = await f.save("Ledger", "concept", "Ledger notes.\n");
+  const runbook = await f.save("Runbook", "concept", "Runbook.\n\n```\nlog\n");
+  const ai = await f.save("AI", "concept", "AI.\n");
+  const local = await f.claim("Local inference", "AI uses local inference.", [ai.id]);
+  const inference = `## Inference\n\nSee [Ledger](ledger.md) and [[${local.id}|claim]].\n\n\`\`\`md\n[Ledger](ledger.md)\n\`\`\`\n\nInline \`[Ledger](ledger.md)\` and \\[Ledger](ledger.md).\n\n`;
+  const text = `# AI\n\nRuns on [[Runbook]].\n\n## Billing\n\nSee [Ledger][ledger].\n\n${inference}## Notes\n\n[ledger]: ledger.md\n`;
+  await f.call("save_page", {
+    requestId: randomUUID(),
+    ...(await f.fence(ai.id)),
+    title: "AI",
+    body: text,
+  });
+  const bytes = await f.file(ai.path);
+  // The reference definition stays behind, and the runbook ends inside an open code block.
+  await expect(f.extract(ai.id, text.indexOf("## Billing"))).rejects.toThrow(/would not lead/);
+  await expect(
+    f.extract(ai.id, text.indexOf("## Inference"), { destination: await f.fence(runbook.id) }),
+  ).rejects.toThrow(/would not lead/);
+  expect(await f.file(ai.path)).toBe(bytes);
+
+  const receipt = await f.extract(ai.id, text.indexOf("## Inference"), {
+    destination: { title: "AI inference", type: "project" },
+  });
+  const destination = receipt.items!.find((i) => i.key === "destination")!;
+  const rewritten = path.posix.relative(path.posix.dirname(destination.path), ledger.path);
+  // Code, inline code and escaped text keep their bytes; only the parsed link moves.
+  expect(await f.body(destination.path)).toBe(inference.replace("](ledger.md)", `](${rewritten})`));
+  expect((await f.read(local.id)).metadata!.entities).toStrictEqual([destination.id, ai.id]);
 });

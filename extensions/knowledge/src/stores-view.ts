@@ -1,5 +1,5 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { button, el } from "./page-dom.js";
 import {
   accessText,
@@ -201,7 +201,7 @@ export function storesSection(
   const inventory = el("section", undefined, "knowledge-store-inventory");
   inventory.append(el("h3", "Stores", "knowledge-eyebrow"));
   const list = el("div", undefined, "knowledge-surface");
-  for (const entry of [...snapshot.stores].toSorted(
+  for (const entry of snapshot.stores.toSorted(
     (a, b) => Number(b.kind === "named") - Number(a.kind === "named"),
   )) {
     const row = el("div", undefined, "knowledge-store-row"),
@@ -349,7 +349,7 @@ export function vaultFacts(rows: [string, string | Node][]) {
   return grid;
 }
 
-type Maintenance = FeatureOutput<typeof contract, "maintenance_status">;
+type Maintenance = FeatureOutput<FullOutputContract, "maintenance_status">;
 /** Scheduled maintenance: schedule, next and last pass, and each store's result (spec §11). */
 export function maintenanceSection(status: Maintenance, when: (iso: string) => string) {
   const root = el("div");

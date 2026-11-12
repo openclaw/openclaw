@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { readSessionActorBoundedHistory } from "./session-actor-bounded-history.js";
 import type { SessionActorHotState } from "./session-actor-state.types.js";
 import { timedMessageEvent } from "./transcript-message.test-support.js";
@@ -6,6 +7,32 @@ import { timedMessageEvent } from "./transcript-message.test-support.js";
 const timestamp = "2026-10-12T00:00:00.000Z";
 const message = (id: string, parentId: string | null, content = id) =>
   timedMessageEvent(id, parentId, timestamp, { role: "user", content });
+
+function hotState(lastSeq: number): SessionActorHotState {
+  return {
+    target: {
+      database: { kind: "memory", handle: "test", incarnation: "test" },
+      sessionKey: "k",
+    },
+    version: { epoch: "epoch", sequence: 1 },
+    writeToken: "committed",
+    dependencySessionIds: ["session"],
+    entry: { sessionId: "session", updatedAt: 1 },
+    hasBoard: false,
+    participants: [],
+    members: [],
+    pendingInputs: [],
+    completionKeys: [],
+    transcript: {
+      watermark: { generation: "generation", maxSeq: lastSeq },
+      version: { generation: "generation", rawSeq: lastSeq, updatedAt: 1 },
+      anchorsState: "resident",
+      anchors: [],
+      idempotency: [],
+      modelContext: { kind: "unavailable", reason: "projection", generation: "generation" },
+    },
+  };
+}
 
 it.each(["compaction", "reset"] as const)(
   "hydrates the complete current window after %s without copying obsolete history",
@@ -44,29 +71,7 @@ it.each(["compaction", "reset"] as const)(
     const current = message("current", "boundary");
     const events = [header, ...archived, retained, note, branch, boundary, current];
     const lastSeq = events.length - 1;
-    const hot: SessionActorHotState = {
-      target: {
-        database: { kind: "memory", handle: "test", incarnation: "test" },
-        sessionKey: "k",
-      },
-      version: { epoch: "epoch", sequence: 1 },
-      writeToken: "committed",
-      dependencySessionIds: ["session"],
-      entry: { sessionId: "session", updatedAt: 1 },
-      hasBoard: false,
-      participants: [],
-      members: [],
-      pendingInputs: [],
-      completionKeys: [],
-      transcript: {
-        watermark: { generation: "generation", maxSeq: lastSeq },
-        version: { generation: "generation", rawSeq: lastSeq, updatedAt: 1 },
-        anchorsState: "resident",
-        anchors: [],
-        idempotency: [],
-        modelContext: { kind: "unavailable", reason: "projection", generation: "generation" },
-      },
-    };
+    const hot = hotState(lastSeq);
     const { snapshot } = readSessionActorBoundedHistory(
       {
         hot,
@@ -95,5 +100,52 @@ it.each(["compaction", "reset"] as const)(
     if (type === "reset") {
       expect(snapshot.opaqueParents.get("retained-branch")).toBe("retained");
     }
+  },
+);
+
+it.each([false, true])(
+  "reserves background payload bytes before the ordinary suffix (placed=%s)",
+  (placed) => {
+    const header = { type: "session", id: "session", version: 3 };
+    const pending = {
+      type: "message",
+      id: "pending",
+      parentId: null,
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "automation-result",
+        content: [{ type: "text", text: "Background accepted" }],
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      },
+    };
+    const older = message("older", "pending", "old".repeat(400));
+    const middle = message("middle", "older", "middle".repeat(200));
+    const newest = message("newest", "middle", "newest".repeat(200));
+    const placement = {
+      type: "custom",
+      id: "placement",
+      parentId: "newest",
+      timestamp,
+      customType: BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+      data: { afterEntryId: "newest", resultEntryIds: ["pending"] },
+    };
+    const events = [header, pending, older, middle, newest, ...(placed ? [placement] : [])];
+    const bytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
+    const maxBytes =
+      bytes(header) + bytes(middle) + bytes(newest) + (placed ? bytes(placement) : 0);
+    const { snapshot } = readSessionActorBoundedHistory(
+      {
+        hot: hotState(events.length - 1),
+        events: events.map((event, rawSeq) => ({ event, rawSeq, serializedBytes: bytes(event) })),
+      },
+      { maxEvents: 10, maxBytes },
+    );
+    expect(snapshot.events).toEqual([header, pending, newest, ...(placed ? [placement] : [])]);
+    expect(snapshot.serializedBytes).toBeLessThanOrEqual(maxBytes);
+    expect(snapshot.truncated).toBe(true);
+    expect(snapshot.activeLeafEntryId).toBe(placed ? "placement" : "newest");
   },
 );

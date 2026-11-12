@@ -21,6 +21,7 @@ import {
   renderDiscordThreadReplyAttachmentHtml,
 } from "./discord-live.evidence.js";
 import * as testing from "./discord-live.runtime.js";
+import { waitForDiscordVoiceState } from "./discord-live.voice.js";
 import {
   discordQaTranscriptsVoiceAuthorizationScenario,
   runDiscordTranscriptsVoiceAuthorizationScenario as runTranscriptScenario,
@@ -394,6 +395,61 @@ describe("discord live qa runtime", () => {
     ).resolves.toBeNull();
   });
 
+  it.each([
+    { expectation: "joined", state: { channel_id: voiceChannelId, user_id: sutId } },
+    { expectation: "joined", state: { channel_id: voiceChannelId } },
+    { expectation: "left", state: null },
+    { expectation: "left", state: { channel_id: channelId } },
+  ] as const)("waits for voice $expectation with state $state", async ({ expectation, state }) => {
+    vi.useFakeTimers();
+    const request = stubFetch(
+      Response.json({ channel_id: voiceChannelId, user_id: driverId }),
+      Response.json({ message: "REST unavailable" }, { status: 503 }),
+      state === null
+        ? Response.json({ message: "Unknown Voice State" }, { status: 404 })
+        : Response.json(state),
+    );
+    const observed = waitForDiscordVoiceState({
+      token: "token",
+      guildId,
+      channelId: voiceChannelId,
+      timeoutMs: 2_000,
+      ...(expectation === "joined" ? { expectation, sutBotId: sutId } : { expectation }),
+    });
+    await vi.advanceTimersByTimeAsync(1_100);
+    await expect(observed).resolves.toEqual(state);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["joined", "left"] as const)(
+    "retains voice %s timeout observations",
+    async (expectation) => {
+      vi.useFakeTimers();
+      const state = { channel_id: voiceChannelId, user_id: driverId };
+      const error = new Error("REST unavailable");
+      const request = stubFetch();
+      if (expectation === "joined") {
+        request.mockRejectedValue(error).mockResolvedValueOnce(Response.json(state));
+      } else {
+        request.mockImplementation(async () => Response.json(state)).mockRejectedValueOnce(error);
+      }
+      const observed = waitForDiscordVoiceState({
+        token: "token",
+        guildId,
+        channelId: voiceChannelId,
+        timeoutMs: 1_000,
+        ...(expectation === "joined" ? { expectation, sutBotId: sutId } : { expectation }),
+      });
+      const rejected = expect(observed).rejects.toThrow(
+        expectation === "joined"
+          ? `SUT bot did not join Discord voice channel ${voiceChannelId} (last voice state channel=${voiceChannelId} user=${driverId}; last error: REST unavailable)`
+          : `SUT bot did not leave Discord voice channel ${voiceChannelId} (last channel=${voiceChannelId})`,
+      );
+      await vi.advanceTimersByTimeAsync(1_100);
+      await rejected;
+    },
+  );
+
   it("waits for required Discord application commands to be registered", async () => {
     vi.useFakeTimers();
     const schedule = vi.spyOn(globalThis, "setTimeout");
@@ -551,17 +607,20 @@ describe("discord live qa runtime", () => {
       );
       poll.mockResolvedValueOnce(polledReply(`62345678901234567${index * 2 + 2}`, text));
     });
-    vi.spyOn(testing, "getCurrentDiscordVoiceState").mockResolvedValue(null);
-    vi.spyOn(testing, "waitForDiscordVoiceState").mockResolvedValue({
-      channel_id: voiceChannelId,
-      guild_id: guildId,
-      user_id: sutId,
-    });
-    vi.spyOn(discordApi, "requestDiscord").mockResolvedValue(undefined);
+    const request = vi
+      .spyOn(discordApi, "requestDiscord")
+      .mockResolvedValue(undefined)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ channel_id: voiceChannelId, guild_id: guildId, user_id: sutId })
+      .mockResolvedValueOnce(null);
     await expect(f.start()).resolves.toMatchObject({
       details: "visible denial, authorized transcript join, and verified stop/leave",
     });
     expect(f.configureTranscriptVoiceAccess).toHaveBeenCalledExactlyOnceWith(true);
+    expect(request.mock.calls.slice(0, 4).map(([requestPath]) => requestPath)).toEqual(
+      Array(4).fill(`/guilds/${guildId}/voice-states/@me`),
+    );
     const prompts = send.mock.calls.map((call) => call[2]);
     expect(prompts[0]).toContain('"action":"start"');
     expect(prompts[0]).toContain(f.run.deniedSessionId);
@@ -585,9 +644,7 @@ describe("discord live qa runtime", () => {
   it("does not attest voice disconnect when Discord state reads fail", async () => {
     vi.useFakeTimers();
     const f = transcriptFixture();
-    vi.spyOn(testing, "getCurrentDiscordVoiceState").mockRejectedValue(
-      new Error("REST unavailable"),
-    );
+    vi.spyOn(discordApi, "requestDiscord").mockRejectedValue(new Error("REST unavailable"));
     const send = vi
       .spyOn(testing, "sendChannelMessage")
       .mockRejectedValue(new Error("REST unavailable"));

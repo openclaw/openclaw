@@ -8,6 +8,48 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it("hides the routed-model suffix and standard-only speed controls without changing the route", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const id = "anthropic/claude-opus-5-5";
+      const name = "Claude Opus 5.5 via ClawRouter";
+      await installMockGateway(page, {
+        agentModel: `clawrouter/${id}`,
+        models: [
+          {
+            id,
+            name,
+            alias: name,
+            provider: "clawrouter",
+            reasoning: true,
+            thinkingLevels: ["low", "medium", "high", "xhigh", "max"].map((level) => ({
+              id: level,
+              label: level,
+            })),
+            supportsFastMode: false,
+            serviceTiers: ["default"],
+          },
+        ],
+        sessionInfo: { model: id, modelProvider: "clawrouter", thinkingLevel: "medium" },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__input").first();
+      const trigger = composer.locator("[data-chat-model-select]");
+      await trigger.waitFor({ state: "visible" });
+      await expect.poll(() => trigger.textContent()).toBe("Claude Opus 5.5");
+      await composer.screenshot({ path: `${suite.artifactDir}/clawrouter-model-label.png` });
+      await trigger.click();
+      const option = page.locator(`[data-chat-model-option="clawrouter/${id}"]`);
+      await option.waitFor({ state: "visible" });
+      expect(await option.textContent()).toContain("Claude Opus 5.5");
+      expect(await option.textContent()).not.toContain("via ClawRouter");
+      expect(await option.getAttribute("aria-selected")).toBe("true");
+      await page.keyboard.press("Escape");
+      await composer.locator('[data-chat-thinking-select="true"]').click();
+      await composer.locator("[data-chat-thinking-slider]").waitFor({ state: "visible" });
+      expect(await composer.locator(".chat-controls__speed-panel").count()).toBe(0);
+    });
+  });
+
   it("keeps a large pending model catalog usable in /chat", async () => {
     const contextOptions = { viewport: { width: 1280, height: 900 }, hasTouch: true };
     await suite.withPage(contextOptions, async ({ page }) => {
@@ -193,20 +235,12 @@ suite.define(() => {
                   provider: "openai",
                   displayName: "OpenAI",
                   status: "ok",
-                  profiles: [
-                    {
-                      profileId: personal.authProfileId,
-                      type: "oauth",
-                      status: "ok",
-                      email: "personal@example.com",
-                    },
-                    {
-                      profileId: work.authProfileId,
-                      type: "oauth",
-                      status: "ok",
-                      email: "work@example.com",
-                    },
-                  ],
+                  profiles: [personal, work].map(({ authProfileId }) => ({
+                    profileId: authProfileId,
+                    type: "oauth",
+                    status: "ok",
+                    email: `${authProfileId.slice("openai:".length)}@example.com`,
+                  })),
                   usage: { providerId: "openai", windows: [], plan: "ChatGPT Pro" },
                 },
               ],
@@ -240,9 +274,9 @@ suite.define(() => {
         await expect
           .poll(() => heading.textContent())
           .toContain("Subscription · personal@example.com");
-        const account = composer.locator("[data-chat-account-selection]");
-        const picker = account;
+        const picker = composer.locator("[data-chat-account-selection]");
         const trigger = picker.locator("[data-chat-account-group-toggle]");
+        const currentOption = picker.locator('[data-chat-account-option="current"]');
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         for (const width of [320, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
@@ -263,12 +297,10 @@ suite.define(() => {
         await trigger.click();
         const more = picker.locator('[data-chat-account-option="more"]');
         await expect.poll(() => more.isVisible()).toBe(true);
-        expect(
-          await picker.locator('[data-chat-account-option="current"]').textContent(),
-        ).toContain("personal@example.com");
+        expect(await currentOption.textContent()).toContain("personal@example.com");
         await trigger.click();
         await expect.poll(() => more.isVisible()).toBe(false);
-        await expect.poll(() => account.isVisible()).toBe(true);
+        await expect.poll(() => picker.isVisible()).toBe(true);
         await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
         const refreshRequests = await gateway.getRequests("users.listModelAccounts");
         if (input === "keyboard") {
@@ -303,11 +335,7 @@ suite.define(() => {
         } else {
           expect(await gateway.getRequests("users.listModelAccounts")).toEqual(refreshRequests);
         }
-        expect(
-          await picker
-            .locator('[data-chat-account-option="current"]')
-            .getAttribute("aria-selected"),
-        ).toBe("true");
+        expect(await currentOption.getAttribute("aria-selected")).toBe("true");
         const loading = picker.locator('[data-chat-account-option="loading"]');
         const beginAccountPage = async (cursor: string) => {
           const requestsBefore = await gateway.getRequests("users.listModelAccounts");
@@ -387,7 +415,17 @@ suite.define(() => {
         if (input === "keyboard") {
           await workOption.press("Enter");
         } else {
-          await workOption.click();
+          await workOption.hover();
+          await page.mouse.down();
+          // A peer message refreshes history between pointer down and activation.
+          const historyRequests = await gateway.deferNext("chat.history");
+          await gateway.emitGatewayEvent("session.message", {
+            sessionKey,
+            session: await gateway.getSessionRow(sessionKey),
+            message: { role: "user", content: [{ type: "text", text: "Peer message" }] },
+          });
+          await gateway.waitForRequest("chat.history", { after: historyRequests });
+          await page.mouse.up();
         }
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toEqual({
@@ -395,13 +433,15 @@ suite.define(() => {
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
+        if (input === "pointer") {
+          await gateway.resolveDeferred("chat.history");
+        }
         // A pending model override must not change the confirmed account.
-        const currentOption = picker.locator('[data-chat-account-option="current"]');
         await expect.poll(() => currentOption.isVisible()).toBe(true);
         expect(await currentOption.textContent()).toContain(personal.label);
         expect(await currentOption.getAttribute("aria-selected")).toBe("true");
         expect(await search.isDisabled()).toBe(true);
-        await gateway.resolveDeferred("sessions.patch", { ok: true });
+        await gateway.resolveDeferred("sessions.patch");
         await gateway.setMethodResponse("sessions.list", sessionList);
         await gateway.setMethodResponse("models.list", {
           commands: [],
@@ -552,8 +592,13 @@ suite.define(() => {
             .toBe(true);
         }
         await page.setViewportSize({ width: 393, height: 852 });
-        await composer.locator("textarea").click();
         await page.emulateMedia({ reducedMotion: "no-preference" });
+        await composer.locator("textarea").click();
+        // Re-entering mobile editing animates the toolbar before it can be clicked.
+        await expect.poll(() => composer.getAttribute("data-composer-layout")).toBeNull();
+        await composer.evaluate(async (input) => {
+          await Promise.all(input.getAnimations().map((animation) => animation.finished));
+        });
         const needle = effort.locator(".chat-controls__effort-gauge-needle");
         const needleAngle = () =>
           needle.evaluate((node) => {

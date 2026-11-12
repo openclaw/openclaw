@@ -1,8 +1,9 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiSettingsView,
   ControlUiChannelSettingsView,
 } from "../../../src/plugin-sdk/control-ui.js";
+import { i18n } from "../i18n/lib/translate.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { loadControlUiPluginAssets } from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
@@ -126,3 +127,19 @@ it.each(["owner", "placement", "duplicate", "channel"])(
     expect(f.stop).toHaveBeenCalledOnce();
   },
 );
+
+it("localizes packaged settings timeouts without changing cleanup", async () => {
+  vi.useFakeTimers();
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const f = fixture([memoryView()]);
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized settings timeout");
+  onTestFinished(() => translate.mockRestore());
+  vi.mocked(loadControlUiPluginAssets).mockImplementation(() => new Promise(() => {}));
+  const pending = expect(f.load()).rejects.toThrow("localized settings timeout");
+  await vi.waitFor(() => expect(loadControlUiPluginAssets).toHaveBeenCalled());
+  await vi.advanceTimersByTimeAsync(15_000);
+  await pending;
+  expect(translate).toHaveBeenCalledWith("pluginUi.settingsTimedOut", undefined);
+});

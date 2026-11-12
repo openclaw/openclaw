@@ -89,7 +89,7 @@ const { remoteCatalog, pluginMetadataSnapshot, ...requestInput } = input;
 const request: PreparedModelCatalogWorkerTask["request"] = {
   kind: "catalog",
   syntheticAuth: [],
-  clawInstallSchemaVersions: {
+  templateInstallSchemaVersions: {
     path: "/synthetic/state.sqlite",
     snapshot: { kind: "ready", schemaVersions: [] },
   },
@@ -100,7 +100,10 @@ let checksum = 0;
 const run = () => {
   if (values.mode === "baseline") {
     const cloned = structuredClone(full);
-    assert.equal(fingerprintPreparedModelCatalogPluginContext(cloned.value), context.fingerprint);
+    assert.equal(
+      fingerprintPreparedModelCatalogPluginContext(cloned.value),
+      context.registrationFingerprint,
+    );
     checksum += cloned.value.pluginMetadataSnapshot.plugins.length;
   } else {
     const cloned = structuredClone(handoff);

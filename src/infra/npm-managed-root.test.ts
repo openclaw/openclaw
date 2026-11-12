@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -92,14 +93,26 @@ describe("managed npm root", () => {
 
   it.each([
     { installedState: "invalid package manifest", expectedMissing: true },
+    { installedState: "absent native executable (ENOENT)", expectedMissing: true },
+    { installedState: "directory in place of native executable", expectedMissing: true },
     {
       installedState: "non-executable native executable",
       expectedMissing: process.platform !== "win32",
     },
     { installedState: "installed native executable", expectedMissing: false },
+    { installedState: "X_OK denied with EPERM", expectedMissing: false },
+    { installedState: "Windows exe without Unix executable bits", expectedMissing: false },
+    { installedState: "incomplete target before complete target", expectedMissing: false },
+    { installedState: "stat EACCES", expectedMissing: false },
+    { installedState: "stat EPERM", expectedMissing: false },
+    { installedState: "non-native package", expectedMissing: false },
+    { installedState: "vendor package without native bin declaration", expectedMissing: false },
   ])(
     "validates current-platform package contents: $installedState",
     async ({ installedState, expectedMissing }) => {
+      if (installedState === "Windows exe without Unix executable bits") {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      }
       const npmRoot = await makeTempRoot();
       const platformPackage = "@vendor/tool-platform";
       const canonicalPackage = "@vendor/tool";
@@ -108,7 +121,10 @@ describe("managed npm root", () => {
       await writeLock(npmRoot, {
         "": {},
         [`node_modules/${canonicalPackage}`]: {
-          bin: { tool: "bin/tool.js" },
+          bin:
+            installedState === "vendor package without native bin declaration"
+              ? {}
+              : { tool: "bin/tool.js" },
         },
         [`node_modules/${platformPackage}`]: {
           name: canonicalPackage,
@@ -118,27 +134,68 @@ describe("managed npm root", () => {
         },
       });
 
+      let executablePath = "";
       if (installedState === "invalid package manifest") {
         await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
       } else {
         await writeFixtureJson(path.join(packagePath, "package.json"), {
           name: canonicalPackage,
           version: "1.0.0-platform",
-          files: ["vendor"],
+          files: installedState === "non-native package" ? [] : ["vendor"],
         });
         const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
         await fs.mkdir(nativeBinDir, { recursive: true });
         await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
         const executableName = process.platform === "win32" ? "tool.exe" : "tool";
-        await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
-          encoding: "utf8",
-          mode: installedState === "installed native executable" ? 0o755 : 0o644,
+        executablePath = path.join(nativeBinDir, executableName);
+        if (installedState === "directory in place of native executable") {
+          await fs.mkdir(executablePath);
+        } else if (
+          installedState !== "absent native executable (ENOENT)" &&
+          installedState !== "non-native package" &&
+          installedState !== "vendor package without native bin declaration"
+        ) {
+          await fs.writeFile(executablePath, "native executable", {
+            encoding: "utf8",
+            mode:
+              installedState === "non-executable native executable" ||
+              installedState === "Windows exe without Unix executable bits"
+                ? 0o644
+                : 0o755,
+          });
+        }
+        if (installedState === "incomplete target before complete target") {
+          await fs.mkdir(path.join(packagePath, "vendor", "a-incomplete", "bin", executableName), {
+            recursive: true,
+          });
+        }
+      }
+      const access = fs.access;
+      const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+        if (mode === syncFs.constants.X_OK) {
+          throw Object.assign(new Error("mocked stage execution denial"), { code: "EPERM" });
+        }
+        return access(file, mode);
+      });
+      const statErrorCode = installedState.startsWith("stat ")
+        ? installedState.slice(5)
+        : undefined;
+      if (statErrorCode) {
+        const error = Object.assign(new Error("native metadata unavailable"), {
+          code: statErrorCode,
         });
+        const statSpy = vi.spyOn(fs, "stat").mockRejectedValue(error);
+        await expect(
+          listMissingRequiredPlatformPackages({ npmRoot, requiredPackageNames: [platformPackage] }),
+        ).rejects.toBe(error);
+        expect(statSpy).toHaveBeenCalledWith(executablePath);
+        return;
       }
 
       await expect(
         listMissingRequiredPlatformPackages({ npmRoot, requiredPackageNames: [platformPackage] }),
       ).resolves.toEqual(expectedMissing ? [{ name: platformPackage, packagePath }] : []);
+      expect(accessSpy.mock.calls.filter(([, mode]) => mode === syncFs.constants.X_OK)).toEqual([]);
     },
   );
 
@@ -279,7 +336,7 @@ describe("managed npm root", () => {
     });
   });
 
-  it("syncs managed peer pins with an unbounded update budget", async () => {
+  it("syncs managed peer pins without blocking filesystem writes and an unbounded update budget", async () => {
     const npmRoot = await makeTempRoot({
       private: true,
       dependencies: { "existing-root": "1.0.0", "old-peer": "1.0.0", plugin: "1.0.0" },
@@ -318,6 +375,8 @@ describe("managed npm root", () => {
       },
     );
 
+    const synchronousWrites = ["writeFileSync", "writeSync", "fsyncSync", "renameSync"] as const;
+    const writeSpies = synchronousWrites.map((method) => vi.spyOn(syncFs, method));
     await expect(
       syncManagedNpmRootPeerDependencies({
         npmRoot,
@@ -326,6 +385,9 @@ describe("managed npm root", () => {
         workTimeoutMs: null,
       }),
     ).resolves.toBe(true);
+    for (const spy of writeSpies) {
+      expect(spy).not.toHaveBeenCalled();
+    }
 
     const [args, rawOptions] = expectDefined(
       runCommand.mock.calls[0],
@@ -392,6 +454,33 @@ describe("managed npm root", () => {
       overrides: { "runtime-peer": "4.12.18" },
       openclaw: { managedOverrides: ["runtime-peer"], managedPeerDependencies: ["runtime-peer"] },
     });
+  });
+
+  it("retains the manifest when authority expires during temporary publication", async () => {
+    const original = { private: true, dependencies: { plugin: "1.0.0" } };
+    const npmRoot = await makeTempRoot(original);
+    const open = fs.open.bind(fs);
+    let current = true;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (path.dirname(String(args[0])) === npmRoot && args[1] === "wx") {
+        current = false;
+      }
+      return handle;
+    });
+    await expect(
+      syncManagedNpmRootPeerDependencies({
+        npmRoot,
+        managedOverrides: { axios: "1.18.0" },
+        runCommand: peerPlan({}),
+        beforePersistentApply: () => {
+          if (!current) {
+            throw new Error("publication authority expired");
+          }
+        },
+      }),
+    ).rejects.toThrow("publication authority expired");
+    await expect(readManifest(npmRoot)).resolves.toEqual(original);
   });
 
   it("reconciles preserved stale pins with managed overrides when peer planning fails", async () => {

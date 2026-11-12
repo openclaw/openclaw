@@ -34,11 +34,8 @@ import { summarizeStringEntries } from "../shared/string-sample.js";
 import { displayPath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
-import {
-  ExpectedCliError,
-  formatCliJsonFailure,
-  rethrowExpectedCliError,
-} from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
@@ -380,22 +377,26 @@ function writeHooksOutput(value: string, json: boolean | undefined): void {
   defaultRuntime.log(value);
 }
 
+function hooksCliFailure(message: string): ExpectedCliError {
+  // Owner remedies span lines (Config:/Fix:); keep the breaks, strip controls per line.
+  const humanOutput = `${theme.error("Error:")} ${message
+    .split("\n")
+    .map((line) => terminalText`${line}`)
+    .join("\n")}`;
+  return new ExpectedCliError({ message, humanOutput, machineOutput: message });
+}
+
 async function runOneShotHooksCliAction(
   action: () => Promise<number | void>,
   failureOwner: "command" | "root" = "command",
 ): Promise<void> {
   const result = await action().catch((err: unknown) => {
     rethrowExpectedCliError(err);
-    const message = formatErrorMessage(err);
-    // Owner remedies span lines (Config:/Fix:); keep the breaks, strip controls per line.
-    const humanOutput = `${theme.error("Error:")} ${message
-      .split("\n")
-      .map((line) => terminalText`${line}`)
-      .join("\n")}`;
+    const failure = hooksCliFailure(formatErrorMessage(err));
     if (failureOwner === "root") {
-      throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
+      throw failure;
     }
-    defaultRuntime.error(humanOutput);
+    defaultRuntime.error(failure.humanOutput);
     defaultRuntime.exit(1);
     throw new Error("unreachable");
   });
@@ -416,15 +417,17 @@ export function registerHooksCli(program: Command): void {
     Boolean(opts?.json || hooks.opts<{ json?: boolean }>().json);
   hooks.hook("preAction", (_thisCommand, actionCommand) => {
     const parentAgent = hooks.opts<{ agent?: string }>().agent;
+    // preAction runs outside runOneShotHooksCliAction; plain errors would reach the
+    // root renderer as a generic failure and hide these messages.
     if (parentAgent !== undefined && !parentAgent.trim()) {
-      throw new Error("--agent must not be blank");
+      throw hooksCliFailure("--agent must not be blank");
     }
     if (
       parentAgent &&
       actionCommand !== hooks &&
       !new Set(["list", "info", "check", "enable", "disable"]).has(actionCommand.name())
     ) {
-      throw new Error(
+      throw hooksCliFailure(
         `openclaw hooks ${actionCommand.name()} does not support --agent; the option only selects an owner for read-only hook reports.`,
       );
     }

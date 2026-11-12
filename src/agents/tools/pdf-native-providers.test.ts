@@ -260,18 +260,66 @@ it.each([
 });
 
 it.each([
-  [analyzeAnthropic, () => anthropicResponse("   "), "Anthropic PDF returned no text"],
+  [analyzeAnthropic, () => anthropicResponse("   "), { error: "Anthropic PDF returned no text" }],
   [
     analyzeAnthropic,
     () => anthropicResponse("x".repeat(17 * 1024 * 1024)),
-    "JSON response exceeds",
+    { error: "JSON response exceeds" },
   ],
-  [analyzeGemini, () => Response.json({ candidates: [] }), "Gemini PDF returned no candidates"],
+  [
+    analyzeAnthropic,
+    () => Response.json({ content: { type: "text", text: "not an array" } }),
+    { error: "Anthropic PDF response missing content array" },
+  ],
+  [
+    analyzeAnthropic,
+    () => Response.json({ content: [null] }),
+    { error: "Anthropic PDF returned no text" },
+  ],
+  [
+    analyzeAnthropic,
+    () =>
+      Response.json({
+        content: [{ type: "text", text: " first " }, null, { type: "text", text: "second " }],
+      }),
+    { text: "first second" },
+  ],
+  [
+    analyzeGemini,
+    () => Response.json({ candidates: [] }),
+    { error: "Gemini PDF returned no candidates" },
+  ],
+  [
+    analyzeGemini,
+    () => Response.json({ candidates: [{ content: { parts: { text: "not an array" } } }] }),
+    { error: "Gemini PDF returned no text" },
+  ],
+  [
+    analyzeGemini,
+    () => Response.json({ candidates: [{ content: { parts: [null] } }] }),
+    { error: "Gemini PDF returned no text" },
+  ],
+  [
+    analyzeGemini,
+    () =>
+      Response.json({
+        candidates: [
+          { content: { parts: [{ text: " first " }, null, { text: "second " }] } },
+          { content: { parts: [{ text: "ignored candidate" }] } },
+        ],
+      }),
+    { text: "first second" },
+  ],
 ] as const)(
-  "rejects invalid successful responses: %s / %s / %s",
-  async (analyze, response, error) => {
+  "handles successful response text and invalid payloads: %s / %s / %j",
+  async (analyze, response, expected) => {
     mockFetchResponse(response());
-    await expect(analyze()).rejects.toThrow(error);
+    const result = analyze();
+    if ("error" in expected) {
+      await expect(result).rejects.toThrow(expected.error);
+    } else {
+      await expect(result).resolves.toBe(expected.text);
+    }
   },
 );
 

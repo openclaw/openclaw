@@ -15,6 +15,7 @@ import {
 } from "./evidence-reconciliation-contract.js";
 import { prepareEvidenceRevision } from "./evidence-reconciliation.js";
 import { parseYaml } from "./files.js";
+import { hashMatches } from "./hash-fence.js";
 import { RECORD_MAX_BYTES } from "./limits.js";
 import { linkTargets, mergeRedirects } from "./merge.js";
 import { approvedRecall, Envelope, type LoadedRecord, type Recall } from "./model.js";
@@ -30,10 +31,10 @@ import {
 import { connectedPages, linkGraph, pageSections } from "./page-budget.js";
 import {
   carryLinks,
-  linkedIds,
   relinkClaim,
   sameCitation,
   sectionEvidence,
+  verifyMovedLinks,
 } from "./page-extract.js";
 import { PublicationFiles } from "./publication-files.js";
 import { recordPath } from "./record-path.js";
@@ -76,7 +77,7 @@ export class StorageEdits extends StoragePublication {
         !previous.valid ||
         previous.kind !== "page" ||
         previous.lifecycle !== "active" ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash) ||
         previous.revision !== input.expectedRevision
       ) {
         throw new Error("Body edit conflict: target unavailable or changed.");
@@ -152,7 +153,7 @@ export class StorageEdits extends StoragePublication {
           !found.valid ||
           found.kind !== "page" ||
           found.lifecycle !== "active" ||
-          found.hash !== fence.expectedHash ||
+          !hashMatches(found.hash, fence.expectedHash) ||
           found.revision !== fence.expectedRevision ||
           !current.some((r) => r.id === found.id)
         ) {
@@ -196,7 +197,7 @@ export class StorageEdits extends StoragePublication {
           existsSync(path.join(this.config.root, scope, candidate)),
         );
       const original = source.body.slice(section.start, section.end);
-      const moved = carryLinks(original, source.path, destinationPath, graph.targets);
+      const moved = carryLinks(source.body, section, source.path, destinationPath, graph.targets);
       const text = moved.text.endsWith("\n") ? moved.text : moved.text + "\n";
       const join = (body: string) =>
         body + (!body || body.endsWith("\n\n") ? "" : body.endsWith("\n") ? "\n" : "\n\n") + text;
@@ -276,7 +277,7 @@ export class StorageEdits extends StoragePublication {
           2000,
         ),
       );
-      // Claims the section cites and that name the source as a subject now belong to the destination.
+      // Claims the section cites that name the source as a subject also belong to the destination.
       const at = new Date().toISOString();
       const claims = data.records
         .filter(
@@ -284,11 +285,12 @@ export class StorageEdits extends StoragePublication {
             r.kind === "claim" &&
             moved.linked.has(r.id) &&
             r.metadata.entities?.includes(source.id) &&
+            r.metadata.entities[0] !== destinationId &&
             current.some((c) => c.id === r.id),
         )
         .map((before) => {
           const encoded = encodeRecordEvidence(
-            relinkClaim(before, source, destinationId, {
+            relinkClaim(before, destinationId, {
               reason: `Section "${heading}" moved from ${source.title} to ${destinationTitle}.`,
               actor: "agent",
               requestId: input.requestId,
@@ -329,19 +331,19 @@ export class StorageEdits extends StoragePublication {
         }
       }
       const after = linkTargets(preview.records, active),
-        landed = destination.record,
-        landedLinks = linkedIds(text, landed.path, after);
+        landed = destination.record;
       if (
         !landed.body.endsWith(text) ||
-        [...moved.linked].some((id) => !landedLinks.has(id)) ||
-        !linkedIds(shrunk.record.body, shrunk.record.path, after).has(destinationId) ||
         carried.some((e) => !(landed.metadata.evidence ?? []).some((x) => sameCitation(x, e)))
       ) {
         throw new Error("Extraction verification failed; no publication accepted.");
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
+      verifyMovedLinks(moved, { source, shrunk: shrunk.record, target, landed }, after, {
+        section,
+        stubEnd: section.start + stub.length,
+        appended: landed.body.length - text.length,
+        destinationId,
+      });
       return {
         record: landed,
         previous: target,
@@ -418,9 +420,6 @@ export class StorageEdits extends StoragePublication {
               .join(", "),
         );
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return {
         previous,
         record: encoded.record,
@@ -492,7 +491,7 @@ export class StorageEdits extends StoragePublication {
         previous = matches.length === 1 ? matches[0] : undefined;
       if (
         !previous ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash) ||
         previous.revision !== input.expectedRevision
       ) {
         throw new Error("Annotation conflict: target unavailable or changed.");
@@ -589,9 +588,6 @@ export class StorageEdits extends StoragePublication {
       if (Buffer.byteLength(record.raw) > RECORD_MAX_BYTES) {
         throw new Error("Annotation exceeds record limits.");
       }
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during validation.");
-      }
       return {
         previous,
         record,
@@ -639,7 +635,7 @@ export class StorageEdits extends StoragePublication {
       );
       if (
         !previous ||
-        previous.hash !== input.expectedHash ||
+        !hashMatches(previous.hash, input.expectedHash) ||
         previous.revision !== input.expectedRevision
       ) {
         throw new Error(
@@ -697,9 +693,6 @@ export class StorageEdits extends StoragePublication {
         hash: digest(raw),
         revision: metadata.revision,
       };
-      if (new PublicationFiles(this.config.root).snapshot(scope) !== snapshot) {
-        throw new Error("Edit conflict: vault changed during automatic recall validation.");
-      }
       return { record, previous, data, snapshot, artifacts: {}, metadataOnly: true };
     });
     return this.accept(input.requestId, intent, prepared, access, actor);

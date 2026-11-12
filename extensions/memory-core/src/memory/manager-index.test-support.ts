@@ -89,6 +89,7 @@ const { providerState, resetProviderState } = vi.hoisted(() => {
       | null,
     providerRuntimeBatchErrors: [] as unknown[],
     providerRuntimeBatchFailuresRemaining: 0,
+    providerRuntimeBatchDeclines: false,
     providerRuntimeActiveBatchCalls: 0,
     providerRuntimeMaxActiveBatchCalls: 0,
     providerCloseCalls: 0,
@@ -233,6 +234,9 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                     if (providerState.providerRuntimeBatchFailuresRemaining > 0) {
                       providerState.providerRuntimeBatchFailuresRemaining -= 1;
                       throw new Error("provider runtime batch failed");
+                    }
+                    if (providerState.providerRuntimeBatchDeclines) {
+                      return null;
                     }
                     return texts.map(embedText);
                   } finally {

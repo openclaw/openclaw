@@ -1,5 +1,6 @@
 import { setImmediate } from "node:timers/promises";
 import type { StreamOptions, UserMessage } from "@openclaw/llm-core";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -908,4 +909,59 @@ it("does not submit input after abort wins an awaited conversion", async () => {
   await finish();
   expect(steer).not.toHaveBeenCalled();
   expect(agent.cancelSteeringMessage((message) => message === update)).toBe(update);
+});
+
+it("interrupts safe tools, waits for their cleanup, and continues with ordered steering", async () => {
+  const started = createDeferred();
+  const aborted = createDeferred();
+  const cleanup = createDeferred();
+  const observedSignals: AbortSignal[] = [];
+  const first = user("first correction", 2);
+  const second = user("second correction", 3);
+  const tool = makeTool("wait");
+  tool.interruptible = true;
+  tool.execute = async (_id, _args, signal) => {
+    const callSignal = expectDefined(signal, "tool cancellation signal");
+    observedSignals.push(callSignal);
+    if (observedSignals.length === 1) {
+      callSignal.addEventListener("abort", () => aborted.resolve(), { once: true });
+      started.resolve();
+      await aborted.promise;
+      await cleanup.promise;
+      throw callSignal.reason;
+    }
+    return emptyResult();
+  };
+  const { agent, requests, events } = makeAgent([tool], { steeringMode: "all" }, [
+    [makeCall("wait", "before")],
+    [makeCall("wait", "after")],
+    done,
+  ]);
+  const run = agent.prompt("start");
+  await started.promise;
+  agent.steer(first);
+  agent.steer(second);
+  expect(agent.hasPendingSteeringMessage((message) => message === second)).toBe(true);
+  expect(agent.interruptTools()).toEqual({
+    status: "interrupted",
+    tools: [{ toolCallId: "before", toolName: "wait" }],
+  });
+  await aborted.promise;
+  expect(agent.signal?.aborted).toBe(false);
+  expect(requests).toHaveLength(1);
+  expect(agent.hasPendingSteeringMessage((message) => message === first)).toBe(true);
+  cleanup.resolve();
+  await run;
+  expect(requests[1]?.slice(-2)).toEqual([first, second]);
+  expect(requests[1]?.[2]).toMatchObject(
+    expectedToolResult("before", true, {
+      content: text("Interrupted by the user to send a pending message."),
+    }),
+  );
+  expectInjectedOnce(events, first);
+  expectInjectedOnce(events, second);
+  expect(observedSignals.map((signal) => signal.aborted)).toEqual([true, false]);
+  expect(agent.hasPendingSteeringMessage((message) => message === first)).toBe(false);
+  expect(agent.interruptTools()).toEqual({ status: "idle", tools: [] });
+  expect(agent.state.messages.at(-1)).toMatchObject({ role: "assistant", content: done });
 });

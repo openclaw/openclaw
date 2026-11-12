@@ -17,7 +17,10 @@ const avatarGatewayContext = projectSource(null, {
   equality: "revision",
 });
 
-export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
+export function useIdentityAvatarView(
+  identity: Accessor<IdentityAvatarInput>,
+  cachedOnly?: Accessor<boolean>,
+) {
   const gateway = useAvatarGatewayContext();
   const application = useOptionalApplication();
   return createMemo(() => {
@@ -29,6 +32,7 @@ export function useIdentityAvatarView(identity: Accessor<IdentityAvatarInput>) {
             .read()
             .avatarIdentity(input)
         : input,
+      cachedOnly?.() ?? false,
     );
   });
 }

@@ -9,6 +9,7 @@ afterEach(() => vi.doUnmock("./chat-header-session-menu-content.tsx"));
 it("defers header entries until opening and retains the trigger, focus intent and rows", async () => {
   // mock-isolation: hold only the optional chunk, keeping the native menu owner real.
   const entered = createDeferred();
+  const imported = createDeferred();
   const ready = createDeferred();
   onTestFinished(() => ready.resolve());
   let loads = 0;
@@ -16,9 +17,13 @@ it("defers header entries until opening and retains the trigger, focus intent an
     loads++;
     entered.resolve();
     await ready.promise;
-    return vi.importActual<typeof import("./chat-header-session-menu-content.tsx")>(
-      "./chat-header-session-menu-content.tsx",
-    );
+    try {
+      return await vi.importActual<typeof import("./chat-header-session-menu-content.tsx")>(
+        "./chat-header-session-menu-content.tsx",
+      );
+    } finally {
+      imported.resolve();
+    }
   });
   const onAction = vi.fn();
   const menu = document.createElement("openclaw-chat-header-session-menu");
@@ -43,6 +48,7 @@ it("defers header entries until opening and retains the trigger, focus intent an
   expect(loads).toBe(1);
   menu.session = { ...menu.session, pinned: true };
   ready.resolve();
+  await imported.promise;
   await waitForSolid(() => {
     expect(menu.querySelector('[data-value="toggle-pin"]')?.textContent).toContain("Unpin");
     expect(document.activeElement?.getAttribute("data-value")).toBe("submenu:advanced");

@@ -14,6 +14,8 @@ import {
 } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import { RefreshButton } from "../../components/solid/refresh-button.tsx";
+import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -23,6 +25,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -30,6 +33,7 @@ import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
@@ -94,23 +98,14 @@ export function SessionStorageSettings(props: SettingsProps) {
   // Admission and retirement are synchronous; Solid owns the visible submission state.
   let runOperation: AbortController | null = null;
   let followingRun = false;
-  let maintenanceTimer: ReturnType<typeof setInterval> | undefined;
-  function stopPolling() {
-    clearInterval(maintenanceTimer);
-    maintenanceTimer = undefined;
-  }
-  function startPolling() {
-    if (maintenanceTimer !== undefined) {
-      return;
+  const maintenancePoll = useVisiblePoll(2_000, () => {
+    if (!client()) {
+      stopPolling();
+    } else if (!pending()) {
+      refreshStatus();
     }
-    maintenanceTimer = setInterval(() => {
-      if (!client()) {
-        stopPolling();
-      } else if (!pending()) {
-        refreshStatus();
-      }
-    }, 2_000);
-  }
+  });
+  const stopPolling = maintenancePoll.stop;
   function retireRequests(identityChanged: boolean) {
     stopPolling();
     runOperation?.abort();
@@ -129,7 +124,7 @@ export function SessionStorageSettings(props: SettingsProps) {
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
-      startPolling();
+      maintenancePoll.start();
       return;
     }
     stopPolling();
@@ -302,8 +297,7 @@ export function SessionStorageSettings(props: SettingsProps) {
           control={<SettingsValue value={storageSize(totals().embedded)} />}
         />
         {inventoryProps.status.agents.length > 1 ? (
-          <details class="settings-row settings-row--stacked">
-            <summary>{t("configView.sessionStorage.byAgent")}</summary>
+          <SettingsDisclosure quiet title={t("configView.sessionStorage.byAgent")}>
             <For each={inventoryProps.status.agents} keyed={(agent) => agent.agentId}>
               {(agent) => (
                 <SettingsRow
@@ -319,7 +313,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                 />
               )}
             </For>
-          </details>
+          </SettingsDisclosure>
         ) : undefined}
         <SettingsRow
           title={t("configView.sessionStorage.worker")}
@@ -378,9 +372,12 @@ export function SessionStorageSettings(props: SettingsProps) {
             title={t("configView.sessionStorage.title")}
             description={t("configView.sessionStorage.description")}
             actions={
-              <button class="btn" disabled={!client() || pending()} onClick={() => refreshStatus()}>
-                {t("common.refresh")}
-              </button>
+              <RefreshButton
+                label={t("common.refresh")}
+                busy={pending()}
+                disabled={!client()}
+                onClick={() => refreshStatus()}
+              />
             }
           >
             <Errored
@@ -391,8 +388,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                       t("common.loading")
                     ) : (
                       <span role="alert">
-                        {formatUiError(error())}
-                        {t("configView.sessionStorage.refreshAfterError")}
+                        {formatUiError(error())} {t("configView.sessionStorage.refreshAfterError")}
                       </span>
                     )
                   }
@@ -406,15 +402,17 @@ export function SessionStorageSettings(props: SettingsProps) {
                 <Show
                   when={readStatus()?.status}
                   fallback={
-                    <SettingsEmpty
-                      message={t(
-                        client()
-                          ? "common.loading"
-                          : context.gateway.snapshot.phase === "connected"
+                    client() ? (
+                      <SettingsEmpty message={t("common.loading")} />
+                    ) : (
+                      <SettingsUnavailable
+                        message={t(
+                          context.gateway.snapshot.phase === "connected"
                             ? "configView.sessionStorage.adminRequired"
                             : "configView.sessionStorage.disconnected",
-                      )}
-                    />
+                        )}
+                      />
+                    )
                   }
                 >
                   {(currentStatus) => <StorageInventory status={currentStatus()} />}
@@ -522,12 +520,15 @@ export function SessionStorageSettings(props: SettingsProps) {
         </div>
       </SettingsPage>
       <ShellLayoutBoundary traits={{ settingsPage: true }}>
-        <details class="settings-page" open={props.advancedExpanded}>
-          <summary class="settings-section__heading">
-            {t("configView.sessionStorage.advanced")}
-          </summary>
-          {props.buildEditor?.()}
-        </details>
+        <div class="settings-page">
+          <SettingsDisclosure
+            sections
+            title={t("configView.sessionStorage.advanced")}
+            open={props.advancedExpanded}
+          >
+            {props.buildEditor?.()}
+          </SettingsDisclosure>
+        </div>
       </ShellLayoutBoundary>
     </openclaw-session-storage-settings>
   );

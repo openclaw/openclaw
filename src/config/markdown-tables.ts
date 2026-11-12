@@ -43,7 +43,7 @@ function resolveMarkdownModeFromSection(
 export function resolveMarkdownTableMode(
   params: ResolveMarkdownTableModeParams,
 ): MarkdownTableMode {
-  const channel = normalizeChannelId(params.channel);
+  const channel = normalizeChannelId(params.channel) ?? params.channel?.trim().toLowerCase();
   const defaultMode = channel
     ? (getLoadedChannelPlugin(channel)?.messaging?.defaultMarkdownTableMode ?? "code")
     : "code";

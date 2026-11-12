@@ -48,6 +48,7 @@ export function ModelAccounts(props: ModelAccountsProps) {
     };
     // The profile owner admits both connection authority and its canonical profile.
     const stopTarget = target.subscribe(sync);
+    const stopRefresh = target.subscribeRefresh?.(() => void state.loadAccounts());
     const stopEvents = context.gateway.subscribeEvents((event) => {
       if (modelAuthEventInvalidates(event)) {
         void state.loadAccounts();
@@ -56,6 +57,7 @@ export function ModelAccounts(props: ModelAccountsProps) {
     sync();
     return () => {
       stopEvents();
+      stopRefresh?.();
       stopTarget();
       state.dispose();
     };

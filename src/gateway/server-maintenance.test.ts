@@ -1,6 +1,5 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
-import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
@@ -31,6 +30,7 @@ import { createChannelThawScenario } from "./server-maintenance.thaw.test-suppor
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
+import * as worktreeMaintenance from "./worktree-maintenance.js";
 
 const {
   cleanOldMediaMock,
@@ -88,6 +88,12 @@ function createMaintenanceTimerDeps(
 type MaintenanceTimerDeps = ReturnType<typeof createMaintenanceTimerDeps>;
 
 async function createThawScenario() {
+  // Thaw timing assertions exclude unrelated root work and admission waiters.
+  vi.spyOn(worktreeMaintenance, "startWorktreeMaintenance").mockReturnValue({
+    request: vi.fn(),
+    notifyArchive: vi.fn(),
+    stop: async () => {},
+  });
   const clock = createGatewaySchedulerClock();
   let nowMs = 0;
   let cpuUsage = { user: 0, system: 0 };
@@ -971,7 +977,7 @@ describe("startGatewayMaintenanceTimers", () => {
     },
   );
 
-  it("leaves stalled terminal persistence and recovery ownership with the controller", async () => {
+  it("leaves stalled terminal persistence with the controller", async () => {
     const { deps } = await createTimedMaintenanceScenario();
     const runId = "run-terminal-persistence";
     const terminalRun = createActiveRun("main");
@@ -980,25 +986,11 @@ describe("startGatewayMaintenanceTimers", () => {
     terminalRun.adapter.projectSessionTerminalObservedAt = Date.now() - 120_000;
     terminalRun.adapter.projectSessionTerminalPersistence = new Promise<void>(() => {});
     rpcSourceTesting.set(runId, terminalRun);
-    const target = expectDefined(terminalRun.input.target, "Expected captured fixture target");
-    const recoveryCandidate = {
-      storePath: target.storeScope,
-      agentId: target.agentId,
-      runId,
-      sourceRunId: "source-terminal-persistence",
-      lifecycleGeneration: "generation-1",
-      sessionKey: "main",
-      sessionId: "sess-1",
-      observedAt: terminalRun.adapter.projectSessionTerminalObservedAt,
-    };
-    deps.restartRecoveryCandidates.set(runId, recoveryCandidate);
-
     const timers = startGatewayMaintenanceTimers(deps);
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(terminalRun.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.get(runId)).toBe(terminalRun);
-    expect(deps.restartRecoveryCandidates.get(runId)).toBe(recoveryCandidate);
     await stopMaintenanceTimers(timers);
   });
 

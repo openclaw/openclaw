@@ -11,7 +11,7 @@ import {
 
 const memory = await import("./index.js");
 
-describe("memory search reindex backoff", () => {
+describe("memory maintenance reindex backoff", () => {
   const fixture = createManagerIndexFixture(memory);
   const oldChunking =
     "UPDATE memory_index_meta SET value = json_set(value, '$.chunkingVersion', 0) WHERE key = 'memory_index_meta_v1'";
@@ -25,6 +25,7 @@ describe("memory search reindex backoff", () => {
   function clock() {
     const time = { now: Date.now() };
     vi.spyOn(Date, "now").mockImplementation(() => time.now);
+    vi.spyOn(performance, "now").mockImplementation(() => time.now);
     return time;
   }
   // Rebuilds reuse published vectors for unchanged chunks; failing rebuilds need new input.
@@ -42,7 +43,9 @@ describe("memory search reindex backoff", () => {
 
   it.each(["openai", "auto"])("backs off failed rebuilds (%s)", async (provider) => {
     const manager = await baseline(provider);
-    const fields = manager as unknown as { awaitManagerIdle(): Promise<void> };
+    const fields = manager as unknown as {
+      syncPublishedIndexInBackground(params: { reason: string }): Promise<void>;
+    };
     memoryIndexFixtureWriter(manager).exec(oldChunking);
     await reviseMemory("first");
     const time = clock();
@@ -50,15 +53,15 @@ describe("memory search reindex backoff", () => {
     await expect(manager.sync({ force: true })).rejects.toThrow("full rebuild failed");
     expect(embedding).toHaveBeenCalledTimes(1);
     const searchPublished = async (attempts?: number) => {
+      await fields.syncPublishedIndexInBackground({ reason: "reconcile" }).catch(() => undefined);
       const results = await manager.search("zebra", { minScore: 0 });
       expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      await fields.awaitManagerIdle();
       if (attempts !== undefined) {
         expect(embedding).toHaveBeenCalledTimes(attempts);
       }
     };
 
-    // Searches cannot move the deadline. Each elapsed retry doubles the delay, capped at 30m.
+    // Maintenance cannot move the deadline. Each elapsed retry doubles the delay, capped at 30m.
     for (const delay of [30_000, 60_000, 120_000, 240_000, 480_000, 960_000, 1_800_000]) {
       const attempts = embedding.mock.calls.length;
       await searchPublished(attempts);

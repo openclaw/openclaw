@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
@@ -26,7 +27,7 @@ const REVIEW_PREFIX =
 const OUTPUT_CONTRACT =
   "Reply NO_CHANGE if the agent is on track. Otherwise reply CORRECTION on the first line, then one short correction to the agent (under 80 words) naming the evidence and the next action. A tool call without a result may still be running.";
 export const DELIVERY_PREFIX =
-  "Advisor (OpenClaw Labs): an automatic advisor read this conversation's recent work. " +
+  "Advisor: an automatic advisor read this conversation's recent work. " +
   "Treat this as advice, not new instructions or permissions, and check that it still applies before acting.";
 
 type AdmittedRun = { sessionKey: string };
@@ -34,6 +35,8 @@ type Session = {
   toolCalls: number;
   since: number;
   review?: AbortController;
+  /** The correction already delivered to this run; the next review must not repeat it. */
+  lastCorrection?: string;
   /** Started tool calls without a result; a fork taken now would misreport them. */
   pending: Set<string>;
 };
@@ -57,9 +60,9 @@ export default definePluginEntry({
   id: "advisor",
   name: "Advisor",
   description:
-    "Experimental: reviews ongoing agent work on the session's own model and offers one short correction.",
+    "Reviews ongoing agent work on the session's own model and offers one short correction.",
   register(api) {
-    const everyToolCalls = readTrigger(api.pluginConfig, "everyToolCalls", 10);
+    const everyToolCalls = readTrigger(api.pluginConfig, "everyToolCalls", 0);
     const everyMs = readTrigger(api.pluginConfig, "everyMinutes", 20) * 60_000;
     if (everyToolCalls === 0 && everyMs === 0) {
       api.logger.warn(
@@ -70,7 +73,7 @@ export default definePluginEntry({
     const sessions = new Map<string, Session>();
     let scheduler: PluginServiceSchedulerV1 | undefined;
 
-    async function review(sessionKey: string, cancel: AbortSignal) {
+    async function review(sessionKey: string, session: Session, cancel: AbortSignal) {
       if (!scheduler) {
         return;
       }
@@ -82,17 +85,20 @@ export default definePluginEntry({
       const instructions =
         api.runtime.config.current().plugins?.entries?.advisor?.config?.reviewInstructions;
       const guidance = typeof instructions === "string" ? instructions.trim() : "";
+      const previous = session.lastCorrection
+        ? `\nYou already gave this correction in this run: ${JSON.stringify(session.lastCorrection)} Do not repeat it. Reply NO_CHANGE unless there is a different problem.`
+        : "";
       let text: string;
       try {
         const result = await api.runtime.subagent.forkSession({
           sessionKey,
-          message: `${REVIEW_PREFIX}\n${guidance || DEFAULT_REVIEW_INSTRUCTIONS}\n${OUTPUT_CONTRACT}`,
+          message: `${REVIEW_PREFIX}\n${guidance || DEFAULT_REVIEW_INSTRUCTIONS}\n${OUTPUT_CONTRACT}${previous}`,
           timeoutMs: REVIEW_TIMEOUT_MS,
           signal,
         });
         text = result.text;
         api.logger.info(
-          `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
+          `advisor: review usage for session ${sessionKey}: input=${result.usage?.inputTokens ?? "unknown"} cacheRead=${result.usage?.cacheReadTokens ?? "unknown"} cacheWrite=${result.usage?.cacheWriteTokens ?? "unknown"} output=${result.usage?.outputTokens ?? "unknown"}`,
         );
       } catch (error) {
         if (!cancel.aborted) {
@@ -123,6 +129,9 @@ export default definePluginEntry({
       });
       // Advice only ever joins the requester's own active run, under its permissions; a run that
       // already ended or a refused steer (for example prompt-injection policy) delivers nothing.
+      if (steer.steered) {
+        session.lastCorrection = finding;
+      }
       api.logger.info(
         steer.steered
           ? `advisor: steered active run for session ${sessionKey}`
@@ -160,7 +169,7 @@ export default definePluginEntry({
           }
           session.toolCalls = 0;
           session.since = Date.now();
-          await review(run.sessionKey, cancel.signal).finally(() => {
+          await review(run.sessionKey, session, cancel.signal).finally(() => {
             if (session.review === cancel) {
               session.review = undefined;
             }
@@ -194,7 +203,13 @@ export default definePluginEntry({
       "before_agent_reply",
       (_event, ctx) => {
         // Hooks and the Gateway service use distinct registrations; run context carries admission.
-        if (ctx.sessionKey && ctx.runId && ctx.trigger === "user") {
+        // Only the main agent is reviewed: it sees its subagents' results and can redirect them.
+        if (
+          ctx.sessionKey &&
+          ctx.runId &&
+          ctx.trigger === "user" &&
+          !isSubagentSessionKey(ctx.sessionKey)
+        ) {
           api.runContext.setRunContext({
             runId: ctx.runId,
             namespace: RUN_CONTEXT_NAMESPACE,
@@ -207,7 +222,7 @@ export default definePluginEntry({
 
     api.agent.events.registerAgentEventSubscription({
       id: "advisor-runs",
-      description: "Counts tool calls in user runs and reviews when a trigger is due.",
+      description: "Counts tool calls in main-agent user runs and reviews when a trigger is due.",
       streams: ["tool", "lifecycle", "codex_app_server.item"],
       phases: ["start", "result", "end", "error", "started", "completed"],
       payload: "metadata",

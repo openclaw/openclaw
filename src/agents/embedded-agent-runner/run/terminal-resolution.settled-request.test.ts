@@ -11,11 +11,11 @@ import { buildAttemptReplayMetadata } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
-  createTerminalToolPresentationTracker,
   resolveEmbeddedRunTerminal,
   resolveSettledTurnFinalizationRequest,
 } from "./terminal-resolution.js";
 import { makeTerminalInput } from "./terminal-resolution.test-support.js";
+import { createTerminalToolPresentationTracker } from "./terminal-tool-presentation.js";
 
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";

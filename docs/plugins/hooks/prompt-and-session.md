@@ -33,7 +33,8 @@ Use the phase-specific hooks for new plugins:
   When provided, `fallbacksOverride` replaces the fallback chain for this run;
   `[]` disables model fallback, so a failed primary fails the run. A value that
   is not an array of strings is treated as `[]`. Omit it to preserve configured
-  fallback behavior.
+  fallback behavior. Results returned after the source run is canceled or
+  superseded are discarded before model preparation.
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
@@ -74,6 +75,9 @@ On embedded, CLI, and harness runtime prompt-preparation paths (including
 ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
 `agent_turn_prepare` → ordinary
 `before_prompt_build` → finalized tool policy → authorized prompt enrichment.
+On CLI runtimes, authorized enrichment also runs after the native session
+reuse decision, transcript checks, and history selection, so it can report and
+respond to that decision on the same turn.
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
@@ -181,6 +185,14 @@ Treat `toolAuthority` as an ephemeral capability:
 
 - `allows(toolName)` checks a standard tool id against the finalized surface
   and also verifies that the capability is still active.
+- `list()` returns the same surface as frozen, normalized, deduplicated, sorted
+  tool names. For example, a policy plugin can select tool-specific prompt
+  guidance without maintaining its own catalog. It exposes no descriptions,
+  schemas, arguments, or tool handles, and grants no execution authority.
+  Like `allows()`, it verifies the host and dispatch are still active. The method
+  is optional for older-host compatibility: feature-detect with
+  `typeof authority.list === "function"` and fail closed if enumeration is required
+  but unavailable. Previously returned names are data, not live authorization.
 - `assertActive()` rejects after abort, cancellation, run replacement,
   lifecycle rotation, or hook dispatch completion. Call it after awaited work
   and before committing plugin-owned side effects.
@@ -192,6 +204,53 @@ Treat `toolAuthority` as an ephemeral capability:
 The host revalidates authority after each awaited handler and discards stale
 enrichment. A retained `toolAuthority` object rejects use after dispatch.
 
+#### Session continuity
+
+In this phase, `event.continuity` reports what the runtime's session owner
+decided for this request:
+
+- `state`: `fresh` (no prior native session), `resumed` (the request continues
+  an existing session), or `invalidated` (a stored native session binding was
+  discarded for this turn, so the model starts a replacement session).
+- `invalidatedReason`: optional runtime reason when `state` is `invalidated`.
+  CLI runtimes use their session-reuse reasons, such as `prompt-tools`,
+  `system-prompt`, `auth-profile`, `auth-epoch`, `mcp`, `cwd`,
+  `missing-transcript`, and `orphaned-tool-use`.
+- `history`: `included` when the host placed prior conversation in this
+  request (replayed history or a resume handoff), `withheld` when it sent only
+  a notice that earlier messages exist without their contents, and `none`
+  otherwise.
+
+The field contains no transcript content and grants no authority; it does not
+allow replaying history across an account or authentication boundary. Use it to
+restore plugin-owned context only when a turn needs it, for example:
+
+```typescript
+api.on(
+  "before_prompt_build",
+  async (event) =>
+    event.continuity?.state === "invalidated"
+      ? { prependContext: await loadPluginSummary() }
+      : undefined,
+  { requiresToolAuthority: true },
+);
+```
+
+CLI runtimes report all three states. Codex reports `fresh` or `resumed` from
+its native thread binding and `invalidated` when that binding is discarded
+before the turn starts: rotated away by the token limit, or replaced by a new
+thread when resuming fails. The embedded runtime owns its transcript and has no
+native binding, so it reports `fresh` or `resumed`. Other runtimes omit the
+field; omission means unknown. The ordinary prompt-build phase never receives
+it, because its tool restrictions are inputs to the reuse decision.
+
+The phase runs on every attempt, including each model fallback candidate. Each
+run reports that attempt's own continuity and receives that attempt's model,
+context budget, and tool authority, so handlers repeat their own model- and
+authority-keyed checks. A handler that wants to avoid repeated work across
+fallback candidates owns that cache and keys it on every input that changes its
+answer.
+
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
 with the first OpenClaw version they build against for this contract. Older
@@ -202,9 +261,17 @@ treat an unknown option as an ordinary pre-policy hook.
 
 On the embedded and CLI runners, `before_agent_run` runs after prompt
 construction and before model submission, including `llm_input` observation.
-On the embedded path it also precedes prompt-local image loading. It receives
-the current user input as `prompt`, plus loaded session history in `messages`
-and the active system prompt. Return `{ outcome: "block", reason, message? }`
+It receives the current user input as `prompt`, loaded session history in
+`messages`, the active system prompt, and prepared current-turn images in `images`.
+Image preparation, including prompt-local image paths, completes before this gate;
+the runner submits the same prepared image bytes after approval. The event is a
+copy, so mutating its images does not rewrite model input. `images: []` means no
+current-turn images; an absent field means an older host without this contract.
+Gateway worker turns expose Gateway-prepared images too; legacy worker turns do
+not expose a worker-local system prompt. Their history preparation reads the selected
+conversation branch, leaving inactive branches unloaded. Recorder-owned user input
+is persisted only after policy approval. Paired-node CLI sessions do not support
+images. This hook remains limited to runners that implement it. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
 supported; unsupported decision shapes are rejected.
@@ -295,6 +362,22 @@ cron, exec-event).
 older plugins. Core does not populate it; new channel-specific sender
 identities should live under `ctx.channelContext.sender` through module
 augmentation.
+
+`agent_end` reports what the finished run did:
+
+- `event.skillsUsed`: skills the run invoked by command or read from disk, each
+  with `name`, `source` (`bundled`, `workspace` or `unknown`) and `activation`
+  (`command` or `read`).
+- `event.modelIterations`: the number of model calls, when the runtime reports
+  it. Count assistant messages in `event.messages` when it is absent.
+- `ctx.toolNames`: the OpenClaw tools the model could call this turn, after
+  policy. Runtime-native tools, such as the Codex shell, are not listed. It is
+  absent for runtimes that cannot report it, such as CLI backends.
+- `ctx.completedTurn`: `{ sessionId, entryId }` of the transcript entry that
+  ended the turn. Pass it as `through` to `api.runtime.subagent.runForkedTurn`
+  to review the finished turn in the background. It is absent when the runtime
+  recorded no final entry, such as CLI backends or a turn superseded before it
+  finished.
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait
@@ -413,7 +496,7 @@ runtime or Codex. Legacy V1 runtimes, including Copilot, return
 without queueing the guidance. The API does not automatically enqueue a later
 turn; use the explicit fallback below when needed.
 
-Steering requires `plugins.entries.<id>.hooks.allowPromptInjection` (enabled
+Steering requires `plugins.entries.<id>.hooks.allowPromptModification` (enabled
 unless explicitly set to `false`) and a live plugin instance. Disabled prompt
 injection returns `steered: false`; an expired plugin instance cannot dispatch.
 The host and guarded runtime recheck the plugin instance before dispatch,

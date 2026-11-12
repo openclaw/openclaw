@@ -11,7 +11,7 @@ import {
 } from "./defaults.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { captureConfigResolutionFactsThroughRewrite } from "./resolution-facts.js";
-import { applySecurityPresetDefaults } from "./security-presets.js";
+import { projectSkillWorkshopPluginPolicy } from "./skill-workshop-plugin-migration.js";
 import { normalizeTalkConfig } from "./talk.js";
 import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./types.js";
 
@@ -41,7 +41,7 @@ export function materializeRuntimeConfig(
   } = {},
 ): RuntimeConfig {
   const carryResolutionFacts = captureConfigResolutionFactsThroughRewrite(config);
-  let next = applyMessageDefaults(applySecurityPresetDefaults(config));
+  let next = applyMessageDefaults(config);
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
   next = applyContextPruningDefaults(next, options);
@@ -51,6 +51,8 @@ export function materializeRuntimeConfig(
     loadManifestRegistry: options.loadManifestRegistry,
   });
   next = normalizeTalkConfig(next);
+  // Unmarked configs keep the built-in Workshop outcome until Doctor records the migration.
+  next = projectSkillWorkshopPluginPolicy(next).config;
   // Status can read a daemon's config from a different home. Capture that
   // resolution context once so nested paths cannot fall back to the CLI home.
   function normalizeAny(key: string | undefined, value: unknown): unknown {

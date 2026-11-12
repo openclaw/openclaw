@@ -41,6 +41,10 @@ import {
   listResolvedDirectoryUserEntriesFromAllowFrom,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  convertMarkdownTables,
+  resolveMarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
 import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-payload";
 import {
   createComputedAccountStatusAdapter,
@@ -363,7 +367,11 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       textChunkLimit: zaloTextChunkLimit,
       // Core strips only conservative runtime markers. This delivery profile also
       // removes model/tool XML and failed-tool traces before Zalo chunking.
-      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
+      sanitizeText: ({ text, cfg, accountId }) =>
+        convertMarkdownTables(
+          sanitizeAssistantVisibleText(text),
+          resolveMarkdownTableMode({ cfg, channel: "zalo", accountId }),
+        ),
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({
           ctx,

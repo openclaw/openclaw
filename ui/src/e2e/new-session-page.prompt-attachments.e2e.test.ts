@@ -34,6 +34,7 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const pngAttachment = { fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 };
+type QuotaProof = { rejectedWrites: number };
 
 function initialPromptResponses(sessionKey: string, runId: string, sessionId: string) {
   return {
@@ -69,7 +70,7 @@ async function withNewSessionPage(run: (page: Page) => Promise<void>): Promise<v
 }
 
 suite.define(() => {
-  it("restores a prompt and image in a fresh page, then clears them after creation", async () => {
+  it("restores a prompt, image and permission choice, then clears them after creation", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     try {
       const firstPage = await context.newPage();
@@ -92,7 +93,18 @@ suite.define(() => {
         "restore this prompt after restart and incognito",
         1,
       );
+      const permission = firstPage.locator('[data-chat-permission-select="true"]');
+      await permission.click();
+      await firstPage.locator('[data-chat-permission-option="read-only"]').click();
+      await pollAttribute(permission, "data-chat-select-value").toBe("read-only");
+      await waitForCommittedNewSessionDraft(
+        firstPage,
+        "restore this prompt after restart and incognito",
+        1,
+        "read-only",
+      );
       await firstPage.reload();
+      await pollAttribute(permission, "data-chat-select-value").toBe("read-only");
       await pollValue(firstMessage).toBe("restore this prompt after restart and incognito");
       await pollCount(firstPage.locator(".chat-attachment-thumb")).toBe(1);
       await firstPage.close();
@@ -107,11 +119,16 @@ suite.define(() => {
       const restoredMessage = restoredPage.locator(".new-session-page__message");
       await pollValue(restoredMessage).toBe("restore this prompt after restart and incognito");
       await pollCount(restoredPage.locator(".chat-attachment-thumb")).toBe(1);
+      await pollAttribute(
+        restoredPage.locator('[data-chat-permission-select="true"]'),
+        "data-chat-select-value",
+      ).toBe("read-only");
       await restoredPage.getByRole("button", { name: "Start session" }).click();
 
       const create = await restoredGateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
         message: "restore this prompt after restart and incognito",
+        permissionMode: "read-only",
         attachments: [{ ...pngAttachment, type: "image", mimeType: "image/png" }],
       });
       await restoredPage.waitForURL(
@@ -126,12 +143,16 @@ suite.define(() => {
       await clearedPage.goto(`${suite.server.baseUrl}new`);
       await pollValue(clearedPage.locator(".new-session-page__message")).toBe("");
       await pollCount(clearedPage.locator(".chat-attachment-thumb")).toBe(0);
+      await pollAttribute(
+        clearedPage.locator('[data-chat-permission-select="true"]'),
+        "data-chat-select-value",
+      ).toBe("");
     } finally {
       await context.close();
     }
   });
 
-  it("grows the first prompt downward without moving the identity, then caps at ten lines", async () => {
+  it("grows the first prompt downward to twelve lines, then scrolls internally", async () => {
     await withNewSessionPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.emulateMedia({ reducedMotion: "reduce" });
@@ -160,6 +181,8 @@ suite.define(() => {
         const style = getComputedStyle(element);
         return {
           height: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          viewportHeight: element.ownerDocument.defaultView!.innerHeight,
           lineHeight: Number.parseFloat(style.lineHeight),
           overflowY: style.overflowY,
           padding: Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom),
@@ -170,9 +193,15 @@ suite.define(() => {
       expect(tenLines.height).toBeGreaterThanOrEqual(
         Math.floor(tenLines.lineHeight * 10 + tenLines.padding) - 1,
       );
+      expect(tenLines.scrollHeight).toBe(tenLines.height);
       expect(tenLines.overflowY).toBe("hidden");
 
-      const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
+      // More text than even the whole viewport can hold must exceed the pane budget.
+      const overflowLines = Math.ceil(tenLines.viewportHeight / tenLines.lineHeight) + 1;
+      const longPrompt = Array.from(
+        { length: overflowLines },
+        (_, index) => `line ${index + 1}`,
+      ).join("\n");
       await message.fill(longPrompt);
       // Classic scrollbars retain their gutter at the cap to prevent draft-height oscillation.
       await expect
@@ -187,6 +216,8 @@ suite.define(() => {
         triggers.boundingBox(),
         composer.boundingBox(),
       ]);
+      expect(capped.clientHeight).toBeCloseTo(tenLines.lineHeight * 12 + tenLines.padding, 0);
+      expect(capped.clientHeight).toBeLessThan(tenLines.viewportHeight);
       expect(capped.clientHeight).toBeLessThan(capped.scrollHeight);
       // Browser subpixel rounding may shift stable blocks by a pixel; larger movement is visible.
       for (const [before, after] of [
@@ -666,10 +697,16 @@ suite.define(() => {
         const quota = recovery === "quota";
         if (quota) {
           await page.addInitScript(() => {
+            const proof: QuotaProof = { rejectedWrites: 0 };
+            (globalThis as unknown as { quotaProof: QuotaProof }).quotaProof = proof;
             const setItem = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem")
               ?.value as Storage["setItem"];
             Storage.prototype.setItem = function (key: string, value: string) {
-              if (key.startsWith("openclaw.control.chatComposer.v2:")) {
+              if (
+                this === window.sessionStorage &&
+                key.startsWith("openclaw.control.chatComposer.v4:")
+              ) {
+                proof.rejectedWrites += 1;
                 throw new DOMException("Quota exceeded", "QuotaExceededError");
               }
               return setItem.call(this, key, value);
@@ -716,6 +753,13 @@ suite.define(() => {
           timeout: 30_000,
         });
         await expectRejectedTurn(page, message, runError);
+        if (quota) {
+          expect(
+            await page.evaluate(
+              () => (globalThis as unknown as { quotaProof: QuotaProof }).quotaProof.rejectedWrites,
+            ),
+          ).toBeGreaterThan(0);
+        }
         if (!quota) {
           await page.reload();
           await expectRejectedTurn(page, message, runError);

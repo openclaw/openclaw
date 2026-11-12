@@ -15,19 +15,21 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   createControlUiMockBootstrapConfig,
-  canRunPlaywrightChromium,
   captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   refreshProductionControlUiE2e,
-  resolvePlaywrightChromiumExecutablePath,
   startProductionControlUiE2eServer,
   startCopiedProductionControlUiE2eServer,
   type ControlUiE2eProductionServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const useWebKit = process.env.OPENCLAW_CONTROL_UI_E2E_BROWSER === "webkit";
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const {
+  executablePath: chromiumExecutablePath,
+  available: chromiumAvailable,
+  wsEndpoint: chromiumWsEndpoint,
+} = inject("controlUiE2eChromium");
 let artifactDir: string;
 beforeEach(() => {
   if (captureUiProof) {
@@ -331,7 +333,7 @@ async function fetchControlledAsset(
 
 describe("Control UI service-worker production update E2E", () => {
   beforeAll(async () => {
-    if (!useWebKit && !canRunPlaywrightChromium(chromiumExecutablePath)) {
+    if (!useWebKit && !chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-service-worker-update-"));
@@ -348,7 +350,9 @@ describe("Control UI service-worker production update E2E", () => {
     await stageBuildB(`${outDir}-next`);
     browser = useWebKit
       ? await webkit.launch()
-      : await chromium.launch({ executablePath: chromiumExecutablePath });
+      : chromiumWsEndpoint
+        ? await chromium.connect(chromiumWsEndpoint, { timeout: 30_000 })
+        : await chromium.launch({ executablePath: chromiumExecutablePath });
   }, 180_000);
 
   afterAll(async () => {

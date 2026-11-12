@@ -1,7 +1,9 @@
 import type { RouteMatch } from "@openclaw/uirouter";
-import { For, Match, Switch } from "solid-js";
+import { For, Match, Show, Switch } from "solid-js";
+import { bootComposerElement } from "../../app/boot-composer.ts";
 import { HomeSessionUnavailable } from "../../components/home-session-unavailable.tsx";
 import { PanelErrorState } from "../../components/solid/lazy-view-error.tsx";
+import { LoadingSkeleton } from "../../components/solid/loading-skeleton.tsx";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "./chat-page.tsx";
@@ -41,7 +43,7 @@ export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
     const value = routeData();
     return value?.kind === "session" ? value : undefined;
   };
-  return (
+  const renderRoute = () => (
     <Switch>
       <Match when={ambiguous()}>
         {(data) => (
@@ -111,6 +113,23 @@ export function ChatRouteView(props: { data?: unknown; presented?: boolean }) {
         )}
       </Match>
     </Switch>
+  );
+  return (
+    <Show when={routeData() && !session() && bootComposerElement()} fallback={renderRoute()}>
+      {/* A terminal route result has no chat pane to take the early input. */}
+      <div class="lazy-view-state lazy-view-state--loading lazy-view-state--route" data-chat="">
+        <LoadingSkeleton
+          composer
+          header={false}
+          renderContent={() => (
+            <>
+              {renderRoute()}
+              <p class="muted">{t("chat.sessionRoute.bootDraftRecovery")}</p>
+            </>
+          )}
+        />
+      </div>
+    </Show>
   );
 }
 

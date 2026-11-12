@@ -9,7 +9,7 @@ import { DebugProxyCaptureKernel } from "../../proxy-capture/store.kernel.js";
 import {
   readSkillUsageInDatabase as readUsage,
   recordSkillUsageInDatabase as recordUsage,
-} from "../../skills/workshop/skill-usage.kernel.js";
+} from "../../skills/runtime/skill-usage.kernel.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,

@@ -111,7 +111,7 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
   return record;
 }
 
-/** Registry mutations invalidate a retained decision without rewriting its derived column. */
+/** Checkout/owner mutations invalidate deferrals; recording the failed outcome must not. */
 export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
   return JSON.stringify([
     record.path,
@@ -125,7 +125,6 @@ export function worktreeGcRevision(record: ManagedWorktreeRecord): string {
     record.lastActiveAt,
     record.removedAt,
     record.snapshotRef,
-    record.runEndCleanup,
   ]);
 }
 

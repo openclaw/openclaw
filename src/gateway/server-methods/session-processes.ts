@@ -43,7 +43,12 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
   const authority = readGatewayRequestMutationAuthority(options);
   const projection = requireSessionRowProjection(context);
   const queries = (cfg: ReturnType<typeof context.getRuntimeConfig>) => {
-    const agent = resolveRequestedSessionAgentId(cfg, input.key, input.agentId);
+    const agent = resolveRequestedSessionAgentId(
+      cfg,
+      input.key,
+      input.agentId,
+      stop ? "write" : "read",
+    );
     if (!agent.ok) {
       throw new SessionMutationAuthorizationChangedError(agent.error);
     }

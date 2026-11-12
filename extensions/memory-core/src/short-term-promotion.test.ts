@@ -2544,6 +2544,26 @@ describe("short-term promotion", () => {
   });
 
   describe("MEMORY.md budget compaction (#73691)", () => {
+    async function seedDeploymentWindowRecall(workspaceDir: string) {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
+        "Keep the Tuesday deployment window in durable memory.",
+      ]);
+      await recordMemoryRecalls(
+        workspaceDir,
+        "deployment window",
+        [
+          memoryRecallResult(
+            "memory/2026-04-29.md",
+            1,
+            1,
+            0.95,
+            "Keep the Tuesday deployment window in durable memory.",
+          ),
+        ],
+        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
+      );
+    }
+
     async function applyBudgetCompactionPromotion(workspaceDir: string) {
       const nowMs = Date.parse("2026-04-29T10:00:00.000Z");
       await recordRotateCredentialsRecall(workspaceDir);
@@ -2691,23 +2711,7 @@ describe("short-term promotion", () => {
     });
 
     it("defers promotion when preserved content leaves no room in the file budget", async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-        "Keep the Tuesday deployment window in durable memory.",
-      ]);
-      await recordMemoryRecalls(
-        workspaceDir,
-        "deployment window",
-        [
-          memoryRecallResult(
-            "memory/2026-04-29.md",
-            1,
-            1,
-            0.95,
-            "Keep the Tuesday deployment window in durable memory.",
-          ),
-        ],
-        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-      );
+      await seedDeploymentWindowRecall(workspaceDir);
       const ranked = await rankAllCandidates(workspaceDir);
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const oversizedBase = `# Long-Term Memory\n\n${"u".repeat(8_800)}\n`;
@@ -2741,23 +2745,7 @@ describe("short-term promotion", () => {
     });
 
     it("leaves prior promotions intact when fitting would exceed the loss limit", async (workspaceDir) => {
-      await writeDailyMemoryNote(workspaceDir, "2026-04-29", [
-        "Keep the Tuesday deployment window in durable memory.",
-      ]);
-      await recordMemoryRecalls(
-        workspaceDir,
-        "deployment window",
-        [
-          memoryRecallResult(
-            "memory/2026-04-29.md",
-            1,
-            1,
-            0.95,
-            "Keep the Tuesday deployment window in durable memory.",
-          ),
-        ],
-        { nowMs: Date.parse("2026-04-29T10:00:00.000Z") },
-      );
+      await seedDeploymentWindowRecall(workspaceDir);
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       const existing = ["2026-04-01", "2026-04-08", "2026-04-15", "2026-04-22"]
         .map(

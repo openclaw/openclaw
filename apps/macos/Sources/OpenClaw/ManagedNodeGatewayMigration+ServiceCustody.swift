@@ -111,13 +111,16 @@ extension ManagedNodeGatewayMigration {
         guard plist["WorkingDirectory"] == nil || plist["WorkingDirectory"] is String else {
             throw Failure(message: "The installed Gateway working directory could not be inspected.")
         }
-        let expectedCommand = [runtime.bun.path, entrypoint, "gateway", "--port", String(port)] +
+        // Restoration keeps a retained per-build Bun; new installs use the stable service path.
+        let executable = cli.prefix.first == runtime.serviceBun.resolvingSymlinksInPath().path
+            ? runtime.serviceBun.path : runtime.bun.path
+        let expectedCommand = [executable, entrypoint, "gateway", "--port", String(port)] +
             (allowUnconfigured ? ["--allow-unconfigured"] : [])
         // A failed writer may publish the service before committing its pin. Without that
         // binding, only the exact packaged installer command and profile working directory qualify.
         let allowsAbsentPin = allowMissingRuntimePin && command == expectedCommand && workingDirectory == state.path
         guard self.runtimePinMatchesInstallation(
-            claim.runtimePin, runtime: runtime, allowMissing: allowsAbsentPin),
+            claim.runtimePin, executable: executable, allowMissing: allowsAbsentPin),
             try await self.captureServiceCustody(profile: profile) == claim
         else {
             throw Failure(message: "Gateway service or runtime pin changed after Bun installation; it was preserved.")
@@ -127,11 +130,11 @@ extension ManagedNodeGatewayMigration {
 
     static func runtimePinMatchesInstallation(
         _ record: GatewayLaunchAgentManager.RuntimeIntent?,
-        runtime: BundledRuntime,
+        executable: String,
         allowMissing: Bool) -> Bool
     {
         guard let record else { return allowMissing }
         // The daemon reports known intent only after checking its binding to the current definition.
-        return record.pin?.runtime == "bun" && record.pin?.path == runtime.bun.path
+        return record.pin?.runtime == "bun" && record.pin?.path == executable
     }
 }

@@ -98,6 +98,11 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
       { assertCurrent: assertOwnerCurrent, authorize: assertOwnerCurrent },
     );
     if (memory) {
+      const assertRoutingCurrent = captureSessionMutationRouting(
+        options.getConfig(),
+        () => new WorkerDispatchTargetChangedError("Workspace recovery session owner changed"),
+        [{ ...identity, preserveQualifiedAddress: true }],
+      );
       const transcriptTarget = {
         ...captureSessionTranscriptTargetBinding({ ...identity, storePath: memory.path }),
         expectedLifecycleRevision: entry.lifecycleRevision,
@@ -105,10 +110,14 @@ export function createWorkerWorkspaceRecoveryPreparer(options: {
       };
       const assertCurrent = () => {
         assertOwnerCurrent();
-        resolved.assertCurrent(options.getConfig());
+        assertRoutingCurrent(options.getConfig());
+        const current = readCapturedSessionActorEntry(memory, identity.sessionKey);
+        // As with durable recovery, this writer may commit its own workspace handoff.
         if (
-          readCapturedSessionActorEntry(memory, identity.sessionKey)?.activeWriterRunId !==
-          entry.activeWriterRunId
+          current?.sessionId !== identity.sessionId ||
+          current.lifecycleRevision !== entry.lifecycleRevision ||
+          current.archivedAt !== entry.archivedAt ||
+          current.activeWriterRunId !== entry.activeWriterRunId
         ) {
           throw new WorkerDispatchTargetChangedError("Workspace recovery writer changed");
         }
@@ -197,7 +206,6 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
   sessionKey: string;
   agentId: string;
   executionMode: WorkerPlacementExecutionMode;
-  action: "activation" | "recovery";
   signal?: AbortSignal;
   run: (workspace: WorkerSessionWorkspace, assertCurrent: () => void) => T | Promise<T>;
 }): Promise<T> {
@@ -222,14 +230,14 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
           before && after
             ? runtimeEntryFields.every((field) => isDeepStrictEqual(before[field], after[field]))
             : before === after,
-        errorMessage: `Session ${params.sessionKey} changed before cloud worker ${params.action}. Retry.`,
+        errorMessage: `Session ${params.sessionKey} changed before cloud worker activation. Retry.`,
       });
       const { target: currentTarget, entry, workspace, assertCurrent } = resolved;
       params.signal?.throwIfAborted();
       assertCurrent(params.getConfig());
       if (entry.archivedAt !== undefined) {
         throw new WorkerDispatchTargetChangedError(
-          `Session ${params.sessionKey} was archived before cloud worker ${params.action}. Retry.`,
+          `Session ${params.sessionKey} was archived before cloud worker activation. Retry.`,
         );
       }
       const readRuntime = await params.sessionRuntime.prepareWorkerPlacementSessionRuntime({
@@ -249,7 +257,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
           params.executionMode
         ) {
           throw new WorkerDispatchTargetChangedError(
-            `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker ${params.action}. Retry.`,
+            `Session ${params.sessionKey} runtime changed to ${currentRuntime} before cloud worker activation. Retry.`,
           );
         }
       };

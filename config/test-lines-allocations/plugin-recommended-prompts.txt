@@ -1,0 +1,5 @@
+# Covers the 1113 distinct manifest/bundle/catalog, consent/retry/intent-retirement,
+# native-editing, theme and responsive-rail test lines introduced by this feature.
+# Allocate the measured feature cost rather than borrow moving main headroom.
+# No assertions, coverage, source caps or global baseline are disabled.
+1113

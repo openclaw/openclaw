@@ -1,6 +1,19 @@
 import type { SessionsDiffResult } from "../../packages/gateway-protocol/src/index.js";
 import type { ManagedWorktreeBranchesResult } from "../agents/worktrees/types.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
+import type { DiffReadTiming } from "./diff-read-timing.js";
+
+export type GitReadOptions = {
+  /** Refresh unversioned layouts; known revisions are always revalidated. */
+  refresh?: boolean;
+  /** Return the recorded picker facts while discovery finishes independently. */
+  snapshot?: boolean;
+  onRefresh?: () => void;
+  signal?: AbortSignal;
+  diffTiming?: DiffReadTiming;
+  /** Bound cold diff waits; share completed cold results for one second. */
+  poll?: boolean;
+};
 
 export type GitCheckoutContext = {
   /** Omitted host is the public GitHub default. */
@@ -25,7 +38,13 @@ type GitPullRequestBranchFacts = {
   stats: { additions: number; deletions: number; changedFiles: number } | null;
 };
 
-export type GitCheckoutDiffInput = { cwd: string; baseCommit?: string; summaryOnly?: boolean } & (
+export type GitCheckoutDiffInput = {
+  cwd: string;
+  baseCommit?: string;
+  summaryOnly?: boolean;
+  /** The session's persisted managed-worktree binding owns index stat refreshes. */
+  refreshIndex?: boolean;
+} & (
   | {
       scope?: "all" | "uncommitted";
       commit?: never;
@@ -55,13 +74,14 @@ export type GitReadOperations = {
       branch?: string;
       defaultBranch?: string;
       summaryOnly?: boolean;
+      refreshIndex?: boolean;
       /** Previously displayed paths whose Git attributes can affect the cached diff. */
       paths?: string[];
     };
     output: {
       key: string;
       /** A successful status inventory, tied to its physical checkout and HEAD. */
-      cleanWorktree?: { root: string; head: string };
+      worktreeStatus?: { root: string; head: string; clean: boolean; untrackedPaths: string[] };
     } | null;
   };
   "checkout.context": {

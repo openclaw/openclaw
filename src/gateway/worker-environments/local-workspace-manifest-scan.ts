@@ -1,6 +1,3 @@
-import { createHash } from "node:crypto";
-import { serialize } from "node:v8";
-import { deflateRawSync } from "node:zlib";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -12,6 +9,7 @@ import { stagedInputPathDirectory } from "../../media/staged-inputs.js";
 import { shellEscape } from "../../shared/shell-quote.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
+  decodeLocalWorkspaceTree,
   localWorkspaceDigestBytes,
   localWorkspaceDigestReference,
   prepareLocalWorkspaceTreePacks,
@@ -22,8 +20,11 @@ import {
 } from "./local-workspace-cas.kernel.js";
 import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
 import {
+  prepareLocalWorkspaceArchive,
+  localWorkspaceManifestDocument as manifestDocument,
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -33,23 +34,23 @@ import {
   type LocalWorkspaceManifestNode,
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
+import { prepareLocalWorkspaceUpdate } from "./local-workspace-publication.js";
 import type {
+  LocalWorkspaceCheckpointReceipt,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
-  LocalWorkspacePreparedUpdate,
 } from "./local-workspace-store.types.js";
+import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
-import {
-  parseWorkerWorkspaceManifest,
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifest,
-  type WorkspaceManifestPathPolicy,
-} from "./workspace-manifest.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  buildCacheInputPaths,
+  isIgnoredWorkspaceBuildOutput,
+} from "./workspace-path-exclusions.js";
 
 export type LocalWorkspaceBaselineDocument = {
   rawManifest: string;
@@ -58,7 +59,13 @@ export type LocalWorkspaceBaselineDocument = {
 };
 
 export type LocalWorkspaceManifestAction =
-  | { kind: "scan"; target: "canonical" | "projection"; canonicalRoot: string }
+  | {
+      kind: "scan" | "probe";
+      target: "canonical" | "projection";
+      canonicalRoot: string;
+      capture?: LocalWorkspaceCapture;
+    }
+  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
   | { kind: "materialize" }
   | { kind: "convert" }
   | { kind: "repair"; canonicalRoot: string }
@@ -81,6 +88,7 @@ export type LocalWorkspaceManifestInput = {
   id: string;
   revision: number;
   action: LocalWorkspaceManifestAction;
+  knownTreeRoot?: string;
 };
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
@@ -93,6 +101,16 @@ export function readLocalWorkspaceManifestRows(
 
 function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceManifestInput) {
   const query = getNodeSqliteKysely<DB>(db);
+  const target =
+    input.action.kind === "scan" || input.action.kind === "probe"
+      ? input.action.target
+      : input.action.kind === "archive"
+        ? "canonical"
+        : undefined;
+  // Conversion preserves admission; discovery and repair consume it. Other actions
+  // must not inflate inline/CAS path documents into the compressed worker snapshot.
+  const needsSourcePaths =
+    target !== undefined || input.action.kind === "convert" || input.action.kind === "repair";
   const row = executeSqliteQueryTakeFirstSync(
     db,
     query
@@ -101,14 +119,23 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "revision",
         "projection_path",
         "base_commit",
-        "source_paths_json",
         "baseline_json",
         "baseline_ref",
         "tree_root_digest",
         "source_paths_digest",
-        "canonical_fingerprints",
-        "projection_fingerprints",
         "pending_ref",
+      ])
+      // Keep the snapshot shape without materializing fingerprints this action never consumes.
+      .select((eb) => [
+        (needsSourcePaths ? eb.ref("source_paths_json") : eb.val("[]")).as("source_paths_json"),
+        (target === "projection" || input.action.kind === "scan"
+          ? eb.ref("canonical_fingerprints")
+          : eb.val(null)
+        ).as("canonical_fingerprints"),
+        (target === "canonical" || input.action.kind === "scan"
+          ? eb.ref("projection_fingerprints")
+          : eb.val(null)
+        ).as("projection_fingerprints"),
       ])
       .$if(input.action.kind === "repair", (builder) => builder.select("checkpoint_json"))
       .where("worktree_id", "=", input.id),
@@ -116,18 +143,26 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
   if (!row || row.revision !== input.revision) {
     throw new Error("Local workspace binding changed");
   }
-  if (row.source_paths_digest) {
+  if (needsSourcePaths && row.source_paths_digest) {
     row.source_paths_json = readLocalWorkspaceSourcePaths(db, row.source_paths_digest);
   }
-  let records = new Map<string, LocalWorkspaceManifestRecord>();
+  if (
+    row.tree_root_digest &&
+    input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
+    ["scan", "probe", "materialize", "archive"].includes(input.action.kind)
+  ) {
+    return { row, records: undefined };
+  }
+  let records: string[] = [];
   const replacing =
     input.action.kind === "replace" ||
     input.action.kind === "repair" ||
     (input.action.kind === "prepare" && input.action.manifest.replace);
-  if (row.tree_root_digest && !replacing) {
-    records = readLocalWorkspaceTree(db, row.tree_root_digest);
+  if (row.tree_root_digest && (!replacing || input.action.kind === "repair")) {
+    records = readLocalWorkspaceTree(db, row.tree_root_digest, {
+      allowMissing: input.action.kind === "repair",
+    });
   } else if (!row.baseline_json && !replacing) {
-    // Decode within the read scope; do not retain the JSON inventory beside its tree during scanning.
     for (const { node_json } of executeSqliteQuerySync(
       db,
       query
@@ -135,73 +170,25 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         .select("node_json")
         .where("worktree_id", "=", input.id),
     ).rows) {
-      // SAFETY: The workspace owner writes this internal record shape atomically with its root.
-      const record = JSON.parse(node_json) as LocalWorkspaceManifestRecord;
-      records.set(record.node.path, record);
+      records.push(node_json);
     }
   }
   return { row, records };
 }
 
-function manifestDocument(
-  nodes: Iterable<LocalWorkspaceManifestNode>,
-  baseCommit: string,
-  retained?: string[],
-  pathPolicy: WorkspaceManifestPathPolicy = "current",
-) {
-  const manifest: WorkerWorkspaceManifest = {
-    version: 1,
-    baseCommit,
-    entries: [],
-    directories: [],
-    ...(retained ? { buildCacheInputs: retained } : {}),
-  };
-  for (const node of nodes) {
-    if (node.type === "directory") {
-      manifest.directories!.push(node.path);
-    } else {
-      manifest.entries.push(node);
-    }
-  }
-  const rawManifest = serializeWorkerWorkspaceManifest(manifest, pathPolicy);
-  return {
-    rawManifest,
-    manifestRef: `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`,
-  };
-}
-
-function prepareUpdate(
-  mutation: Extract<LocalWorkspaceMutation, { kind: "update" }>,
-  preparations: Uint8Array[] = [],
-): LocalWorkspacePreparedUpdate {
-  const manifest = mutation.manifest;
-  const patch = {
-    ...mutation.patch,
-    ...(manifest ? { baseline_ref: manifest.resultingRoot, baseline_json: null } : {}),
-    ...(manifest?.treeRoot
-      ? { tree_root_digest: localWorkspaceDigestBytes(manifest.treeRoot) }
-      : {}),
-    ...(manifest?.fingerprints
-      ? {
-          [manifest.fingerprints.target === "canonical"
-            ? "canonical_fingerprints"
-            : "projection_fingerprints"]: Buffer.from(manifest.fingerprints.blob, "base64"),
-        }
-      : {}),
-  };
-  return {
-    revision: mutation.revision,
-    patch,
-    mutation: deflateRawSync(serialize({ ...mutation, patch })),
-    preparations,
-  };
-}
-
 export async function executeLocalWorkspaceManifestRead(
   snapshot: ReturnType<typeof readLocalWorkspaceManifestRows>,
   action: LocalWorkspaceManifestAction,
+  preparedRecords?: Map<string, LocalWorkspaceManifestRecord>,
 ): Promise<LocalWorkspaceManifestValue> {
   const { row } = snapshot;
+  if (!preparedRecords && !snapshot.records) {
+    throw new Error("Local workspace prepared baseline is unavailable");
+  }
+  const baselineRecords =
+    preparedRecords ?? decodeLocalWorkspaceTree(snapshot.records!, !row.tree_root_digest);
+  // The computation owns this snapshot; release text before retaining the tree across filesystem IO.
+  snapshot.records = [];
   if (action.kind === "repair") {
     if (!row.baseline_ref) {
       throw new Error("Local workspace repair requires its saved baseline reference");
@@ -212,9 +199,15 @@ export async function executeLocalWorkspaceManifestRead(
     const retained = buildCacheInputPaths(parseLocalWorkspaceSourcePaths(row.source_paths_json));
     // A pending receipt can name an intact result after both live sides have
     // moved beyond the baseline. Its saved delta can reconstruct the merge base.
-    const checkpoint = row.checkpoint_json
-      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+    const receipt = row.checkpoint_json
+      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint.
       : undefined;
+    const checkpoint =
+      receipt?.kind === "rejected"
+        ? receipt.checkpoint
+          ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: Preserved owner-written checkpoint.
+          : undefined
+        : receipt;
     const documents = checkpoint
       ? [
           parseWorkerWorkspaceManifest(
@@ -240,78 +233,130 @@ export async function executeLocalWorkspaceManifestRead(
             ]),
         )
       : [];
+    // Surviving saved-root records supply membership, not reconstructed content.
+    // Every candidate is scanned afresh and authenticated by the exact saved root.
+    const baselinePaths = new Set(baselineRecords.keys());
+    baselinePaths.delete("");
+    const knownDirectories = new Set(
+      [...baselineRecords.values()]
+        .filter(({ node }) => node.type === "directory" && node.path !== "")
+        .map(({ node }) => node.path),
+    );
+    // A checkpoint can retain empty ancestors whose physical contents are now excluded.
+    for (const node of documents[1]?.values() ?? []) {
+      if (node.type === "directory") {
+        knownDirectories.add(node.path);
+      }
+    }
+    let canonicalPaths: Set<string> | undefined;
     let scanFailure: unknown;
-    for (const root of [row.projection_path, action.canonicalRoot]) {
-      const nodes: LocalWorkspaceManifestNode[] = [];
-      try {
-        const includePaths =
-          root === action.canonicalRoot
-            ? await selectLocalWorkspaceCanonicalPaths({
-                root,
-                admittedPaths: row.source_paths_json,
-                assertCurrent: () => undefined,
-              })
-            : undefined;
-        if (includePaths) {
-          for (const document of documents) {
-            for (const entryPath of document.keys()) {
-              includePaths.add(entryPath);
+    // Older accepted roots can contain the pnpm fallback store. Try current
+    // membership first, then restore only that historical eligibility for repair.
+    for (const includeLegacyPnpmStore of [false, true]) {
+      let projectionPaths: Set<string> | undefined;
+      let projectionDirectories: Set<string> | undefined;
+      for (const candidate of [
+        "projection",
+        "canonical",
+        "canonicalWithProjectionPaths",
+      ] as const) {
+        const extendCanonical = candidate === "canonicalWithProjectionPaths";
+        if (extendCanonical && !projectionPaths) {
+          continue;
+        }
+        const root = candidate === "projection" ? row.projection_path : action.canonicalRoot;
+        const nodes: LocalWorkspaceManifestNode[] = [];
+        try {
+          let includePaths: Set<string> | undefined;
+          const preserveDirectories = new Set(knownDirectories);
+          if (candidate !== "projection") {
+            canonicalPaths ??= await selectLocalWorkspaceCanonicalPaths({
+              root,
+              admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
+              baselinePaths,
+              assertCurrent: () => undefined,
+            });
+            includePaths = new Set(canonicalPaths);
+            // Keep the original canonical candidate first: a later guest addition
+            // can share a name with unrelated host-only bytes.
+            if (extendCanonical) {
+              for (const entryPath of projectionPaths!) {
+                includePaths.add(entryPath);
+              }
+              for (const entryPath of projectionDirectories!) {
+                preserveDirectories.add(entryPath);
+              }
+            }
+            for (const document of documents) {
+              for (const entryPath of document.keys()) {
+                includePaths.add(entryPath);
+              }
             }
           }
+          await scanActualWorkspaceManifest({
+            root,
+            baseCommit: row.base_commit,
+            includePaths,
+            preserveDirectories,
+            buildCacheInputs: retained,
+            includeLegacyPnpmStore,
+            onEntry: (node) => nodes.push(node),
+          });
+        } catch (error) {
+          scanFailure = error;
+          continue;
         }
-        await scanActualWorkspaceManifest({
-          root,
-          baseCommit: row.base_commit,
-          includePaths,
-          buildCacheInputs: retained,
-          onEntry: (node) => nodes.push(node),
-        });
-      } catch (error) {
-        scanFailure = error;
-        continue;
-      }
-      const records = createLocalWorkspaceManifestTree(nodes);
-      if (
-        checkpoint &&
-        records.get("")!.treeRef === checkpoint.treeRoot &&
-        expectedRoot === checkpoint.previousTreeRoot
-      ) {
-        const [base, result] = documents;
-        updateLocalWorkspaceManifestTree(
-          records,
-          [...new Set([...base!.keys(), ...result!.keys()])].map((entryPath) => ({
-            path: entryPath,
-            node: base!.get(entryPath),
-          })),
-        );
-      }
-      const treeRoot = records.get("")!.treeRef;
-      const repairedNodes = [...records.values()]
-        .map(({ node }) => node)
-        .filter((node) => node.path !== "");
-      const rebuiltRoot = row.tree_root_digest
-        ? treeRoot
-        : row.baseline_json
-          ? manifestDocument(repairedNodes, row.base_commit, undefined, "stored").manifestRef
-          : localWorkspaceManifestRootReference(records, row.base_commit);
-      // Reconstruct only the exact saved merge base. Divergent live files remain edits.
-      if (rebuiltRoot === expectedRoot) {
-        return {
-          kind: "replace",
-          update: prepareUpdate(
-            {
-              kind: "update",
-              revision: row.revision,
-              patch: {
-                tree_root_digest: localWorkspaceDigestBytes(treeRoot),
-                ...(!row.tree_root_digest && !row.pending_ref ? { baseline_json: null } : {}),
-                canonical_fingerprints: null,
-                projection_fingerprints: null,
+        if (candidate === "projection") {
+          // Failed scans never contribute partial hints. Names only select a later
+          // candidate; they do not enroll files or change source admission.
+          projectionPaths = new Set(nodes.map((node) => node.path));
+          projectionDirectories = new Set(
+            nodes.filter((node) => node.type === "directory").map((node) => node.path),
+          );
+        }
+        const records = createLocalWorkspaceManifestTree(nodes);
+        if (
+          checkpoint &&
+          records.get("")!.treeRef === checkpoint.treeRoot &&
+          expectedRoot === checkpoint.previousTreeRoot
+        ) {
+          const [base, result] = documents;
+          updateLocalWorkspaceManifestTree(
+            records,
+            [...new Set([...base!.keys(), ...result!.keys()])].map((entryPath) => ({
+              path: entryPath,
+              node: base!.get(entryPath),
+            })),
+          );
+        }
+        const treeRoot = records.get("")!.treeRef;
+        const repairedNodes = [...records.values()]
+          .map(({ node }) => node)
+          .filter((node) => node.path !== "");
+        const rebuiltRoot = row.tree_root_digest
+          ? treeRoot
+          : row.baseline_json
+            ? manifestDocument(repairedNodes, row.base_commit, undefined, "stored").manifestRef
+            : localWorkspaceManifestRootReference(records, row.base_commit);
+        // Reconstruct only the exact saved merge base. Divergent live files remain edits.
+        if (rebuiltRoot === expectedRoot) {
+          return {
+            kind: "replace",
+            update: prepareLocalWorkspaceUpdate(
+              {
+                kind: "update",
+                revision: row.revision,
+                patch: {
+                  tree_root_digest: localWorkspaceDigestBytes(treeRoot),
+                  ...(!row.tree_root_digest && !row.pending_ref ? { baseline_json: null } : {}),
+                  canonical_fingerprints: null,
+                  projection_fingerprints: null,
+                },
               },
-            },
-            prepareLocalWorkspaceTreePacks(records),
-          ),
-        };
+              prepareLocalWorkspaceTreePacks(records),
+            ),
+          };
+        }
       }
     }
     throw new Error(
@@ -356,14 +401,14 @@ export async function executeLocalWorkspaceManifestRead(
     // Keep the full tree between workers; the host publishes only the accepted root.
     return {
       kind: "replace",
-      update: prepareUpdate(mutation, prepareLocalWorkspaceTreePacks(records)),
+      update: prepareLocalWorkspaceUpdate(mutation, prepareLocalWorkspaceTreePacks(records)),
     };
   }
   if (action.kind === "materialize" && row.baseline_json && row.baseline_ref) {
     // Pending legacy receipts name these exact bytes until acceptance migrates them.
     return { kind: "materialize", rawManifest: row.baseline_json, manifestRef: row.baseline_ref };
   }
-  let { records } = snapshot;
+  let records = baselineRecords;
   const replacing = action.kind === "prepare" && action.manifest.replace;
   if (replacing) {
     records = new Map(action.manifest.records.map((record) => [record.node.path, record]));
@@ -404,7 +449,7 @@ export async function executeLocalWorkspaceManifestRead(
     }
     return {
       kind: "replace",
-      update: prepareUpdate(
+      update: prepareLocalWorkspaceUpdate(
         {
           kind: "update",
           revision: row.revision,
@@ -432,7 +477,7 @@ export async function executeLocalWorkspaceManifestRead(
     }
     return {
       kind: "replace",
-      update: prepareUpdate(
+      update: prepareLocalWorkspaceUpdate(
         {
           kind: "update",
           revision: row.revision,
@@ -464,26 +509,42 @@ export async function executeLocalWorkspaceManifestRead(
   }
 
   // The host index is authoritative for every operation. Guest Git metadata is never read.
+  const target = action.kind === "archive" ? "canonical" : action.target;
   const canonicalPaths = await selectLocalWorkspaceCanonicalPaths({
     root: action.canonicalRoot,
-    admittedPaths: row.source_paths_json,
+    admittedPaths: parseLocalWorkspaceSourcePaths(row.source_paths_json),
     // This read has no effects; the lease owner revalidates before using its result.
     assertCurrent: () => undefined,
   });
   const retained = [...buildCacheInputPaths(canonicalPaths)];
+  const capture = action.kind === "scan" ? action.capture : undefined;
+  const root =
+    capture?.root ?? (target === "canonical" ? row.projection_path : action.canonicalRoot);
+  const gitIgnore = await readLocalWorkspaceGitExclusions(
+    action.canonicalRoot,
+    root,
+    canonicalPaths,
+  );
+  const includePaths = target === "projection" ? new Set(canonicalPaths) : undefined;
+  const excluded = new Set<string>();
   const preserveDirectories = new Set<string>();
   for (const [entryPath, { node }] of records) {
     if (entryPath === "") {
       continue;
     }
+    if (
+      !canonicalPaths.has(entryPath) &&
+      isIgnoredWorkspaceBuildOutput(entryPath, gitIgnore.paths)
+    ) {
+      excluded.add(entryPath);
+      continue;
+    }
     if (node.type === "directory") {
       preserveDirectories.add(entryPath);
     }
-    if (action.target === "projection") {
-      canonicalPaths.add(entryPath);
-    }
+    includePaths?.add(entryPath);
   }
-  const fingerprintTarget = action.target === "canonical" ? "projection" : "canonical";
+  const fingerprintTarget = target === "canonical" ? "projection" : "canonical";
   const previousFingerprints =
     fingerprintTarget === "canonical" ? row.canonical_fingerprints : row.projection_fingerprints;
   const seen = new Set<string>();
@@ -491,36 +552,69 @@ export async function executeLocalWorkspaceManifestRead(
   const previousTreeRoot = row.tree_root_digest
     ? localWorkspaceDigestReference(row.tree_root_digest)
     : null;
-  const scanStartedAtMs = Date.now();
+  const scanStartedAtMs = capture?.capturedAtMs ?? Date.now();
   const fingerprintScan = prepareLocalWorkspaceFingerprints(
     records,
     previousTreeRoot ?? records.get("")!.treeRef,
     previousTreeRoot ? previousFingerprints : null,
     scanStartedAtMs,
+    capture,
   );
-  await scanActualWorkspaceManifest({
-    root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
-    baseCommit: row.base_commit,
-    includePaths: action.target === "projection" ? canonicalPaths : undefined,
-    preserveDirectories,
-    buildCacheInputs: new Set(retained),
-    reuseFile: fingerprintScan.reuseFile,
-    onEntry(node, identity) {
-      seen.add(node.path);
-      const previous = records.get(node.path);
-      if (!sameEntry(previous?.node, node)) {
-        changes.push({ path: node.path, node });
-      }
-      if (identity !== undefined) {
-        fingerprintScan.observe(node.path, identity);
-      }
-    },
-  });
+  const changedDuringProbe = new Error("Workspace changed during reuse probe");
+  try {
+    await scanActualWorkspaceManifest({
+      root,
+      baseCommit: row.base_commit,
+      includePaths,
+      gitIgnore,
+      preserveDirectories,
+      buildCacheInputs: new Set(retained),
+      reuseFile: fingerprintScan.reuseFile,
+      unchangedProbe: action.kind === "probe",
+      btrfsSnapshot: capture !== undefined,
+      onEntry(node, identity) {
+        seen.add(node.path);
+        const previous = records.get(node.path);
+        if (!sameEntry(previous?.node, node)) {
+          if (action.kind === "probe") {
+            throw changedDuringProbe;
+          }
+          changes.push({ path: node.path, node });
+        }
+        if (identity !== undefined) {
+          fingerprintScan.observe(node.path, identity);
+        }
+      },
+    });
+  } catch (error) {
+    if (error === changedDuringProbe) {
+      return { kind: "rescan", entryCount: records.size };
+    }
+    throw error;
+  }
   for (const entryPath of records.keys()) {
     if (entryPath !== "" && !seen.has(entryPath)) {
+      if (action.kind === "probe") {
+        return { kind: "rescan", entryCount: records.size };
+      }
       changes.push({ path: entryPath });
     }
   }
+  if (action.kind === "archive") {
+    // The accepted tree owns membership. Verify live bytes in the worker without
+    // serializing that tree just to parse and validate it again on the host.
+    if (changes.length) {
+      throw new Error("Local workspace changed before archive capture");
+    }
+    return await prepareLocalWorkspaceArchive({
+      root: action.archiveRoot,
+      snapshotCommit: action.snapshotCommit,
+      records,
+      baseCommit: row.base_commit,
+      buildCacheInputs: retained,
+    });
+  }
+
   const inspected = new Set<string>();
   for (const change of changes) {
     inspected.add(change.path);
@@ -539,10 +633,25 @@ export async function executeLocalWorkspaceManifestRead(
   const previousNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
     const previous = records.get(entryPath);
-    if (previous) {
+    // Old captures may own ignored build outputs. Retire their membership, not
+    // their files: omitting both delta sides must never synthesize a deletion.
+    if (previous && !excluded.has(entryPath)) {
       previousNodes.push(previous.node);
     }
   }
+  // Capture the target's old slot layout before advancing the shared tree. Only acceptance
+  // publishes these hints; changed paths must acquire new identities on their next scan.
+  const oppositeFingerprints =
+    changes.length && previousTreeRoot
+      ? prepareLocalWorkspaceFingerprints(
+          records,
+          previousTreeRoot,
+          fingerprintTarget === "canonical"
+            ? row.projection_fingerprints
+            : row.canonical_fingerprints,
+          scanStartedAtMs,
+        )
+      : undefined;
   const delta = updateLocalWorkspaceManifestTree(records, changes);
   const currentNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
@@ -551,7 +660,7 @@ export async function executeLocalWorkspaceManifestRead(
       currentNodes.push(current.node);
     }
   }
-  const base = manifestDocument(previousNodes, row.base_commit, retained);
+  const base = manifestDocument(previousNodes, row.base_commit, retained, "stored");
   const current = manifestDocument(currentNodes, row.base_commit, retained);
   const replace = row.tree_root_digest === null;
   const treeRoot = records.get("")!.treeRef;
@@ -565,13 +674,23 @@ export async function executeLocalWorkspaceManifestRead(
     blob && changedFingerprint
       ? { target: fingerprintTarget, blob: blob.toString("base64") }
       : undefined;
+  if (fingerprints && oppositeFingerprints) {
+    const rebound = oppositeFingerprints.encode(
+      records,
+      treeRoot,
+      new Set(changes.map(({ path }) => path)),
+    );
+    if (rebound) {
+      fingerprints.oppositeBlob = rebound.toString("base64");
+    }
+  }
   const admitted = retained.length ? parseLocalWorkspaceSourcePaths(row.source_paths_json) : [];
   const known = new Set(admitted);
   const added = retained.filter((entryPath) => !known.has(entryPath));
   const unchanged = resultingRoot === row.baseline_ref;
   const observation =
     added.length || (unchanged && changedFingerprint)
-      ? prepareUpdate({
+      ? prepareLocalWorkspaceUpdate({
           kind: "update",
           revision: row.revision,
           patch: {
@@ -597,7 +716,10 @@ export async function executeLocalWorkspaceManifestRead(
     preparations:
       treeRoot === previousTreeRoot
         ? []
-        : prepareLocalWorkspaceTreePacks(records, replace ? records.values() : delta.records),
+        : prepareLocalWorkspaceTreePacks(
+            records,
+            replace ? undefined : [...delta.records.map(({ node }) => node.path), ...delta.removed],
+          ),
     records: [],
     observation,
     removed: [],

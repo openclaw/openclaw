@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -101,7 +102,9 @@ describe("chat delivery watermark preparation", () => {
       const observed = observeHostDataSql();
       try {
         const start = manager[sessionManagerReadTranscriptStart]();
+        using realpath = vi.spyOn(fs.realpathSync, "native");
         expect(dispatch.captureAgentTranscriptStart(runId, start)).toBe(true);
+        expect(realpath).not.toHaveBeenCalled();
         expect(
           observed.queries.filter((sql) =>
             /transcript_events|transcript_rewrite_watermarks|session_transcript_cold_archives/i.test(

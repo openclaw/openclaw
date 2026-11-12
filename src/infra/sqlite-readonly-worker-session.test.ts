@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
@@ -290,6 +291,36 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
     expect(late).not.toHaveBeenCalled();
   } finally {
     await Promise.all([owner.close(), other.close()]);
+  }
+});
+
+it("releases callers of close while retired read scopes remain reachable", async () => {
+  class RetiredCaller {
+    closed = false;
+  }
+  const callers: WeakRef<RetiredCaller>[] = [];
+  async function retire() {
+    const owner = createSqliteReadOnlyWorkerScope();
+    const caller = new RetiredCaller();
+    callers.push(new WeakRef(caller));
+    const beforeCleanup = () => {
+      caller.closed = true;
+      return owner.close();
+    };
+    await beforeCleanup();
+    return owner;
+  }
+  const retired = [];
+  for (let generation = 0; generation < 20; generation++) {
+    retired.push(await retire());
+  }
+  await expectCollected(...callers);
+  for (const owner of retired) {
+    const signal = owner.run(() => resolveSqliteInspectionSignal());
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toMatchObject({ code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED" });
+    const captured = owner.run(captureSqliteReadOnlyWorkerScope);
+    expect(() => captured(() => "late")).toThrow("SQLite read-only worker scope closed");
   }
 });
 

@@ -13,7 +13,7 @@
   min-height: 32px;
   padding: 4px 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -99,7 +99,7 @@
 
 .chat-outputs__group {
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--mobile-list-surface, color-mix(in srgb, var(--popover) 95%, var(--text) 5%));
 }
 

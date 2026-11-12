@@ -27,6 +27,23 @@ export type OpenClawPluginNodeWorkspace = {
   sessionKey: string;
 };
 
+export type OpenClawPluginNodeWorkspaceLease = {
+  workspaceDir: string;
+  /**
+   * Stable HOME owned by this workspace binding. Runtime-private metadata belongs
+   * under .openclaw-worker so the existing retention owner collects it on retirement.
+   */
+  homeDir?: string;
+  release: () => void;
+  /** Host-local provider custody, bound to this lease and invocation; never a wire environment override. */
+  processEnvironment?: {
+    prepare: (sanitizedEnv: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+    /** Revalidate synchronously at the final process effect after awaited preparation. */
+    assertCurrent: () => void;
+    redactOutput: (text: string) => string;
+  };
+};
+
 export type OpenClawPluginNodeHostCommandContext = {
   /** Emit one node-owned event through the active Gateway connection. */
   sendNodeEvent(event: string, payload: unknown): Promise<unknown>;
@@ -44,11 +61,9 @@ export type OpenClawPluginNodeHostCommandContext = {
     release: () => void;
   };
   /** Protect an exact node-owned workspace after durable worker-backed binding validation. */
-  acquireManagedWorkspaceAsync?: (request: OpenClawPluginNodeWorkspace) => Promise<{
-    workspaceDir: string;
-    homeDir?: string;
-    release: () => void;
-  }>;
+  acquireManagedWorkspaceAsync?: (
+    request: OpenClawPluginNodeWorkspace,
+  ) => Promise<OpenClawPluginNodeWorkspaceLease>;
 };
 
 type OpenClawPluginNodeHostCommandBase = {

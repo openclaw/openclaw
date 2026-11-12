@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveUsableAgentCredentialModes } from "../../agents/agent-auth-credentials.js";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import {
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -25,6 +26,7 @@ import {
   createOpenAiCodexOauthHealthSummary,
   createStaticApiKeyProvider,
   healthProfile,
+  oauthCredential,
 } from "./models-auth-status.health.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -133,6 +135,8 @@ import { modelsAuthOrderHandlers } from "./models-auth-order.js";
 import { clearModelAuthStatusUsageCache } from "./models-auth-status-usage-cache.js";
 import { modelsAuthStatusHandlers } from "./models-auth-status.js";
 import { registerModelAuthLogoutTests } from "./models-auth-status.logout.test-support.js";
+import { registerModelAuthOrderTests } from "./models-auth-status.order.test-support.js";
+import { registerModelAuthSetApiKeyTests } from "./models-auth-status.set-api-key.test-support.js";
 import type { ModelAuthStatusResult } from "./models-auth-status.types.js";
 import { registerModelAuthStatusUsageRefreshTests } from "./models-auth-status.usage-refresh.test-support.js";
 
@@ -164,20 +168,6 @@ const orderHandler = expectDefined(
   modelsAuthOrderHandlers["models.authOrderSet"],
   "auth-order handler",
 );
-
-function oauthCredential(
-  provider: string,
-  overrides: Partial<Extract<AuthProfileStore["profiles"][string], { type: "oauth" }>> = {},
-) {
-  return {
-    type: "oauth" as const,
-    provider,
-    access: "access",
-    refresh: "refresh",
-    expires: 1_000_000,
-    ...overrides,
-  };
-}
 
 function mockHealthProvider(provider: AuthHealthSummary["providers"][number], now = 0) {
   mockHealthProviders([provider], now);
@@ -224,6 +214,7 @@ function createOrderOptions(params: Record<string, unknown>): RespondOptions {
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 let preparedAuthStore: AuthProfileStore = { version: 1, profiles: {} };
 let preparedMetadataSnapshot: unknown;
+const isPreparedOwnerCurrent = () => true;
 
 function setPreparedAuthStore(store: RuntimeAuthProfileStore): void {
   preparedAuthStore = store;
@@ -254,6 +245,7 @@ function createPreparedOwnerSnapshot(agentId: string) {
     authStore: preparedAuthStore,
     authMaterializations: [],
     metadataSnapshot: preparedMetadataSnapshot as never,
+    isCurrent: isPreparedOwnerCurrent,
   };
 }
 
@@ -1017,113 +1009,15 @@ describe("models.authStatus", () => {
   });
 });
 
-describe("models.authOrderSet", () => {
-  beforeEach(() => {
-    setPreparedProfiles({
-      "openai:one": oauthCredential("openai", { access: "one", refresh: "one-refresh" }),
-      "openai:two": oauthCredential("openai", { access: "two", refresh: "two-refresh" }),
-    });
-  });
-
-  it("publishes the durable order before acknowledging it", async () => {
-    const publication = createDeferred();
-    const started = createDeferred();
-    mocks.prepareModelRuntimeSnapshot.mockImplementationOnce(() => {
-      started.resolve();
-      return publication.promise;
-    });
-    const opts = createOrderOptions({
-      provider: "openai",
-      profileIds: ["openai:two", "openai:one"],
-    });
-
-    const pending = orderHandler(opts);
-    await started.promise;
-
-    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent",
-      provider: "openai",
-      order: ["openai:two", "openai:one"],
-    });
-    expect(opts.respond).not.toHaveBeenCalled();
-
-    publication.resolve();
-    await pending;
-    expect(firstRespondCall(opts)?.slice(0, 2)).toEqual([
-      true,
-      { provider: "openai", profileIds: ["openai:two", "openai:one"] },
-    ]);
-  });
-
-  it("preserves the committed reset when runtime publication fails", async () => {
-    mocks.prepareModelRuntimeSnapshot.mockRejectedValueOnce(new Error("publication failed"));
-    const opts = createOrderOptions({ provider: "openai" });
-    await orderHandler(opts);
-    expect(mocks.setAuthProfileOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/agent",
-      provider: "openai",
-      order: null,
-    });
-    expectSuccess(opts, {
-      provider: "openai",
-      profileIds: null,
-      warning: expect.stringContaining("Profile priority saved"),
-    });
-  });
-
-  it.each([
-    {
-      params: { provider: "openai", profileIds: ["openai:two", "openai:one"] },
-      config: { auth: { order: { openai: ["openai:one", "openai:two"] } } },
-      message: "auth configuration",
-    },
-    {
-      params: { provider: "openai", profileIds: ["openai:one"] },
-      message: "every available profile",
-    },
-    {
-      params: { provider: "anthropic", profileIds: ["openai:one"] },
-      message: "unavailable for provider anthropic",
-    },
-    {
-      params: { provider: "openai", unexpected: true },
-      message: "invalid models.authOrderSet params",
-    },
-  ])("rejects invalid profile priority without writing: $message", async (scenario) => {
-    if (scenario.config) {
-      mocks.getRuntimeConfig.mockReturnValue(scenario.config);
-    }
-    const opts = createOrderOptions(scenario.params);
-    await orderHandler(opts);
-    expect(mocks.setAuthProfileOrder).not.toHaveBeenCalled();
-    expect(firstRespondCall(opts)?.[0]).toBe(false);
-    expect(firstRespondCall(opts)?.[2]?.message).toContain(scenario.message);
-  });
+registerModelAuthOrderTests({
+  mocks,
+  setPreparedProfiles,
+  createOrderOptions,
+  orderHandler,
+  expectSuccess,
 });
 
-it("models.authSetApiKey reports both application and refresh warnings after saving", async () => {
-  const config = { agents: { entries: { main: {}, writer: {} } } };
-  const warning = "Provider settings were saved but not applied.";
-  mocks.getRuntimeConfig.mockReturnValue(config);
-  mocks.listAgentIds.mockReturnValue(["main", "writer"]);
-  mocks.saveModelProviderApiKey.mockResolvedValueOnce({ profileId: "openrouter:manual", warning });
-  mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(new Error("refresh failed"));
-  const opts = createOptions({ provider: "OpenRouter", apiKey: "test-key", agentId: "Writer" });
-  await setApiKeyHandler(opts);
-  expect(mocks.saveModelProviderApiKey).toHaveBeenCalledWith({
-    config,
-    provider: "openrouter",
-    apiKey: "test-key",
-    agentDir: "/tmp/agent-writer",
-  });
-  expectSuccess(opts, {
-    provider: "openrouter",
-    profileId: "openrouter:manual",
-    warning: expect.any(String),
-  });
-  expect(firstRespondCall(opts)?.[1]?.warning).toContain(warning);
-  expect(firstRespondCall(opts)?.[1]?.warning).toContain("openclaw gateway restart");
-});
+registerModelAuthSetApiKeyTests({ mocks, createOptions, setApiKeyHandler });
 
 registerModelAuthLogoutTests({
   mocks,
@@ -1138,4 +1032,41 @@ registerModelAuthLogoutTests({
   oauthCredential,
 });
 
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+it.each([["operator.admin"], ["operator.read"]])(
+  "projects prepared native billing metadata without a saved account (%s)",
+  async (scope) => {
+    const snapshot = createPreparedOwnerSnapshot("main");
+    mocks.readPreparedCatalog.mockResolvedValue({
+      ...snapshot,
+      authModes: resolveUsableAgentCredentialModes({
+        "claude-cli": {
+          type: "api_key",
+          key: "synthetic-native-presence",
+          nativeAuth: {
+            runtime: "claude-cli",
+            mode: "oauth",
+            display: { kind: "subscription", plan: "Max" },
+          },
+        },
+      }),
+    });
+    const options = createOptions({}, [scope]);
+    await handler(options);
+    expectSuccess(
+      options,
+      expect.objectContaining({
+        providers: [
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "ok",
+            profiles: [],
+            nativeAuth: { kind: "subscription", plan: "Max" },
+          },
+        ],
+      }),
+    );
+    expect(preparedAuthStore.profiles).toEqual({});
+    expect(mocks.loadDeferredCatalog).not.toHaveBeenCalled();
+  },
+);

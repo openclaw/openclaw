@@ -25,10 +25,19 @@ export const UPDATE_CANDIDATE_STARTUP_FAILURES = [
   ],
 ] as const;
 
-// Public descriptions are fixed text: registry responses and local paths stay local.
+// Public descriptions contain only platform facts: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
-  "gateway-stop-unverified":
-    "Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through its service manager, its original terminal, or openclaw gateway stop, then rerun openclaw update. No package replacement was attempted.",
+  get "gateway-stop-unverified"() {
+    const manager =
+      process.platform === "linux"
+        ? "its systemd user/system unit"
+        : process.platform === "darwin"
+          ? "launchd"
+          : process.platform === "win32"
+            ? "Task Scheduler"
+            : "its service manager";
+    return `Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through ${manager}, its original terminal, or openclaw gateway stop, then rerun openclaw update. Run openclaw gateway status --deep --json to inspect the service failure. No package replacement was attempted.`;
+  },
   "windows-task-elevation-required":
     "Windows Task Scheduler requires elevated access for this Gateway task. Rerun openclaw update from an elevated terminal (Run as administrator).",
   "windows-task-inspection-timeout":

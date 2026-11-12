@@ -1,0 +1,2 @@
+# Fake-timer reconnect/shutdown regressions and synchronous socket-close fallback coverage.
+67

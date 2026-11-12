@@ -40,8 +40,11 @@ vi.mock("../cli-credentials.js", () => ({
   readMiniMaxCliCredentialsCached: () => null,
 }));
 
+// mock-isolation: OAuth store fixtures do not discover installed provider hints.
+vi.mock("./doctor.js", () => ({ formatAuthDoctorHint: async () => "" }));
+
+// mock-isolation: OAuth fixtures control credentials without initializing installed provider runtimes.
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  buildProviderAuthDoctorHintWithPlugin: async () => null,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
   resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
@@ -69,6 +72,7 @@ afterAll(() => {
   vi.doUnmock("../../llm/oauth.js");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("./doctor.js");
   vi.doUnmock("../../plugins/provider-external-auth-core.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
   vi.resetModules();

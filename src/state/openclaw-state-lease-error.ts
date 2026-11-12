@@ -1,4 +1,15 @@
-import { formatStateLeaseLoss, type StateLeaseLoss } from "../shared/state-lease-loss.js";
+import { extractErrorCode, toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
+import { formatStateLeaseLoss } from "../shared/state-lease-loss-format.js";
+import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
+
+/** Renewal diagnostics omit error prose, stacks, and database paths. */
+export function formatLeaseRenewalError(error: unknown): string {
+  const name = toErrorObject(error, "State lease renewal failed").name;
+  const code = extractErrorCode(error);
+  const safeCode = code && /^[A-Za-z0-9_-]{1,64}$/u.test(code) ? code : "unknown";
+  return `errorName=${/^[A-Za-z][A-Za-z0-9_.]{0,63}$/u.test(name) ? name : "unknown"}, errorCode=${safeCode}${formatSqliteErrorCodeSuffix(error)}`;
+}
 
 export type OpenClawStateLeaseErrorCode =
   | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
@@ -90,7 +101,7 @@ export function createOpenClawStateLeaseLostError(
   const diagnostic =
     loss?.reason === "expired" && lateByMs > 0 ? { ...loss, renewalTimerLateByMs: lateByMs } : loss;
   return new OpenClawStateLeaseError(
-    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}`,
+    `${identity.leaseLabel ?? "state lease"} ${identity.scope}/${identity.key} was lost${diagnostic ? ` (${formatStateLeaseLoss(diagnostic)})` : ""}; retry the operation`,
     { code: "OPENCLAW_STATE_LEASE_LOST", cause, loss: diagnostic },
   );
 }

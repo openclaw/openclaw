@@ -247,6 +247,13 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
     const sample = memorySample({
       workerCount: retired ? 0 : 1,
       workerTaskMetrics: [current],
+      sqliteReaderMetrics: [
+        {
+          operation: "sessions.usage.refresh",
+          count: retired ? 4 : 2,
+          readBytes: retired ? 8192 : 4096,
+        },
+      ],
       workerMessages: [
         {
           kind: "sqlite_reply" as const,
@@ -255,6 +262,21 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
           payloadBytes: 1234,
           payloadBytesByRequestClass: { "audit.writer.process": 1000, other: 234 },
           unmeasuredMessages: 2,
+        },
+        {
+          kind: "authority",
+          direction: "from_worker",
+          messages: 3,
+          payloadBytes: 567,
+          payloadBytesByRequestClass: { "session.actor.completeTurn": 500, other: 67 },
+          unmeasuredMessages: 1,
+        },
+        {
+          kind: "authority",
+          direction: "to_worker",
+          messages: 1,
+          payloadBytes: 0,
+          unmeasuredMessages: 1,
         },
       ],
       sessionRowSelections: {
@@ -278,6 +300,7 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
         metrics.render(),
         "openclaw_worker_messages_total",
         "openclaw_session_row_selections_total",
+        "openclaw_sqlite_reader_read_bytes_total",
       );
     }
     metrics.record(sample);
@@ -300,12 +323,19 @@ openclaw_worker_messages_total{direction="from_worker",kind="sqlite_reply"} 4
 openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="audit.writer.process"} 1000
 openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite_reply",request_class="other"} 234
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="sqlite_reply"} 2
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="authority",request_class="session.actor.completeTurn"} 500
+openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="authority",request_class="other"} 67
+openclaw_worker_message_payload_bytes_total{direction="to_worker",kind="authority",request_class="other"} 0
+openclaw_worker_messages_total{direction="from_worker",kind="authority"} 3
+openclaw_worker_message_unmeasured_total{direction="from_worker",kind="authority"} 1
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
 openclaw_session_row_selection_resets_total 2
 openclaw_session_row_partition_cache_total{outcome="hit",task="sessions.list"} 63
 openclaw_session_row_partition_cache_total{outcome="miss",task="sessions.list"} 1
-openclaw_session_row_partition_revisions_total{reason="metadata"} 3`);
+openclaw_session_row_partition_revisions_total{reason="metadata"} 3
+openclaw_sqlite_reader_operations_total{reader_operation="sessions.usage.refresh"} 4
+openclaw_sqlite_reader_read_bytes_total{reader_operation="sessions.usage.refresh"} 8192`);
 });
 
 it("exports native memory, missing workers, lifecycle totals and attributed spawns", () => {
@@ -487,6 +517,12 @@ it("exports completed SQLite request phases without inventing missing or invalid
       posted: 2_000,
       postFinished: 9_000,
       received: 4_000,
+      backendLoadStarted: 4_000,
+      backendLoadFinished: 5_000,
+      openGrantStarted: 5_000,
+      openGrantFinished: 6_000,
+      factoryStarted: 6_000,
+      factoryFinished: 7_000,
       inputReady: 7_000,
       executeStarted: 11_000,
       executeFinished: 16_000,
@@ -527,6 +563,9 @@ it("exports completed SQLite request phases without inventing missing or invalid
   for (const [phase, seconds, count] of [
     ["dispatch", 1, 2],
     ["delivery", 2, 1],
+    ["backend-load", 1, 1],
+    ["open-grant", 1, 1],
+    ["factory", 1, 1],
     ["input", 3, 1],
     ["prepare", 4, 1],
     ["execute", 5, 1],
@@ -540,10 +579,10 @@ it("exports completed SQLite request phases without inventing missing or invalid
   expectMetrics(
     rendered,
   )(`openclaw_worker_request_seconds_sum{kind="sqlite_writer",request_class="transcripts"} 28
-openclaw_worker_request_phase_seconds_bucket{kind="sqlite_writer",le="0.005",phase="dispatch",request_class="transcripts"} 1`);
+openclaw_worker_request_seconds_count{kind="sqlite_writer",request_class="transcripts"} 1`);
   expect(
     rendered
       .split("\n")
-      .filter((line) => line.startsWith("openclaw_worker_request_phase_seconds_count")),
-  ).toHaveLength(7);
+      .filter((line) => /^openclaw_worker_request(?:_phase)?_seconds_bucket/.test(line)),
+  ).toEqual(Array.from({ length: 11 }, () => expect.stringContaining('le="+Inf"')));
 });

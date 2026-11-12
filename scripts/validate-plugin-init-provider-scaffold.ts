@@ -63,9 +63,8 @@ await runPluginsInitCommand("plugin-init-test", {
 });
 
 run("npm", ["install", "--no-audit", "--fund=false"], projectDir);
-run("npm", ["run", "build"], projectDir);
-run("npm", ["test"], projectDir);
 run("npm", ["run", "validate"], projectDir);
+run("npm", ["test"], projectDir);
 assertCleanInspectorReport(readInspectorReport());
 
 console.log(`Generated provider scaffold passed ClawHub validation: ${projectDir}`);

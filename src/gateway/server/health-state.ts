@@ -11,7 +11,6 @@ import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status
 import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAgentSelectionState } from "../agent-list.js";
-import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
@@ -92,11 +91,9 @@ export function buildGatewaySnapshot(opts: {
     updateSchedule,
   };
   if (opts.includeSensitive === true) {
-    const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
     // Surface resolved paths only to admin callers that already have broader gateway access.
     snapshot.configPath = CONFIG_PATH;
     snapshot.stateDir = STATE_DIR;
-    snapshot.authMode = auth.mode;
   }
   return snapshot;
 }

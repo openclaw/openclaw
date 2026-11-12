@@ -63,7 +63,7 @@ export function recordWorkerMessage(
     counter.unmeasuredMessages++;
   } else {
     counter.payloadBytes += payloadBytes;
-    if (kind === "sqlite_request" || kind === "sqlite_reply") {
+    if (kind === "sqlite_request" || kind === "sqlite_reply" || kind === "authority") {
       const classes = (counter.payloadBytesByRequestClass ??= {});
       const label = normalizeWorkerRequestClass(requestClass);
       classes[label] = (classes[label] ?? 0) + payloadBytes;

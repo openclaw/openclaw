@@ -9,15 +9,13 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { OwnedStdioCleanupError } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
-import {
-  readReplayedTaskId,
-  recordRunningDescendants,
-  recordTaskOwnership,
-} from "./cli-runtime-tasks.js";
+import { createClaudeTurnStatus } from "./cli-runtime-status.js";
+import * as tasks from "./cli-runtime-tasks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
@@ -30,6 +28,7 @@ const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
  */
 export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
   assertPrivateInputCurrent?: () => void;
+  prepareCredentialUse?: () => Promise<void>;
 };
 type ClaudeCliTurn = {
   context: ClaudeCliExecuteContext;
@@ -363,6 +362,21 @@ async function emitHeldInterimResult(turn: ClaudeCliTurn) {
 
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
   if (message.type === "system" && message.subtype === "init") {
+    const openClawServer = Array.isArray(message.mcp_servers)
+      ? message.mcp_servers.find(
+          (server): server is Record<string, unknown> =>
+            isRecord(server) && server.name === "openclaw",
+        )
+      : undefined;
+    if (openClawServer && openClawServer.status !== "connected") {
+      closeSession(
+        session,
+        new Error(
+          `Claude Code started without the OpenClaw MCP server (status ${String(openClawServer.status)}). The CLI process was retired; retry the request to start a fresh process.`,
+        ),
+      );
+      return;
+    }
     session.hasInputLifecycle =
       Array.isArray(message.capabilities) && message.capabilities.includes("msg_lifecycle_v1");
   }
@@ -370,38 +384,19 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   let taskId: string | undefined;
   let parentRuns = false;
   if (message.type === "system") {
-    parentRuns = recordRunningDescendants(session.runningDescendants, message);
+    parentRuns = tasks.recordRunningDescendants(session.runningDescendants, message);
     const input = turn && (!session.hasInputLifecycle || turn.inputStarted) ? turn : undefined;
     const inputUuid = input?.inputUuid ?? "";
     if (message.subtype === "background_tasks_changed") {
-      if (Array.isArray(message.tasks)) {
-        for (const task of message.tasks) {
-          if (!isRecord(task)) {
-            continue;
-          }
-          const id = recordTaskOwnership(session, task, inputUuid);
-          const parentTaskId = id ? session.runningDescendants.get(id) : undefined;
-          if (
-            id &&
-            input &&
-            !input.interrupted &&
-            session.taskOwners.get(id) === input.inputUuid &&
-            // Only children of held background work extend the input; foreground
-            // descendants still retire with their parent turn.
-            (parentTaskId === undefined ||
-              input.pendingBackgroundTaskIds.has(parentTaskId) ||
-              input.pendingBackgroundTaskIds.has(id)) &&
-            (task.task_type === "local_agent" ||
-              task.task_type === "local_workflow" ||
-              (task.task_type === "local_bash" && input.foregroundTaskIds.has(id)))
-          ) {
-            // Disappearing from a snapshot does not acknowledge the queued answer.
-            input.pendingBackgroundTaskIds.add(id);
-          }
-        }
+      const snapshot = Array.isArray(message.tasks) ? message.tasks.filter(isRecord) : [];
+      for (const task of snapshot) {
+        tasks.recordTaskOwnership(session, task, inputUuid);
+      }
+      if (input && !input.interrupted) {
+        tasks.acquireBackgroundTaskHolds(session, input, snapshot);
       }
     } else {
-      taskId = recordTaskOwnership(session, message, inputUuid);
+      taskId = tasks.recordTaskOwnership(session, message, inputUuid);
     }
   }
   if (!turn) {
@@ -482,7 +477,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
   }
   // A replay receipt acknowledges consumption within the current query. Keep its
   // queue slot until that query's result so it cannot acknowledge the next task twice.
-  const replayedTaskId = readReplayedTaskId(message, turn.submittedInputUuids);
+  const replayedTaskId = tasks.readReplayedTaskId(message, turn.submittedInputUuids);
   if (replayedTaskId) {
     turn.pendingBackgroundTaskIds.delete(replayedTaskId);
     turn.foregroundTaskIds.delete(replayedTaskId);
@@ -585,8 +580,11 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
       isIdle: () => !session.closed && !session.currentTurn,
       close: (_reason, error) => closeSession(session, error),
       waitForExit: async () => {
-        const transport = session.transport ?? (await session.transportStartup);
-        await transport?.waitForExit();
+        // The turn owns launch errors; only unconfirmed startup cleanup blocks replacement.
+        const startup = session.transportStartup?.catch((error: unknown) =>
+          error instanceof OwnedStdioCleanupError ? Promise.reject(error) : undefined,
+        );
+        await (session.transport ?? (await startup))?.waitForExit();
       },
     },
   };
@@ -709,11 +707,13 @@ export async function* executeClaudeCli(
         }
         await transport.initialize();
       }
+      await context.prepareCredentialUse?.();
       context.assertCurrent?.();
       context.assertPrivateInputCurrent?.();
       if (session.closed || session.currentTurn !== turn) {
         throw turn.error ?? new Error("Claude CLI closed before its prompt was accepted.");
       }
+      context.registerTurnStatus?.(createClaudeTurnStatus(context, session, turn));
       context.registerTurnInterrupt?.({
         async interrupt() {
           context.assertCurrent?.();

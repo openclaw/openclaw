@@ -41,7 +41,7 @@ it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
   async () => {
     const stateDir = tempDirs.make("openclaw-meeting-transcripts-cleanup-");
     const sourceDir = await seedLegacySession(stateDir, "design-review");
-    const detected = detectLegacyMeetingTranscripts({
+    const detected = await detectLegacyMeetingTranscripts({
       stateDir,
       doctorOnlyStateMigrations: true,
     });

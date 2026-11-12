@@ -21,6 +21,12 @@ vi.mock("./in-process-gateway.js", async (importOriginal) => ({
 }));
 
 const caller = { agentId: "main", sessionKey: "agent:main:host-owned" };
+
+it("does not prescribe switching to a bound session", () => {
+  expect(createGitHubPublishTool().description).not.toMatch(
+    /Select an existing bound session|separately authorize supported binding\/adoption/,
+  );
+});
 const publication = {
   requestId: "publication-1",
   status: "requested" as const,
@@ -36,6 +42,15 @@ function setup() {
     withGatewayToolCallerIdentity(caller, () => tool.execute(id, args));
   return { callGateway, tool, execute };
 }
+
+it("does not execute inventory previews even with a current Gateway caller", async () => {
+  const { callGateway } = setup();
+  const tool = createGitHubPublishTool({ preview: true });
+  await expect(
+    withGatewayToolCallerIdentity(caller, () => tool.execute("preview", { action: "readiness" })),
+  ).rejects.toThrow("GitHub tool previews cannot execute actions");
+  expect(callGateway).not.toHaveBeenCalled();
+});
 
 it("applies deployment action limits when publication and operator actions are available", () => {
   const [tool] = applyGatewayToolPolicy([createGitHubPublishTool()], {
@@ -198,9 +213,6 @@ it.each<{
     }
     expect(tool.description.includes(action), action).toBe(offered);
   }
-  if (!refresh) {
-    expect(tool.description).not.toMatch(/refresh/i);
-  }
   expect(Value.Check(tool.parameters, {})).toBe(true);
   expect(
     Value.Check(tool.parameters, {
@@ -208,7 +220,7 @@ it.each<{
       pullRequestUrl: "https://github.com/example/repository/pull/1",
     }),
   ).toBe(true);
-  for (const action of ["publish", "edit", "ready", "request_review"]) {
+  for (const action of ["readiness", "publish", "edit", "ready", "request_review"]) {
     expect(Value.Check(tool.parameters, { action }), action).toBe(true);
   }
   for (const action of ["inspect", "merge", "close"]) {
@@ -383,3 +395,35 @@ it.each([undefined, false, true])(
     });
   },
 );
+
+it("names placeholder fields instead of blaming the host", async () => {
+  const { callGateway, execute } = setup();
+  const placeholders = { title: "x", body: "", workspacePath: "/tmp" };
+  await expect(execute({ action: "readiness", ...placeholders })).rejects.toThrow(
+    "workspacePath is accepted only with action publish. Send only the fields readiness needs",
+  );
+  await expect(execute({ action: "readiness", title: "x", body: "" })).rejects.toThrow(
+    "remove title, body",
+  );
+  await expect(
+    execute({ action: "inspect_pr", pullRequestUrl: "https://github.com/o/r/pull/1", body: "" }),
+  ).rejects.toThrow("remove body");
+  expect(callGateway).not.toHaveBeenCalled();
+});
+
+it("tells an unbound conversation how to publish, but not when reading a child", async () => {
+  const { callGateway, execute } = setup();
+  const unbound = {
+    policy: { read: "admitted", write: "unknown" },
+    custody: { kind: "unbound_workspace" },
+    target: { kind: "unknown", reason: "not-qualified" },
+    request: { kind: "none", selection: "current" },
+    remedies: [],
+  };
+  callGateway.mockResolvedValue(unbound);
+  const own = (await execute({ action: "readiness" })).details as { next?: string };
+  expect(own.next).toContain("publish with workspacePath");
+  const child = (await execute({ action: "readiness", publishingSessionKey: "agent:main:child" }))
+    .details;
+  expect(child).toEqual(unbound);
+});

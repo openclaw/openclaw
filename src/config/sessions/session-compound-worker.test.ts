@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
-import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat-send-work-admission.js";
+import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat-send-goal-admission.js";
 import { loadSessionEntryAsync as loadGatewaySessionEntryAsync } from "../../gateway/session-entry-load.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";

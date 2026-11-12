@@ -1,6 +1,10 @@
-import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
+import type {
+  ModelCatalogModel,
+  ModelDecisionCapabilities,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createPreparedModelCatalogProviderNormalizer } from "../../agents/model-catalog-provider-normalizer.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listAvailableManifestContractPlugins } from "../../plugins/manifest-contract-eligibility.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
@@ -48,25 +52,47 @@ function selectorCapabilities(
 export function listDecisionModels({
   config,
   snapshot,
+  catalog,
 }: {
   config: OpenClawConfig;
   snapshot: PluginMetadataSnapshot;
+  catalog: readonly ModelCatalogEntry[];
 }) {
   const decisionModels: NonNullable<ModelsListResult["decisionModels"]> = [];
   if (config.plugins?.enabled !== false) {
+    const normalizeProvider = createPreparedModelCatalogProviderNormalizer(snapshot, config);
+    const byProvider = new Map<string, ModelCatalogEntry[]>();
+    for (const row of catalog) {
+      const provider = normalizeProvider(row.provider);
+      const rows = byProvider.get(provider) ?? [];
+      rows.push(row);
+      byProvider.set(provider, rows);
+    }
     const seen = new Set<string>();
     for (const plugin of listAvailableManifestContractPlugins({
       snapshot,
       config,
       contract: "decisionProviders",
     })) {
-      for (const [provider, catalog] of Object.entries(plugin.modelCatalog?.providers ?? {})) {
-        if (!plugin.contracts?.decisionProviders?.includes(provider)) {
-          continue;
+      // Metadata identifies an installed adapter; advertised facts never register one.
+      for (const provider of plugin.contracts?.decisionProviders ?? []) {
+        const canonical = normalizeProvider(provider);
+        const models = new Map<string, Pick<ModelCatalogModel, "id" | "name" | "inference">>();
+        for (const row of byProvider.get(canonical) ?? []) {
+          if (!models.has(row.id)) {
+            models.set(row.id, row);
+          }
         }
-        for (const model of catalog.models ?? []) {
+        // Installed adapters retain their existing selector advertisement, including custom
+        // routes and replace mode. This projection never restores prepared execution facts.
+        for (const row of plugin.modelCatalog?.providers?.[provider]?.models ?? []) {
+          if (!models.get(row.id)?.inference?.decision) {
+            models.set(row.id, row);
+          }
+        }
+        for (const model of models.values()) {
           const decision = model.inference?.decision;
-          const key = `${provider}/${model.id}`;
+          const key = `${canonical}/${model.id}`;
           if (!decision || seen.has(key)) {
             continue;
           }

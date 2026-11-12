@@ -1,5 +1,3 @@
-/** Runs complete model-catalog discovery outside the Gateway event loop. */
-import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   getConfigResolutionFacts,
   serializeConfigResolutionFacts,
@@ -26,9 +24,12 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { getActiveSkillEnvKeysCore } from "../skills/runtime/env-overrides.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { beginAuthProfileCredentialBatch } from "../state/user-model-account-authority.js";
+/** Runs complete model-catalog discovery outside the Gateway event loop. */
+import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
@@ -399,6 +400,8 @@ export function createPreparedModelCatalogWorker(
   ): Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>> => {
     let message: PreparedModelWorkerResult;
     let requestPool: typeof pool;
+    let requestOwner: GatewayCatalogPool | undefined;
+    let acceptResult: typeof validate | undefined;
     let pending: Promise<PreparedModelWorkerResult> | undefined;
     let credentials: ReturnType<typeof beginAuthProfileCredentialBatch> | undefined;
     const task: { onRecovery?: (error: Error) => void } = {};
@@ -473,19 +476,14 @@ export function createPreparedModelCatalogWorker(
         ? await getGatewayCatalogPool(workerInput, metadataSnapshot, environmentFingerprint)
         : undefined;
       if (shared) {
-        sharedOwner = shared;
+        sharedOwner = requestOwner = shared;
         shared.borrowers.add(borrower);
       }
       requestPool = pool =
         shared?.pool ??
         pool ??
         new CatalogWorkerTaskPool(workerInput.input.env, (result) => receiveResult(result));
-      let acknowledged = acknowledgedContexts.get(requestPool);
-      if (!acknowledged) {
-        acknowledged = new Map();
-        acknowledgedContexts.set(requestPool, acknowledged);
-      }
-      const contexts = acknowledged;
+      const contexts = getOrCreateWeakOwnerMap(acknowledgedContexts, requestPool);
       pending = requestPool.run(
         () => {
           assertCurrent();
@@ -508,13 +506,15 @@ export function createPreparedModelCatalogWorker(
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
-            clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
+            templateInstallSchemaVersions: captureTemplateInstallSchemaVersionFacts({
+              env: input.env,
+            }),
           };
           const publication = beginAuthProfileCredentialBatch(
             captureOpenClawStateWorkerContext({ env: input.env }),
           );
           credentials = publication;
-          receiveResult = (result) => {
+          acceptResult = receiveResult = (result) => {
             // Even a failed or retired catalog may have committed a credential refresh.
             publication.committed(result.authCredentials);
             publication.finish(true);
@@ -581,6 +581,14 @@ export function createPreparedModelCatalogWorker(
       await stop(failure);
       throw error;
     } finally {
+      // Failed transport replies skip validation and can dispatch the next task immediately.
+      // Release only this request's callback, never the successor's publication.
+      if (receiveResult === acceptResult) {
+        receiveResult = validate;
+      }
+      if (requestOwner && requestOwner.validate === acceptResult) {
+        requestOwner.validate = undefined;
+      }
       credentials?.finish(false);
       task.onRecovery = undefined;
       if (pending) {

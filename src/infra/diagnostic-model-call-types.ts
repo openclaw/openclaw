@@ -2,7 +2,7 @@ import type { DiagnosticBaseEvent } from "./diagnostic-event-snapshot.js";
 import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
 import type { DiagnosticRunScopeFields } from "./diagnostic-run-types.js";
 
-export type DiagnosticModelCallPromptStats = Readonly<{
+type DiagnosticModelCallPromptStats = Readonly<{
   inputMessagesCount?: number;
   inputMessagesChars?: number;
   systemPromptChars?: number;
@@ -24,7 +24,7 @@ export type DiagnosticModelCallUsage = Readonly<{
   total?: number;
 }>;
 
-export type DiagnosticModelCallTerminalFields = {
+type DiagnosticModelCallTerminalFields = {
   durationMs: number;
   providerProcessingMs?: number;
   providerWaitEstimateMs?: number;

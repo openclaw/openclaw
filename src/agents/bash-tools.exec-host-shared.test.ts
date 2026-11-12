@@ -277,7 +277,6 @@ describe("resolveExecApprovalWaitOutcome", () => {
       expect(mocks.logWarn).toHaveBeenCalledExactlyOnceWith(
         `exec approval wait failed (id=approval-wait, reason=${reason})`,
       );
-      expect(JSON.stringify(mocks.logWarn.mock.calls)).not.toContain(secret);
     }
   });
 

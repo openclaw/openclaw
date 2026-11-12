@@ -21,6 +21,10 @@ not prompt for embeddings. See [Configure](/cli/configure#memory-section).
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
 
+For models that permit local execution, `setup --message` can verify inference
+without a running Gateway. Configurations with a required worker profile still
+need a Gateway placement owner.
+
 Baseline setup (`--baseline`) works with the local Gateway running or stopped.
 With the Gateway running, setup sends only its config change (for example
 `agents.defaults.workspace` or `agents.defaults.skipBootstrap`) to the Gateway,
@@ -69,7 +73,7 @@ receive verified-subscription priority over environment API keys.
 Codex execution or sign-in inspection errors are reported with a retry diagnostic;
 only a missing executable or login is treated as absent.
 
-In the Control UI, Model Setup can also select models from installed native
+In the Control UI, Models can also select models from installed native
 agents through the shared model picker. **Use** saves that model and its runtime
 without running the setup test; authentication and tools stay with the native
 agent. Provider **Test & use** still requires a verified tool-free reply.

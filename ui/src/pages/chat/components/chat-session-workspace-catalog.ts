@@ -1,3 +1,4 @@
+import { foldSearchCase } from "../../../../../src/shared/search-case.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import type {
@@ -15,6 +16,8 @@ export type WorkspaceCatalogFile = {
   activity?: "modified" | "read" | "mixed";
   artifactId?: string;
   mimeType?: string;
+  /** Last modification reported by the Gateway; absent for missing files and artifacts. */
+  updatedAtMs?: number;
 };
 export type WorkspaceCatalogRow = WorkspaceCatalogFile & { directory: boolean };
 
@@ -107,6 +110,7 @@ export function projectWorkspaceCatalog(
       origin: "session",
       activity: file.kind,
       mimeType: file.mimeType,
+      updatedAtMs: file.updatedAtMs,
     };
     if (path === undefined || absolutePath(path)) {
       session.set(entry.key, {
@@ -202,24 +206,27 @@ export function workspaceCatalogSearch(
   list: SessionWorkspaceListResult | null,
   query: string,
 ): WorkspaceCatalogFile[] {
-  const search = query.trim().toLowerCase();
+  const search = query.trim();
   if (!search) {
     return [];
   }
+  // Canonically equivalent names may arrive in either Unicode form; compare on NFC.
+  const normalizedSearch = foldSearchCase(search).normalize("NFC");
   const catalog = projectWorkspaceCatalog(list);
   const results = new Map<string, WorkspaceCatalogFile>();
   for (const entry of [...catalog.session, ...catalog.project.values()]) {
     if (
       !("directory" in entry && entry.directory) &&
-      [entry.name, entry.workspacePath, entry.path].some((value) =>
-        value?.toLowerCase().includes(search),
+      [entry.name, entry.workspacePath, entry.path].some(
+        (value) =>
+          value !== undefined && foldSearchCase(value).normalize("NFC").includes(normalizedSearch),
       )
     ) {
       results.set(entry.key, entry);
     }
   }
   // A previous query must never supply the next query's project results.
-  if (list?.browser?.search?.toLowerCase() === search) {
+  if (list?.browser?.search?.toLowerCase() === search.toLowerCase()) {
     for (const entry of list.browser.entries) {
       if (entry.kind === "directory") {
         continue;

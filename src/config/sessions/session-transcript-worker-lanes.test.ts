@@ -8,6 +8,11 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import {
+  beginGatewayShutdownCleanup,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
@@ -52,6 +57,32 @@ function input() {
 
 const prewarmed = { ok: true as const, value: { kind: "prewarm" as const } };
 const absent = { ok: true as const, value: false };
+
+it("retires idle readers during shutdown without interrupting a pending read", async () => {
+  const request = input();
+  observed.run.mockResolvedValue(absent);
+  await request.read(projectionLane);
+  const reply = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(reply.promise);
+  const reading = request.read();
+  try {
+    expect(historyLane.pending).toBe(1);
+    markGatewayRestartDraining();
+    beginGatewayShutdownCleanup();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(observed.rotate).toHaveBeenCalledTimes(1);
+    expect(historyLane.pending).toBe(1);
+    reply.resolve(absent);
+    await expect(reading).resolves.toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(observed.rotate).toHaveBeenCalledTimes(2);
+    expect([historyLane.native, projectionLane.native]).toEqual([false, false]);
+  } finally {
+    reply.resolve(absent);
+    await reading;
+    resetGatewayWorkAdmission();
+  }
+});
 
 it("keeps native close conservative until an unqualified reader is retired", async () => {
   const pool = createSessionTranscriptHistoryPool();

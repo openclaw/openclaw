@@ -21,15 +21,30 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
     }
 }
 
+/// Outcome of holding a background wake open for the outbox.
+public enum OpenClawChatOutboxWakeDrain: String, Sendable {
+    /// Nothing was waiting to be sent.
+    case idle
+    /// No waiting row is still queued or sending, and none failed; some may still await history confirmation.
+    case delivered
+    /// A waiting row now needs the user's retry or delete.
+    case failed
+    /// Rows are still waiting at the deadline, for example during retry backoff.
+    case pending
+    /// The Gateway route did not come up in time.
+    case noRoute = "no_route"
+}
+
 /// Durable offline command outbox. Sends made while the gateway is unhealthy
 /// are persisted in installation-wide client state and flushed
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
-    static func isRestartRejectedSend(_ error: Error) -> Bool {
+    static func isRetryableAdmissionRejection(_ error: Error) -> Bool {
         guard let response = error as? GatewayResponseError else { return false }
-        return response.code == "UNAVAILABLE" && response.detailsReason == "gateway-restarting" &&
-            response.details["retryable"]?.boolValue == true
+        return response.isRetryableStartupAdmissionRefusal ||
+            (response.code == "UNAVAILABLE" && response.detailsReason == "gateway-restarting" &&
+                response.details["retryable"]?.boolValue == true)
     }
 
     /// True when this view model owns a gateway-scoped durable text outbox.
@@ -707,14 +722,15 @@ extension OpenClawChatViewModel {
     func pollHealthIfNeeded(
         force: Bool,
         sessionSnapshot: SessionSnapshot? = nil,
-        refreshSessionsOnReconnect: Bool = true) async
+        refreshSessionsOnReconnect: Bool = true,
+        timeoutMs: Int = 5000) async
     {
         if !force, let last = lastHealthPollAt, Date().timeIntervalSince(last) < 10 {
             return
         }
         self.lastHealthPollAt = Date()
         do {
-            let ok = try await self.transport.requestHealth(timeoutMs: 5000)
+            let ok = try await self.transport.requestHealth(timeoutMs: timeoutMs)
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.applyTransportHealth(ok, refreshSessionsOnReconnect: refreshSessionsOnReconnect)
         } catch {
@@ -737,6 +753,7 @@ extension OpenClawChatViewModel {
             self.invalidateSessionMetadataReadiness()
         }
         if ok, !wasHealthy {
+            self.reloadUnsettledComposerCapabilities()
             guard self.outbox != nil else { return }
             if self.hasCurrentSessionMetadata {
                 self.reconcilePendingOutboxBranchScopes()
@@ -770,6 +787,44 @@ extension OpenClawChatViewModel {
                 self.flushOutboxIfNeeded()
             }
         }
+    }
+
+    /// Background wakes report completion as soon as their own work ends, and
+    /// the OS may suspend the app right after. Holds the wake open for up to
+    /// `timeoutMs` while the outbox's own flush and retry schedule deliver the
+    /// rows that were unsent when the wait began. `waitForRoute` runs only when
+    /// such rows exist and reports whether the Gateway route came up in time.
+    public func drainOutboxForBackgroundWake(
+        timeoutMs: Int,
+        waitForRoute: (_ remainingMs: Int) async -> Bool) async -> OpenClawChatOutboxWakeDrain
+    {
+        guard let outbox, !self.isTransportDetached else { return .idle }
+        let deadline = Date().addingTimeInterval(Double(max(0, timeoutMs)) / 1000)
+        guard let initial = await outbox.loadCommandStatusesIfAvailable() else { return .pending }
+        let unsent = Set(initial.filter { $0.status == .queued || $0.status == .sending }.map(\.id))
+        guard !unsent.isEmpty else { return .idle }
+        guard await waitForRoute(Int(deadline.timeIntervalSinceNow * 1000)) else { return .noRoute }
+        var forceHealthPoll = true
+        while !Task.isCancelled, Date() < deadline {
+            let remainingMs = Int(deadline.timeIntervalSinceNow * 1000)
+            if !self.healthOK, remainingMs > 0 {
+                // A reconnect whose health event has not landed yet. The healthy
+                // edge starts the outbox's own flush; the drain never flushes
+                // directly, so retry backoff and attempt limits stay in charge.
+                // The probe gets only the time left, so it cannot outlast the wake.
+                await self.pollHealthIfNeeded(force: forceHealthPoll, timeoutMs: min(5000, remainingMs))
+                forceHealthPoll = false
+            }
+            if self.outboxFlushTask == nil, let commands = await outbox.loadCommandStatusesIfAvailable() {
+                let tracked = commands.filter { unsent.contains($0.id) }
+                if !tracked.contains(where: { $0.status == .queued || $0.status == .sending }) {
+                    // Accepted rows await history confirmation or are already gone.
+                    return tracked.contains { $0.status == .failed } ? .failed : .delivered
+                }
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return .pending
     }
 
     private func performOutboxFlush() async {
@@ -955,9 +1010,9 @@ extension OpenClawChatViewModel {
                 command, outbox: outbox, retryCount: command.retryCount, reason: error.localizedDescription)
             self.errorText = error.localizedDescription
             return update == .unavailable ? .stop : .continueFlush
-        } catch let error where error is OpenClawChatTransportSendError || Self.isRestartRejectedSend(error) {
-            // Both a local non-send and the restart admission fence prove no
-            // run started. Keep the same command for reconnect without spending retries.
+        } catch let error where error is OpenClawChatTransportSendError || Self.isRetryableAdmissionRejection(error) {
+            // A local non-send or admission refusal proves no run started. Keep the same command for reconnect without
+            // spending retries.
             _ = await outbox.markCommandQueued(
                 id: command.id,
                 attemptVersion: command.attemptVersion,

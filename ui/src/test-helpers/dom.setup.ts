@@ -43,6 +43,11 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
   // JSDOM has no layout. Geometry/visibility tests install controlled observers;
   // ordinary rendering fixtures treat their mounted content as visible.
   const globals = {
+    Highlight: class extends Set<Range> {
+      constructor(...ranges: Range[]) {
+        super(ranges);
+      }
+    },
     matchMedia: (media: string) => ({
       media,
       matches: false,
@@ -108,6 +113,48 @@ if (typeof document !== "undefined" && !("__vitest_browser__" in globalThis)) {
       Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
     }
   }
+
+  defineMissing(globalThis, "CSS", { value: {} });
+  defineMissing(CSS, "highlights", { value: new Map<string, Highlight>() });
+  // JSDOM ranges have no layout; geometry-specific tests supply their own bounds.
+  defineMissing(Range.prototype, "getBoundingClientRect", {
+    writable: true,
+    value: () => new DOMRect(),
+  });
+
+  // Synthetic pointer events have no browser capture owner. Keep capture and
+  // release observable to drag lifecycles and the unit leak guard.
+  const pointerCaptures = new WeakMap<Element, Set<number>>();
+  const dispatchCapture = (element: Element, type: string, pointerId: number) => {
+    element.dispatchEvent(
+      Object.defineProperty(new Event(type, { bubbles: true }), "pointerId", { value: pointerId }),
+    );
+  };
+  defineMissing(Element.prototype, "setPointerCapture", {
+    writable: true,
+    value(this: Element, pointerId: number) {
+      const captures = pointerCaptures.get(this) ?? new Set<number>();
+      pointerCaptures.set(this, captures);
+      if (!captures.has(pointerId)) {
+        captures.add(pointerId);
+        dispatchCapture(this, "gotpointercapture", pointerId);
+      }
+    },
+  });
+  defineMissing(Element.prototype, "hasPointerCapture", {
+    writable: true,
+    value(this: Element, pointerId: number) {
+      return pointerCaptures.get(this)?.has(pointerId) ?? false;
+    },
+  });
+  defineMissing(Element.prototype, "releasePointerCapture", {
+    writable: true,
+    value(this: Element, pointerId: number) {
+      if (pointerCaptures.get(this)?.delete(pointerId)) {
+        dispatchCapture(this, "lostpointercapture", pointerId);
+      }
+    },
+  });
 
   defineMissing(Element.prototype, "checkVisibility", {
     writable: true,

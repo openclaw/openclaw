@@ -18,6 +18,11 @@ token. Keep that binding explicitly associated with the OpenClaw session, and
 keep mirroring user-visible assistant/tool output into the OpenClaw
 transcript.
 
+`resolveActiveEmbeddedRunSessionId(sessionKey, target?, { executionStartedOnly: true })`
+from `openclaw/plugin-sdk/agent-harness-runtime` excludes queued admission when
+checking for active execution. Execution remains started during later lane waits;
+omitting the option retains the default observation of all active ownership.
+
 The OpenClaw transcript remains the compatibility layer for:
 
 - channel-visible session history

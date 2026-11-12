@@ -176,7 +176,7 @@ export function createCliHistoryRow(message: unknown, id: number, localSeq?: num
   };
 }
 
-export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata">;
+export type HistoryMatch = Pick<HistoryRow, "id" | "text" | "metadata" | "role">;
 export type HistoryTextMatch = {
   role: string;
   text: string;
@@ -194,6 +194,11 @@ export type CliHistoryMergeStore = {
   minimumOrder: (role: string | null, text: string) => number;
   advanceOrderFloor: (floor: { role: string; text: string; minimumOrder: number }) => void;
   consume: (row: Pick<HistoryRow, "id" | "metadata" | "external_key">) => void;
+  onMatch?: (
+    imported: Omit<HistoryRow, "payload">,
+    matched: HistoryMatch,
+    byIdentity: boolean,
+  ) => void;
 };
 
 export function mergeCliHistoryRow(
@@ -213,6 +218,7 @@ export function mergeCliHistoryRow(
   };
   let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
   if (duplicate) {
+    store.onMatch?.(imported, duplicate, true);
     advance(duplicate);
     return true;
   }
@@ -241,6 +247,7 @@ export function mergeCliHistoryRow(
     }
   }
   if (duplicate) {
+    store.onMatch?.(imported, duplicate, Boolean(imported.image_mentions));
     const meta: Record<string, unknown> = duplicate.metadata ? JSON.parse(duplicate.metadata) : {};
     const importedMeta: Record<string, unknown> = imported.metadata
       ? JSON.parse(imported.metadata)
@@ -303,11 +310,8 @@ function attachCliHistoryImport<T extends CliHistoryOrderRow>(
   afterLocal.set(anchor.id, [imported]);
 }
 
-/**
- * Locals stay in transcript order. Each import follows the latest local at
- * or before its timestamp. Dated imports and timestamp-sorted locals advance
- * together so placement stays one pass.
- */
+// Prefix timestamps anchor imports without letting backdated locals move earlier
+// activity past a preceding answer. Stored timestamps and local order stay intact.
 export function orderCliHistoryRows<T extends CliHistoryOrderRow>(rows: readonly T[]): T[] {
   const locals = rows
     .filter(isLocalCliHistoryRow)
@@ -315,27 +319,29 @@ export function orderCliHistoryRows<T extends CliHistoryOrderRow>(rows: readonly
   const imports = rows
     .filter((row) => row.local_seq === null)
     .toSorted(compareImportedCliHistoryRows);
-  const byTime = locals
-    .filter((row): row is T & { local_seq: number; timestamp: number } => row.timestamp !== null)
-    .toSorted((a, b) => a.timestamp - b.timestamp || a.local_seq - b.local_seq || a.id - b.id);
+  let localTime = Number.NEGATIVE_INFINITY;
   const before: T[] = [];
   const afterLocal = new Map<number, T[]>();
   let timeIndex = 0;
-  let anchor: (typeof byTime)[number] | undefined;
+  let anchor: (typeof locals)[number] | undefined;
   for (const imported of imports) {
     if (imported.timestamp === null) {
       attachCliHistoryImport(imported, locals.at(-1), before, afterLocal);
       continue;
     }
     for (;;) {
-      const candidate = byTime[timeIndex];
-      if (candidate === undefined || candidate.timestamp > imported.timestamp) {
+      const candidate = locals[timeIndex];
+      if (candidate === undefined) {
         break;
       }
-      timeIndex += 1;
-      if (!anchor || candidate.local_seq > anchor.local_seq) {
+      if (candidate.timestamp !== null) {
+        localTime = Math.max(localTime, candidate.timestamp);
+        if (localTime > imported.timestamp) {
+          break;
+        }
         anchor = candidate;
       }
+      timeIndex += 1;
     }
     attachCliHistoryImport(imported, anchor, before, afterLocal);
   }

@@ -13,6 +13,7 @@ import {
   registerPreparedProjectRegistry,
 } from "./project-registration.js";
 import type { ProjectRegistryIdentity, ProjectRegistryRecord } from "./project-registry.types.js";
+import { isWorkspaceProjectId, WORKSPACE_PROJECT_ID_PREFIX } from "./workspace-project-id.js";
 
 export {
   ProjectCheckoutError,
@@ -23,7 +24,7 @@ export {
 function workspaceProject(cfg: OpenClawConfig, agentId: string): ProjectRegistryRecord {
   const repoRoot = resolveAgentWorkspaceDir(cfg, agentId);
   return {
-    id: `workspace:${agentId}`,
+    id: `${WORKSPACE_PROJECT_ID_PREFIX}${agentId}`,
     displayName: path.basename(repoRoot) || agentId,
     repoRoot,
     source: "workspace",
@@ -82,10 +83,10 @@ export function resolveWorkspaceProject(
   cfg: OpenClawConfig,
   id: string,
 ): ProjectRegistryRecord | undefined {
-  if (!id.startsWith("workspace:")) {
+  if (!isWorkspaceProjectId(id)) {
     return undefined;
   }
-  const agentId = id.slice("workspace:".length);
+  const agentId = id.slice(WORKSPACE_PROJECT_ID_PREFIX.length);
   return listAgentIds(cfg).includes(agentId) ? workspaceProject(cfg, agentId) : undefined;
 }
 
@@ -94,7 +95,7 @@ export async function resolveProjectRegistry(
   id: string,
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<ProjectRegistryRecord | undefined> {
-  if (id.startsWith("workspace:")) {
+  if (isWorkspaceProjectId(id)) {
     return resolveWorkspaceProject(cfg, id);
   }
   const context = captureOpenClawStateWorkerContext(options);

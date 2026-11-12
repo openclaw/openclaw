@@ -159,6 +159,73 @@ OpenClaw removes `CODEX_HOME` and `HOME` from this list during local launch
 normalization: `CODEX_HOME` stays pointed at the selected agent or user scope,
 and `HOME` stays inherited so subprocesses can use normal user-home state.
 
+## Custom providers with native command auth
+
+For an operator-managed custom HTTPS Responses endpoint, set the provider's
+auth mode to `native-command` and explicitly select the Codex runtime. Use a
+new provider ID, not an ID or alias owned by a provider plugin:
+
+```json5
+{
+  models: {
+    providers: {
+      "company-inference": {
+        baseUrl: "https://inference.example.com/v1",
+        api: "openai-responses",
+        auth: "native-command",
+        agentRuntime: { id: "codex" },
+        models: [{ id: "company-model", name: "Company model" }],
+      },
+    },
+  },
+}
+```
+
+Configure the same provider ID and endpoint in the selected Codex home's
+`config.toml` (the default per-agent Codex home, or an explicitly selected user
+home). Codex owns the executable, token cache, timeout, and refresh behavior:
+
+```toml
+[model_providers.company-inference]
+name = "Company inference"
+base_url = "https://inference.example.com/v1"
+wire_api = "responses"
+requires_openai_auth = false
+
+[model_providers.company-inference.auth]
+command = "/absolute/path/to/provider-token"
+args = ["--audience", "inference"]
+timeout_ms = 5000
+refresh_interval_ms = 300000
+```
+
+The command must print only the bearer token to stdout and exit successfully.
+OpenClaw’s eligibility checks do not execute the command or copy its token into
+an auth profile. Codex owns command execution during native discovery and turns.
+A configured model being eligible does not prove that the command or upstream
+service is healthy; execution failures are reported by the native runtime.
+
+Select `company-inference/company-model` for an ordinary Codex session. The
+runtime checks the native provider's endpoint and command-auth configuration
+before starting a thread. OpenClaw does not forward stored profiles or ambient
+`CODEX_API_KEY`, `OPENAI_API_KEY`, or `CODEX_ACCESS_TOKEN` credentials.
+Do not combine this mode with an OpenClaw API key, profile pin, custom headers,
+or request transport overrides in OpenClaw. Explicit authentication and headers
+in Codex's native configuration remain owned by Codex, including `gateway_oauth`
+alongside the primary token command. Codex validates conflicts, stores and refreshes
+its secondary account, and may authenticate catalog requests during startup.
+The helper can represent a user or service; a native secondary account is not
+implicitly the OpenClaw or Team requester. This mode does not add an OpenClaw
+login flow or import either native credential into an OpenClaw profile.
+
+This mode does not support the embedded OpenClaw runtime, isolated completions,
+supervised native sessions, manual compaction, or remote-exec cloud placement.
+Codex still owns automatic compaction within a normal turn. If tools finish
+without a final answer, OpenClaw uses the settled-tool fallback instead of
+borrowing credentials for a separate summarization turn. This mode does not relax
+model-backed approval-review endpoint trust, operator model policy, or native
+tool permissions. Existing OpenAI account discovery and readiness are unchanged.
+
 ## Upgrading from 2026.9.4 with Codex sign-in
 
 If `openai:default` exists only through native Codex sign-in, you can prepare

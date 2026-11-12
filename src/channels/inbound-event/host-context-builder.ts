@@ -1,8 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-  getCommandOwnerAuthority,
+  CommandOwnerRevokedError,
 } from "../../auto-reply/command-owner-authority.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -127,22 +126,22 @@ export function createHostChannelInboundEventContextBuilder<
           const principal = batch.at(-1)?.verifiedPrincipal;
           const principalKey = principal && JSON.stringify(principal);
           const gateway = owner.resolveGatewayContext?.();
-          if (
-            !principal ||
-            !gateway ||
-            batch.some((input) => JSON.stringify(input?.verifiedPrincipal) !== principalKey)
-          ) {
+          if (!gateway) {
             return;
           }
           const requester = batch.at(-1)?.requesterProfile;
+          let operatorAuthority: ReturnType<typeof captureChannelOperatorRunAuthority> | undefined;
           if (
+            principal &&
             requester &&
             built.SenderId === principal.senderId &&
             (built.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
             built.OriginatingChannel === principal.channelId &&
             batch.every(
               (input) =>
-                input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
+                JSON.stringify(input?.verifiedPrincipal) === principalKey &&
+                input?.requesterProfile?.id === requester.id &&
+                input.requesterProfile.isCurrent(),
             )
           ) {
             // Retain the remote provenance and record the attested human contribution too.
@@ -155,8 +154,31 @@ export function createHostChannelInboundEventContextBuilder<
                 );
               }
             }
+            const prepared = batch.at(-1)?.operatorAuthority;
+            const operatorIsCurrent = () =>
+              owner.isLive() &&
+              owner.resolveGatewayContext?.() === gateway &&
+              batch.every((input) =>
+                input?.operatorAuthority?.isCurrent(gateway.getRuntimeConfig()),
+              );
+            if (prepared && operatorIsCurrent()) {
+              operatorAuthority = captureChannelOperatorRunAuthority({
+                ...prepared.operatorProfile,
+                recoveryReference: prepared.recoveryReference,
+                getRuntimeConfig: () => gateway.getRuntimeConfig(),
+                signal: prepared.signal,
+                assertCurrent: () => {
+                  if (!operatorIsCurrent()) {
+                    throw new CommandOwnerRevokedError(
+                      "Channel operator authority changed; send a new request.",
+                    );
+                  }
+                },
+              });
+            }
             bindRequesterProfile(built, {
               ...requester,
+              operatorAuthority,
               isCurrent: () =>
                 owner.isLive() &&
                 owner.resolveGatewayContext?.() === gateway &&
@@ -164,33 +186,29 @@ export function createHostChannelInboundEventContextBuilder<
             });
           }
           const authority = batch.at(-1)?.commandOwnerAuthority;
-          if (!authority?.source || !authority.isCurrent(gateway.getRuntimeConfig())) {
+          const ownerPrincipal = batch.at(-1)?.commandOwnerPrincipal;
+          if (
+            !authority?.source ||
+            !ownerPrincipal ||
+            built.SenderId !== ownerPrincipal.senderId ||
+            (built.AccountId ?? DEFAULT_ACCOUNT_ID) !== ownerPrincipal.accountId ||
+            built.OriginatingChannel !== ownerPrincipal.channelId ||
+            batch.some(
+              (input) =>
+                JSON.stringify(input?.commandOwnerPrincipal) !== JSON.stringify(ownerPrincipal),
+            ) ||
+            !authority.isCurrent(gateway.getRuntimeConfig())
+          ) {
             return;
           }
           bindCommandOwnerAuthority(built, {
             recoveryReference: authority.recoveryReference,
+            operatorAuthority,
             isCurrent: () =>
               owner.isLive() &&
               owner.resolveGatewayContext?.() === gateway &&
               authority.isCurrent(gateway.getRuntimeConfig()),
           });
-          const assertCurrent = captureCommandOwnerAssertion(built);
-          const commandOwner = getCommandOwnerAuthority(built);
-          if (authority.operatorProfile && assertCurrent && commandOwner) {
-            bindCommandOwnerAuthority(built, {
-              ...commandOwner,
-              operatorAuthority: captureChannelOperatorRunAuthority({
-                ...authority.operatorProfile,
-                recoveryReference:
-                  authority.recoveryReference?.version === 1
-                    ? authority.recoveryReference
-                    : undefined,
-                getRuntimeConfig: () => gateway.getRuntimeConfig(),
-                assertCurrent,
-                signal: authority.signal,
-              }),
-            });
-          }
         };
         bindParticipants();
       }

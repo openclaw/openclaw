@@ -34,11 +34,10 @@ function access(scopes: string[], request: SessionMethodAccessRequest) {
 }
 
 describe("readSessionMethodAccess", () => {
-  it("admits ordinary scoped creation before an owned row exists", () => {
-    const scoped = snapshot({ scopes: ["operator.sessions.write"] });
+  it.each(["operator.sessions.write", "operator.write"])("gates %s creation", (scope) => {
     const request = { method: "sessions.create", params: { agentId: "main", message: "Hello" } };
-    expect(readSessionMethodAccess(scoped, request)).toMatchObject({ allowed: false });
-    expect(readSessionMethodAccess(scoped, { ...request, sessionScope: true })).toEqual({
+    expect(access([scope], request).allowed).toBe(scope === "operator.write");
+    expect(access([scope], { ...request, sessionScope: true })).toEqual({
       allowed: true,
       requiredScope: "operator.sessions.write",
     });
@@ -48,22 +47,12 @@ describe("readSessionMethodAccess", () => {
       { execNode: "worker" },
       { toolOverrides: {} },
     ]) {
-      expect(
-        readSessionMethodAccess(scoped, { ...request, params, sessionScope: true }),
-      ).toMatchObject({ allowed: false, requiredScope: "operator.admin" });
+      expect(access([scope], { ...request, params, sessionScope: true })).toMatchObject({
+        allowed: false,
+        requiredScope: "operator.admin",
+        cause: "missing-scope",
+      });
     }
-  });
-
-  it("requires admin for privileged create params", () => {
-    const result = readSessionMethodAccess(snapshot({ scopes: ["operator.write"] }), {
-      method: "sessions.create",
-      params: { agentId: "main", incognito: true },
-    });
-    expect(result.allowed).toBe(false);
-    expect(result).toMatchObject({
-      cause: "missing-scope",
-      requiredScope: "operator.admin",
-    });
   });
 
   it("keeps profile placement admin-only through the caller's scope", () => {
@@ -102,8 +91,10 @@ describe("readSessionMethodAccess", () => {
     }
   });
 
-  it("requires explicit opt-in and ownership for narrow session actions", () => {
-    const request = { method: "sessions.patch", params: { key: "agent:main:notes", label: null } };
+  it.each([
+    { method: "sessions.patch", params: { key: "agent:main:notes", label: null } },
+    { method: "sessions.create", params: { parentSessionKey: "main", fork: true } },
+  ])("requires explicit opt-in and ownership for $method", (request) => {
     const scoped = snapshot({ methods: [request.method], scopes: ["operator.sessions.write"] });
     expect(
       readSessionMethodAccess(scoped, { ...request, session: { sharingRole: "owner" } }),
@@ -135,6 +126,49 @@ describe("readSessionMethodAccess", () => {
         session: { sharingRole: "viewer" },
       }),
     ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
+  });
+
+  it("lets a session writer send the first turn only to a session proven absent", () => {
+    const scoped = snapshot({
+      methods: ["chat.send", "sessions.patch"],
+      scopes: ["operator.sessions.write"],
+    });
+    const send = {
+      method: "chat.send",
+      requiredScope: "operator.write",
+      sessionScope: true,
+    } as const;
+    expect(readSessionMethodAccess(scoped, { ...send, sessionAbsent: true })).toEqual({
+      allowed: true,
+      requiredScope: "operator.sessions.write",
+    });
+    // Unproven absence and another creator's row keep the ownership requirement.
+    for (const request of [
+      send,
+      { ...send, sessionAbsent: true, session: { sharingRole: "member" } },
+      {
+        method: "sessions.patch",
+        params: { key: "agent:main:main", label: "Renamed" },
+        sessionScope: true,
+        sessionAbsent: true,
+      },
+    ] as const) {
+      expect(readSessionMethodAccess(scoped, request)).toMatchObject({
+        allowed: false,
+        cause: "session-not-owned",
+      });
+    }
+    // Absence never lends a session writer broad or administrative scope.
+    expect(
+      readSessionMethodAccess(scoped, { ...send, sessionScope: false, sessionAbsent: true }),
+    ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.write" });
+    expect(
+      access(["operator.sessions.write"], {
+        method: "chat.send",
+        requiredScope: "operator.admin",
+        sessionAbsent: true,
+      }),
+    ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.admin" });
   });
 
   it("keeps context-window changes separate from write-scoped effort access", () => {
@@ -186,24 +220,15 @@ describe("readSessionMethodAccess", () => {
     ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.read" });
   });
 
-  it("rejects snapshots without advertised auth", () => {
-    expect(
-      readSessionMethodAccess(snapshot({ includeAuth: false }), {
-        method: "sessions.create",
-        params: { agentId: "main" },
-      }),
-    ).toMatchObject({ allowed: false, cause: "missing-scope" });
-  });
-
-  it("rejects disconnected and unadvertised calls before scope checks", () => {
-    expect(
-      readSessionMethodAccess(snapshot({ connected: false }), {
-        method: "sessions.create",
-      }),
-    ).toMatchObject({ allowed: false, cause: "disconnected" });
-    expect(
-      readSessionMethodAccess(snapshot({ methods: [] }), { method: "sessions.create" }),
-    ).toMatchObject({ allowed: false, cause: "method-unavailable" });
+  it.each([
+    { state: snapshot({ includeAuth: false }), cause: "missing-scope" },
+    { state: snapshot({ connected: false }), cause: "disconnected" },
+    { state: snapshot({ methods: [] }), cause: "method-unavailable" },
+  ])("rejects unavailable creation: $cause", ({ state, cause }) => {
+    expect(readSessionMethodAccess(state, { method: "sessions.create" })).toMatchObject({
+      allowed: false,
+      cause,
+    });
   });
 
   it("admits only opted-in desired-state assignments to a retained offline identity", () => {

@@ -16,6 +16,9 @@ import "../styles/settings-controls.css";
 import "../styles/settings.css";
 import "../styles/model-providers.css";
 
+// Geometry assertions measure the settled list, not the Select entry scale.
+document.documentElement.style.setProperty("--select-enter-duration", "0s");
+
 afterEach(async () => {
   cleanupSolid();
   document.body.replaceChildren();
@@ -88,6 +91,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     const first = () => picker.querySelector('[role="option"][data-value="fixture/model-0"]');
     await expect.poll(first).not.toBeNull();
     const original = first();
+    picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+    await expect.poll(() => picker.querySelector(".picker-select__search")).not.toBeNull();
     const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
     await page.elementLocator(search).fill("Model");
     await new Promise<void>((resolve) => {
@@ -102,6 +107,50 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
   });
 
   it.each([false, true])(
+    "keeps the row gap, none after the last (windowed=%s)",
+    async (windowed) => {
+      const { role } = await browser(1280);
+      const gap = Number.parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue("--menu-item-gap"),
+      );
+      expect(gap).toBeGreaterThan(0);
+      const count = windowed ? 1000 : 60;
+      const { picker } = await mountModel(numberedModels(count), "width:240px;margin:24px", {
+        windowed,
+      });
+      await role("button", "Model: Model 0").click();
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const settle = () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      // The current value stays mounted while windowed, so the far end skips that row.
+      const rows = (from = 0) =>
+        [...picker.querySelectorAll<HTMLElement>('.picker-select__options [role="option"]')]
+          .filter((row) => Number(row.dataset.value?.split("-").at(-1)) >= from)
+          .map((row) => row.getBoundingClientRect())
+          .toSorted((left, right) => left.top - right.top);
+      const gaps = (current: DOMRect[]) =>
+        current.slice(1).map((row, index) => row.top - current[index]!.bottom);
+      await expect.poll(() => rows()[0]?.height ?? 0).toBeGreaterThan(0);
+      await settle();
+      const openHeight = list.scrollHeight;
+      expect(openHeight).toBe(count * (rows()[0]!.height + gap) - gap);
+      expect(new Set(gaps(rows()))).toEqual(new Set([gap]));
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event("scroll"));
+      await expect
+        .poll(() => list.querySelector(`[data-value="fixture/model-${count - 1}"]`))
+        .not.toBeNull();
+      await settle();
+      expect(list.scrollHeight).toBe(openHeight);
+      const end = rows(1);
+      expect(new Set(gaps(end))).toEqual(new Set([gap]));
+      expect(end.at(-1)!.bottom).toBeCloseTo(list.getBoundingClientRect().bottom, 0);
+    },
+  );
+
+  it.each([false, true])(
     "keeps the scroll position on clipped edge hover (windowed=%s)",
     async (windowed) => {
       const { userEvent, role } = await browser(1280);
@@ -112,29 +161,40 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       );
       await role("button", "Model: Model 0").click();
       const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      // Keep the edge rows below within a short region regardless of the Select height budget.
+      list.style.maxHeight = "240px";
       const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
       await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
       await expect.poll(() => rows()[0]?.getBoundingClientRect().height ?? 0).toBeGreaterThan(0);
       const rowHeight = rows()[0]!.getBoundingClientRect().height;
+      const rowStep =
+        rowHeight +
+        Number.parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue("--menu-item-gap"),
+        );
       const settle = () =>
         new Promise<void>((resolve) => {
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
         });
+      // Opening reveals the current value; scroll only once that has settled.
+      await settle();
       for (const edge of ["bottom", "top"] as const) {
         // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
-        const middle = rowHeight * 10 + Math.round(rowHeight / 2);
+        const middle = rowStep * 10 + Math.round(rowHeight / 2);
         list.scrollTop = edge === "bottom" ? middle - list.clientHeight : middle;
         list.dispatchEvent(new Event("scroll"));
         await settle();
         const top = list.scrollTop;
         const bounds = list.getBoundingClientRect();
-        const clipped = rows().find((row) => {
-          const rect = row.getBoundingClientRect();
-          return edge === "bottom"
-            ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
-            : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
-        })!;
-        expect(clipped, edge).toBeDefined();
+        const findClipped = () =>
+          rows().find((row) => {
+            const rect = row.getBoundingClientRect();
+            return edge === "bottom"
+              ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
+              : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
+          });
+        await expect.poll(findClipped, { message: edge }).toBeDefined();
+        const clipped = findClipped()!;
         const rect = clipped.getBoundingClientRect();
         // Hover the list at the clipped row's visible sliver; hovering the row
         // itself would let Playwright scroll it into view before moving.
@@ -273,6 +333,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       for (const picker of pickers) {
         const trigger = picker.querySelector<HTMLButtonElement>("button")!;
         await page.elementLocator(trigger).click();
+        await expect.poll(() => picker.querySelector(".header-search__toggle")).not.toBeNull();
+        picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+        await expect.poll(() => picker.querySelector('input[role="combobox"]')).not.toBeNull();
         const search = picker.querySelector<HTMLInputElement>('input[role="combobox"]')!;
         await expect.element(search).toHaveFocus();
         expect(getComputedStyle(search).direction).toBe(direction);
@@ -280,11 +343,15 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         await page.elementLocator(search).fill("one");
         expect(getComputedStyle(search).textAlign).toBe("start");
         await userEvent.keyboard("{Escape}");
+        await expect
+          .element(picker.querySelector<HTMLButtonElement>(".header-search__toggle")!)
+          .toHaveFocus();
+        await userEvent.keyboard("{Escape}");
         await expect.element(trigger).toHaveFocus();
       }
       for (const label of ["Value", "Nested value"]) {
         const input = host.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-        expect(getComputedStyle(input).textAlign).toBe("right");
+        expect(getComputedStyle(input).textAlign).toBe("start");
       }
       expect(onChange).not.toHaveBeenCalled();
     },
@@ -410,6 +477,8 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         if (width === 1280) {
           expect(open).toBeGreaterThan(trigger.getBoundingClientRect().width + 20);
         }
+        picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
+        await expect.poll(() => picker.querySelector(".picker-select__search")).not.toBeNull();
         const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
         await page.elementLocator(search).fill("long provider");
         await expect.poll(count).toBe(1);
@@ -449,6 +518,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
     const utility = role("button", "Utility Model: retired/not-offered");
     await expect.element(utility).toBeVisible();
     await utility.click();
+    await role("button", "Search").click();
     await role("combobox", "Search").fill("retired/not-offered");
     await userEvent.keyboard("{Enter}");
     expect(utilityChange).not.toHaveBeenCalled();
@@ -471,14 +541,13 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       );
       const trigger = role("button", "Model: anchor");
       await trigger.click();
-      await expect.element(role("combobox", "Search")).toHaveFocus();
+      await expect.element(role("listbox", "Model")).toHaveFocus();
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();
       await page.viewport(390, 844);
       expect(scrollX).toBe(0);
       await trigger.click();
-      const search = role("combobox", "Search");
-      await expect.element(search).toHaveFocus();
+      await expect.element(role("listbox", "Model")).toHaveFocus();
       const bounds = picker.querySelector("button")!.getBoundingClientRect();
       expect(scrollX).toBe(0);
       expect(bounds.left).toBeGreaterThanOrEqual(0);
@@ -511,10 +580,9 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
         ),
         "position:fixed;right:12px;top:32px;width:90px",
       );
-      let trigger = role("button", "Decision Model: Alpha decision model");
+      let trigger = role("button", "Decision model: Alpha decision model");
       await trigger.click();
-      const search = role("combobox", "Search");
-      await expect.element(search).toHaveFocus();
+      await expect.element(role("button", "Search")).toBeVisible();
       const alpha = role("button", "Alpha 1");
       await userEvent.keyboard("{Tab}");
       await expect.element(alpha).toHaveFocus();
@@ -527,7 +595,7 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       setValue("beta/two");
       flush();
       await picker.updateComplete;
-      trigger = role("button", "Decision Model: Beta decision model");
+      trigger = role("button", "Decision model: Beta decision model");
       expect(document.activeElement).toBe(
         picker.querySelector('[role="group"][aria-label="Beta"] button'),
       );

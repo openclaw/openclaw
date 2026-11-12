@@ -6,16 +6,22 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts as IngressCommand } from "../agents/command/types.js";
 import * as preparedRuntime from "../agents/prepared-model-runtime.js";
+import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
+import * as replyDelivery from "../agents/tools/sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import { writeConfigFile } from "../config/io.js";
 import {
   loadTranscriptEvents,
+  replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import * as pendingInputs from "../config/sessions/session-accessor.pending-inputs.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
+import { getLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
@@ -40,6 +46,11 @@ installGatewayTestHooks({
     const role = expectDefined(cfg.gateway?.roles?.definitions?.view, "guest role");
     role.scopes = ["operator.sessions.read", "operator.sessions.write"];
     role.sandbox = "required";
+    expectDefined(cfg.gateway?.roles?.definitions, "role definitions").blocked = {
+      agents: [],
+      scopes: [],
+      sessions: { others: "none" },
+    };
     cfg.tools = { sessions: { visibility: "all" } };
     await writeConfigFile(cfg);
     kernel = await captureGatewayKernel(async () => {
@@ -55,11 +66,15 @@ async function withFollowup(
     revoke: () => void;
     profileId: string;
     child: string;
+    parent: string;
     foreign: string;
     runId: string;
     readInput: (sessionKey?: string) => Promise<{ pending: unknown; transcript: unknown }>;
     waitForCompletion: (signal: AbortSignal) => Promise<void>;
-  }) => Promise<void>,
+    observe: () => Promise<{ status: string; error?: string; stopReason?: string }>;
+    invalidateAccepted: (boundary: "access revoked" | "session replaced") => Promise<void>;
+  }) => Promise<void | (() => Promise<void>)>,
+  sameSession = false,
 ) {
   const context = kernel.gatewayRequestContext;
   const cfg = context.getRuntimeConfig();
@@ -93,7 +108,7 @@ async function withFollowup(
       },
     );
   }
-  const readInput = async (sessionKey = child) => {
+  const readInput = async (sessionKey = sameSession ? parent : child) => {
     const scope = {
       agentId: "main",
       sessionKey,
@@ -132,7 +147,7 @@ async function withFollowup(
       return pending;
     });
   try {
-    await withPluginRuntimeGatewayRequestScope(
+    const afterSender = await withPluginRuntimeGatewayRequestScope(
       { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
       () =>
         withPersonalToolTurn(
@@ -150,11 +165,11 @@ async function withFollowup(
             const tool = createSessionsSendTool({
               config: cfg,
               agentSessionKey: parent,
-              completionOwner: "caller",
+              ...(sameSession ? {} : { completionOwner: "caller" as const }),
               idempotencyKey: runId,
             });
-            await run({
-              send: (sessionKey = child) =>
+            return await run({
+              send: (sessionKey = sameSession ? parent : child) =>
                 tool.execute("followup-child", {
                   sessionKey,
                   mode: "followup",
@@ -164,14 +179,47 @@ async function withFollowup(
               revoke: () => source.abort(new Error("followup source revoked")),
               profileId,
               child,
+              parent,
               foreign,
               runId,
               readInput,
               waitForCompletion: (signal) => withinTest(completed.promise, signal),
+              observe: () =>
+                expectDefined(context.lifecycleRuntime, "Gateway lifecycle observer").waitForAgent({
+                  runId,
+                  timeoutMs: 1,
+                }),
+              invalidateAccepted: async (boundary) => {
+                if (boundary === "access revoked") {
+                  await dispatchGatewayMethodInProcess(
+                    "users.setRole",
+                    { profileId, role: "blocked" },
+                    {
+                      resolveGatewayContext: () => context,
+                      forceSyntheticClient: true,
+                      operatorRoleActor: { kind: "system" },
+                      syntheticScopes: ["operator.admin"],
+                    },
+                  );
+                } else {
+                  const current = await loadSessionEntryAsync(parent, { agentId: "main" });
+                  await replaceSessionEntry(
+                    { agentId: "main", sessionKey: parent },
+                    {
+                      ...expectDefined(current.entry, "current accepted session"),
+                      sessionId: randomUUID(),
+                      lifecycleRevision: randomUUID(),
+                    },
+                  );
+                }
+              },
             });
           },
         ),
     );
+    if (afterSender) {
+      await afterSender();
+    }
   } finally {
     await Promise.allSettled(executions);
     execution.mockRestore();
@@ -214,6 +262,126 @@ it("persists narrow followups but denies raw agent calls", async ({ signal }) =>
     expect(agentCommandMock).toHaveBeenCalledOnce();
   });
 });
+
+it.for(["success", "failure", "cancelled"] as const)(
+  "settles a guest's accepted same-session followup with its actual %s outcome",
+  async (outcome, { signal }) => {
+    const warnings: unknown[] = [];
+    setLoggerOverride({ level: "warn", consoleLevel: "silent" });
+    getLogger().attachTransport((record) => {
+      warnings.push(record);
+    });
+    try {
+      await withFollowup(async ({ send, parent, runId, readInput, waitForCompletion, observe }) => {
+        agentCommandMock.mockImplementation(async (input) => {
+          const command = input as IngressCommand;
+          await expectDefined(
+            command.userTurnTranscriptRecorder,
+            "real input recorder",
+          ).persistApproved();
+          if (outcome === "failure" && command.runId === runId) {
+            throw new Error("The saved review could not be read.");
+          }
+          if (outcome === "cancelled" && command.runId === runId) {
+            throw createAgentRunDirectAbortError();
+          }
+          const { terminalReply } = prepareAgentRunTerminalReply({ rawText: "Review complete." });
+          return {
+            payloads: [{ text: "Review complete.", mediaUrl: null }],
+            meta: { durationMs: 1, terminalReply },
+          };
+        });
+        await expect(send()).resolves.toMatchObject({
+          details: {
+            status: "accepted",
+            runId,
+            targetDisposition: "queued",
+            delivery: { status: "pending" },
+          },
+        });
+        return async () => {
+          await waitForCompletion(signal);
+          expect((await waitForGatewayActiveWork(10_000)).drained).toBe(true);
+          expect(agentCommandMock).toHaveBeenCalledTimes(outcome === "success" ? 1 : 2);
+          expect(agentCommandMock.mock.calls[0]?.[0]).toMatchObject({ sessionKey: parent, runId });
+          const accepted = await readInput();
+          expect(JSON.stringify(accepted.transcript)).toContain(MESSAGE);
+          expect(JSON.stringify(accepted.transcript)).not.toContain("missing scope");
+          expect(JSON.stringify(warnings)).not.toContain("sessions_send reply flow failed");
+          expect(JSON.stringify(warnings)).not.toContain(
+            "sessions_send reply flow admission failed",
+          );
+          if (outcome === "success") {
+            expect((await observe()).status).toBe("ok");
+          } else if (outcome === "failure") {
+            expect(await observe()).toMatchObject({
+              status: "error",
+              error: "The saved review could not be read.",
+            });
+            expect(agentCommandMock.mock.calls[1]?.[0]).toMatchObject({
+              sessionKey: parent,
+              message: expect.stringContaining("The saved review could not be read."),
+            });
+          } else {
+            expect(await observe()).toMatchObject({ status: "error", stopReason: "rpc" });
+          }
+        };
+      }, true);
+    } finally {
+      resetLogger();
+      setLoggerOverride({ level: "silent", consoleLevel: "silent" });
+    }
+  },
+);
+
+it.for(["access revoked", "session replaced"] as const)(
+  "rejects late self-followup delivery after accepted %s",
+  async (boundary, { signal }) => {
+    const entered = createDeferred();
+    const finish = createDeferred();
+    const delivery = vi.spyOn(replyDelivery, "runSessionsSendA2AFlow");
+    try {
+      await withFollowup(async ({ send, runId, waitForCompletion, invalidateAccepted }) => {
+        agentCommandMock.mockImplementation(async (input) => {
+          const command = input as IngressCommand;
+          await expectDefined(
+            command.userTurnTranscriptRecorder,
+            "real input recorder",
+          ).persistApproved();
+          entered.resolve();
+          await finish.promise;
+          throw new Error("The accepted review failed after its requester changed.");
+        });
+        await expect(send()).resolves.toMatchObject({
+          details: {
+            status: "accepted",
+            runId,
+            targetDisposition: "queued",
+            delivery: { status: "pending" },
+          },
+        });
+        return async () => {
+          try {
+            await withinTest(entered.promise, signal);
+            await invalidateAccepted(boundary);
+            finish.resolve();
+            await waitForCompletion(signal);
+            expect((await waitForGatewayActiveWork(10_000)).drained).toBe(true);
+            expect(agentCommandMock).toHaveBeenCalledOnce();
+            // This real consumer owns both the returned notice and source-channel send.
+            // Revoked results must not reach it, even after the accepted producer ends.
+            expect(delivery).not.toHaveBeenCalled();
+          } finally {
+            finish.resolve();
+          }
+        };
+      }, true);
+    } finally {
+      finish.resolve();
+      delivery.mockRestore();
+    }
+  },
+);
 
 it("rejects an unrelated target without persisting or executing input", async () => {
   await withFollowup(async ({ send, foreign, readInput }) => {

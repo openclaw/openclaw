@@ -145,12 +145,7 @@ it.each([undefined, "--show-object-format", "unknown-format"])(
 );
 
 it.each([
-  [
-    "feature",
-    "origin/trunk",
-    ["origin/trunk", "main", "master", "origin/main", "origin/master"],
-    "trunk",
-  ],
+  ["feature", "origin/trunk", ["origin/trunk", "main"], "trunk"],
   ["feature", null, ["main", "master", "origin/main", "origin/master"], "main"],
   ["feature", null, ["master", "origin/main", "origin/master"], "master"],
   ["feature", null, ["origin/main", "origin/master"], "origin/main"],
@@ -161,15 +156,18 @@ it.each([
 ] as const)(
   "resolves branch %s with default %s and refs %j to %s",
   async (branch, symbolicDefault, refs, baseRef) => {
+    const qualify = (ref: string) =>
+      `refs/${ref.startsWith("origin/") ? "remotes" : "heads"}/${ref}`;
     const gitOut = async (_root: string, args: string[]) =>
       args[0] === "symbolic-ref"
-        ? symbolicDefault
-        : refs.some((ref) => ref === args[1])
+        ? symbolicDefault && qualify(symbolicDefault)
+        : refs.some((ref) => qualify(ref) === args[1])
           ? `${args[1]}-base\n`
           : null;
+    const base = baseRef === "HEAD" ? "head-sha" : `${qualify(symbolicDefault ?? baseRef)}-base`;
     await expect(
-      resolveSessionDiffBase({ branch, gitOut, head: "captured-head", root: "/repo" }),
-    ).resolves.toEqual({ base: baseRef === "HEAD" ? "captured-head" : `${refs[0]}-base`, baseRef });
+      resolveSessionDiffBase({ branch, gitOut, head: "head-sha", root: "/repo" }),
+    ).resolves.toEqual({ base, baseRef });
   },
 );
 
@@ -219,6 +217,7 @@ it.skipIf(process.platform === "win32").each(["all", "uncommitted"] as const)(
         { path: "file.txt", status: "modified", additions: 1, deletions: 1 },
         { path: "new.txt", untracked: true, additions: 1 },
       ]);
+      expect(commands.mock.calls.filter(([argv]) => argv.includes("ls-files"))).toHaveLength(0);
     }),
 );
 
@@ -230,29 +229,29 @@ it("binds a clean inventory to its checkout, HEAD, and selected comparison", () 
     await write("file.txt", "feature\n");
     await git("commit", "-am", "feature");
     const head = (await git("rev-parse", "HEAD")).trim();
-    const cleanWorktree = { root, head };
+    const worktreeStatus = { root, head, clean: true, untrackedPaths: [] };
     const clean = await runGitWorkerOperation({
       type: "checkout.diff",
-      input: { cwd: root, scope: "uncommitted", cleanWorktree },
+      input: { cwd: root, scope: "uncommitted", worktreeStatus },
     });
     expect(clean).toMatchObject({ files: [], aheadCount: 1, commits: [{ subject: "feature" }] });
     const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
     for (const input of [{ scope: "all" as const }, { scope: "commit" as const, commit: head }]) {
       const diff = await runGitWorkerOperation({
         type: "checkout.diff",
-        input: { cwd: root, cleanWorktree, ...input },
+        input: { cwd: root, worktreeStatus, ...input },
       });
       expect(diff.files[0]).toMatchObject({ path: "file.txt", additions: 1, deletions: 1 });
     }
     expect(commands.mock.calls.filter(([argv]) => argv.includes("ls-files"))).toHaveLength(0);
     await write("file.txt", "unstaged\n");
     for (const stale of [
-      { root, head: base },
-      { root: path.join(root, "other"), head },
+      { ...worktreeStatus, head: base },
+      { ...worktreeStatus, root: path.join(root, "other") },
     ]) {
       const diff = await runGitWorkerOperation({
         type: "checkout.diff",
-        input: { cwd: root, scope: "uncommitted", cleanWorktree: stale },
+        input: { cwd: root, scope: "uncommitted", worktreeStatus: stale },
       });
       expect(diff.files[0]?.patch).toContain("+unstaged");
     }
@@ -275,7 +274,7 @@ it.skipIf(process.platform === "win32")(
       await fs.mkdir(cwd);
       await promisify(execFile)("git", ["-C", cwd, "init", "-b", "main"]);
       await fs.writeFile(path.join(cwd, "created.txt"), "created\n");
-      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_001);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1_001);
       const recreated = await read();
       expect(recreated.unavailableReason).toBeUndefined();
       expect(recreated.files).toEqual([
@@ -285,7 +284,7 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
-  "reuses diffs from nested and aliased linked worktrees while an index writer holds its lock",
+  "reuses managed diffs from nested and aliased linked worktrees while an index writer holds its lock",
   () =>
     withCheckout("openclaw-linked-diff-", async ({ root }) => {
       const origin = path.join(root, "origin");
@@ -302,7 +301,8 @@ it.skipIf(process.platform === "win32")(
       const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
         const timing: DiffReadTiming = { durations: {} };
-        const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
+        const read = () =>
+          loadCheckoutDiff({ cwd, sessionKey: "fixture", refreshIndex: true }, timing);
         const first = await read();
         expect(first.files[0]?.patch).toContain("+after");
         expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(

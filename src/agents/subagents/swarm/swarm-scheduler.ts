@@ -345,20 +345,6 @@ export function activateSwarmRun(
   pumpLane(lane);
 }
 
-export function enqueueSwarmRun(
-  params: SwarmLaunch & {
-    groupId: string;
-    runId: string;
-    maxConcurrent: number;
-    activeRunIds: readonly string[];
-  },
-): void {
-  if (!reserveSwarmRun(params)) {
-    throw new Error(`swarm scheduler run already exists: ${params.runId}`);
-  }
-  activateSwarmRun(params);
-}
-
 export function releaseSwarmRun(runId: string): boolean {
   const location = runLocations.get(runId);
   if (!location || location.state !== "active") {
@@ -492,25 +478,5 @@ export function holdQueuedSwarmRun(runId: string) {
         (await item.removal) && !item.pendingLaunch && item.removalReason === "cancelled",
       );
     },
-  };
-}
-
-const testing = {
-  reset() {
-    for (const location of runLocations.values()) {
-      location.item?.removeAbortListener?.();
-    }
-    lanes.clear();
-    runLocations.clear();
-    reservationRevision++;
-    notifyGatewayWorkMetricsChanged();
-    pendingRemovals.clear();
-    pendingLaunches.clear();
-  },
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.swarmSchedulerTestApi")] = {
-    testing,
   };
 }

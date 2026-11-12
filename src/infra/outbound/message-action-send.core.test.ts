@@ -314,6 +314,26 @@ describe("runMessageAction core send routing", () => {
     expect(mockFirstRecordArg(sendText, "send text").text).toBe(expected);
   });
 
+  it.each([
+    ["one\\ntwo", "one\ntwo"],
+    ["one\ntwo\\nthree", "one\ntwo\nthree"],
+    ['Before\\n`printf("%d\\n", x);`\\nafter', 'Before\n`printf("%d\\n", x);`\nafter'],
+    ["Use ``a`b\\nc``\\nnext", "Use ``a`b\\nc``\nnext"],
+    [
+      'Fix:\n```c\nprintf("%d\\n", x);\n```\nEnd\\nnext',
+      'Fix:\n```c\nprintf("%d\\n", x);\n```\nEnd\nnext',
+    ],
+    ["~~~\na\\nb\n~~~\nEnd\\nnext", "~~~\na\\nb\n~~~\nEnd\nnext"],
+    ["Code:\n\n    a\\nb\n\nEnd\\nnext", "Code:\n\n    a\\nb\n\nEnd\nnext"],
+  ])("unescapes newlines only outside code in %j", async (message, expected) => {
+    const sendText = registerSlackTextPlugin();
+    await runMessageAction({
+      cfg: { channels: { slack: { enabled: true } } },
+      params: { channel: "slack", target: "channel:OTHER", message },
+    });
+    expect(mockFirstRecordArg(sendText, "send text").text).toBe(expected);
+  });
+
   it("leaves media-only sends without a responsePrefix", async () => {
     const sendMedia = vi.fn().mockResolvedValue(receipt("slack", "m1", "C123"));
     registerPlugin(

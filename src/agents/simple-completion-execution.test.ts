@@ -7,6 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { bindModelCompletionOwner } from "../llm/model-runtime-binding.js";
+import {
+  getModelTransportContext,
+  withModelTransportContext,
+} from "../llm/model-transport-context.js";
 import type { Model } from "../llm/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { completionContext, completionModel } from "./simple-completion.test-support.js";
@@ -76,23 +80,51 @@ it.each(["success", "returned-error", "thrown"])(
       errorMessage: outcome === "success" ? undefined : "fixture error",
     });
     message.usage.usageReport = { state: "available" };
-    if (outcome === "thrown") {
-      mocks.complete.mockRejectedValueOnce(new Error("before usage"));
-    } else {
-      mocks.complete.mockResolvedValueOnce(message);
-    }
+    const outerWait = vi.fn();
+    const outerContext = {
+      sessionKey: "foreground-session",
+      runId: "foreground-run",
+      requestId: "foreground-call",
+      priority: "background" as const,
+      onRateLimitWait: outerWait,
+    };
+    let observed: ReturnType<typeof getModelTransportContext>;
+    mocks.complete.mockImplementationOnce(async () => {
+      observed = getModelTransportContext();
+      expect(observed).toMatchObject({
+        runId: expect.any(String),
+        requestId: expect.any(String),
+        priority: "background",
+        onRateLimitWait: expect.any(Function),
+      });
+      expect(observed?.runId).not.toBe(outerContext.runId);
+      expect(observed?.requestId).not.toBe(outerContext.requestId);
+      expect(observed?.sessionKey).toBeUndefined();
+      expect(observed?.onRateLimitWait).not.toBe(outerWait);
+      await Promise.resolve();
+      expect(getModelTransportContext()).toBe(observed);
+      observed?.onRateLimitWait?.(Date.now())?.();
+      if (outcome === "thrown") {
+        throw new Error("before usage");
+      }
+      return message;
+    });
     await withEnvAsync(
       {
         OPENCLAW_DIAGNOSTICS: "timeline",
         OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file,
       },
       async () => {
-        const result = complete({ model: baseModel });
-        if (outcome === "thrown") {
-          await expect(result).rejects.toThrow("before usage");
-        } else {
-          await expect(result).resolves.toBe(message);
-        }
+        await withModelTransportContext(outerContext, async () => {
+          const result = complete({ model: baseModel });
+          if (outcome === "thrown") {
+            await expect(result).rejects.toThrow("before usage");
+          } else {
+            await expect(result).resolves.toBe(message);
+          }
+          expect(getModelTransportContext()).toBe(outerContext);
+        });
+        expect(outerWait).not.toHaveBeenCalled();
         flushDiagnosticsTimeline();
       },
     );
@@ -103,6 +135,8 @@ it.each(["success", "returned-error", "thrown"])(
     expect(events.filter((event) => event.name === "provider.request.started")).toHaveLength(1);
     expect(events.filter((event) => event.type === "provider.request")).toEqual([
       expect.objectContaining({
+        runId: observed?.runId,
+        spanId: observed?.requestId,
         ok: outcome === "success",
         attributes: expect.objectContaining({
           observationUnit: "logical-call",
@@ -113,6 +147,58 @@ it.each(["success", "returned-error", "thrown"])(
     ]);
   },
 );
+
+it.each(["interactive", "background"] as const)(
+  "isolates concurrent completions while preserving %s admission priority",
+  async (priority) => {
+    const file = path.join(tempDirs.make("simple-completion-context-"), "timeline.jsonl");
+    const contexts: ReturnType<typeof getModelTransportContext>[] = [];
+    mocks.complete.mockImplementation(async () => {
+      const current = getModelTransportContext();
+      contexts.push(current);
+      await Promise.resolve();
+      expect(getModelTransportContext()).toBe(current);
+      return makeAssistantMessageFixture();
+    });
+    await withEnvAsync(
+      { OPENCLAW_DIAGNOSTICS: "timeline", OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: file },
+      () =>
+        withModelTransportContext({ requestId: "outer", priority }, async () => {
+          await Promise.all([complete({ model: baseModel }), complete({ model: baseModel })]);
+          expect(getModelTransportContext()).toEqual({ requestId: "outer", priority });
+          flushDiagnosticsTimeline();
+        }),
+    );
+    expect(contexts).toHaveLength(2);
+    expect(new Set(contexts.map((current) => current?.requestId)).size).toBe(2);
+    for (const current of contexts) {
+      expect(current).toMatchObject({
+        requestId: expect.any(String),
+        runId: current?.requestId,
+        priority,
+      });
+      expect(current?.requestId).not.toBe("outer");
+    }
+  },
+);
+
+it("preserves the caller's transport context when diagnostics are disabled", async () => {
+  const outerContext = {
+    requestId: "outer",
+    priority: "interactive" as const,
+    onRateLimitWait: vi.fn(),
+  };
+  mocks.complete.mockImplementationOnce(async () => {
+    await Promise.resolve();
+    expect(getModelTransportContext()).toBe(outerContext);
+    return makeAssistantMessageFixture();
+  });
+  await withEnvAsync(
+    { OPENCLAW_DIAGNOSTICS: undefined, OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: undefined },
+    () => withModelTransportContext(outerContext, () => complete({ model: baseModel })),
+  );
+  expect(completionOptions()[0]).not.toHaveProperty("requestId");
+});
 
 it.each([
   "src/agents/host-prepared-isolated-completion.ts",

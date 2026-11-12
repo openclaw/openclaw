@@ -1,10 +1,12 @@
 import type { JSX } from "@solidjs/web";
 import { createProjection, createSignal, Errored, lazy, Loading, onSettled } from "solid-js";
+import type { SessionBranch } from "../../../api/types.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
 import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { CompactSessionMenuView } from "../../../components/session-menu-compact.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
+import { iconButtonClass } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
@@ -38,7 +40,13 @@ const Content = lazy(() => import("./chat-header-session-menu-content.tsx"), {
 
 export type { HeaderMenuQuickAction } from "./chat-quick-action.tsx";
 
-export type CompactMenuView = CompactSessionMenuView | "sharing" | "view";
+export type CompactMenuView = CompactSessionMenuView | "sharing" | "view" | "versions";
+/** Desktop conversation versions; mobile lists them in Details instead. */
+export type HeaderMenuVersions = {
+  branches: readonly SessionBranch[];
+  disabledReason: string | null;
+  onSelect: (leafEntryId: string) => void;
+};
 export type HeaderMenuProps = {
   session: SessionMenuData;
   /** Pane-local actions before a catalog thread has session management metadata. */
@@ -66,6 +74,7 @@ export type HeaderMenuProps = {
   composeSessionActions?: (nativeActions: HeaderMenuSessionAction[]) => HeaderMenuSessionAction[];
   viewActions?: HeaderMenuQuickAction[];
   viewContent?: JSX.Element;
+  versions?: HeaderMenuVersions;
   boardWidgetMenu?: BoardWidgetPageMenu;
   sharing: ChatSessionSharingProps | null;
   groups: readonly string[];
@@ -234,7 +243,7 @@ function ChatHeaderSessionMenuShell(
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
       label={label()}
-      triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
+      triggerClass={[iconButtonClass({ size: 28 }), "chat-header-session-menu__trigger"]}
       trigger={<Icon name="moreHorizontal" />}
       items={items}
       onSelect={(item, event) => handlers?.select(item, event)}
@@ -290,6 +299,7 @@ export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMe
         attribute: false,
       },
       viewContent: { default: undefined, attribute: false },
+      versions: { default: undefined, attribute: false },
       viewActions: { default: undefined, attribute: false },
       sessionActions: { default: [], attribute: false },
       composeSessionActions: { default: undefined, attribute: false },

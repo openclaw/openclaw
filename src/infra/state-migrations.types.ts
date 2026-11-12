@@ -3,6 +3,7 @@ import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
+import type { StateLeaseLoss } from "../shared/state-lease-loss.js";
 import type { EngineConnection } from "./sql-connection.js";
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
@@ -126,6 +127,7 @@ export type DetectedPluginDoctorStateMigrationPlan = {
 export type MigrationMessages = {
   changes: string[];
   warnings: string[];
+  leaseLoss?: StateLeaseLoss;
   notices?: string[];
   /** Active plugin owners whose required migration phases were inspected and completed. */
   completedPluginIds?: readonly string[];
@@ -186,6 +188,7 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   sqliteFamilies?: MigrationMessages["sqliteFamilies"];
   changes: string[];
   warnings: string[];
+  leaseLoss?: StateLeaseLoss;
   notices?: string[];
   refusedAgentDatabasePaths?: readonly string[];
   recoveredAgentDatabasePaths?: readonly string[];

@@ -47,7 +47,7 @@ import type {
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { AuthStorage } from "./sessions/auth-storage.core.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
@@ -55,10 +55,20 @@ const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 export async function prepareFullCatalogFacts(
   agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
     Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    | "pluginMetadataSnapshot"
+    | "pluginRegistry"
+    | "preparedStaticProviderCatalog"
+    | "providerStaticModels"
+  >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
-  options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
+  options: {
+    includeNative?: boolean;
+    providerIds?: readonly string[];
+    assertCurrent?: () => void;
+  } = {},
 ): Promise<PreparedModelRuntimeCatalogFacts & { catalogModels: readonly Model[] }> {
   const prepare = async () => {
     const { env, input, templateAuthStorage } = agentFacts;
@@ -148,10 +158,11 @@ export async function prepareFullCatalogFacts(
         { providerMetadataOwners: pluginMetadataSnapshot.owners },
       ).map((model) => completeInlineProviderModel(model, providerConfig)),
     );
-    const configuredRuntimeModels = completeConfiguredRuntimeModels(
+    const configuredRuntimeModels = await completeConfiguredRuntimeModels(
       agentFacts,
       pluginGeneration,
       templateModelRegistry,
+      options.assertCurrent,
     );
     const providerOutcomes = catalogSource.providerOutcomes ?? [];
     const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
@@ -183,7 +194,6 @@ export async function prepareFullCatalogFacts(
       catalogModels,
       modelCatalog: completeModelCatalog,
       configuredRuntimeModels,
-      inlineProviderModels: pluginGeneration.inlineProviderModels,
     };
   };
   return withPluginRuntimeGenerationScope(
@@ -336,13 +346,14 @@ export function createPreparedModelRuntimeSnapshot(
 ): PreparedModelRuntimeSnapshot {
   const { credentials, input } = agentFacts;
   const {
+    inlineProviderModels,
     mediaCapabilityProviders,
     mediaCapabilityProviderSource,
     messageToolCatalog,
     pluginMetadataSnapshot,
     pluginRegistry,
   } = pluginGeneration;
-  const { configuredRuntimeModels, inlineProviderModels, templateModelRegistry } = catalogFacts;
+  const { configuredRuntimeModels, templateModelRegistry } = catalogFacts;
   const modelCatalog = materializePreparedModelCatalog(
     catalogFacts.modelCatalog,
     agentFacts.runtimeCapabilityModels,
