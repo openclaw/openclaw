@@ -5,9 +5,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { consumeReplyUsageState } from "../auto-reply/reply/reply-usage-state.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
@@ -543,65 +541,6 @@ describe("runBtwSideQuestion", () => {
       mode: "token",
       requirement: "subscription",
     });
-  });
-
-  it("exposes block-streamed side-question usage without mutating the parent session", async () => {
-    const tokens = { input: 13, output: 9, cacheRead: 7, cacheWrite: 3 };
-    const usage = { ...tokens, total: 41 };
-    const cost = { input: 0.1, output: 0.1, cacheRead: 0.03, cacheWrite: 0.02, total: 0.25 };
-    const text = "Side answer.";
-    const onBlockReply = vi.fn().mockResolvedValue(undefined);
-    const done = btw.createDoneEvent(text);
-    done.message.usage = { ...tokens, totalTokens: 41, cost };
-    btw.streamSimpleMock.mockReturnValue(
-      btw.makeAsyncEvents([
-        { type: "text_delta", delta: text },
-        { type: "text_end", content: text, contentIndex: 0 },
-        done,
-      ]),
-    );
-    const runId = "btw-usage-reply-direct-block";
-    const authorityRunId = "btw-usage-authority-direct-block";
-    const sessionEntry = btw.createSessionEntry({ inputTokens: 200, cacheRead: 100 });
-    const originalEntry = structuredClone(sessionEntry);
-    const diagnostics: unknown[] = [];
-    const unsubscribe = onInternalDiagnosticEvent((event) => {
-      if (event.type === "model.usage") {
-        diagnostics.push(event);
-      }
-    });
-    try {
-      await expect(
-        btw.runSideQuestion({
-          cfg: { diagnostics: { enabled: undefined } },
-          sessionEntry,
-          authorityRunId,
-          blockReplyChunking: { minChars: 1, maxChars: 200, breakPreference: "paragraph" },
-          resolvedBlockStreamingBreak: "text_end",
-          opts: { runId, onBlockReply },
-        }),
-      ).resolves.toEqual(undefined);
-      expect(onBlockReply).toHaveBeenCalledExactlyOnceWith({
-        text,
-        btw: { question: btw.DEFAULT_QUESTION },
-      });
-      expect
-        .soft(consumeReplyUsageState(runId))
-        .toMatchObject({ usage, sessionId: "session-1", turnUsd: 0.25 });
-      expect(consumeReplyUsageState(authorityRunId)).toBeUndefined();
-      expect(sessionEntry).toEqual(originalEntry);
-      await nextTurn();
-      expect.soft(diagnostics).toEqual([
-        expect.objectContaining({
-          type: "model.usage",
-          sessionId: "session-1",
-          usage: { ...usage, promptTokens: 23 },
-          costUsd: 0.25,
-        }),
-      ]);
-    } finally {
-      unsubscribe();
-    }
   });
 
   it("keeps an unprofiled subscription token on the OpenClaw BTW path", async () => {

@@ -488,6 +488,9 @@ suite.define(() => {
               ]);
               await page.goto(new URL("usage", suite.server.baseUrl).toString());
               await waitForControlUiGatewayReady(page);
+              const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+              await agentScope.locator(".agent-select__trigger").click();
+              await agentScope.locator('[data-agent-option][value="opus"]').click();
               const selected = page.locator(
                 `.session-bar-row[title="${key}"] .session-bar-selection`,
               );

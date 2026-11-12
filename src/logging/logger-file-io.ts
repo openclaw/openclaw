@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { appendRegularFile } from "@openclaw/fs-safe/advanced";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 
 const MAX_ROTATED_LOG_FILES = 5;
@@ -89,11 +90,22 @@ export function prepareFileLogTarget(file: string, rolling: boolean): void {
   }
 }
 
+export type DefaultFileLogRoot = { tmpDir: string; stateDir: string };
+
+export function resolveDefaultFileLogTarget(file: string, root: DefaultFileLogRoot): string {
+  return path.join(
+    resolvePreferredOpenClawTmpDir({ tmpdir: () => root.tmpDir, stateDir: root.stateDir }),
+    file,
+  );
+}
+
 export type FileLogIORequest =
+  | { type: "resolveDefault"; file: string; root: DefaultFileLogRoot }
   | { type: "prepare"; file: string; rolling: boolean }
   | { type: "size"; file: string }
   | { type: "append"; file: string; payload: string; rotate: boolean };
 export type FileLogIOResults = {
+  resolveDefault: string;
   prepare: void;
   size: number;
   append: { rotation: "none" | "rotated" | "failed"; appended: boolean };
@@ -104,6 +116,8 @@ export async function executeFileLogIO(
   request: FileLogIORequest,
 ): Promise<FileLogIOResults[keyof FileLogIOResults]> {
   switch (request.type) {
+    case "resolveDefault":
+      return resolveDefaultFileLogTarget(request.file, request.root);
     case "prepare":
       return prepareFileLogTarget(request.file, request.rolling);
     case "size":

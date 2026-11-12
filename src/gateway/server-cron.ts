@@ -28,7 +28,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { emitLegacyHeartbeatCronOutcome } from "../infra/heartbeat-events.js";
 import { mergeSsrFPolicies } from "../infra/net/ssrf.js";
 import { listConfiguredMessageChannels } from "../infra/outbound/channel-selection.js";
-import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging.js";
+import { getChildLogger, getFileLogLevel, toPinoLikeLogger } from "../logging.js";
 import type {
   PluginHookCronChangedEvent,
   PluginHookGatewayCronService,
@@ -104,7 +104,7 @@ export function buildGatewayCronService(params: {
   resolvePluginRegistry?: () => PluginRegistry | undefined;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
-  const cronServiceLogger = toPinoLikeLogger(cronLogger, getResolvedLoggerSettings().level);
+  const cronServiceLogger = toPinoLikeLogger(cronLogger, getFileLogLevel());
   const scheduledGatewayContextResolver = fenceScheduledGatewayContextResolver(
     params.resolveGatewayContext,
   );
@@ -542,7 +542,7 @@ export function buildGatewayCronService(params: {
     ...createGatewayCronFailureRepair(params.cfg, scheduledGatewayContextResolver),
     log: toPinoLikeLogger(
       getChildLogger({ module: "cron", storeKey: storePath }),
-      getResolvedLoggerSettings().level,
+      getFileLogLevel(),
     ),
     onDefinitionChange: publishCronInventoryChange,
     onEvent: (evt, eventContext) => {
