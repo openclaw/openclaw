@@ -157,7 +157,8 @@ export type PluginServiceRegistration = PluginRegistrationOwner & {
   readonly id: string;
   service:
     | import("./types.js").OpenClawPluginService
-    | import("./types.js").OpenClawPluginServiceV2;
+    | import("./types.js").OpenClawPluginServiceV2
+    | import("./types.js").OpenClawPluginServiceV3;
   origin: PluginOrigin;
   trustedOfficialInstall?: boolean;
 };

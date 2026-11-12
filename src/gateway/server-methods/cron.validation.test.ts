@@ -16,8 +16,6 @@ import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
 } from "../../commands/doctor/cron/legacy-repair.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
@@ -52,6 +50,7 @@ import { registerCronRunWaitTests } from "./cron-run-wait.test-support.js";
 import { loadGatewaySessionEntry } from "./cron-session-reader.test-support.js";
 import {
   createCronTestContext,
+  registerCronDeclarationProjectionTest,
   callerClientWithCronCreatorAuthority,
   expectCronSuccess,
   expectCronReply,
@@ -1620,60 +1619,11 @@ describe("cron method validation", () => {
     expectResponseError(respond, { code: "INVALID_REQUEST" });
   });
 
-  it("projects declaration metadata and existing run and delivery state in compact lists", async () => {
-    setRuntimeConfig({ agents: { entries: { main: {}, ops: {} } } });
-    const job = createCronJob({
-      declarationKey: "daily-report",
-      displayName: "Daily report",
-      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
-      state: {
-        nextRunAtMs: 2000,
-        lastRunAtMs: 1000,
-        lastRunStatus: "error",
-        lastError: "boom",
-        lastDelivered: false,
-        lastDeliveryStatus: "not-delivered",
-        lastDeliveryError: "offline",
-        lastFailureNotificationDelivered: true,
-        lastFailureNotificationDeliveryStatus: "delivered",
-      },
-    });
-    const context = createCronContext(job);
-    const missing = await invokeCron("cron.list", { compact: true }, { context });
-    expectCronReply(missing.respond, expect.objectContaining({ jobs: [], total: 0 }));
-    await upsertSessionEntryCore(
-      {
-        agentId: "ops",
-        sessionKey: "agent:ops:main",
-        storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-          agentId: "ops",
-        }),
-      },
-      { sessionId: "declaration-owner", updatedAt: 1, visibility: "shared" },
-    );
-    const { respond } = await invokeCron("cron.list", { compact: true }, { context });
-
-    expectCronReply(
-      respond,
-      expect.objectContaining({
-        jobs: [
-          expect.objectContaining({
-            declarationKey: "daily-report",
-            displayName: "Daily report",
-            owner: { agentId: "ops", sessionKey: "agent:ops:main" },
-            nextRunAtMs: 2000,
-            lastRunAtMs: 1000,
-            lastRunStatus: "error",
-            lastRunError: "boom",
-            lastDelivered: false,
-            lastDeliveryStatus: "not-delivered",
-            lastDeliveryError: "offline",
-            lastFailureNotificationDelivered: true,
-            lastFailureNotificationDeliveryStatus: "delivered",
-          }),
-        ],
-      }),
-    );
+  registerCronDeclarationProjectionTest({
+    invokeCron,
+    createCronContext,
+    setRuntimeConfig,
+    getRuntimeConfig,
   });
 
   it.each([

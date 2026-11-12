@@ -47,6 +47,9 @@ import { withTempConfig } from "../test-temp-config.js";
 import { createGatewayTestRegistry } from "./__tests__/test-utils.js";
 import {
   createCookieSessionReadDispatch,
+  expectSessionKeys,
+  expectSession,
+  sessionKey,
   type DispatchResult,
   type SessionReadMethod,
 } from "./plugins-http-session-read.test-support.js";
@@ -202,6 +205,11 @@ describe("plugin HTTP route runtime scopes", () => {
         hasAvatar: false,
         updatedAt: 1,
       };
+      const device = {
+        kind: "owner" as const,
+        peerKey: `iroh:${"ef".repeat(32)}`,
+        authority: { clawId: "route-claw", rootPub: "route-root", listedSeq: 1 },
+      };
       let scope: RuntimeScope;
       const response = await invoke(
         {
@@ -218,12 +226,17 @@ describe("plugin HTTP route runtime scopes", () => {
             trustDeclaredOperatorScopes: false,
             authenticatedUserProfile: profile,
             operatorRoleActor: { kind: "system" },
+            openclawIdPrincipal: device,
           },
         },
       );
       expect(response.handled).toBe(true);
       expect(scope?.client?.internal?.operatorRoleActor).toEqual(
         auth === "gateway" ? { kind: "system" } : undefined,
+      );
+      // Durable work dispatched from the route keeps the relayed device that authorized it.
+      expect(scope?.client?.internal?.openclawIdPrincipal).toEqual(
+        auth === "gateway" ? device : undefined,
       );
       expect(scope?.client?.authenticatedUserProfile).toEqual(
         auth === "gateway" ? profile : undefined,
@@ -330,7 +343,6 @@ describe("plugin HTTP route runtime scopes", () => {
 });
 
 type SessionDispatch = (method: SessionReadMethod, key?: string) => Promise<DispatchResult>;
-const sessionKey = (name: string) => `agent:main:${name}`;
 
 async function withCookieSessionReader(
   roles: boolean,
@@ -495,20 +507,6 @@ async function withCookieSessionReader(
         }
       },
     });
-  });
-}
-
-function expectSessionKeys(result: DispatchResult, names: string[]) {
-  expect(result.ok).toBe(true);
-  const payload = result.payload as { sessions: Array<{ key: string }> };
-  expect(payload.sessions.map((session) => session.key).toSorted()).toEqual(
-    names.map(sessionKey).toSorted(),
-  );
-}
-async function expectSession(dispatch: SessionDispatch, name: string, session: unknown) {
-  expect(await dispatch("sessions.describe", sessionKey(name))).toMatchObject({
-    ok: true,
-    payload: { session },
   });
 }
 

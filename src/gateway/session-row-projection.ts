@@ -86,12 +86,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     isActive: () => !disposed && !topologyDirty,
     runAsOwner: inOwnerContext,
   });
-  const prepareRegistryFacts = (): Promise<void> | undefined =>
-    disposed
-      ? undefined
-      : !inOwnerContext(subagents.snapshotIdentity)
-        ? inOwnerContext(subagents.prepare)
-        : registryRead.prepare();
+  const prepareRegistryFacts = () => inOwnerContext(metadata.prepareRuntimeFacts);
   const placementFacts = createSessionRowPlacementProjection(
     params.placementFactsReader,
     () => (!disposed && topologyDirty ? topology() : prepareRegistryFacts()),
@@ -134,7 +129,11 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       void ensureMaterialized().catch(() => {});
     },
   });
-  const metadata = createSessionRowProjectionContext(subagents, childRows.invalidate);
+  const metadata = createSessionRowProjectionContext(subagents, {
+    state: () => ({ cfg, epoch, disposed }),
+    prepareRegistry: () => registryRead.prepare(),
+    invalidateChildren: childRows.invalidate,
+  });
   const backfill = createSessionRowProjectionBackfill({
     ready: ensureMaterialized,
     read: (id) => rows.get(id),
@@ -316,6 +315,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       (change.scope === "config-presentation" || change.scope === "config-profiles")
     ) {
       cfg = inOwnerContext(() => params.getConfig?.() ?? cfg);
+      metadata.adoptPresentationConfig(rows.values(), cfg);
     }
     childRows.mark(change);
     epoch++;
@@ -354,7 +354,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         const id = records.identity(row);
         // Runtime summary state does not change the entry-derived materialization.
         if (presentationOnly && row.facts) {
-          row.facts.refreshActivitySummary();
+          row.facts.refreshActivitySummary(cfg);
         } else {
           dirty.add(id);
         }
@@ -489,7 +489,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       records.invalidateDatabaseFacts(row, retained);
       // Certified transcript facts refresh summaries and previews without replacing the row.
       if (retained && records.ready(row) && !dirty.has(id) && row.facts) {
-        row.facts.refreshActivitySummary(retained);
+        row.facts.refreshActivitySummary(cfg, retained);
         backfill.prepare(row, retained);
         revisions.publishFacts(row);
         return;
@@ -541,7 +541,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     describeArchived: (row) => archive.describe(row),
     isCurrent,
     materializePrivate: (row, repository) => materialize(row, undefined, undefined, repository),
-    preparePresentation: (row) => metadata.preparePresentation(row, readChildLinks, cfg),
+    preparePresentation: (row) => metadata.preparePresentation(row, readChildLinks),
   });
   function dispose() {
     disposed = true;

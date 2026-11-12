@@ -1,4 +1,5 @@
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type {
@@ -16,6 +17,8 @@ import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.
 import type { SessionNativeBindingParticipants } from "./session-native-binding.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type { SessionEntry } from "./types.js";
+
+export type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
   previousSessionKeys?: readonly string[];

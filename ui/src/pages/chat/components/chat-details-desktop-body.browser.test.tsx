@@ -1,32 +1,41 @@
 import { flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { ChatDetailsDesktopBody, type ChatDetailsHandoff } from "./chat-details-desktop-body.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 
-function mount(loading: boolean) {
+function mount() {
   const container = document.body.appendChild(document.createElement("div"));
-  let handoff!: ChatDetailsHandoff;
-  function Body(props: { height: number; presented: boolean }) {
+  const chat: ChatDetailsProps = {
+    sessionKey: "agent:main:cached-details-scroll",
+    currentAgentId: "main",
+    selectedSession: undefined,
+    messages: [],
+    cachedDetails: { locale: "en", environment: { branch: "feature/cached", worktree: false } },
+    sessionFactsReady: false,
+    detailsWorkspace: { root: "/workspace/details", label: "details", branch: "feature/cached" },
+  };
+  function Content(props: { chat: ChatDetailsProps }) {
     return (
-      <ChatDetailsDesktopBody presented={props.presented}>
-        {(lifecycle) => {
-          handoff = lifecycle;
-          return <div style={{ height: props.height + "px" }}>Details content</div>;
-        }}
-      </ChatDetailsDesktopBody>
+      <ChatDetailsDesktopContent
+        chat={props.chat}
+        presented
+        dismissed={false}
+        cachedReady
+        progressMenuRef={() => {}}
+        onHideProgress={() => {}}
+      />
     );
   }
-  const view = mountSolid(Body, { height: loading ? 210 : 90, presented: true }, container);
-  if (loading) {
-    handoff.onLoading(true);
-  }
+  const view = mountSolid(Content, { chat }, container);
   onTestFinished(() => {
     view.dispose();
     container.remove();
   });
   return {
     ...view,
-    ...handoff,
+    chat,
     body: container.querySelector<HTMLDivElement>(".chat-details-desktop-body")!,
   };
 }
@@ -53,45 +62,40 @@ async function nextFrame() {
 it("adds no handoff measurements or animations to cached and settled scrolling", async () => {
   const animations = vi.spyOn(Element.prototype, "animate");
   onTestFinished(() => animations.mockRestore());
-  const view = mount(false);
+  // The shared browser graph may already have loaded these modules in another file.
+  const prepared = mount();
+  await waitForSolid(() =>
+    expect(prepared.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
+      "feature/cached",
+    ),
+  );
+  await document.fonts.ready;
+  await nextFrame();
+  await nextFrame();
+  prepared.dispose();
+  const view = mount();
+  expect(view.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
+    "feature/cached",
+  );
   const reads = trackHandoffReads(view.body);
-  view.onReady();
   await nextFrame();
   view.body.dispatchEvent(new Event("scroll"));
   await nextFrame();
-  view.update({ height: 150, presented: true });
+  view.update({
+    chat: {
+      ...view.chat,
+      sessionFactsReady: true,
+      detailsWorkspace: { root: "/workspace/details", label: "details", branch: "feature/updated" },
+    },
+  });
   await nextFrame();
+  expect(view.container.querySelector(".chat-environment__branch-name")?.textContent).toBe(
+    "feature/updated",
+  );
   view.body.dispatchEvent(new Event("focusin"));
   for (const read of reads) {
     expect(read).not.toHaveBeenCalled();
   }
   expect(animations.mock.contexts.filter((element) => element === view.body)).toHaveLength(0);
-  expect(view.body.style.height).toBe("");
-});
-
-it("returns to natural height and the original scroll work after the cold handoff", async () => {
-  const view = mount(true);
-  await nextFrame();
-  view.update({ height: 90, presented: true });
-  view.onLoading(false);
-  view.onReady();
-  await expect.poll(() => view.body.getAnimations().length).toBe(1);
-  await expect.poll(() => view.body.getAnimations().length).toBe(0);
-  expect(view.body.style.height).toBe("");
-  const reads = trackHandoffReads(view.body);
-  view.body.dispatchEvent(new Event("scroll"));
-  await nextFrame();
-  for (const read of reads) {
-    expect(read).not.toHaveBeenCalled();
-  }
-  view.update({ height: 210, presented: true });
-  view.onLoading(true);
-  view.update({ height: 90, presented: true });
-  view.onLoading(false);
-  view.onReady();
-  expect(view.body.getAnimations()).toHaveLength(1);
-  view.body.parentElement!.remove();
-  view.update({ height: 90, presented: false });
-  expect(view.body.getAnimations()).toHaveLength(0);
   expect(view.body.style.height).toBe("");
 });

@@ -1,7 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import * as pluginTools from "./openclaw-plugin-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -14,6 +16,7 @@ export function registerPluginOnlyCallerIdentityCase({
   testConfig: OpenClawConfig;
   requireTool: (tools: CodingTools, name: string) => CodingTools[number];
 }) {
+  registerOrdinaryAutomationsInheritanceCase(testConfig);
   async function execute(options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>) {
     let identity: ReturnType<typeof getGatewayToolCallerIdentity>;
     using spy = vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions");
@@ -85,5 +88,25 @@ export function registerPluginOnlyCallerIdentityCase({
       config: { ...testConfig, tools: { ...testConfig.tools, deny: ["web_search"] } },
     });
     expect(denied?.sessionEventToolsAllow).toEqual(["file_fetch"]);
+  });
+}
+
+function registerOrdinaryAutomationsInheritanceCase(testConfig: OpenClawConfig) {
+  it("preserves ordinary explicit automations inheritance outside a self-scoped run", () => {
+    const inheritedToolAllowlistRef: string[] = [];
+    const tools = createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["automations"],
+      inheritRuntimeToolAllowlist: true,
+      inheritedToolAllowlistRef,
+      senderIsOwner: true,
+    });
+    expect(tools.map((tool) => tool.name)).toContain("automations");
+    expect(inheritedToolAllowlistRef).toEqual(["automations"]);
+    const coreOptions = expectDefined(
+      vi.mocked(createOpenClawTools).mock.lastCall?.[0],
+      "createOpenClawTools options",
+    );
+    expect(coreOptions.inheritedToolDenylist).not.toContain("automations");
   });
 }

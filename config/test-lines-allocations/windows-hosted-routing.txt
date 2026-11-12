@@ -1,2 +1,0 @@
-# Hosted Windows runner selection, release groups, workers, and selected-row capacity accounting.
-38

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
 import {
   expectRetained,
   expectRecovery,
@@ -419,7 +419,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       restMergePayload: { sha: f.head, merge_method: "squash" },
     });
     expect(f.state().restMergePayload).not.toHaveProperty("commit_title");
-    expect(f.state().nodeArgs).toEqual(resolveVitestNodeArgs());
+    expect(f.state().nodeArgs).toEqual(resolveNodeCompilerArgs());
     const { calls } = f.state();
     expect(calls.filter((call) => call.includes("PUT"))).toHaveLength(1);
     expect(

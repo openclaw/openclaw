@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,6 +33,7 @@ import {
   getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
+  recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunPhase, UpdateRunRecord } from "../infra/update-run-record.js";
 import * as updateRunWrites from "../infra/update-run-write.async.js";
@@ -251,7 +252,9 @@ async function cleanUp() {
     readConfig: async () => ({}),
     confirm: async () => true,
   });
-  return (file: string) => report.artifacts.find((item) => item.path === file);
+  return Object.assign((file: string) => report.artifacts.find((item) => item.path === file), {
+    report,
+  });
 }
 
 it("retires remounted recovery after its Gateway writes the destination", async () => {
@@ -336,23 +339,6 @@ it("keeps an original when its destination reports another volume than the origi
   const result = await complete(runId, now + 61_000);
   expect(result.steps.at(-1)?.advisory?.message).toContain("destination-verification-failed");
   expectBytesEqual(fs.readFileSync(backup), original, backup);
-});
-
-it("settles an unlinked pre-reboot original when its destination still matches it", async () => {
-  const { backup, source, manifestPath } = await migrationOriginal(true);
-  // No original remains to witness the remount; the unchanged destination proves itself.
-  fs.unlinkSync(interruptDisposal(manifestPath, backup, "unlink-pending"));
-  finishUpdateRun(start(now + 60_000), { status: "succeeded" }, { env });
-  expect((await cleanUp())(backup)).toMatchObject({
-    outcome: "disposed",
-    reason: "completed-interrupted-disposal",
-  });
-  const target = readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!;
-  expect(target.databaseIdentity).toMatchObject({
-    dev: String(fs.statSync(source, { bigint: true }).dev),
-    sha256: createHash("sha256").update(fs.readFileSync(source)).digest("hex"),
-  });
-  expect(target.completedMoves[0]!.artifact!.disposal.state).toBe("disposed");
 });
 
 it.each([true, false])(
@@ -782,6 +768,36 @@ it("retires a failed update's own capture only when it never activated", async (
   );
 });
 
+it.each([true, false])(
+  "retires an update's own copies once its Gateway is verified healthy (verified: %s)",
+  async (verified) => {
+    const runId = start(now - 1_000);
+    const directory = capture(runId);
+    // Activation's Doctor migration completes inside the run.
+    const { backup } = await migrationOriginal();
+    if (verified) {
+      recordUpdateRunVerification(
+        runId,
+        {
+          serviceRunning: true,
+          versionMatch: true,
+          settled: true,
+          readyz: true,
+          channelsReady: true,
+          coreReady: true,
+          pluginErrors: [],
+        },
+        { env },
+      );
+    }
+    const result = await complete(runId, now + 60_000);
+    expect([directory, backup].map(fs.existsSync)).toEqual([!verified, !verified]);
+    const cleanup = result.steps.at(-1);
+    expect(cleanup).toMatchObject({ name: "recovery-artifact-cleanup", exitCode: 0 });
+    expect(cleanup?.advisory).toBeUndefined();
+  },
+);
+
 it("keeps the triggering update's capture when the wall clock moves backward", async () => {
   const { runId, directory: current } = capturedRun(now + 60_000);
   const result = await complete(runId, now);
@@ -871,3 +887,27 @@ it("keeps Gateway completion warnings visible when cleanup diagnostics cannot be
     await lock?.release();
   }
 });
+
+it.each(["intent", "unlink-pending", "retained"] as const)(
+  "records a pre-reboot original that is already gone under a %s receipt",
+  async (state) => {
+    const { backup, source, manifestPath } = await migrationOriginal(true);
+    writeAfterReboot(source);
+    // A consented retirement recorded its receipt; the bytes were then lost outside cleanup.
+    fs.unlinkSync(state === "retained" ? backup : interruptDisposal(manifestPath, backup, state));
+    finishUpdateRun(start(now + 60_000), { status: "succeeded" }, { env });
+    const cleanup = await cleanUp();
+    const target = readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!;
+    if (state === "retained") {
+      // Without consent, a lost original stays reported as missing rather than disposed.
+      expect(cleanup.report.missingOriginals).toBe(1);
+      expect(target.completedMoves[0]!.artifact!.disposal.state).toBe("retained");
+    } else {
+      expect(cleanup(backup)).toMatchObject({
+        outcome: "disposed",
+        reason: "completed-interrupted-disposal",
+      });
+      expect(target.completedMoves[0]!.artifact!.disposal.state).toBe("disposed");
+    }
+  },
+);

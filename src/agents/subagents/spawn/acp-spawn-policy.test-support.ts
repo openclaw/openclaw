@@ -1,15 +1,54 @@
 import os from "node:os";
-import { expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, type Mock } from "vitest";
+import { canReadSessionAccess } from "../../../config/sessions/session-access.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { spawnAcpDirect } from "./acp-spawn.js";
+import { expectAcceptedAcpSpawn as expectAcceptedSpawn } from "./subagent-spawn.test-helpers.js";
 
 export function registerAcpSpawnPolicyTests(fixture: {
   spawn: typeof spawnAcpDirect;
   state: { cfg: OpenClawConfig };
   initializeSessionMock: unknown;
-  upsertSessionEntryMock: unknown;
+  upsertSessionEntryMock: Mock;
+  configureParentDelivery: (sessionKey: string, entry: Partial<SessionEntry>) => unknown;
   callGatewayMock: unknown;
 }) {
+  it.each(["disabled", "source", "private parent"] as const)(
+    "child confidentiality is opt-in for ACP spawn: %s",
+    async (mode) => {
+      if (mode === "source") {
+        fixture.state.cfg.session = {
+          ...fixture.state.cfg.session,
+          sharing: { accessPolicy: { default: "creator" } },
+        };
+      }
+      const parent = "agent:main:dashboard:opt-in-parent";
+      fixture.configureParentDelivery(parent, {
+        visibility: "shared",
+        ...(mode === "private parent"
+          ? { access: { mode: "audience", profileIds: ["selected"] } }
+          : {}),
+      });
+      const { childSessionKey } = expectAcceptedSpawn(
+        await fixture.spawn(
+          { task: "Investigate flaky tests", agentId: "codex", mode: "run" },
+          { agentSessionKey: parent },
+        ),
+      );
+      const call = fixture.upsertSessionEntryMock.mock.calls.find(
+        ([scope]) => scope.sessionKey === childSessionKey,
+      );
+      const entry = expectDefined(call, "child creation write")[1] as SessionEntry;
+      expect(entry.access).toEqual(
+        mode === "disabled" ? undefined : { mode: mode === "source" ? "source" : "creator" },
+      );
+      expect(canReadSessionAccess(fixture.state.cfg, childSessionKey, entry, () => false)).toBe(
+        mode === "disabled",
+      );
+    },
+  );
   it.each(["codex", undefined])(
     "refuses restricted cross-agent ACP targets, including the default (%s)",
     async (agentId) => {

@@ -15,7 +15,6 @@ import {
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { assertAgentSessionWriteAdmission } from "../../sessions/session-agent-work-admission.js";
-import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
   AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
@@ -35,6 +34,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import type {
+  ReplacementDatabaseOptions,
   SessionEntryWorkerLifecycle,
   SessionEntryReplacementCandidate,
 } from "./session-accessor.sqlite-replacement-types.js";
@@ -55,8 +55,6 @@ import {
 } from "./session-source-publication.js";
 import { parseSessionTranscriptAuthorityReceipts } from "./session-transcript-authority.js";
 import { throwSessionWorkerOutcomeUnknown } from "./session-worker-receipt.js";
-
-type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
 export type SessionEntryWorkerPreparation = (
   execution: OpenClawAgentDatabaseExecution,
@@ -117,6 +115,7 @@ export async function withSessionEntryWorker<T>(
           ? {
               kind: "file",
               physicalIdentity: databaseIdentity,
+              birthtime: expectedCreationIdentity?.birthtime,
               nativeLocation: options.path,
             }
           : undefined,

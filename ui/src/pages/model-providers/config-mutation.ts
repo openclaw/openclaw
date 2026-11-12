@@ -320,7 +320,7 @@ export async function runModelProviderApiKeyMutation(
   owner: ModelProviderConfigMutationOwner & {
     canMutate: () => boolean;
     refreshProviders: () => Promise<string | null>;
-    checkSavedKey: () => Promise<ModelProviderRowMessage | null>;
+    checkSavedKey: (receipt: { profileId?: string }) => Promise<ModelProviderRowMessage | null>;
   },
   params: {
     client: GatewayBrowserClient;
@@ -340,10 +340,10 @@ export async function runModelProviderApiKeyMutation(
           throw new Error(t("modelProviders.requestFailed"));
         }
         const target = { provider: params.provider, agentId: params.agentId };
-        const receipt = await client.request<{ warning?: string }>("models.authSetApiKey", {
-          ...target,
-          apiKey: params.apiKey,
-        });
+        const receipt = await client.request<{ warning?: string; profileId?: string }>(
+          "models.authSetApiKey",
+          { ...target, apiKey: params.apiKey },
+        );
         invalidateModelAuthStatusRequests(client);
         return receipt;
       },
@@ -360,7 +360,7 @@ export async function runModelProviderApiKeyMutation(
     if (!isCurrent()) {
       return { ok: false };
     }
-    const checked = await owner.checkSavedKey();
+    const checked = await owner.checkSavedKey(result.value);
     if (!isCurrent()) {
       return { ok: false };
     }

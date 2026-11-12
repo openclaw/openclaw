@@ -4,6 +4,7 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 
@@ -40,4 +41,40 @@ export function authorizeSessionSourceCreation(
     );
   }
   return undefined;
+}
+
+export function guardSessionSourceCreation(
+  params: CreateGatewaySessionParams,
+  sessionKey: string,
+  createdNewEntry: () => boolean,
+  commitGuard?: () => void,
+): () => void {
+  return () => {
+    commitGuard?.();
+    if (createdNewEntry()) {
+      const error = authorizeSessionSourceCreation(
+        { ...params, cfg: params.getCurrentConfig?.() ?? params.cfg },
+        sessionKey,
+      );
+      if (error) {
+        throw new Error(error.message);
+      }
+    }
+  };
+}
+
+export function authorizeSessionCreationRequest(
+  params: CreateGatewaySessionParams,
+  target: { agentId: string; canonicalKey: string },
+): ErrorShape | undefined {
+  return (
+    authorizeSessionSourceCreation(params, target.canonicalKey) ??
+    authorizeGatewaySessionCreation({
+      cfg: params.cfg,
+      agentId: target.agentId,
+      ...(params.operatorRoleActor
+        ? { actor: params.operatorRoleActor }
+        : { profileId: params.requestingOperatorProfileId }),
+    })
+  );
 }

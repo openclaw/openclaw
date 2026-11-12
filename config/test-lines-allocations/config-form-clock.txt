@@ -1,2 +1,0 @@
-# Page-clock setup, RPC-settled Apply polling, and resuming later defaults edits preserve all composed config and binding assertions while removing real Saved-to-Apply waits.
-15

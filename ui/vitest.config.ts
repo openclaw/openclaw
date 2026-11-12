@@ -96,6 +96,7 @@ const webkitTestFiles = [
   "src/pages/apps/apps-page.browser.test.tsx",
   "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/usage/view-details.browser.test.tsx",
+  "src/pages/sessions/view.invalidation.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
   "src/components/select-picker.browser.test.tsx",
@@ -107,6 +108,7 @@ const webkitTestFiles = [
   "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/app-sidebar-session-visibility.browser.test.ts",
   "src/components/app-sidebar-owner-avatar.browser.test.ts",
+  "src/components/app-sidebar-session-filter.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",
@@ -336,6 +338,7 @@ export default defineConfig({
   },
   test: {
     ...sharedUiTestConfig,
+    globalSetup: [path.join(repoRoot, "test/vitest/vitest.node-policy.global-setup.ts")],
     maxWorkers: sharedVitestConfig.test.maxWorkers,
     reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.

@@ -97,6 +97,46 @@ describe("shared toast", () => {
     expect(titles(host)).toEqual(["First", "Second"]);
   });
 
+  it("retires a notice whose offer was resolved elsewhere", async () => {
+    vi.useFakeTimers();
+    const host = await mountHost();
+    const onDismiss = vi.fn();
+    const resolved = new AbortController();
+    showToast({ severity: undefined, message: "Held", signal: resolved.signal, onDismiss });
+    showToast({ severity: undefined, message: "Other" });
+    await settleHost(host);
+    expect(titles(host)).toEqual(["Other", "Held"]);
+
+    resolved.abort();
+    await vi.advanceTimersByTimeAsync(EXIT_MS);
+    await settleHost(host);
+    expect(titles(host)).toEqual(["Other"]);
+    expect(onDismiss).toHaveBeenCalledOnce();
+
+    // An offer resolved before the host presents it never appears.
+    showToast({ severity: undefined, message: "Late", signal: AbortSignal.abort() });
+    await settleHost(host);
+    expect(titles(host)).toEqual(["Other"]);
+  });
+
+  it("keeps equal copy distinct by key and replaces only the matching notice", async () => {
+    const host = await mountHost();
+    const firstDismiss = vi.fn();
+    const secondDismiss = vi.fn();
+    const message = "Session started";
+    showToast({ severity: "success", message, dedupeKey: "first", onDismiss: firstDismiss });
+    showToast({ severity: "success", message, dedupeKey: "second", onDismiss: secondDismiss });
+    showToast({ severity: "success", message });
+    await settleHost(host);
+    expect(titles(host)).toEqual([message, message, message]);
+
+    showToast({ severity: "success", message: "Session created", dedupeKey: "first" });
+    await settleHost(host);
+    expect(firstDismiss).toHaveBeenCalledExactlyOnceWith("replaced");
+    expect(secondDismiss).not.toHaveBeenCalled();
+    expect(titles(host)).toEqual(["Session created", message, message]);
+  });
+
   it("separates actions in the center from arrivals on the right", async () => {
     const host = await mountHost();
     showToast({ severity: undefined, message: "Session archived" });

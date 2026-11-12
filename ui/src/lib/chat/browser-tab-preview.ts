@@ -18,6 +18,8 @@ const latestTabsByHistory = new WeakMap<
   readonly unknown[],
   { toolMessages: readonly unknown[]; latest: ReadonlyMap<string, BrowserTabSelection> }
 >();
+// Unrelated message receipts must not invalidate every transcript row's previews.
+const emptyBrowserTabs: ReadonlyMap<string, BrowserTabSelection> = new Map();
 
 export function latestBrowserTabCards(
   messages: readonly unknown[],
@@ -27,7 +29,7 @@ export function latestBrowserTabCards(
   if (cached?.toolMessages === toolMessages) {
     return cached.latest;
   }
-  const latest = new Map<string, BrowserTabSelection>();
+  let latest: Map<string, BrowserTabSelection> | undefined;
   // History precedes the current live stream. Select before search/virtualization
   // so expanding an old row cannot turn it into a new capture request.
   for (const source of [messages, toolMessages]) {
@@ -39,14 +41,16 @@ export function latestBrowserTabCards(
         const revision = browserTabCardRevision(card);
         if (card.browserTab && revision && resolveToolCardOutcome(card, false) === "succeeded") {
           const key = browserTabKey(card.browserTab);
+          latest ??= new Map();
           latest.delete(key);
           latest.set(key, { tab: card.browserTab, revision });
         }
       }
     }
   }
-  latestTabsByHistory.set(messages, { toolMessages, latest });
-  return latest;
+  const result = latest ?? emptyBrowserTabs;
+  latestTabsByHistory.set(messages, { toolMessages, latest: result });
+  return result;
 }
 
 type ThumbnailEntry = {

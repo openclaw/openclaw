@@ -19,6 +19,12 @@ extension SettingsProTab {
     var offlineDeviceSection: some View {
         Section {
             self.settingsListRow(
+                icon: "iphone",
+                iconColor: .gray,
+                title: "Device Settings",
+                route: .deviceSettings)
+                .accessibilityIdentifier("settings-device-row")
+            self.settingsListRow(
                 icon: "cpu",
                 iconColor: .orange,
                 title: "ESP device setup",
@@ -71,11 +77,15 @@ extension SettingsProTab {
 
     func destination(for route: SettingsRoute) -> some View {
         Group {
-            if route == .espSetup {
+            if route == .deviceSettings {
+                LocalDeviceSettingsScreen()
+            } else if route == .espSetup {
                 ESPDeviceSetupScreen()
             } else {
                 List {
                     switch route {
+                    case .deviceSettings:
+                        EmptyView()
                     case .gateway:
                         self.gatewayDestination
                     case .appleWatch:

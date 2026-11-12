@@ -13,6 +13,7 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
+import { settleChatMount } from "../test-helpers/chat-mount-frames.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -95,13 +96,15 @@ function mountTranscriptPane(props: ChatThreadProps) {
   const renderPane = () => {
     setCurrent({ ...props, mediaOwner: renderPane });
     flush();
-    root ??= mountSolid(
-      () => (
-        <ContentPresentation value={presented}>
-          <ChatThread props={current()} transcript={transcript} />
-        </ContentPresentation>
+    root ??= settleChatMount(() =>
+      mountSolid(
+        () => (
+          <ContentPresentation value={presented}>
+            <ChatThread props={current()} transcript={transcript} />
+          </ContentPresentation>
+        ),
+        { container },
       ),
-      { container },
     );
     transcript.update();
     flush();

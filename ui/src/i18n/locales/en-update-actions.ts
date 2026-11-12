@@ -100,7 +100,6 @@ const enUpdateActions = {
       blockedSummary:
         "Couldn’t apply the selected revision to this checkout. Review the update details.",
       blockedWaiting: "Blocked · waiting for active work · {target}",
-      waitingForIdle: en.updates.sidebar.waitingForIdle,
     },
     dialog: {
       disconnected:
@@ -120,12 +119,9 @@ const enUpdateActions = {
     channel: en.updates.channel,
     installKind: en.updates.installKind,
     page: en.updates.page,
-    coalescedRestart: en.updates.coalescedRestart,
     error: en.updates.error,
     checkError: en.updates.checkError,
     status: en.updates.status,
-    verificationFailedWithIdentity: en.updates.verificationFailedWithIdentity,
-    handoffTimeout: en.updates.handoffTimeout,
     outcomeUnknown: en.updates.outcomeUnknown,
     triage: {
       hostHint: en.updates.triage.hostHint,
@@ -146,9 +142,6 @@ const enUpdateActions = {
     },
     failureReasons: en.updates.failureReasons,
     failedAtStep: en.updates.failedAtStep,
-    succeededVersion: en.updates.succeededVersion,
-    succeededCommit: en.updates.succeededCommit,
-    succeeded: en.updates.succeeded,
   },
   chat: {
     updating: "Updating…",

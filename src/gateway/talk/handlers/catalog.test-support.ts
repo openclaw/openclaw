@@ -118,10 +118,6 @@ vi.mock("../../../talk/provider-internal.js", async (importOriginal) => {
   };
 });
 
-export function setSourceConfig(config: OpenClawConfig) {
-  mocks.projectConfigOntoRuntimeSourceSnapshot.mockReturnValue(config);
-}
-
 export const callTalkHandler = createTalkHandlerCaller(talkHandlers);
 
 export async function invokeTalkHandler(

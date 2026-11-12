@@ -1,2 +1,0 @@
-# New output mode policy: validation, host umask, remote transport, existing modes, and private exclusions.
-187

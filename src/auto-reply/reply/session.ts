@@ -28,10 +28,7 @@ import {
   resolveSessionResetType,
   resolveThreadFlag,
 } from "../../config/sessions/reset.js";
-import {
-  commitReplySessionInitialization,
-  loadReplySessionInitializationSnapshot,
-} from "../../config/sessions/session-accessor.js";
+import { commitReplySessionInitialization } from "../../config/sessions/session-accessor.js";
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -60,7 +57,6 @@ import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { emitSessionAutoResetHook } from "../../hooks/session-auto-reset.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
@@ -101,7 +97,7 @@ import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
-  assertPreparedConversationBindingRouteCurrent,
+  touchPreparedSessionBinding,
   resolveSessionDefaultAccountId,
   resolveBoundAcpSessionForCommandReset,
 } from "./session-conversation-binding.js";
@@ -127,9 +123,9 @@ import type {
 } from "./session-init.types.js";
 import {
   assertReplySessionInitializationAllowed,
+  loadReplySessionInitializationForAttempt,
   prepareReplySessionInitialization,
   resolveInitSessionStateAttemptContext,
-  resolveInitializationSessionReader,
   type InitSessionStateParams,
   type InitSessionStateAttemptContext,
 } from "./session-initialization-admission.js";
@@ -163,10 +159,8 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
     resolveInitSessionStateAttemptContext(params, "initialization"),
   );
   params.signal?.throwIfAborted();
-  const binding = attemptContext.conversationBinding;
-  if (binding) {
-    await getSessionBindingService().touchAsync(binding.bindingId, undefined, binding.conversation);
-    await assertPreparedConversationBindingRouteCurrent(params.ctx);
+  if (attemptContext.conversationBinding) {
+    await touchPreparedSessionBinding(attemptContext.conversationBinding, params.ctx);
   }
   params.signal?.throwIfAborted();
   const parentSessionKey = await measureDiagnosticsTimelineSpan("reply.session.hydrate", () =>
@@ -359,13 +353,11 @@ async function initSessionStateAttemptLocked(
   const initializationSnapshot = await measureDiagnosticsTimelineSpan(
     "reply.session.snapshot",
     () =>
-      loadReplySessionInitializationSnapshot(
+      loadReplySessionInitializationForAttempt(
         { ...sessionTarget, relatedSessionKeys },
-        {
-          reader: resolveInitializationSessionReader(params, attemptContext),
-          includeLifecycle: true,
-          assertCurrent: () => params.signal?.throwIfAborted(),
-        },
+        params,
+        attemptContext,
+        mainSessionKey,
       ),
   );
   if (ingressTimingEnabled) {

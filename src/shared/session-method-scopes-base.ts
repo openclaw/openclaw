@@ -77,6 +77,7 @@ const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([
   "chat.send",
   "chat.abort",
   "chat.steerNow",
+  "session.typing",
   "sessions.create",
   "sessions.patch",
   "sessions.patchMany",
@@ -120,8 +121,13 @@ export function resolveSessionMethodScope(
   if (method === "talk.session.appendAudio" || method === "talk.session.close") {
     return "operator.sessions.write";
   }
-  // Selecting a device filesystem requires the broader operator capability.
-  if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
+  // Selecting a device filesystem, or cloning/reusing a repository by URL with the
+  // Gateway's GitHub identity, requires the broader operator capability.
+  if (
+    method === "sessions.create" &&
+    isRecord(params) &&
+    (params.deviceFolder !== undefined || params.projectGitUrl !== undefined)
+  ) {
     return undefined;
   }
   // Session readers can invoke only stored named queries. The closed RPC schema

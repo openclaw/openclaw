@@ -741,7 +741,7 @@ describe("native Ollama output guards", () => {
         { ...outputModel, id, maxTokens: definition.maxTokens },
         {},
       );
-      expect(body).toMatchObject({ options: { num_predict: 8192 } });
+      expect(body).toMatchObject({ options: { num_predict: 16_384 } });
     },
   );
 

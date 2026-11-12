@@ -123,3 +123,19 @@ export function createCookieSessionReadDispatch(params: {
     return { statusCode, result };
   };
 }
+
+export const sessionKey = (name: string) => `agent:main:${name}`;
+type SessionDispatch = (method: SessionReadMethod, key?: string) => Promise<DispatchResult>;
+export function expectSessionKeys(result: DispatchResult, names: string[]) {
+  expect(result.ok).toBe(true);
+  const payload = result.payload as { sessions: Array<{ key: string }> };
+  expect(payload.sessions.map((session) => session.key).toSorted()).toEqual(
+    names.map(sessionKey).toSorted(),
+  );
+}
+export async function expectSession(dispatch: SessionDispatch, name: string, session: unknown) {
+  expect(await dispatch("sessions.describe", sessionKey(name))).toMatchObject({
+    ok: true,
+    payload: { session },
+  });
+}

@@ -41,6 +41,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
@@ -200,6 +201,13 @@ async function loadChatSendSessionContext(params: {
     { sessionKey: rawSessionKey, agentId: requestedAgentId },
   ]);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
+  if (!request.stopCommand) {
+    await waitForAgentInputAdmission(requestedAgentId, {
+      cfg: runtimeConfig,
+      sessionKey: sessionLoadKey,
+      owner: context.agentDatabaseStartup,
+    });
+  }
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
     "gateway.chat_send.load_session",

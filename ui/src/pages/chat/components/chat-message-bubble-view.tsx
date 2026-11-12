@@ -49,6 +49,7 @@ import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import {
   AssistantAttachments,
   ChatClawHubCard,
+  ChatTemplatePluginCards,
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
@@ -274,6 +275,9 @@ function MessageText(props: ContentProps) {
       </Match>
       <Match when={prepared().text}>
         <MessageMarkdown
+          onOpenImage={(item, index) =>
+            props.state().imageRenderOptions.openInlineImage(index, item.src)
+          }
           markdown={prepared().text ?? ""}
           messageKey={props.messageKey}
           options={prepared().options}
@@ -349,6 +353,7 @@ function BubbleContents(props: ContentProps) {
   return (
     <>
       <Show when={props.state().sourceRole === "assistant"}>
+        <ChatTemplatePluginCards notices={props.state().templatePluginCards} />
         <For each={props.state().clawHubCards} keyed={(card) => card.id}>
           {(card) => <ChatClawHubCard recommendation={card()} agentId={props.options.agentId} />}
         </For>
