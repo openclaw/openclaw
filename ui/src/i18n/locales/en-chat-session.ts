@@ -105,7 +105,8 @@ const enChatSession = {
       noMatches: "No emoji match your search.",
       you: "You",
       andOthers: "{names} and {count} others",
-      reactedWith: "{names} reacted with {emoji}",
+      andOneOther: "{names} and 1 other",
+      current: "Reactions on this message",
     },
     sessionHeader: {
       people: "People",

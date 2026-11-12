@@ -37,6 +37,7 @@ import {
 import { captureSkillLibraryAccess } from "../../skills/library/store-access.js";
 import { projectSkillLibraryList, type SkillLibraryAuthority } from "../../skills/library/store.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
+import { currentOwnerDevicePrincipal } from "../openclaw-id/tunnel-principal.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { captureSessionSharingMemoryFacts } from "../session-sharing-incognito.js";
@@ -65,9 +66,12 @@ export function libraryAuthority(
   assertFileMutationAllowed?: () => void,
 ): SkillLibraryAuthority {
   const { client, context } = options;
+  // A linked owner device keeps the owner's scopes under its person's profile (OCF-510).
+  const ownerDevice = currentOwnerDevicePrincipal(client) !== undefined;
   return {
     profileId: client?.authenticatedUserProfile?.profileId,
     scopes: client?.connect.scopes ?? [],
+    ...(ownerDevice ? { ownerDevice } : {}),
     getConfig: context.getRuntimeConfig,
     assertFileMutationAllowed,
     assertCurrent: composeSessionSourceAssertion(
@@ -78,6 +82,12 @@ export function libraryAuthority(
       ],
       (assertSources) => {
         assertSources();
+        if (ownerDevice && currentOwnerDevicePrincipal(client) === undefined) {
+          throw new SkillLibraryError(
+            "AUTHORITY_EXPIRED",
+            "Skill library authority changed. Refresh and retry.",
+          );
+        }
         // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
         if (client?.internal?.syntheticClient) {
           throw new SkillLibraryError(

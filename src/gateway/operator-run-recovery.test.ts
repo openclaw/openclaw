@@ -20,6 +20,7 @@ import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -538,7 +539,7 @@ describe("scheduled authenticated operator source", () => {
           await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
           await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
           expect(restored.authority.assertCurrent).toThrow();
-          await expect(restore()).rejects.toThrow("Queued channel operator authority changed");
+          await expect(restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
         } finally {
           restored.release();
         }
@@ -568,6 +569,40 @@ describe("scheduled authenticated operator source", () => {
       },
       { tokenlessDevice: true },
     ));
+  it("recovers a source with a handshake-attested OpenClaw ID origin marker", () =>
+    withRecovery(async (fixture) => {
+      fixture.client.authPolicy = captureGatewayAuthPolicy(fixture.context.getRuntimeConfig(), {
+        ...fixture.client.authPolicy,
+        browserOrigin: {
+          requestHost: "localhost",
+          origin: "http://localhost",
+          isLocalClient: true,
+          openclawIdTunnel: true,
+        },
+      });
+      const caller = acceptedCaller(fixture);
+      const captured = expectDefined(await caller.capture(), "captured source");
+      try {
+        const source = expectDefined(
+          captureQueuedOperatorRecoverySource(captured.authority),
+          "captured recovery source",
+        );
+        expect(source.kind).toBe("gateway");
+        const restored = await restoreGatewayQueuedOperatorRecovery({
+          source,
+          context: fixture.context,
+          assertCurrent: () => {},
+        });
+        try {
+          expectCurrent(restored.authority);
+        } finally {
+          restored.release();
+        }
+      } finally {
+        captured.release();
+        caller.release();
+      }
+    }));
   it.each(["before capture", "after admission", "after restoration"] as const)(
     "revokes the original device authority on Gateway retirement %s",
     (timing) =>
@@ -695,7 +730,9 @@ describe("scheduled authenticated operator source", () => {
           owner.publish({ current: generation, required: null });
           expect(restored.authority.assertCurrent).toThrow("authority changed");
         } else {
-          await expect(fixture.restore()).rejects.toThrow("authentication owner changed");
+          await expect(fixture.restore()).rejects.toThrow(
+            GatewayOperatorRecoveryAuthorizationError,
+          );
         }
       }),
   );
