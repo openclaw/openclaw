@@ -10,6 +10,7 @@ import {
   GATEWAY_SUSPEND_UNAVAILABLE_REASON,
 } from "../../packages/gateway-protocol/src/restart-unavailable.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { isGatewayCompletionWaitActive } from "../infra/gateway-suspend-coordinator.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -30,6 +31,9 @@ const SUSPEND_CONTROL_METHODS = new Set([
 export function isGatewayRootlessRequestAllowed(method: string): boolean {
   return (
     SUSPEND_CONTROL_METHODS.has(method) ||
+    // Reconnected completion controllers must rediscover the exact live process.
+    // Existing authorization and observation-only scope still apply.
+    (method === "system.info" && isGatewayCompletionWaitActive()) ||
     (method === "update.runs.get" &&
       getGatewayRestartDrainSignal().aborted &&
       getGatewaySuspendAdmissionPhase() === "accepting")

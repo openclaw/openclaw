@@ -80,6 +80,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
       suspensionId: params.suspensionId.trim(),
       owner,
       commit: params.commit,
+      deferExit: params.deferExit,
       assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
     });
     if (!result.ok) {
@@ -99,12 +100,25 @@ export const suspendHandlers: GatewayRequestHandlers = {
       respond(false, undefined, invalidParams("gateway.suspend.prepare"));
       return;
     }
+    if (
+      params.completionDeadlineMs !== undefined &&
+      (params.drain === true ||
+        params.terminalPolicy === "terminate" ||
+        params.completionDeadlineMs <= Date.now() ||
+        params.completionDeadlineMs > Date.now() + 30 * 60_000)
+    ) {
+      respond(false, undefined, invalidParams("gateway.suspend.prepare"));
+      return;
+    }
     const requestId = params.requestId.trim();
     const result = prepareGatewaySuspend({
       requestId,
       caller: `gateway.suspend.prepare ${callerDescription(client)}`,
       terminalPolicy: params.terminalPolicy ?? "preserve",
       ...(params.drain === true ? { drain: true } : {}),
+      ...(params.completionDeadlineMs === undefined
+        ? {}
+        : { completionDeadlineMs: params.completionDeadlineMs }),
       pauseScheduling: () => context.cron.pauseScheduling(),
       resumeScheduling: () => context.cron.resumeScheduling(),
       inspect: createGatewayServerActiveWorkInspectors(context),

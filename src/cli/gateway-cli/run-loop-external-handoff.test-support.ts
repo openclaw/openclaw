@@ -9,6 +9,42 @@ import {
 } from "./run-loop.test-support.js";
 
 export function registerExternalHandoffShutdownTests(f: UpdateRespawnFixtures): void {
+  it("keeps the fenced process alive until the supervisor sends SIGTERM", async () => {
+    await f.withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
+      const host = start.mock.calls[0]?.[0]?.hostLifecycle;
+      if (!host?.externalRestart?.commitStopFence) {
+        throw new Error("Missing deferred stop capability");
+      }
+      host.externalRestart.commitStopFence();
+      expect(f.isGatewayWorkAdmissionClosed()).toBe(true);
+      expect(close).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      f.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({
+        reason: "gateway.restart",
+        force: true,
+      });
+      captureSignal("SIGUSR2")();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(f.gatewayLog.info).toHaveBeenCalledWith(
+        "external stop is committed; waiting for the supervisor stop signal",
+      );
+      expect(start).toHaveBeenCalledOnce();
+      expect(close).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      // A stale restart intent cannot turn the supervisor's stop into another wait.
+      f.consumeGatewayRestartIntentPayload.mockResolvedValueOnce({
+        reason: "gateway.restart",
+        force: true,
+        waitMs: 30_000,
+      });
+      captureSignal("SIGTERM")();
+      await expect(exited).resolves.toBe(0);
+      expect(start).toHaveBeenCalledOnce();
+    }, true);
+  });
+
   it.each([
     { fails: true, trigger: "signal" },
     { fails: false, trigger: "commit" },

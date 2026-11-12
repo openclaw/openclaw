@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as gatewayCrash from "../infra/gateway-crash.js";
 import {
+  isGatewayCompletionWaitActive,
   prepareGatewaySuspend,
   resumeGatewaySuspend,
 } from "../infra/gateway-suspend-coordinator.js";
@@ -260,54 +261,65 @@ describe("gateway probe endpoints", () => {
     );
   });
 
-  it("keeps liveness green while a prepared suspension lease makes readiness red", async () => {
-    resetGatewayWorkAdmission();
-    const channelManager = {
-      getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
-      getAutostartSuppression: () => null,
-      isAmbientAutostartSuppressed: () => false,
-    };
-    const getReadiness = createReadinessChecker({
-      channelManager,
-      startedAt: Date.now(),
-      getGatewayDraining: isGatewayDraining,
-    });
-    try {
-      await withProbeServer({ getReadiness, openAiChatCompletionsEnabled: true }, async (probe) => {
-        const prepared = prepareGatewaySuspend({
-          requestId: "request-readiness-probe",
-          pauseScheduling: vi.fn(),
-          resumeScheduling: vi.fn(),
-          createSuspensionId: () => "suspension-readiness-probe",
-          inspect: { ...idleInspectors, getRootRequests: () => 0 },
-        });
-        if (prepared.status !== "ready") {
-          throw new Error(`expected prepared suspension, received ${prepared.status}`);
-        }
-
-        await probe.json("/healthz", 200, { ok: true, status: "live" }, true);
-
-        await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
-
-        for (const [path, method] of [
-          ["/v1/chat/completions", "POST"],
-          ["/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage", "GET"],
-        ] as const) {
-          await probe.json({ path, method }, 503, { error: { code: "gateway_unavailable" } });
-        }
-
-        expect(resumeGatewaySuspend(prepared.suspensionId)).toEqual({
-          ok: true,
-          status: "running",
-          resumed: true,
-        });
-
-        await probe.json("/readyz", 200, readyState([]));
-      });
-    } finally {
+  it.each([false, true])(
+    "keeps completion waits routable without admitting new work (completion=%s)",
+    async (completion) => {
       resetGatewayWorkAdmission();
-    }
-  });
+      const channelManager = {
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getAutostartSuppression: () => null,
+        isAmbientAutostartSuppressed: () => false,
+      };
+      const getReadiness = createReadinessChecker({
+        channelManager,
+        startedAt: Date.now(),
+        getGatewayDraining: () => !isGatewayCompletionWaitActive() && isGatewayDraining(),
+      });
+      try {
+        await withProbeServer(
+          { getReadiness, openAiChatCompletionsEnabled: true },
+          async (probe) => {
+            const prepared = prepareGatewaySuspend({
+              requestId: "request-readiness-probe",
+              ...(completion ? { completionDeadlineMs: Date.now() + 60_000 } : {}),
+              pauseScheduling: vi.fn(),
+              resumeScheduling: vi.fn(),
+              createSuspensionId: () => "suspension-readiness-probe",
+              inspect: { ...idleInspectors, getRootRequests: () => 0 },
+            });
+            if (prepared.status !== "ready") {
+              throw new Error(`expected prepared suspension, received ${prepared.status}`);
+            }
+
+            await probe.json("/healthz", 200, { ok: true, status: "live" }, true);
+
+            await probe.json(
+              "/readyz",
+              completion ? 200 : 503,
+              completion ? readyState([]) : readyState(["gateway-draining"], false),
+            );
+
+            for (const [path, method] of [
+              ["/v1/chat/completions", "POST"],
+              ["/__openclaw__/board/agent%3Amain%3Amain/status/index.html?bt=garbage", "GET"],
+            ] as const) {
+              await probe.json({ path, method }, 503, { error: { code: "gateway_unavailable" } });
+            }
+
+            expect(resumeGatewaySuspend(prepared.suspensionId)).toEqual({
+              ok: true,
+              status: "running",
+              resumed: true,
+            });
+
+            await probe.json("/readyz", 200, readyState([]));
+          },
+        );
+      } finally {
+        resetGatewayWorkAdmission();
+      }
+    },
+  );
 
   it("keeps in-flight core HTTP work visible to suspension preparation", async () => {
     resetGatewayWorkAdmission();

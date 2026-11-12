@@ -35,6 +35,33 @@ async function invoke(method: keyof typeof suspendHandlers, params: unknown) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("gateway suspend handlers", () => {
+  it.each([
+    { drain: true, offset: 60_000 },
+    { terminalPolicy: "terminate", offset: 60_000 },
+    { offset: -1 },
+    { offset: 31 * 60_000 },
+  ])("refuses unsafe completion-wait parameters: %j", async ({ offset, ...params }) => {
+    const { respond } = await invoke("gateway.suspend.prepare", {
+      requestId: "planned-update",
+      completionDeadlineMs: Date.now() + offset,
+      ...params,
+    });
+    expect(coordinator.prepare).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "invalid gateway.suspend.prepare params",
+    });
+  });
+
+  it("passes a bounded completion wait to the suspension owner", async () => {
+    const completionDeadlineMs = Date.now() + 60_000;
+    coordinator.prepare.mockReturnValueOnce({ status: "draining", blockers: [], activeCount: 1 });
+    await invoke("gateway.suspend.prepare", { requestId: "planned-update", completionDeadlineMs });
+    expect(coordinator.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ completionDeadlineMs, terminalPolicy: "preserve" }),
+    );
+  });
+
   it("validates the closed prepare params shape", async () => {
     const { respond } = await invoke("gateway.suspend.prepare", {
       requestId: "request-1",

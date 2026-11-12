@@ -19,6 +19,7 @@ export function createGatewayHostLifecycle(params: {
   isServing: () => boolean;
   acceptStop: () => void;
   commitExternalStop?: () => void;
+  commitExternalStopFence?: () => void;
   processOwner: GatewayProcessOwner;
   getShutdownBudget?: GatewayHostLifecycle["getShutdownBudget"];
 }) {
@@ -40,6 +41,15 @@ export function createGatewayHostLifecycle(params: {
         throw new Error("Gateway host cannot commit stop for a retired or non-serving iteration.");
       }
       runOutsideGatewayRootWorkAdmission(commitExternalStop);
+    };
+  }
+  const commitExternalStopFence = params.commitExternalStopFence;
+  if (commitExternalStopFence) {
+    externalRestart.commitStopFence = () => {
+      if (!externalRestart.isCurrent()) {
+        throw new Error("Gateway host cannot fence stop for a retired or non-serving iteration.");
+      }
+      runOutsideGatewayRootWorkAdmission(commitExternalStopFence);
     };
   }
   const assertCurrent = () => {

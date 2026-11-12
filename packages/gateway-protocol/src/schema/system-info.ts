@@ -39,6 +39,8 @@ export const SystemInfoResultSchema = closedObject({
   pid: Type.Integer(),
   /** Process-start identity for invalidating work that cannot survive a Gateway restart. */
   processInstanceId: Type.Optional(Type.String({ minLength: 1 })),
+  /** This live host can commit completion admission while awaiting its supervisor's stop signal. */
+  deferredStopHandoff: Type.Optional(Type.Literal(true)),
   uptimeMs: Type.Integer(),
   cpuCount: Type.Integer(),
   cpuModel: Type.Optional(Type.String()),

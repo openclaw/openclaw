@@ -1064,7 +1064,7 @@ var External = [
     /(^source$|^app$)/u,
     /(^wsPath$)/u,
     /(^released$)/u,
-    /(^machineName$|^hostname$|^platform$|^release$|^arch$|^osLabel$|^lanAddress$|^port$|^nodeVersion$|^pid$|^processInstanceId$|^uptimeMs$|^cpuCount$|^cpuModel$|^loadAverage$|^memoryTotalBytes$|^memoryFreeBytes$|^eventLoop$|^processMemory$|^diskTotalBytes$|^diskAvailableBytes$|^diskPath$|^disks$|^defaultAgentUtilityModel$)/u,
+    /(^machineName$|^hostname$|^platform$|^release$|^arch$|^osLabel$|^lanAddress$|^port$|^nodeVersion$|^pid$|^processInstanceId$|^deferredStopHandoff$|^uptimeMs$|^cpuCount$|^cpuModel$|^loadAverage$|^memoryTotalBytes$|^memoryFreeBytes$|^eventLoop$|^processMemory$|^diskTotalBytes$|^diskAvailableBytes$|^diskPath$|^disks$|^defaultAgentUtilityModel$)/u,
     /(^degraded$|^degradedSinceMs$|^reasons$|^intervalMs$|^delayP99Ms$|^delayMaxMs$|^utilization$|^cpuCoreRatio$|^cpuBreakdown$)/u,
     /(^mainThreadCoreRatio$|^workerCoreRatio$|^otherThreadsCoreRatio$|^hostUtilization$|^hostCpuCount$)/u,
     /(^rssBytes$|^heapUsedBytes$|^heapTotalBytes$|^externalBytes$|^arrayBuffersBytes$)/u,
@@ -1568,7 +1568,7 @@ var External = [
     /(^startedAt$|^endedAt$|^stopReason$|^yielded$|^timeoutPhase$|^providerStarted$|^aborted$|^toolErrorSummary$|^livenessState$|^replayInvalid$|^phase$|^error$)/u,
     /(^startedAt$|^endedAt$|^stopReason$|^yielded$|^timeoutPhase$|^providerStarted$|^aborted$|^toolErrorSummary$|^livenessState$|^replayInvalid$|^phase$)/u,
     /(^startedAt$|^endedAt$|^stopReason$|^yielded$|^timeoutPhase$|^providerStarted$|^aborted$|^toolErrorSummary$|^livenessState$|^replayInvalid$|^phase$|^error$|^fallbackExhaustedFailure$)/u,
-    /(^requestId$|^terminalPolicy$|^drain$)/u,
+    /(^requestId$|^terminalPolicy$|^drain$|^completionDeadlineMs$)/u,
     /(^status$|^reason$|^retryAfterMs$|^activeCount$|^blockers$|^writeCustody$)/u,
     /(^kind$|^count$|^message$)/u,
     /(^phase$|^count$)/u,
@@ -1579,7 +1579,7 @@ var External = [
     /(^status$|^ownerId$|^phase$|^expiresAtMs$|^retryAfterMs$|^activeCount$|^blockers$|^writeCustody$)/u,
     /(^status$|^ownerId$|^expiresAtMs$|^writeCustody$)/u,
     /(^suspensionId$)/u,
-    /(^suspensionId$|^commit$|^target$)/u,
+    /(^suspensionId$|^commit$|^deferExit$|^target$)/u,
     /(^pid$|^processInstanceId$)/u,
     /(^type$|^id$|^method$|^params$|^traceparent$|^expectedProfileId$)/u,
     /(^nodeId$)/u,
@@ -9384,6 +9384,9 @@ var External = [
     (value.processInstanceId === void 0 ||
       !("processInstanceId" in value) ||
       check_63(value.processInstanceId)) &&
+    (value.deferredStopHandoff === void 0 ||
+      !("deferredStopHandoff" in value) ||
+      check_330(value.deferredStopHandoff)) &&
     check_1371(value.uptimeMs) &&
     check_1371(value.cpuCount) &&
     (value.cpuModel === void 0 || !("cpuModel" in value) || check_276(value.cpuModel)) &&
@@ -18700,7 +18703,10 @@ var External = [
     (value.terminalPolicy === void 0 ||
       !("terminalPolicy" in value) ||
       check_2778(value.terminalPolicy)) &&
-    (value.drain === void 0 || !("drain" in value) || check_181(value.drain)),
+    (value.drain === void 0 || !("drain" in value) || check_181(value.drain)) &&
+    (value.completionDeadlineMs === void 0 ||
+      !("completionDeadlineMs" in value) ||
+      check_192(value.completionDeadlineMs)),
   check_2778 = (value) => check_2779(value) || check_2780(value),
   check_2779 = (value) => typeof value == "string" && value === "preserve",
   check_2780 = (value) => typeof value == "string" && value === "terminate",
@@ -18905,6 +18911,7 @@ var External = [
     ) &&
     check_561(value.suspensionId) &&
     (value.commit === void 0 || !("commit" in value) || check_330(value.commit)) &&
+    (value.deferExit === void 0 || !("deferExit" in value) || check_330(value.deferExit)) &&
     check_2822(value.target),
   check_2822 = (value) =>
     typeof value == "object" &&

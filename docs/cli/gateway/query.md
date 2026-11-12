@@ -540,6 +540,36 @@ returns the same details while draining, and each draining observation writes
 one `DRAINING` line to the Gateway log. Pending final writes remain protected
 until their persistence owner settles, even after a chat client disconnects.
 
+Planned-update controllers can call `gateway.suspend.prepare` with
+`completionDeadlineMs`, an absolute Unix time in milliseconds no more than
+30 minutes ahead. This mode rejects new independent work while admitted work
+and pending delivery finish. It does not queue rejected requests. Unlike
+`drain: true`, it does not treat cleared write custody as task completion or
+terminate terminals. Those options cannot be combined.
+
+The completion lease keeps the Gateway routable for existing work and control
+requests. Unrelated readiness failures still apply. Existing connected node work
+may finish; this mode does not change the node-reconnection rules.
+
+`system.info` advertises `deferredStopHandoff: true` when the host supports this
+handoff. Authorized controllers may read it during completion waiting to
+rediscover the exact process after reconnecting; ordinary freeze still refuses
+this read. An external supervisor can preflight `gateway.suspend.handoff` with
+`deferExit: true`, then commit the same exact-process handoff with both
+`commit: true` and `deferExit: true`.
+This irreversibly closes admission but keeps the process alive until the
+supervisor sends SIGTERM. It avoids a container being restarted before its
+workload is removed. Resume and lease expiry cannot reopen committed admission;
+the supervisor must finish stopping that workload. Hosts without this capability
+refuse the preflight.
+
+Renew the same request ID and deadline before the two-minute lease expires.
+Renewal never extends the fixed deadline. Resume or lease expiry reopens
+admission; reaching the deadline alone does not stop the process. The update
+controller owns its bounded-stop policy. Before reporting a completed handoff,
+use the process-bound `gateway.suspend.handoff` operation: it checks live work
+and pending delivery again, so an earlier ready response is not a stop permit.
+
 ### `gateway resume <suspensionId>`
 
 Release a prepared suspension after thaw or when the host operation is

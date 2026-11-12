@@ -48,6 +48,10 @@ export const GatewaySuspendPrepareParamsSchema = closedObject({
   requestId: SuspensionTokenSchema,
   terminalPolicy: Type.Optional(stringLiteralUnion(["preserve", "terminate"])),
   drain: Type.Optional(Type.Boolean()),
+  /** Wait for admitted work and delivery, under a renewable lease ending by this cutoff. */
+  completionDeadlineMs: Type.Optional(
+    Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
 });
 
 export const GatewaySuspendPrepareBusyResultSchema = closedObject({
@@ -131,6 +135,8 @@ export const GatewaySuspendResumeResultSchema = closedObject({
 export const GatewaySuspendHandoffParamsSchema = closedObject({
   suspensionId: SuspensionTokenSchema,
   commit: Type.Optional(Type.Literal(true)),
+  /** Commit admission now; let the external supervisor signal the actual exit. */
+  deferExit: Type.Optional(Type.Literal(true)),
   target: closedObject({
     pid: Type.Integer({ minimum: 1 }),
     processInstanceId: SuspensionTokenSchema,
