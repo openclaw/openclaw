@@ -272,6 +272,7 @@ function buildFailureAlertPayload(params: {
       job: params.job,
       reason: "consecutive-failures",
       consecutiveErrors: params.consecutiveErrors,
+      failureNotificationDetail: params.failureNotificationDetail,
     });
     return {
       text:

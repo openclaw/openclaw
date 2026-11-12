@@ -96,7 +96,10 @@ async function recordSessionEventTerminalOutcome(
   event: SessionEventExecution | undefined,
   runId: string,
   result: AgentTurnExecutionResult | undefined,
+  replyOperation: AgentTurnParams["replyOperation"],
 ): Promise<void> {
+  const replyResult = replyOperation?.result;
+  const failureCause = replyResult?.kind === "failed" ? replyResult.cause : undefined;
   await event?.onTerminal(
     runId,
     result?.outcome.kind === "aborted"
@@ -105,10 +108,12 @@ async function recordSessionEventTerminalOutcome(
         ? "completed"
         : "failed",
     result?.outcome.kind === "settled"
-      ? { ...result.outcome.result, resolved: result.outcome.resolved }
+      ? { ...result.outcome.result, resolved: result.outcome.resolved, failureCause }
       : result?.outcome.kind === "rejected"
-        ? { payloads: [result.outcome.payload], resolved: result.outcome.resolved }
-        : undefined,
+        ? { payloads: [result.outcome.payload], resolved: result.outcome.resolved, failureCause }
+        : failureCause !== undefined
+          ? { failureCause }
+          : undefined,
   );
 }
 
@@ -182,13 +187,18 @@ export async function runAgentTurnWithOutcome(
     }
     await recordAgentTurnExecutionOutcome(params, result);
     terminalRecorded = true;
-    await recordSessionEventTerminalOutcome(eventExecution, runId, result);
+    await recordSessionEventTerminalOutcome(eventExecution, runId, result, params.replyOperation);
     return result;
   } catch (error) {
     eventExecution?.onFailed?.(error);
     if (!terminalRecorded) {
       await recordAgentTurnExecutionOutcome(params, undefined);
-      await recordSessionEventTerminalOutcome(eventExecution, runId, undefined);
+      await recordSessionEventTerminalOutcome(
+        eventExecution,
+        runId,
+        undefined,
+        params.replyOperation,
+      );
     }
     throw error;
   } finally {

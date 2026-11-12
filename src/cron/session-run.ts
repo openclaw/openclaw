@@ -345,7 +345,7 @@ export async function runCronSessionTurn(
           ? { kind: "aborted" }
           : classification === "timeout"
             ? { kind: "reason", reason: "timeout" }
-            : undefined,
+            : result.automationResult?.errorClassification,
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

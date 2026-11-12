@@ -335,6 +335,47 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   expect(enqueueSessionEvent).not.toHaveBeenCalled();
 });
 
+it("pauses a recurring job on its first account refusal with one actionable alert", async () => {
+  const enqueueSessionEvent = vi.fn();
+  const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
+    async () => undefined,
+  );
+  const { state, job, apply, deferredNotifications } = outcomeFixture(
+    startedAt,
+    { failureAlert: { cooldownMs: 0 } },
+    { enqueueSessionEvent, sendCronFailureAlert },
+  );
+  const error =
+    "Automation has no recorded inference account. Runtime codex would run openai/gpt-5.5 with stored account openai:synthetic-account.";
+  apply({
+    status: "error",
+    error,
+    executionStarted: true,
+    errorClassification: { kind: "permanent" },
+    failureNotificationDetail: { kind: "inference-account-unrecorded" },
+  });
+
+  expect(job.enabled).toBe(false);
+  expect(job.state.nextRunAtMs).toBeUndefined();
+  expect(job.state.lastError).toBe(error);
+  expect(job.state.autoDisabled).toEqual({
+    reason: "consecutive-failures",
+    atMs: startedAt + 10,
+    consecutiveErrors: 1,
+  });
+  expect(deferredNotifications).toHaveLength(1);
+  await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+  expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+  const text = sendCronFailureAlert.mock.calls[0]?.[0].payload.text ?? "";
+  expect(text).toContain("was paused because retrying cannot fix its last run failure");
+  expect(text).toContain("no recorded inference account");
+  expect(text).toContain("openclaw doctor --fix");
+  expect(text).toContain(`openclaw automations enable ${job.id}`);
+  // The stored account stays in automation history, not in the alert.
+  expect(text).not.toContain("openai:synthetic-account");
+  expect(enqueueSessionEvent).not.toHaveBeenCalled();
+});
+
 it.each([
   { name: "alerts disabled for the job", overrides: { failureAlert: false } },
   { name: "no failure route", overrides: { delivery: { mode: "none" } } },

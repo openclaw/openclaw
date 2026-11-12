@@ -1,7 +1,8 @@
 /** Shared state and owner-notification policy for cron auto-disable transitions. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isCronConfigurationRefusal } from "../configuration-refusal.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
-import type { CronJob, CronJobState } from "../types.js";
+import type { CronFailureNotificationDetail, CronJob, CronJobState } from "../types.js";
 import { cronNotificationJob } from "./notification-intents.js";
 import type { DeferredCronNotifications } from "./state.js";
 
@@ -22,14 +23,19 @@ export function buildCronAutoDisableNotice(params: {
   job: Pick<CronJob, "id" | "name" | "state">;
   reason: CronAutoDisableReason;
   consecutiveErrors: number;
+  /** Closed detail of the run failure that disabled the job. */
+  failureNotificationDetail?: CronFailureNotificationDetail;
 }): string {
   const { job } = params;
   const name = truncateUtf16Safe((job.name || job.id).replace(/\s+/g, " ").trim(), 120);
-  const errorReason =
-    params.reason === "consecutive-failures" ? job.state.lastErrorReason : undefined;
+  const runFailure = params.reason === "consecutive-failures";
+  const errorReason = runFailure ? job.state.lastErrorReason : undefined;
+  const detail = runFailure ? params.failureNotificationDetail : undefined;
   return [
-    `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
-    ...cronFailureDetailLines(errorReason),
+    isCronConfigurationRefusal(detail)
+      ? `⚠️ Automation "${name}" was paused because retrying cannot fix its last run failure.`
+      : `⚠️ Automation "${name}" was auto-disabled after ${params.consecutiveErrors} consecutive ${autoDisableReasonLabel(params.reason)}.`,
+    ...cronFailureDetailLines(errorReason, detail),
     `Fix the underlying cause, then run \`openclaw automations enable ${job.id}\` to re-enable it.`,
   ].join("\n");
 }
@@ -39,6 +45,7 @@ export function queueCronAutoDisableNotification(params: {
   job: CronJob;
   reason: CronAutoDisableReason;
   consecutiveErrors: number;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   deferredNotifications: DeferredCronNotifications;
 }): void {
   params.deferredNotifications.push({
@@ -54,6 +61,7 @@ export function autoDisableCronJob(params: {
   reason: CronAutoDisableReason;
   atMs: number;
   consecutiveErrors: number;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   deferredNotifications: DeferredCronNotifications;
   /** A terminal one-shot is already disabled when its notification is finalized. */
   terminalOneShot?: boolean;
@@ -79,10 +87,14 @@ export function autoDisableCronJob(params: {
   return true;
 }
 
-/** Auto-disables only time-based recurring jobs once their run-error streak reaches the limit. */
+/**
+ * Auto-disables only time-based recurring jobs once their run-error streak reaches the limit.
+ * A setup refusal that retries cannot change pauses the job on its first failure.
+ */
 export function maybeAutoDisableCronJobAfterRunFailure(params: {
   job: CronJob;
   atMs: number;
+  failureNotificationDetail?: CronFailureNotificationDetail;
   deferredNotifications: DeferredCronNotifications;
   /** The caller owns the notice when the failure route decides who is told first. */
   notify?: boolean;
@@ -90,7 +102,10 @@ export function maybeAutoDisableCronJobAfterRunFailure(params: {
   const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;
   if (
     (params.job.schedule.kind !== "cron" && params.job.schedule.kind !== "every") ||
-    consecutiveErrors < MAX_CONSECUTIVE_RUN_FAILURES
+    consecutiveErrors <
+      (isCronConfigurationRefusal(params.failureNotificationDetail)
+        ? 1
+        : MAX_CONSECUTIVE_RUN_FAILURES)
   ) {
     return false;
   }

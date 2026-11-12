@@ -206,7 +206,9 @@ export type CronFailureNotificationDetail =
       kind: "script-failure";
       source: "payload" | "trigger";
       code: CronTriggerFailureCode;
-    };
+    }
+  /** A deterministic setup refusal: the job pauses until the operator records the account. */
+  | { kind: "inference-account-unrecorded" };
 
 /** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
