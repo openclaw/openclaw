@@ -1,4 +1,4 @@
 # Exact net test-line growth for PR #197118: the new mcp-http.schema.test.ts covers
 # top-level union flattening (allOf, root+union, sibling keywords, empty unions) and the
 # three conjunctive-overlap skip scenarios from review.
-169
+172
