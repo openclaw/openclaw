@@ -23,12 +23,15 @@ public struct OpenClawIDOwnerDeviceActions: Sendable {
     /// "Stop using this Mac for tools": `remove_node` for this device's node only; the device stays.
     public func removeNode(peerKey: String) async throws {
         let view = try await self.membership()
-        try await self.submit(OpenClawIDStatement.sign("MembershipChange", body: .object([
-            "claw_id": .string(view.clawID),
-            "seq": .integer(view.seq + 1),
-            "target": .object(["op": .string("remove_node"), "peer_key": .string(peerKey)]),
-            "issued_at": .integer(self.now()),
-        ]), signer: self.device))
+        try await self.submit(OpenClawIDStatement.sign(
+            "MembershipChange",
+            body: .object([
+                "claw_id": .string(view.clawID),
+                "seq": .integer(view.seq + 1),
+                "target": .object(["op": .string("remove_node"), "peer_key": .string(peerKey)]),
+                "issued_at": .integer(self.now()),
+            ]),
+            signer: self.device))
     }
 
     /// "Use this Mac for tools": re-adds this device with its own caps and a new node key. The
@@ -40,21 +43,29 @@ public struct OpenClawIDOwnerDeviceActions: Sendable {
         description: OpenClawIDNodeEnrollmentDescription) async throws
     {
         let view = try await self.membership()
-        let cert = try OpenClawIDStatement.sign("OwnerDeviceCert", body: .object([
-            "device_pub": .string(self.device.signingKey),
-            "peer_keys": .array([.string(peer)]),
-            "label": .string(label),
-            "scope": .string("owner"),
-            "caps": .array(view.ownCaps.map { .string($0) }),
-            "issued_at": .integer(self.now()),
-            "expires_at": .null,
-            "root_epoch": .integer(1),
-        ]), signer: self.device)
+        let cert = try OpenClawIDStatement.sign(
+            "OwnerDeviceCert",
+            body: .object([
+                "device_pub": .string(self.device.signingKey),
+                "peer_keys": .array([.string(peer)]),
+                "label": .string(label),
+                "scope": .string("owner"),
+                "caps": .array(view.ownCaps.map { .string($0) }),
+                "issued_at": .integer(self.now()),
+                "expires_at": .null,
+                "root_epoch": .integer(1),
+            ]),
+            signer: self.device)
         try await self.submit(OpenClawIDStatement.sign(
             "MembershipChange",
             body: OpenClawIDOwnerEnrollmentClient
                 .addOwnerDevice(
-                    clawID: view.clawID, seq: view.seq + 1, cert: cert, nodeKey: node, label: label, node: description,
+                    clawID: view.clawID,
+                    seq: view.seq + 1,
+                    cert: cert,
+                    nodeKey: node,
+                    label: label,
+                    node: description,
                     issuedAt: self.now()),
             signer: self.device))
     }
@@ -69,15 +80,18 @@ public struct OpenClawIDOwnerDeviceActions: Sendable {
     static func revocation(clawID: String, seq: Int64, device: OpenClawIDNodeIdentity, issuedAt: Int64) throws
         -> OpenClawIDCanonicalJSON
     {
-        try OpenClawIDStatement.sign("Revocation", body: .object([
-            "claw_id": .string(clawID),
-            "seq": .integer(seq),
-            "target_fp": .string(OpenClawIDStatement.fingerprint(device.signingKey)),
-            "target_kind": .string("owner_device"),
-            "reason": .string("removed from this Mac"),
-            "root_epoch": .integer(1),
-            "issued_at": .integer(issuedAt),
-        ]), signer: device)
+        try OpenClawIDStatement.sign(
+            "Revocation",
+            body: .object([
+                "claw_id": .string(clawID),
+                "seq": .integer(seq),
+                "target_fp": .string(OpenClawIDStatement.fingerprint(device.signingKey)),
+                "target_kind": .string("owner_device"),
+                "reason": .string("removed from this Mac"),
+                "root_epoch": .integer(1),
+                "issued_at": .integer(issuedAt),
+            ]),
+            signer: device)
     }
 
     private func membership() async throws -> (clawID: String, seq: Int64, ownCaps: [String]) {

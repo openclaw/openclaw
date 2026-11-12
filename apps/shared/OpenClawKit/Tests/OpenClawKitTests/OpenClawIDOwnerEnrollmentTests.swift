@@ -256,7 +256,9 @@ struct OpenClawIDOwnerEnrollmentTests {
 
     /// The handoff arrives either way; only the person's match on this Mac lets it be opened and pinned.
     @Test(arguments: [true, false])
-    func `SAS enrollment opens the approver's handoff only after the code is confirmed here`(matches: Bool) async throws {
+    func `SAS enrollment opens the approver's handoff only after the code is confirmed here`(
+        matches: Bool) async throws
+    {
         let vectors = try Vectors()
         let keys = try vectors.keys
         let discovery = try Discovery(vectors: vectors)

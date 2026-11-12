@@ -46,8 +46,13 @@ public enum OpenClawIDDeviceRoute {
         }
         try Task.checkCancellation()
         let assessment = try OpenClawIDNodeTrust.assessDevice(
-            response: response!, hostname: hostname, pin: (previous.clawID, previous.rootFingerprint),
-            discoveryOrigin: discoveryOrigin, listed: (peer.peerKey, admission), previous: previous, now: now())
+            response: response!,
+            hostname: hostname,
+            pin: (previous.clawID, previous.rootFingerprint),
+            discoveryOrigin: discoveryOrigin,
+            listed: (peer.peerKey, admission),
+            previous: previous,
+            now: now())
         if let observation = assessment.observation {
             try await store.observe(hostname: hostname, state: observation)
         }

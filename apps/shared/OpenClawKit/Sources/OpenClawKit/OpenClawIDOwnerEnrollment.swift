@@ -183,23 +183,25 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
             throw OpenClawIDOwnerEnrollmentError.wrongKit
         }
         try await self.discovery.bindDevice(session, device: keys.device, peer: keys.peer, label: label)
-        let cert = try OpenClawIDStatement.sign("OwnerDeviceCert", body: .object([
-            "device_pub": .string(keys.device.signingKey),
-            "peer_keys": .array([.string(keys.peer.peerKey)]),
-            "label": .string(label),
-            "scope": .string("owner"),
-            "caps": .array(Self.ownerCapabilities.map { .string($0) }),
-            "issued_at": .integer(self.now()),
-            "expires_at": .null,
-            "root_epoch": .integer(1),
-        ]), signer: root)
+        let cert = try OpenClawIDStatement.sign(
+            "OwnerDeviceCert",
+            body: .object([
+                "device_pub": .string(keys.device.signingKey),
+                "peer_keys": .array([.string(keys.peer.peerKey)]),
+                "label": .string(label),
+                "scope": .string("owner"),
+                "caps": .array(Self.ownerCapabilities.map { .string($0) }),
+                "issued_at": .integer(self.now()),
+                "expires_at": .null,
+                "root_epoch": .integer(1),
+            ]),
+            signer: root)
         let ownFingerprint = try OpenClawIDStatement.fingerprint(keys.device.signingKey)
         try await self.sendRootChange(
             cert: cert,
             seq: seq + 1,
             root: root,
-            session: session,
-            claw: claw,
+            target: (session, claw),
             keys: keys,
             label: label,
             node: node)
@@ -237,8 +239,7 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
                 cert: cert,
                 seq: seq + 1,
                 root: root,
-                session: session,
-                claw: claw,
+                target: (session, claw),
                 keys: keys,
                 label: label,
                 node: node)
@@ -253,15 +254,23 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         cert: OpenClawIDCanonicalJSON,
         seq: Int64,
         root: OpenClawIDNodeIdentity,
-        session: OpenClawIDDiscoverySession,
-        claw: OpenClawIDDiscoveryClaw,
+        target: (session: OpenClawIDDiscoverySession, claw: OpenClawIDDiscoveryClaw),
         keys: OpenClawIDOwnerDeviceKeys,
         label: String,
         node: OpenClawIDNodeEnrollmentDescription?) async throws
     {
-        let change = try OpenClawIDStatement.sign("MembershipChange", body: Self.addOwnerDevice(
-            clawID: claw.id, seq: seq, cert: cert, nodeKey: keys.node, label: label, node: node,
-            issuedAt: self.now()), signer: root)
+        let (session, claw) = target
+        let change = try OpenClawIDStatement.sign(
+            "MembershipChange",
+            body: Self.addOwnerDevice(
+                clawID: claw.id,
+                seq: seq,
+                cert: cert,
+                nodeKey: keys.node,
+                label: label,
+                node: node,
+                issuedAt: self.now()),
+            signer: root)
         try await self.discovery.send(
             session, device: keys.device, clawID: claw.id, to: "gateway", payload: .object([
                 "kind": .string("root_statement"),
@@ -345,8 +354,12 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
     {
         let response = try await self.discovery.descriptorAndSnapshot(session, clawID: claw.id)
         return try await OpenClawIDNodeTrust.verifiedSnapshotSequence(
-            response: response, hostname: claw.hostname, clawID: claw.id, rootFingerprint: rootFingerprint,
-            discoveryOrigin: self.discovery.origin, previous: self.deviceStore.load(hostname: claw.hostname),
+            response: response,
+            hostname: claw.hostname,
+            clawID: claw.id,
+            rootFingerprint: rootFingerprint,
+            discoveryOrigin: self.discovery.origin,
+            previous: self.deviceStore.load(hostname: claw.hostname),
             now: self.now())
     }
 
@@ -381,9 +394,13 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
     {
         let response = try await self.discovery.descriptorAndSnapshot(session, clawID: claw.id)
         let device = try await OpenClawIDNodeTrust.assessDevice(
-            response: response, hostname: claw.hostname, pin: (claw.id, rootFingerprint),
-            discoveryOrigin: self.discovery.origin, listed: (keys.peer.peerKey, .owner),
-            previous: self.deviceStore.load(hostname: claw.hostname), now: self.now())
+            response: response,
+            hostname: claw.hostname,
+            pin: (claw.id, rootFingerprint),
+            discoveryOrigin: self.discovery.origin,
+            listed: (keys.peer.peerKey, .owner),
+            previous: self.deviceStore.load(hostname: claw.hostname),
+            now: self.now())
         if let observation = device.observation {
             try await self.deviceStore.observe(hostname: claw.hostname, state: observation)
         }
@@ -393,9 +410,13 @@ public struct OpenClawIDOwnerEnrollmentClient: Sendable {
         case let .success(target):
             if let nodeStore, let node = keys.node {
                 let nodeTarget = try OpenClawIDNodeTrust.assessDevice(
-                    response: response, hostname: claw.hostname, pin: (claw.id, rootFingerprint),
-                    discoveryOrigin: self.discovery.origin, listed: (node.peerKey, .node),
-                    previous: target.state, now: self.now())
+                    response: response,
+                    hostname: claw.hostname,
+                    pin: (claw.id, rootFingerprint),
+                    discoveryOrigin: self.discovery.origin,
+                    listed: (node.peerKey, .node),
+                    previous: target.state,
+                    now: self.now())
                 guard case let .success(listed) = nodeTarget.verdict else { return nil }
                 try await nodeStore.commit(listed)
             }

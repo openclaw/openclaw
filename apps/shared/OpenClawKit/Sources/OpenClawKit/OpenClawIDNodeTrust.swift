@@ -164,8 +164,13 @@ public enum OpenClawIDNodeTrust {
         now: Int64) throws -> Int64
     {
         try self.assess(
-            response: response, hostname: hostname, pin: (clawID, rootFingerprint),
-            discoveryOrigin: discoveryOrigin, listed: ("", nil), previous: previous, now: now)
+            response: response,
+            hostname: hostname,
+            pin: (clawID, rootFingerprint),
+            discoveryOrigin: discoveryOrigin,
+            listed: ("", nil),
+            previous: previous,
+            now: now)
             .verdict.get().state.snapshotSequence
     }
 

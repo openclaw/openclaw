@@ -73,7 +73,9 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
         let response = try Self.decode(Response.self, data)
         guard response.session.hasPrefix("ds_") else { throw OpenClawIDNodeEnrollmentError.malformed }
         return .init(
-            token: response.session, accountID: response.account_id, email: response.email,
+            token: response.session,
+            accountID: response.account_id,
+            email: response.email,
             expiresAt: response.expires_at)
     }
 
@@ -93,8 +95,11 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
             guard OpenClawIDNodeEnrollmentLink.matches(claw.claw_id, "^[0-9a-f]{32}$"),
                   OpenClawIDNodeEnrollmentLink.validHostname(claw.hostname) else { return nil }
             return .init(
-                id: claw.claw_id, hostname: claw.hostname, relationship: claw.relationship,
-                role: claw.role, online: claw.online)
+                id: claw.claw_id,
+                hostname: claw.hostname,
+                relationship: claw.relationship,
+                role: claw.role,
+                online: claw.online)
         }
     }
 
@@ -163,8 +168,13 @@ public struct OpenClawIDDiscoveryAccount: Sendable {
             else { return nil }
             let data = (payload["data"] as? [String: Any] ?? [:]).compactMapValues { $0 as? String }
             return .init(
-                id: id, to: to, kind: kind, requestID: payload["request_id"] as? String,
-                step: payload["step"] as? String, event: payload["event"] as? String, ref: payload["ref"] as? String,
+                id: id,
+                to: to,
+                kind: kind,
+                requestID: payload["request_id"] as? String,
+                step: payload["step"] as? String,
+                event: payload["event"] as? String,
+                ref: payload["ref"] as? String,
                 data: data)
         }
         return (parsed, root["cursor"] as? String)
