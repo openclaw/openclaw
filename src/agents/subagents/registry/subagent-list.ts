@@ -247,11 +247,6 @@ function canonicalCwdIdentity(resolved: string, memo: Map<string, string>) {
   return identity;
 }
 
-/** Case-fold the grouping key only where the platform filesystem is case-insensitive. */
-function sharedCwdGroupKey(identity: string) {
-  return process.platform === "win32" ? identity.toLowerCase() : identity;
-}
-
 /** Locale-independent code-unit ordering; `localeCompare` would vary by host ICU data. */
 function compareCodeUnits(a: string, b: string) {
   if (a === b) {
@@ -306,56 +301,66 @@ function capSharedCwdPath(value: string) {
  * directory (see `canonicalCwdIdentity`). Runs without an explicit `spawnedCwd`
  * inherited the parent workspace — the default for `collect` swarms — and are
  * skipped so the advisory stays silent on normal usage. A sender-restricted
- * helper is skipped for the same reason even though it does carry a
- * `spawnedCwd`: see the `inheritedToolPolicySource` check below.
+ * helper does carry a `spawnedCwd` it never chose: it counts as a writer, but
+ * a group made only of such helpers is dropped — see `hasChosenCwd` below.
+ *
+ * The canonical identity is the grouping key as-is. `realpathSync.native`
+ * already returns one spelling for every case alias of a directory on a
+ * case-insensitive volume, so folding case again by `process.platform` adds
+ * nothing there and merges distinct checkouts where a Windows directory has
+ * opted into case sensitivity.
  */
 function buildSharedCwdIndex(params: {
   runs: SubagentRunRecord[];
   sessionEntries: ReadonlyMap<string, SessionEntry>;
   now: number;
 }) {
-  const groups = new Map<string, { path: string; displayPath: string; runIds: string[] }>();
+  const groups = new Map<
+    string,
+    { path: string; displayPath: string; runIds: string[]; hasChosenCwd: boolean }
+  >();
   const identityMemo = new Map<string, string>();
   for (const run of params.runs) {
     if (!isRetainedUnendedSubagentRun(run, params.now)) {
       continue;
     }
     const sessionEntry = params.sessionEntries.get(run.runId);
-    // A sender-restricted helper never chose its directory, so its
-    // `spawnedCwd` is not the explicit request this advisory reports on. Both
-    // spawn owners refuse any cwd that is not the requester's own root
-    // (`resolveSubagentChildPlan`, `resolveAcpSenderSpawnError`) and then hand
-    // the child exactly that root as `spawnedCwd` so the restriction stays
-    // enforceable downstream. Two such helpers therefore always collide by
-    // construction — the inherited-workspace case the advisory already exempts
-    // — and the operator has no cwd to change in response. Reading the flag
-    // here keeps the enforced directory on the entry, which clearing it to
-    // silence the advisory would not.
-    if (sessionEntry?.inheritedToolPolicySource === "sender") {
-      continue;
-    }
     const spawnedCwd = sessionEntry?.spawnedCwd?.trim();
     if (!spawnedCwd) {
       continue;
     }
-    const resolved = resolveUserPath(spawnedCwd);
+    // A sender-restricted helper never chose its directory. Both spawn owners
+    // refuse any cwd that is not the requester's own root
+    // (`resolveSubagentChildPlan`, `resolveAcpSenderSpawnError`) and then hand
+    // the child exactly that root as `spawnedCwd` so the restriction stays
+    // enforceable downstream. Two such helpers therefore always collide by
+    // construction and the operator has no cwd to change in response, so a
+    // group of only restricted helpers is dropped below. The helper is still a
+    // live writer, though: next to a run whose cwd was chosen it is a real
+    // collision, and that run can be moved.
+    const choseCwd = sessionEntry?.inheritedToolPolicySource !== "sender";
+    // `spawnedCwd` records that a directory was named; for an ACP child the
+    // directory actually in use is the manager-owned effective cwd, which a
+    // backend may report as different from the request (`AcpRuntimeHandle.cwd`).
+    const resolved = resolveUserPath(sessionEntry?.acp?.cwd?.trim() || spawnedCwd);
     if (!resolved) {
       continue;
     }
     const identity = canonicalCwdIdentity(resolved, identityMemo);
-    const groupKey = sharedCwdGroupKey(identity);
-    const existing = groups.get(groupKey);
+    const existing = groups.get(identity);
     if (existing) {
       existing.runIds.push(run.runId);
+      existing.hasChosenCwd ||= choseCwd;
       continue;
     }
     // Report the canonical directory rather than whichever alias was named
     // first, so the operator sees the checkout the runs actually share. The cap
     // is applied once per group, not once per emitted row.
-    groups.set(groupKey, {
+    groups.set(identity, {
       path: identity,
       displayPath: capSharedCwdPath(identity),
       runIds: [run.runId],
+      hasChosenCwd: choseCwd,
     });
   }
   // Order the report by keys that depend only on live state, before the caps
@@ -375,7 +380,7 @@ function buildSharedCwdIndex(params: {
   // record per run id — so each comparator is a total order and the reported
   // shape is a function of the live runs alone.
   const orderedGroups = [...groups]
-    .filter(([, group]) => group.runIds.length >= 2)
+    .filter(([, group]) => group.runIds.length >= 2 && group.hasChosenCwd)
     .map(([key, group]) => ({
       key,
       displayPath: group.displayPath,

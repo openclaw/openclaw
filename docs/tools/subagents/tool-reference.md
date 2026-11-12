@@ -589,6 +589,13 @@ the directory to the survivor.
 Both spawn runtimes are covered: native children and `runtime: "acp"` children
 persist an explicit `cwd` through the same contract, so a native run and an ACP
 run in one directory are reported as peers of each other.
+An ACP run is grouped by the effective working directory its runtime reported,
+which can differ from the `cwd` that was requested.
+
+A helper started by a sender-restricted requester is always placed in the
+requester's root. It counts as a live run of that directory, but a group made up
+only of such helpers is not reported: none of them could have been placed
+elsewhere.
 
 Directories are matched by their canonical on-disk identity, so two runs still
 group together when one was spawned through a symlink to the other's path, or

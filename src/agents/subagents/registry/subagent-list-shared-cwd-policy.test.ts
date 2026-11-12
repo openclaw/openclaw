@@ -58,7 +58,7 @@ describe("shared cwd advisory: policy-inherited roots", () => {
     storePath: string,
     sessionKey: string,
     spawnedCwd: string,
-    options?: { senderRestricted?: boolean },
+    options?: { senderRestricted?: boolean; acpEffectiveCwd?: string },
   ) => {
     await replaceSessionEntry(
       { storePath, sessionKey },
@@ -73,6 +73,21 @@ describe("shared cwd advisory: policy-inherited roots", () => {
         // pin it against the real owners.
         ...(options?.senderRestricted
           ? { inheritedToolPolicySource: "sender" as const, sessionRoot: spawnedCwd }
+          : {}),
+        // The manager records the backend's effective cwd here
+        // (`manager.initialize-session.ts`); `spawnedCwd` stays the request.
+        ...(options?.acpEffectiveCwd
+          ? {
+              acp: {
+                backend: "fixture-backend",
+                agent: "fixture-harness",
+                runtimeSessionName: `runtime-${sessionKey}`,
+                mode: "oneshot" as const,
+                state: "idle" as const,
+                lastActivityAt: Date.now(),
+                cwd: options.acpEffectiveCwd,
+              },
+            }
           : {}),
       },
     );
@@ -140,15 +155,15 @@ describe("shared cwd advisory: policy-inherited roots", () => {
     ]);
   });
 
-  it("keeps reporting the unrestricted peers when one run of the group is restricted", async () => {
-    // The exemption is per run, not per directory: the restricted helper is
-    // removed from the group while its two ordinary peers keep their advisory.
+  it("counts a restricted helper as a writer next to a run whose cwd was chosen", async () => {
+    // Only a group made entirely of restricted helpers is unactionable. Next to
+    // an ordinary run the helper is a second live writer, and that run can be
+    // moved — dropping the helper first used to leave the pair unreported.
     const now = Date.now();
     const sharedDir = path.join(testWorkspaceDir, "restricted-mixed");
     const restricted = makeRun("mixed-restricted", now);
     const ordinary = makeRun("mixed-ordinary", now);
-    const ordinaryPeer = makeRun("mixed-ordinary-peer", now);
-    for (const run of [restricted, ordinary, ordinaryPeer]) {
+    for (const run of [restricted, ordinary]) {
       await addSubagentRunForTests(run);
     }
     const storePath = path.join(testWorkspaceDir, "sessions-mixed.json");
@@ -156,13 +171,12 @@ describe("shared cwd advisory: policy-inherited roots", () => {
       senderRestricted: true,
     });
     await seedSessionEntry(storePath, ordinary.childSessionKey, sharedDir);
-    await seedSessionEntry(storePath, ordinaryPeer.childSessionKey, sharedDir);
     const cfg: OpenClawConfig = { session: { store: storePath } };
     setRuntimeConfigSnapshot(cfg);
 
     const list = await buildSubagentListForTests({
       cfg,
-      runs: [restricted, ordinary, ordinaryPeer],
+      runs: [restricted, ordinary],
       recentMinutes: 30,
     });
 
@@ -171,12 +185,81 @@ describe("shared cwd advisory: policy-inherited roots", () => {
         id: 1,
         path: expectedSharedCwdPath(sharedDir),
         runCount: 2,
-        runIds: [ordinary.runId, ordinaryPeer.runId].toSorted(),
+        runIds: [ordinary.runId, restricted.runId].toSorted(),
       },
     ]);
     const byRunId = new Map(list.active.map((item) => [item.runId, item]));
-    expect(byRunId.get(restricted.runId)?.sharedCwdGroupId).toBeUndefined();
+    expect(byRunId.get(restricted.runId)?.sharedCwdGroupId).toBe(1);
     expect(byRunId.get(ordinary.runId)?.sharedCwdGroupId).toBe(1);
-    expect(byRunId.get(ordinaryPeer.runId)?.sharedCwdGroupId).toBe(1);
+  });
+
+  it("groups an ACP run by the effective cwd its runtime reported", async () => {
+    // Both ACP runs named `requested`, but the backend placed one elsewhere:
+    // the named directory has a single live writer and the effective one two.
+    const now = Date.now();
+    const requested = path.join(testWorkspaceDir, "acp-requested");
+    const effective = path.join(testWorkspaceDir, "acp-effective");
+    const stayed = makeRun("acp-stayed", now);
+    const moved = makeRun("acp-moved", now);
+    const native = makeRun("acp-native-peer", now);
+    for (const run of [stayed, moved, native]) {
+      await addSubagentRunForTests(run);
+    }
+    const storePath = path.join(testWorkspaceDir, "sessions-acp-effective.json");
+    await seedSessionEntry(storePath, stayed.childSessionKey, requested, {
+      acpEffectiveCwd: requested,
+    });
+    await seedSessionEntry(storePath, moved.childSessionKey, requested, {
+      acpEffectiveCwd: effective,
+    });
+    await seedSessionEntry(storePath, native.childSessionKey, effective);
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
+
+    const list = await buildSubagentListForTests({
+      cfg,
+      runs: [stayed, moved, native],
+      recentMinutes: 30,
+    });
+
+    expect(list.sharedCwdGroups).toEqual([
+      {
+        id: 1,
+        path: expectedSharedCwdPath(effective),
+        runCount: 2,
+        runIds: [moved.runId, native.runId].toSorted(),
+      },
+    ]);
+  });
+
+  it("keeps directories that differ only by case apart on Windows", async () => {
+    // A Windows directory can opt into case sensitivity, so `Tree` and `tree`
+    // may be two checkouts. Their canonical identities already differ; folding
+    // case by platform merged them into one group.
+    const now = Date.now();
+    const upper = makeRun("case-upper", now);
+    const lower = makeRun("case-lower", now);
+    for (const run of [upper, lower]) {
+      await addSubagentRunForTests(run);
+    }
+    const storePath = path.join(testWorkspaceDir, "sessions-case.json");
+    await seedSessionEntry(storePath, upper.childSessionKey, path.join(testWorkspaceDir, "Tree"));
+    await seedSessionEntry(storePath, lower.childSessionKey, path.join(testWorkspaceDir, "tree"));
+    const cfg: OpenClawConfig = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+    try {
+      const list = await buildSubagentListForTests({
+        cfg,
+        runs: [upper, lower],
+        recentMinutes: 30,
+      });
+
+      expect(list.active).toHaveLength(2);
+      expect(list.sharedCwdGroupTotal).toBe(0);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 });
