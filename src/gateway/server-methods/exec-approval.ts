@@ -391,6 +391,7 @@ export function createExecApprovalHandlers(
         }
         await handlePendingApprovalRequestWithDelivery({
           approvalKind: "exec",
+          runtimeRunId: trustedAgentRuntime?.operationalRunInstance.runId,
           manager,
           record,
           respond,

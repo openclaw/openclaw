@@ -9,6 +9,7 @@ export type GatewayExecApprovalDecision = "allow-once" | "allow-always" | "deny"
 
 export type GatewayExecApprovalEvent = {
   approvalId: string;
+  runtimeRunId?: string;
   command?: string;
   host?: string;
   title?: string;
@@ -85,6 +86,7 @@ export function parseGatewayExecApprovalRequestEventPayload(
       readNonEmptyString(requestRecord.command) ?? readNonEmptyString(requestRecord.commandPreview),
     host: readNonEmptyString(requestRecord.host),
     toolCallId: readNonEmptyString(requestRecord.toolCallId),
+    runtimeRunId: readNonEmptyString(payload.runId),
   };
 }
 
