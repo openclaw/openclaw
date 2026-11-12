@@ -80,6 +80,7 @@ public struct OpenClawIDNodeIdentity: Sendable {
         self.key = try Curve25519.Signing.PrivateKey(rawRepresentation: seed)
     }
 
+    // periphery:ignore - Used only by the opt-in native iroh build (OPENCLAW_IROH_NATIVE), which the Periphery scans do not compile.
     /// Module-only native adapter handoff. Never expose this to JSONL, configuration or diagnostics.
     func withNativeSeed<T>(_ body: (Data) async throws -> T) async rethrows -> T {
         // CryptoKit can share its key storage with rawRepresentation; wipe only an owned copy.
