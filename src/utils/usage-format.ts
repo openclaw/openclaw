@@ -233,6 +233,25 @@ export function captureModelCostPricing(config?: OpenClawConfig, agentDir?: stri
 }
 
 /**
+ * Whether agent-local models.json or the source config authors a price on any model of this
+ * provider. Configured overrides price such runtime rows with their own authored-row rules.
+ */
+export function hasAuthoredProviderModelCost(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  agentDir?: string;
+}): boolean {
+  const prefix = `${normalizeProviderId(params.provider)}/`;
+  const source = params.config ? projectConfigOntoRuntimeSourceSnapshot(params.config) : undefined;
+  return [
+    getProviderCostIndex(source?.models?.providers),
+    loadModelsJsonCostIndex(resolveCostAgentDir(params.config, params.agentDir)),
+  ].some((index) =>
+    [...index].some(([key, cost]) => key.startsWith(prefix) && hasModelCostRates(cost)),
+  );
+}
+
+/**
  * Resolves local models.json first, then authored overrides over effective catalog prices.
  * Complete direct prices need no plugin normalization or provider discovery.
  */

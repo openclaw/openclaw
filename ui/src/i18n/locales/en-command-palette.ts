@@ -91,6 +91,7 @@ const enCommandPalette = {
       debugOverlay: "Toggle debug overlay",
       appearanceSettings: "Open appearance settings",
       startNewSession: "Start new session (from the new-session page)",
+      startNewSessionBackground: "Start new session in background (from the new-session page)",
       closeDialog: "Close dialog or exit settings",
       sendMessage: "Send message",
       newline: "Insert new line",

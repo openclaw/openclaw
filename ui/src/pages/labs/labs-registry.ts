@@ -50,12 +50,6 @@ export const LAB_FEATURES = (
     },
     {
       ...BOOLEAN_GATE,
-      id: "advisor",
-      configPath: ["plugins", "entries", "advisor", "enabled"],
-      settingsPluginId: "advisor",
-    },
-    {
-      ...BOOLEAN_GATE,
       id: "composerPredictions",
       configPath: ["gateway", "controlUi", "experimental", "composerPredictions", "enabled"],
     },
