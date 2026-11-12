@@ -7,6 +7,7 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import { projectAgentToolRuntimeListing } from "../../agent-tool-runtime-listing.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { omitUnsupportedNodeTools } from "../../computer-use-node-capabilities.js";
@@ -252,9 +253,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         sessionId: params.attempt.sessionId,
       });
-      return omitUnsupportedNodeTools(
-        schemaProjection.tools,
-        params.preparedToolBase.nodeToolAvailability,
+      return projectAgentToolRuntimeListing(
+        omitUnsupportedNodeTools(
+          schemaProjection.tools,
+          params.preparedToolBase.nodeToolAvailability,
+        ),
       );
     };
     phases.mark("attempt.bundle-tools.project");

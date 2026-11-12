@@ -17,6 +17,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.ts";
 if (!process.argv[2]) {
@@ -24,6 +25,8 @@ if (!process.argv[2]) {
 }
 const root = process.cwd(),
   out = path.resolve(process.argv[2]);
+const pluginMode = process.argv.includes("--plugins");
+const remoteMode = process.argv.includes("--configured-remote");
 await fs.mkdir(out, { recursive: true });
 if ((await fs.readdir(out)).length) {
   throw new Error("Artifact directory must be empty");
@@ -60,6 +63,10 @@ Object.assign(process.env, {
 });
 const { GatewayClient } = await import("../../src/gateway/client.ts");
 const { acquireTestPortBlock } = await import("../../src/test-utils/port-claims.ts");
+const fileCommands = pluginMode
+  ? (await import(pathToFileURL(path.join(root, "dist/extensions/file-transfer/index.js")).href))
+      .default.nodeHostCommands
+  : [];
 const claim = await acquireTestPortBlock({ offsets: [0, 1] });
 const port = claim.port,
   providerPort = port + 1,
@@ -178,13 +185,55 @@ async function handleProvider(req, res) {
         ]),
       ),
       inlineImages: countImages(j.messages),
+      toolErrors: (j.messages ?? [])
+        .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+        .filter((part) => part.type === "tool_result" && part.is_error).length,
+      presentationTargets:
+        (j.tools ?? []).find((tool) => tool.name === "show_widget")?.input_schema?.properties
+          ?.presentation?.properties?.target?.enum ?? [],
     });
     const desired =
       scenario === "no-target"
         ? { name: "nodes", input: { action: "status" } }
         : scenario === "mobile"
           ? { name: "mobile_ui", input: { action: "observe" } }
-          : { name: "computer", input: { action: "screenshot" } };
+          : scenario === "discover"
+            ? { name: "node_inference", input: { action: "discover" } }
+            : scenario === "infer-denied"
+              ? {
+                  name: "node_inference",
+                  input: { action: "run", model: "fixture-chat", prompt: "Synthetic" },
+                }
+              : scenario === "infer-run"
+                ? {
+                    name: "node_inference",
+                    input: { action: "run", model: "fixture-chat", prompt: "Synthetic" },
+                  }
+                : scenario === "files"
+                  ? {
+                      name: "dir_list",
+                      input: { node: "synthetic-android-desktop", path: workspace },
+                    }
+                  : scenario === "files-denied"
+                    ? {
+                        name: "dir_list",
+                        input: { node: "synthetic-android-desktop", path: "/denied-fixture" },
+                      }
+                    : scenario === "canvas" || scenario === "mac-offline"
+                      ? {
+                          name: "canvas",
+                          input: { action: "present", url: "https://example.com/fixture" },
+                        }
+                      : scenario === "inline" || scenario === "pinned"
+                        ? {
+                            name: "show_widget",
+                            input: {
+                              title: "Synthetic fixture",
+                              widget_code: "<p>Fixture</p>",
+                              ...(scenario === "pinned" ? { pin: true, name: "fixture" } : {}),
+                            },
+                          }
+                        : { name: "computer", input: { action: "screenshot" } };
     const call =
       !issued.has(scenario) && (j.tools ?? []).some((t) => t.name === desired.name)
         ? desired
@@ -272,23 +321,78 @@ await fs.writeFile(
     tools: {
       codeMode: false,
       toolSearch: false,
-      allow: ["nodes", "computer", "mobile_ui", "sessions_spawn", "automations"],
+      allow: [
+        "nodes",
+        "computer",
+        "mobile_ui",
+        "sessions_spawn",
+        "automations",
+        ...(pluginMode
+          ? [
+              "file_fetch",
+              "dir_list",
+              "dir_fetch",
+              "file_write",
+              "node_inference",
+              "canvas",
+              "show_widget",
+            ]
+          : []),
+      ],
     },
     browser: { enabled: false },
     cron: { enabled: false },
     gateway: {
       mode: "local",
+      ...(remoteMode ? { remote: { url: "wss://desktop.example" } } : {}),
       bind: "loopback",
       port,
       auth: { mode: "token", token },
       controlUi: { enabled: false },
       nodes: {
         commands: {
-          allow: ["computer.act", "screen.snapshot", "mobile.ui.observe", "mobile.ui.act"],
+          allow: [
+            "computer.act",
+            "screen.snapshot",
+            "mobile.ui.observe",
+            "mobile.ui.act",
+            ...(pluginMode
+              ? [
+                  "file.stat",
+                  "file.fetch",
+                  "dir.list",
+                  "dir.fetch",
+                  "file.write",
+                  "ollama.models",
+                  "ollama.chat",
+                  "canvas.present",
+                ]
+              : []),
+          ],
         },
       },
     },
-    plugins: { allow: ["anthropic"] },
+    plugins: {
+      allow: ["anthropic", ...(pluginMode ? ["file-transfer", "ollama", "canvas"] : [])],
+      ...(pluginMode
+        ? {
+            entries: {
+              "file-transfer": {
+                config: {
+                  policyVersion: 2,
+                  nodes: {
+                    "*": {
+                      allowReadPaths: [workspace, workspace + "/**"],
+                      denyPaths: ["/denied-fixture/**"],
+                      ask: "off",
+                    },
+                  },
+                },
+              },
+            },
+          }
+        : {}),
+    },
   }),
 );
 const log = await fs.open(path.join(out, "gateway.log"), "w");
@@ -303,6 +407,7 @@ async function connect() {
     clientVersion: "1.0.0",
     platform: process.platform,
     mode: "test",
+    caps: pluginMode ? ["inline-widgets", "ui-commands"] : undefined,
     scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
     onHelloOk: () => resolve(c),
     onConnectError: reject,
@@ -359,18 +464,26 @@ try {
       await delay(200);
     }
   }
+  const sessionKeys = new Map();
   async function turn(name, key = name) {
     scenario = name;
+    if (pluginMode && !sessionKeys.has(key)) {
+      const created = await control.request("sessions.create", {
+        agentId: "main",
+        label: "Synthetic " + key,
+        model: "anthropic/fixture-node-route",
+      });
+      sessionKeys.set(key, created.key);
+    }
     const ack = await control.request(
-      "agent",
+      pluginMode ? "chat.send" : "agent",
       {
-        sessionKey: "agent:main:dm:node-route-" + key,
-        createSessionIfMissing: true,
+        sessionKey: pluginMode ? sessionKeys.get(key) : "agent:main:dm:node-route-" + key,
+        ...(!pluginMode ? { createSessionIfMissing: true, timeout: 60 } : { timeoutMs: 60000 }),
         message:
           "SCENARIO=" + name + ". Synthetic route probe; return the scripted fixture result only.",
         deliver: false,
         idempotencyKey: randomUUID(),
-        timeout: 60,
       },
       { timeoutMs: 90000 },
     );
@@ -392,7 +505,7 @@ try {
     }
   }
   let node;
-  async function connectNode() {
+  async function connectNode(platform = "android") {
     const { promise, resolve, reject } = Promise.withResolvers();
     const c = new GatewayClient({
       url: `ws://127.0.0.1:${port}`,
@@ -401,10 +514,27 @@ try {
       clientName: "node-host",
       clientDisplayName: "synthetic-android-desktop",
       clientVersion: "1.0.0",
-      platform: "android",
+      platform,
       mode: "node",
       caps: ["computer", "screen", "mobileUI"],
-      commands: ["screen.snapshot", "computer.act", "mobile.ui.observe", "mobile.ui.act"],
+      commands: [
+        "screen.snapshot",
+        "computer.act",
+        "mobile.ui.observe",
+        "mobile.ui.act",
+        ...(pluginMode
+          ? [
+              "file.stat",
+              "file.fetch",
+              "dir.list",
+              "dir.fetch",
+              "file.write",
+              "ollama.models",
+              ...(platform === "macos" ? ["ollama.chat"] : []),
+              "canvas.present",
+            ]
+          : []),
+      ],
       computerUse: {
         contractVersion: 2,
         provider: { id: "synthetic", label: "Synthetic", generation: "fixture-1" },
@@ -450,6 +580,27 @@ try {
               windowTitle: "Synthetic",
               nodes: [],
             };
+          } else if (pluginMode && f.command === "ollama.models") {
+            payload = {
+              provider: "ollama",
+              models: [{ name: "fixture-chat", capabilities: ["completion"], loaded: true }],
+            };
+          } else if (pluginMode && f.command === "ollama.chat") {
+            payload = {
+              provider: "ollama",
+              model: "fixture-chat",
+              response: "SYNTHETIC_INFERENCE_DONE",
+              usage: { promptTokens: 1, completionTokens: 1 },
+            };
+          } else if (pluginMode && f.command === "canvas.present") {
+            payload = { ok: true };
+          } else if (pluginMode && ["file.stat", "dir.list"].includes(f.command)) {
+            const params = f.params ?? JSON.parse(f.paramsJSON ?? "{}");
+            if (params.path !== workspace && !params.path.startsWith(workspace + path.sep)) {
+              throw new Error("Fixture filesystem boundary");
+            }
+            const command = fileCommands.find((entry) => entry.command === f.command);
+            payload = JSON.parse(await command.handle(JSON.stringify(params)));
           } else {
             throw new Error("Unexpected fixture device effect: " + f.command);
           }
@@ -489,12 +640,36 @@ try {
   );
   await turn("online", "known");
   await turn("mobile");
+  if (pluginMode) {
+    await turn("discover");
+    await turn("infer-denied");
+    await turn("files");
+    await turn("files-denied");
+    await turn("inline");
+    await turn("pinned");
+  }
   await node.stopAndWait({ timeoutMs: 1000 });
   await fs.writeFile(
     path.join(out, "offline-nodes.json"),
     JSON.stringify(await control.request("node.list", {}), null, 2),
   );
   await turn("offline", "known");
+  if (pluginMode) {
+    try {
+      node = await connectNode("macos");
+    } catch (error) {
+      if (error.details?.code !== "PAIRING_REQUIRED") {
+        throw error;
+      }
+      await approvePending();
+      node = await connectNode("macos");
+    }
+    await approvePending();
+    await turn("canvas", "mac");
+    await turn("infer-run", "mac");
+    await node.stopAndWait({ timeoutMs: 1000 });
+    await turn("mac-offline", "mac");
+  }
   await fs.writeFile(path.join(out, "captures.json"), JSON.stringify(captures, null, 2));
   await fs.writeFile(
     path.join(out, "node-invocations.json"),
@@ -502,18 +677,95 @@ try {
   );
   const noTarget = captures.filter((item) => item.scenario === "no-target" && item.tools.length);
   if (
-    !noTarget.length ||
-    noTarget.some(
-      (item) =>
-        !item.tools.includes("nodes") ||
-        item.tools.includes("computer") ||
-        item.tools.includes("mobile_ui"),
-    )
+    !remoteMode &&
+    (!noTarget.length ||
+      noTarget.some(
+        (item) =>
+          !item.tools.includes("nodes") ||
+          item.tools.includes("computer") ||
+          item.tools.includes("mobile_ui"),
+      ))
   ) {
     throw new Error("Absent routes remained in the provider surface, or node discovery was lost");
   }
+  if (
+    remoteMode &&
+    (!noTarget.length ||
+      noTarget.some(
+        (item) => !item.tools.includes("computer") || !item.tools.includes("mobile_ui"),
+      ))
+  ) {
+    throw new Error(
+      "Configured remote desktop/mobile routes disappeared behind empty local inventory",
+    );
+  }
   if (handlerErrors.length) {
     throw new AggregateError(handlerErrors, "Synthetic node handler failed");
+  }
+  if (pluginMode && !remoteMode) {
+    const pluginTools = [
+      "file_fetch",
+      "dir_list",
+      "dir_fetch",
+      "file_write",
+      "node_inference",
+      "canvas",
+    ];
+    if (
+      noTarget.some(
+        (item) =>
+          pluginTools.some((name) => item.tools.includes(name)) ||
+          !item.tools.includes("show_widget") ||
+          item.presentationTargets.includes("node_panel"),
+      )
+    ) {
+      throw new Error(
+        "Absent plugin route remained, or inline/pinned widget authoring was removed",
+      );
+    }
+    for (const [name, tool] of [
+      ["discover", "node_inference"],
+      ["files", "dir_list"],
+      ["inline", "show_widget"],
+      ["pinned", "show_widget"],
+      ["canvas", "canvas"],
+      ["infer-run", "node_inference"],
+    ]) {
+      if (
+        !outcomes
+          .find((item) => item.scenario === name)
+          ?.outcome.terminalReceipt?.successfulToolNames?.includes(tool)
+      ) {
+        throw new Error(name + " did not complete its supported plugin route");
+      }
+    }
+    for (const name of ["infer-denied", "files-denied"]) {
+      if (
+        !issued.has(name) ||
+        !captures.some((item) => item.scenario === name && item.toolErrors)
+      ) {
+        throw new Error(name + " did not produce its required policy/readiness refusal");
+      }
+    }
+    const android = captures.find((item) => item.scenario === "discover" && item.tools.length);
+    if (
+      !android?.tools.includes("node_inference") ||
+      android.tools.includes("canvas") ||
+      android.presentationTargets.includes("node_panel")
+    ) {
+      throw new Error("Android/inference discovery support was confused with macOS Canvas");
+    }
+    const mac = captures.findLast((item) => item.scenario === "infer-run" && item.tools.length);
+    const offlineMac = captures.find(
+      (item) => item.scenario === "mac-offline" && item.tools.length,
+    );
+    if (
+      !mac?.presentationTargets.includes("node_panel") ||
+      mac.toolsSha256 !== offlineMac?.toolsSha256 ||
+      mac.systemSha256 !== offlineMac?.systemSha256
+    ) {
+      throw new Error("Known offline Canvas route lost its settled session prefix");
+    }
   }
   for (const [name, tool] of [
     ["no-target", "nodes"],

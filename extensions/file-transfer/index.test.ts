@@ -1,4 +1,7 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+type NodeRow = Awaited<ReturnType<OpenClawPluginApi["runtime"]["nodes"]["list"]>>["nodes"][number];
 
 const fileCommands = "file.stat file.fetch dir.list dir.fetch file.create file.write".split(" ");
 const toolNames = "file_fetch dir_list dir_fetch file_write".split(" ");
@@ -21,6 +24,7 @@ afterAll(() => {
 
 describe("file-transfer plugin entry", () => {
   const api = {
+    runtime: { nodes: { list: vi.fn<OpenClawPluginApi["runtime"]["nodes"]["list"]>() } },
     registerNodeHostCommand: vi.fn(),
     registerNodeInvokePolicy: vi.fn(),
     registerTool: vi.fn(),
@@ -33,7 +37,49 @@ describe("file-transfer plugin entry", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    api.runtime.nodes.list.mockResolvedValue({ nodes: [] });
     pluginEntry.register(api as never);
+  });
+
+  const listingSupport = () =>
+    Promise.all(api.registerTool.mock.calls.map(([, options]) => options.listingSupported({})));
+
+  it("keeps configured remote overrides unknown without probing them", async () => {
+    const context = {
+      config: { gateway: { mode: "local", remote: { url: "wss://desktop.example" } } },
+    };
+    await expect(
+      Promise.all(
+        api.registerTool.mock.calls.map(([, options]) => options.listingSupported(context)),
+      ),
+    ).resolves.toEqual([undefined, undefined, undefined, undefined]);
+    expect(api.runtime.nodes.list).not.toHaveBeenCalled();
+  });
+
+  it("lists only each tool's effective command, including offline nodes", async () => {
+    const commands = ["file.fetch", "dir.list", "dir.fetch", "file.write"];
+    for (const [index, command] of commands.entries()) {
+      const nodes: NodeRow[] = [
+        { nodeId: "offline", connected: false, commands, invocableCommands: [command] },
+      ];
+      api.runtime.nodes.list.mockImplementation(async (params) => ({
+        nodes: params?.connected ? nodes.filter((node) => node.connected) : nodes,
+      }));
+      await expect(listingSupport()).resolves.toEqual(commands.map((_, i) => i === index));
+    }
+  });
+
+  it("falls back to advertised commands only when effective commands are absent", async () => {
+    api.runtime.nodes.list.mockResolvedValue({
+      nodes: [{ nodeId: "paired", commands: ["dir.list"] }],
+    });
+    await expect(listingSupport()).resolves.toEqual([false, true, false, false]);
+    api.runtime.nodes.list.mockResolvedValue({
+      nodes: [{ nodeId: "denied", commands: fileCommands, invocableCommands: [] }],
+    });
+    await expect(listingSupport()).resolves.toEqual([false, false, false, false]);
+    api.runtime.nodes.list.mockResolvedValue({ nodes: [] });
+    await expect(listingSupport()).resolves.toEqual([false, false, false, false]);
   });
 
   it("registers static command and tool descriptors without importing runtime handlers", () => {

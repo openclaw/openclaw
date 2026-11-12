@@ -389,7 +389,7 @@ describe("ollama plugin", () => {
       }),
     );
     expect(registerNodeHostCommand).not.toHaveBeenCalled();
-    expect(registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "node_inference" }));
+    expect(registerTool.mock.calls[0]?.[0]).toMatchObject({ name: "node_inference" });
   });
 
   it("carries the selected model from provider auth into model preparation", async () => {

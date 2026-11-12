@@ -1,6 +1,14 @@
 import * as acorn from "acorn";
 import { describe, expect, it, vi } from "vitest";
 import type { BoardWidgetDataQuery } from "../../packages/gateway-protocol/src/index.js";
+import {
+  gateAgentToolExecution,
+  isAgentToolExecutionAvailable,
+} from "../agents/agent-tool-availability.js";
+import {
+  prepareAgentToolRuntimeListing,
+  projectAgentToolRuntimeListing,
+} from "../agents/agent-tool-runtime-listing.js";
 import { WidgetHtmlInputError } from "../plugin-sdk/widget-html.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import {
@@ -15,6 +23,66 @@ import { buildWidgetDocument } from "./wrap.js";
 vi.mock("acorn", { spy: true });
 
 const { createTool, expectNoDocument } = useWidgetHarness();
+
+it("does not revive execution authority when a presenter listing is prepared", async () => {
+  const tool = gateAgentToolExecution(
+    createTool({
+      presenters: [
+        {
+          target: "node_panel",
+          description: "Synthetic panel",
+          listingSupported: () => false,
+          availability: vi.fn(),
+          present: vi.fn(),
+        },
+      ],
+    }),
+    "requesting client disconnected",
+  );
+  await prepareAgentToolRuntimeListing([tool], () => {});
+  const [listed] = projectAgentToolRuntimeListing([tool]);
+  expect(isAgentToolExecutionAvailable(listed!)).toBe(false);
+  expect((await listed!.execute("blocked", {})).details).toMatchObject({ gated: true });
+});
+
+it.each([false, true, undefined, "error"] as const)(
+  "projects only node_panel listing support=%s",
+  async (support) => {
+    const listingSupported = vi.fn(async () => {
+      if (support === "error") {
+        throw new Error("inventory unknown");
+      }
+      return support;
+    });
+    const availability = vi.fn<WidgetPresenter["availability"]>();
+    const tool = createTool({
+      agentSessionKey: "agent:main:listing",
+      presenters: [
+        {
+          target: "node_panel",
+          description: "Synthetic panel",
+          listingSupported,
+          availability,
+          present: vi.fn(),
+        },
+      ],
+    });
+    const definition = (candidate: typeof tool) => JSON.stringify(candidate.parameters);
+    const complete = definition(tool);
+    expect(complete).toContain("node_panel");
+    expect(listingSupported).not.toHaveBeenCalled();
+    await prepareAgentToolRuntimeListing([tool], () => {});
+    expect(definition(tool)).toBe(complete);
+    const [listed] = projectAgentToolRuntimeListing([tool]);
+    expect(listed?.name).toBe("show_widget");
+    expect(definition(listed!)).toContain("assistant_message");
+    expect(definition(listed!)).toContain('"pin"');
+    expect(definition(listed!).includes("node_panel")).toBe(support !== false);
+    expect(listed?.execute).toBe(tool.execute);
+    expect(listingSupported).toHaveBeenCalledTimes(1);
+    expect(availability).not.toHaveBeenCalled();
+  },
+);
 
 describe("show_widget current-channel presentation", () => {
   it.each([false, true])("prefers the channel presenter (inline=%s)", async (inlineClient) => {

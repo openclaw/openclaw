@@ -1,6 +1,8 @@
 import {
   definePluginEntry,
   type AnyAgentTool,
+  type OpenClawPluginApi,
+  type OpenClawPluginToolContext,
   type OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -30,6 +32,16 @@ function createLazyTool(
       const tool = await (toolPromise ??= loadTool());
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
+  };
+}
+
+function nodeCommandListingSupported(api: OpenClawPluginApi, command: string) {
+  return async (ctx: OpenClawPluginToolContext) => {
+    if (ctx.config?.gateway?.remote?.url?.trim()) {
+      return undefined;
+    }
+    const { nodes } = await api.runtime.nodes.list();
+    return nodes.some((node) => (node.invocableCommands ?? node.commands ?? []).includes(command));
   };
 }
 
@@ -162,24 +174,28 @@ export default definePluginEntry({
         const { createFileFetchTool } = await import("./src/tools/file-fetch-tool.js");
         return createFileFetchTool();
       }),
+      { listingSupported: nodeCommandListingSupported(api, "file.fetch") },
     );
     api.registerTool(
       createLazyTool(DIR_LIST_TOOL_DESCRIPTOR, async () => {
         const { createDirListTool } = await import("./src/tools/dir-list-tool.js");
         return createDirListTool();
       }),
+      { listingSupported: nodeCommandListingSupported(api, "dir.list") },
     );
     api.registerTool(
       createLazyTool(DIR_FETCH_TOOL_DESCRIPTOR, async () => {
         const { createDirFetchTool } = await import("./src/tools/dir-fetch-tool.js");
         return createDirFetchTool();
       }),
+      { listingSupported: nodeCommandListingSupported(api, "dir.fetch") },
     );
     api.registerTool(
       createLazyTool(FILE_WRITE_TOOL_DESCRIPTOR, async () => {
         const { createFileWriteTool } = await import("./src/tools/file-write-tool.js");
         return createFileWriteTool();
       }),
+      { listingSupported: nodeCommandListingSupported(api, "file.write") },
     );
   },
 });

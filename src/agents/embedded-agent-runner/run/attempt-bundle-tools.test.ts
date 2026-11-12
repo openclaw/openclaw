@@ -180,6 +180,21 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   );
 
   const clients = ["client_read", "client_write", "other_read"];
+  it("keeps passive plugin absence out of child and cron policy", async () => {
+    const missing = pluginTool("device_read", "fixture");
+    setPluginToolMeta(missing, { pluginId: "fixture", optional: false, listingSupported: false });
+    const inherited = ["device_read"];
+    const input = createInput(inherited, [missing]);
+    const result = await prepare(input);
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual([]);
+    expect(inherited).toEqual(["device_read"]);
+    expect(input.preparedToolBase.cronCreatorToolAllowlist).toEqual([
+      { name: "device_read", pluginId: "fixture" },
+    ]);
+    setPluginToolMeta(missing, { pluginId: "fixture", optional: false, listingSupported: true });
+    result.refreshTools(() => {});
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["device_read"]);
+  });
   it("keeps host-runtime omissions out of child and cron authority, including refresh", async () => {
     const inherited = ["nodes", "computer", "mobile_ui"];
     const input = createInput(

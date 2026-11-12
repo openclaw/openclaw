@@ -5,6 +5,7 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { projectAgentToolRuntimeListing } from "../agents/agent-tool-runtime-listing.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.async.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { projectAgentToolsExecPolicy } from "../agents/agent-tools.execution-policy.js";
@@ -724,7 +725,9 @@ export async function resolveGatewayScopedTools(
 
   return {
     agentId: sessionAgentId,
-    tools: applyToolAvailabilityDescriptions(tools),
+    tools: applyToolAvailabilityDescriptions(
+      surface === "loopback" ? tools : projectAgentToolRuntimeListing(tools),
+    ),
     workspaceDir,
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef

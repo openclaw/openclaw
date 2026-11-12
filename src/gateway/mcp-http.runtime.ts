@@ -4,6 +4,7 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { projectAgentToolRuntimeListing } from "../agents/agent-tool-runtime-listing.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
@@ -378,9 +379,11 @@ async function constructMcpLoopbackTools(
   scoped.captureFinalCronCreatorTools?.(new Set(eligibleSchema.map((tool) => tool.name)));
   // A later child or cron run owns different targets. Capture policy/schema
   // eligibility above; current-host runtime omissions affect only this catalog.
-  const tools = omitUnsupportedNodeTools(eligibleTools, params.pairedComputerUseAvailability);
-  const offeredNames = new Set(tools.map((tool) => tool.name));
-  const toolSchema = eligibleSchema.filter((tool) => offeredNames.has(tool.name));
+  const tools = projectAgentToolRuntimeListing(
+    omitUnsupportedNodeTools(eligibleTools, params.pairedComputerUseAvailability),
+  );
+  const eligibleNames = new Set(eligibleSchema.map((tool) => tool.name));
+  const toolSchema = buildMcpToolSchema(tools.filter((tool) => eligibleNames.has(tool.name)));
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,

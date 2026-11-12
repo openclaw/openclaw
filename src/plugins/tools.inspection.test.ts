@@ -2,9 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, assert, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { projectAgentToolRuntimeListing } from "../agents/agent-tool-runtime-listing.js";
 import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
-import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
+import {
+  resolveOpenClawPluginToolsForOptions,
+  resolveOpenClawPluginToolsForOptionsAsync,
+} from "../agents/openclaw-plugin-tools.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { runWithAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +22,7 @@ import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
+import { getPluginToolMeta } from "./tool-metadata.js";
 import { acquirePluginToolInspectionRegistry } from "./tools.js";
 import { readToolTestEvents } from "./tools.test-support.js";
 import { resolveRuntimeWebSearchProviders } from "./web-search-providers.runtime.js";
@@ -35,6 +40,7 @@ function writeToolPlugin(params: {
   workspaceAccess?: boolean | "execute";
   factoryReadsWorkspace?: boolean;
   webSearchProviderId?: string;
+  listingSupported?: boolean | "error" | "unknown";
 }): string {
   const toolName = `${params.id}_tool`;
   const { webSearchProviderId } = params;
@@ -81,7 +87,9 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
       parameters: { type: "object", properties: {} },
       execute: async () => { event("execute"); return { content: [{ type: "text", text: JSON.stringify(details) }], details }; },
     };
-  }, { name: ${JSON.stringify(toolName)}, ...${JSON.stringify(params.workspaceAccess === undefined ? {} : { workspaceAccess: params.workspaceAccess })} });
+  }, { name: ${JSON.stringify(toolName)}, ...${JSON.stringify(params.workspaceAccess === undefined ? {} : { workspaceAccess: params.workspaceAccess })},
+    ${params.listingSupported === undefined ? "" : `listingSupported: async (context) => { event("listing", {agentId: context.agentId}); if (${params.listingSupported === "error"}) throw new Error("inventory unknown"); return ${params.listingSupported === "unknown" ? "undefined" : JSON.stringify(params.listingSupported)}; },`}
+  });
 } };
 `,
   );
@@ -126,6 +134,53 @@ async function inspectionLease(params: Parameters<typeof acquirePluginToolInspec
   const inspection = await acquirePluginToolInspectionRegistry(params);
   return { ...inspection, [Symbol.asyncDispose]: () => inspection.release() };
 }
+
+it.each([undefined, true, false, "error", "unknown"] as const)(
+  "prepares passive listing=%s without narrowing synchronous or policy discovery",
+  async (support) => {
+    await withInspectionState(async (state) => {
+      const events = state.path("listing-events.jsonl");
+      const pluginPath = writeToolPlugin({
+        root: state.path("listing-plugin"),
+        id: "listing",
+        events,
+        listingSupported: support,
+      });
+      const config: OpenClawConfig = { plugins: pluginConfig([pluginPath], ["listing"]) };
+      const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
+      await using inspection = await inspectionLease({
+        loadContext,
+        scopes: [toolScope(config, state.workspaceDir, ["listing_tool"], "main")],
+      });
+      const params = {
+        options: {
+          config,
+          workspaceDir: state.workspaceDir,
+          agentDir: state.agentDir(),
+          requesterAgentIdOverride: "main",
+          pluginToolAllowlist: ["listing_tool"],
+        },
+      };
+      const synchronous = withPluginRuntimeRegistryScope(inspection.registry, () =>
+        resolveOpenClawPluginToolsForOptions(params),
+      );
+      expect(synchronous.map((tool) => tool.name)).toEqual(["listing_tool"]);
+      expect(readEvents(events, "listing")).toEqual([]);
+      const prepared = await withPluginRuntimeRegistryScope(inspection.registry, () =>
+        resolveOpenClawPluginToolsForOptionsAsync(params),
+      );
+      expect(prepared.map((tool) => tool.name)).toEqual(["listing_tool"]);
+      expect(getPluginToolMeta(prepared[0]!)?.listingSupported).toBe(
+        typeof support === "boolean" ? support : undefined,
+      );
+      expect(projectAgentToolRuntimeListing(prepared).map((tool) => tool.name)).toEqual(
+        support === false ? [] : ["listing_tool"],
+      );
+      expect(readEvents(events, "listing")).toHaveLength(support === undefined ? 0 : 1);
+      expect(readEvents(events, "execute")).toEqual([]);
+    });
+  },
+);
 
 it.each(
   ([undefined, true, false, "execute"] as const).flatMap((workspaceAccess) =>

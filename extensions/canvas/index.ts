@@ -3,7 +3,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
-import { CANVAS_PRESENT_COMMAND, isEligibleCanvasNode } from "./src/node-eligibility.js";
+import {
+  CANVAS_PRESENT_COMMAND,
+  isEligibleCanvasNode,
+  supportsCanvasNode,
+} from "./src/node-eligibility.js";
 import { canvasToolDefinition } from "./src/tool-schema.js";
 
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
@@ -26,6 +30,10 @@ export default definePluginEntry({
   description: "Presents hosted widget documents on paired macOS panels.",
   configSchema: canvasConfigSchema,
   register(api) {
+    async function listingSupported() {
+      const { nodes } = await api.runtime.nodes.list();
+      return nodes.some(supportsCanvasNode);
+    }
     if (isCanvasHostEnabled(api.config)) {
       const nodesRuntime = api.runtime.nodes;
       type CanvasRuntimeNode = Awaited<ReturnType<typeof nodesRuntime.list>>["nodes"][number];
@@ -43,6 +51,7 @@ export default definePluginEntry({
       api.registerWidgetPresenter({
         target: "node_panel",
         description: "Show on a connected device panel",
+        listingSupported,
         async availability() {
           try {
             const node = await selectCanvasNode();
@@ -125,7 +134,10 @@ export default definePluginEntry({
       defaultPlatforms: ["macos"],
       handle: async (ctx) => await ctx.invokeNode(),
     });
-    api.registerTool((ctx) => createLazyCanvasTool(ctx.sessionKey));
+    api.registerTool((ctx) => createLazyCanvasTool(ctx.sessionKey), {
+      listingSupported: (ctx) =>
+        ctx.config?.gateway?.remote?.url?.trim() ? undefined : listingSupported(),
+    });
     api.registerNodeCliFeature(
       async ({ program }) => {
         const { registerNodesCanvasCommands } = await import("./src/cli.js");

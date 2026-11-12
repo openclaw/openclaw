@@ -57,7 +57,7 @@ import {
 import { ollamaMediaUnderstandingProvider } from "./src/media-understanding-provider.js";
 import {
   createLazyOllamaNodeHostCommands,
-  createLazyOllamaNodeInferenceTool,
+  registerOllamaNodeInferenceTool,
   createOllamaNodeInvokePolicy,
 } from "./src/node-inference-registration.js";
 import { readProviderBaseUrl } from "./src/provider-base-url.js";
@@ -630,7 +630,7 @@ export default definePluginEntry({
       }
     }
     api.registerNodeInvokePolicy(createOllamaNodeInvokePolicy());
-    api.registerTool(createLazyOllamaNodeInferenceTool(api));
+    registerOllamaNodeInferenceTool(api);
     const resolveCurrentPluginConfig = (config?: OpenClawConfig): OllamaPluginConfig => {
       const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");
       if (runtimePluginConfig) {

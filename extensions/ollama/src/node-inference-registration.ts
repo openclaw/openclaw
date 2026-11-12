@@ -15,6 +15,7 @@ import {
   OLLAMA_NODE_INFERENCE_COMMANDS,
   OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS,
   ollamaNodeInferenceToolDefinition,
+  supportsOllamaModelDiscovery,
 } from "./node-inference-contract.js";
 
 const loadOllamaNodeInference = createLazyRuntimeModule(() => import("./node-inference.js"));
@@ -57,7 +58,16 @@ export function createOllamaNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
   };
 }
 
-export function createLazyOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentTool {
+export function registerOllamaNodeInferenceTool(api: OpenClawPluginApi): void {
+  api.registerTool(createLazyOllamaNodeInferenceTool(api), {
+    listingSupported: async () => {
+      const { nodes } = await api.runtime.nodes.list();
+      return nodes.some(supportsOllamaModelDiscovery);
+    },
+  });
+}
+
+function createLazyOllamaNodeInferenceTool(api: OpenClawPluginApi): AnyAgentTool {
   const loadTool = createLazyRuntimeSurface(loadOllamaNodeInference, (runtime) =>
     runtime.createOllamaNodeInferenceTool(api),
   );
