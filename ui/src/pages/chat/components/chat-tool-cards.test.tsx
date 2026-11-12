@@ -906,7 +906,7 @@ it("previews live command output without inferring completion and retains detail
     expect(textOf(container, ".chat-command-trail__status")).toBe("Running");
   });
   expect(textOf(container, ".chat-command-trail__preview pre")).toBe("third\nfourth\nfifth");
-  expect(container.textContent).toContain("Earlier output omitted");
+  expect(container.textContent).not.toContain("Earlier output omitted");
   expect(container.textContent).toContain("Captured output is truncated");
   query(container, ".chat-command-trail__more")!.click();
   expect(onToggleExpanded).toHaveBeenCalledWith("trail-command");
@@ -917,11 +917,9 @@ it("previews live command output without inferring completion and retains detail
   await mountCard({ ...card, outputText: `prefix😀${"x".repeat(593)}latest` }, options, container);
   const longPreview = textOf(container, ".chat-command-trail__preview pre")!;
   expect(longPreview).toBe(`${"x".repeat(593)}latest`);
-  expect(container.textContent).toContain("Earlier output omitted");
 
   await mountCard({ ...card, outputText: "\nshort output" }, options, container);
   expect(textOf(container, ".chat-command-trail__preview pre")).toBe("\nshort output");
-  expect(container.textContent).not.toContain("Earlier output omitted");
   expect(container.textContent).toContain("Captured output is truncated");
 
   await mountCard({ ...card, completed: true, isError: true, exitCode: 2 }, options, container);

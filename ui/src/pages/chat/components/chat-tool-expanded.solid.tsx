@@ -24,10 +24,19 @@ import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import type { ToolCardContentProps } from "./chat-tool-card-types.ts";
 import { RawOutputToggle, ToolDataBlock } from "./chat-tool-content.solid.tsx";
-import { ToolOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 
 registerEnglishCatalog(registerChatToolContentEnglish);
+
+function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
+  const label = () =>
+    props.outcome === "failed" && props.exitCode !== undefined && props.exitCode !== 0
+      ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
+      : t(
+          `chat.toolCards.${props.outcome === "succeeded" ? "completed" : props.outcome === "unknown" ? "outcomeUnknown" : props.outcome === "unrecorded" ? "noResult" : props.outcome}`,
+        );
+  return <div class="chat-tool-card__outcome">{label()}</div>;
+}
 
 const KV_MAX_KEYS = 12;
 const KV_MAX_VALUE_CHARS = 400;

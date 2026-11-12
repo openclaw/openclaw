@@ -21,7 +21,6 @@ import {
 import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardOptions } from "./chat-tool-card-types.ts";
 import { ChatToolCard, ToolApprovalReviews } from "./chat-tool-cards.solid.tsx";
-import { ToolOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 
 const ToolMessageSummary = lazy(() => import("./chat-tool-card-row.solid.tsx"), {
@@ -130,7 +129,14 @@ export function BubbleToolCards(props: ContentProps) {
       </Show>
       <Show when={props.state().isStandaloneToolMessage && props.state().failedToolCard}>
         <openclaw-chat-tool-outcome style={{ display: "contents" }}>
-          <ToolOutcome outcome="failed" exitCode={props.state().failedToolCard!.exitCode} />
+          <div class="chat-tool-card__outcome">
+            {props.state().failedToolCard!.exitCode !== undefined &&
+            props.state().failedToolCard!.exitCode !== 0
+              ? t("chat.toolCards.exitCode", {
+                  code: String(props.state().failedToolCard!.exitCode),
+                })
+              : t("chat.toolCards.failed")}
+          </div>
         </openclaw-chat-tool-outcome>
       </Show>
     </>
