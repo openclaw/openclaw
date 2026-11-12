@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { registerStatusHealthSessionsCommands } from "./program/register.status-health-sessions.js";
 
@@ -133,6 +134,45 @@ describe("sessions import CLI", () => {
     });
     expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
   });
+
+  it.each(["listing", "import"])(
+    "stops cancelled %s without losing an accepted receipt",
+    async (phase) => {
+      const scope = new AsyncWorkScope();
+      mocks.callGateway.mockImplementation(async ({ method }) => {
+        if (method === "sessions.catalog.list") {
+          if (phase === "listing") {
+            scope.beginClose();
+            throw scope.signal.reason;
+          }
+          return {
+            catalogs: [
+              catalog("claude", [host(["first", "second"], { nextCursor: "older" })]),
+              catalog("codex", [host(["third"])]),
+            ],
+          };
+        }
+        scope.beginClose();
+        return imported;
+      });
+
+      await scope.run(() => run("sessions import --all --json"));
+
+      expect(mocks.callGateway.mock.calls.map(([params]) => params.method)).toEqual(
+        phase === "listing"
+          ? ["sessions.catalog.list"]
+          : ["sessions.catalog.list", "sessions.catalog.import"],
+      );
+      expect(JSON.parse(String(mocks.runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        error: { message: "Session import interrupted." },
+        results:
+          phase === "listing" ? [] : [{ threadId: "first", status: "imported", importedItems: 2 }],
+        summary: { imported: phase === "listing" ? 0 : 1, failed: 0 },
+      });
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("imports visible partial rows while reporting listing errors and stopping stale paging", async () => {
     mocks.callGateway
