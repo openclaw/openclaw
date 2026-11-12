@@ -196,13 +196,6 @@
   white-space: nowrap;
 }
 
-@media (max-width: 768px), (pointer: coarse) {
-  .sessions-filter-popover__search input {
-    min-height: 44px;
-    padding-inline-end: 48px;
-  }
-}
-
 .session-filter-toggle-group {
   display: inline-flex;
   flex-wrap: wrap;
