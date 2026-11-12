@@ -27,7 +27,7 @@ it("keeps rich editing history inside its New Session draft owner", async () => 
   expect(f.container.querySelector("textarea")).toBe(original);
   await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
   expect(original.value).toBe("@Alex ");
-  await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
+  await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/Shift}{/${historyModifier}}`);
   expect(original.value).toBe("@Alex before route change");
 
   f.rerenderForDraftRoute("draft:two", "New route draft");

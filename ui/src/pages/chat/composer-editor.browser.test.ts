@@ -87,13 +87,13 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
       const f = fixture(kind, "@Alex ", 230, [{ profileId: "alex-one", start: 0, end: 5 }]);
       focusComposerInput(f.input);
       selectComposerInput(f.input, 6, 6);
-      await userEvent.keyboard(quote + "s");
-      expect(f.raw()).toBe("@Alex" + quote + "s");
-      expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 0, end: 5 }]);
+      await userEvent.keyboard(quote);
       expect(undo(f.view)).toBe(true);
       expect(f.raw()).toBe("@Alex ");
       expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 0, end: 5 }]);
       expect(redo(f.view)).toBe(true);
+      expect(f.raw()).toBe("@Alex" + quote);
+      await userEvent.keyboard("s");
       expect(f.raw()).toBe("@Alex" + quote + "s");
       selectComposerInput(f.input, 0, 0);
       await userEvent.keyboard(quote);
@@ -255,7 +255,7 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
         { profileId: "alex-one", start: 0, end: 5 },
         { profileId: "alex-two", start: 6, end: 11 },
       ]);
-      await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
+      await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/Shift}{/${historyModifier}}`);
       expect(f.raw()).toBe("@Alex");
       expect(f.mentions()).toEqual([{ profileId: "alex-two", start: 0, end: 5 }]);
     }
@@ -433,7 +433,7 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     // Undo restores the chip's recipient, not just its text.
     expect(f.mentions()).toEqual([{ profileId: "alex-one", start: 7, end: 12 }]);
     await expect.poll(() => f.surface.querySelectorAll(".chat-composer-mention").length).toBe(1);
-    await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
+    await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/Shift}{/${historyModifier}}`);
     expect(f.raw()).toBe("Ask Hi ! after");
     expect(f.inputEvents.at(-1)?.inputType).toBe("historyRedo");
     expect(composerInputHasFocus(f.input)).toBe(true);

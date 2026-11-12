@@ -251,7 +251,7 @@ describe.each(["chat", "new-session"] as const)(
         await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
         f.refresh();
         expect(f.value()).toEqual(beforePick);
-        await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
+        await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/Shift}{/${historyModifier}}`);
         f.refresh();
         expect(f.value()).toEqual(picked);
         selectComposerInput(input, picked.draft.length, picked.draft.length);
@@ -344,7 +344,7 @@ describe.each(["chat", "new-session"] as const)(
       await userEvent.keyboard(`{${historyModifier}>}z{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "", mentions: [] });
-      await userEvent.keyboard(`{${historyModifier}>}{Shift>}z{/Shift}{/${historyModifier}}`);
+      await userEvent.keyboard(`{${historyModifier}>}{Shift>}Z{/Shift}{/${historyModifier}}`);
       f.refresh();
       expect(f.value()).toEqual({ draft: "@Alex", mentions: [mention("alex-one", 0, 5)] });
       selectComposerInput(input, input.value.length, input.value.length);
