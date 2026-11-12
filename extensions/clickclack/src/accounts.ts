@@ -78,8 +78,9 @@ function mergeClickClackGroups(
 
 export function resolveClickClackAccountConfig(
   cfg: CoreConfig,
-  accountId: string,
+  rawAccountId?: string | null,
 ): ClickClackAccountConfig {
+  const accountId = normalizeAccountId(rawAccountId);
   const channel = cfg.channels?.clickclack;
   const merged = resolveMergedClickClackAccountConfig(cfg, accountId);
   const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
@@ -289,6 +290,25 @@ export function resolveClickClackAccount(params: {
       allowFrom: merged.allowFrom ?? ["*"],
     },
     apiEndpoint,
+  };
+}
+
+/** Read-only snapshots use configured facts; the channel lifetime owns credential health. */
+export function inspectClickClackAccount(cfg: CoreConfig, rawAccountId?: string | null) {
+  const accountId = normalizeAccountId(rawAccountId);
+  const config = resolveClickClackAccountConfig(cfg, accountId);
+  const { baseUrl } = resolveClickClackAccountEndpoints(config);
+  const credential = config.tokenFile?.trim()
+    ? { tokenSource: "tokenFile" as const }
+    : resolveClickClackToken({ cfg, value: config.token, accountId });
+  return {
+    accountId,
+    name: normalizeOptionalString(config.name),
+    enabled: cfg.channels?.clickclack?.enabled !== false && config.enabled !== false,
+    configured: Boolean(baseUrl && config.workspace?.trim() && credential.tokenSource !== "none"),
+    baseUrl,
+    tokenSource: credential.tokenSource,
+    ...("tokenStatus" in credential ? { tokenStatus: credential.tokenStatus } : {}),
   };
 }
 

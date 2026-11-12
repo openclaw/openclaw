@@ -13,6 +13,8 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-history-navigation.js";
 import {
   readSessionTranscriptModelContext,
+  readSessionTranscriptContextMessages,
+  readSessionTranscriptContextSeed,
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { CurrentTranscriptProjection } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
@@ -344,6 +346,106 @@ for (const engine of ["sqlite", "postgres"] as const) {
           expect(find("missing")).toBeUndefined();
         }));
 
+      it.each([
+        [
+          "key",
+          '"message":{"role":"user","content":"request","idempotencyKey":"wrong","idempotencyKey":"seed:user","timestamp":1}',
+        ],
+        [
+          "role",
+          '"message":{"role":"assistant","role":"user","content":"request","idempotencyKey":"seed:user","timestamp":1}',
+        ],
+        [
+          "message",
+          '"message":{"role":"assistant"},"message":{"role":"user","content":"request","idempotencyKey":"seed:user","timestamp":1}',
+        ],
+      ])(
+        "seeds duplicate %s scalars using the full reader's last-member semantics",
+        (name, fields) =>
+          withEngineStoreAdmission(() => {
+            const fixture = transcriptFixture(
+              `seed-duplicates-${name}`,
+              [
+                {
+                  id: "summary",
+                  parentId: null,
+                  json: '{"type":"branch_summary","id":"summary","parentId":null,"fromId":"earlier","timestamp":"2026-11-09T00:00:00.000Z","summary":"older","summary":""}',
+                },
+                {
+                  id: "admitted",
+                  parentId: "summary",
+                  json: `{"type":"message","id":"admitted","parentId":"summary",${fields}}`,
+                },
+              ],
+              false,
+            );
+            const full = readSessionTranscriptContextMessages(fixture.scope, (messages) => [
+              ...messages,
+            ]);
+            const seed = readSessionTranscriptContextSeed(fixture.scope, {
+              maxBytes: 100_000,
+              tokenBudget: 25_000,
+              admittedKey: "seed:user",
+              beforeAdmittedUser: true,
+            });
+            expect(seed.messages).toEqual([]);
+            expect(seed.seed?.admittedUser).toEqual(full[0]);
+            expect(seed.seed?.admittedUser).toMatchObject({ idempotencyKey: "seed:user" });
+          }),
+      );
+
+      it("seeds branch summaries and admitted input with escapes JSONB rejects", () =>
+        withEngineStoreAdmission(() => {
+          const fixture = transcriptFixture(
+            "seed-exceptional",
+            [
+              {
+                id: "summary",
+                parentId: null,
+                json: JSON.stringify({
+                  type: "branch_summary",
+                  id: "summary",
+                  parentId: null,
+                  fromId: "earlier",
+                  timestamp: "2026-11-09T00:00:00.000Z",
+                  summary: "retained summary \ud800",
+                }),
+              },
+              {
+                id: "admitted",
+                parentId: "summary",
+                json: JSON.stringify({
+                  type: "message",
+                  id: "admitted",
+                  parentId: "summary",
+                  message: {
+                    role: "user",
+                    content: "admitted request \udc00",
+                    idempotencyKey: "seed:user",
+                    timestamp: 1,
+                  },
+                }),
+              },
+            ],
+            false,
+          );
+          const seed = readSessionTranscriptContextSeed(fixture.scope, {
+            maxBytes: 100_000,
+            tokenBudget: 25_000,
+            admittedKey: "seed:user",
+            beforeAdmittedUser: true,
+          });
+          expect(seed.messages).toMatchObject([
+            { role: "branchSummary", summary: "retained summary \ud800" },
+          ]);
+          expect(seed.seed?.admittedUser).toMatchObject({
+            role: "user",
+            content: "admitted request \udc00",
+            idempotencyKey: "seed:user",
+          });
+          expect(seed.seed?.retainedInputTokens).toBeGreaterThan(0);
+        }));
+
       it("reads, validates and indexes escapes JSONB rejects without rewriting rows", async () => {
         const scope = withEngineStoreAdmission(() => ({
           agentId: "main",
@@ -399,6 +501,17 @@ for (const engine of ["sqlite", "postgres"] as const) {
         }
         const manager = await SessionManager.openModelContextAsync(scope);
         expect(manager.buildSessionContext().messages).toMatchObject(entries.slice(0, 3));
+        const seed = withEngineStoreAdmission(() =>
+          readSessionTranscriptContextSeed(scope, {
+            maxBytes: 100_000,
+            tokenBudget: 25_000,
+            admittedKey: key,
+            beforeAdmittedUser: true,
+          }),
+        );
+        expect(seed.messages).toEqual([]);
+        expect(seed.seed?.admittedUser).toMatchObject(entries[0]!);
+        expect(seed.seed?.retainedInputTokens).toBeGreaterThan(0);
         await append(3);
         withEngineStoreAdmission(() => {
           // Growth after the read takes detached validation through its prefix scan.
