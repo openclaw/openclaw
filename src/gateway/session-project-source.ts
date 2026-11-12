@@ -21,7 +21,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
+import { parseProjectGitUrl } from "../projects/project-git-url.js";
 import {
+  listProjectRegistry,
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
@@ -38,6 +40,22 @@ import type { PreparedGatewaySessionLifecycle } from "./session-create-service.t
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "./session-utils-store.js";
+
+/** The inspected PR base identifies the project; fork names alone never select local source. */
+export async function resolvePullRequestProjectSource(
+  cfg: OpenClawConfig,
+  source: { host: string; repository: string; requester: ProjectRequester },
+): Promise<ProjectRegistryRecord | undefined> {
+  const matches = (project: ProjectRegistryRecord) =>
+    project.originUrl &&
+    parseProjectGitUrl(project.originUrl, source.host)?.url ===
+      `https://${source.host}/${source.repository.toLowerCase()}.git`;
+  const candidate = (await listProjectRegistry(cfg)).find(matches);
+  const project = candidate
+    ? await resolveRequesterProject(cfg, candidate.id, source.requester, { fresh: true })
+    : undefined;
+  return project && matches(project) ? project : undefined;
+}
 
 export async function resolveSessionProjectRootForRecord(
   project: ProjectRegistryRecord,

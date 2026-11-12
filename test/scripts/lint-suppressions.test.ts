@@ -168,6 +168,8 @@ describe("production lint suppressions", () => {
         "scripts/bench-control-ui-rpc-hostage.ts|unicorn/prefer-dom-node-text-content|1",
         // The Talk readiness probe calls the saved media method with its original receiver.
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
+        // Node MessagePort and Worker postMessage have no Window target-origin parameter.
+        "scripts/diagnostics/windows-link-service.mjs|unicorn/require-post-message-target-origin|5",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -210,6 +212,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/doctor-transcript-heap-probe.cjs|typescript/unbound-method|3",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // Observe Node's stream allocation boundary while forwarding its original read size.
+        "scripts/perf/idle-gateway-measure-preload.mjs|no-underscore-dangle|2",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The stack probe compares V8's formatter callback identity without invoking it.

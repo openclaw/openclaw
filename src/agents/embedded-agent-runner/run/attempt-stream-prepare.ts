@@ -28,6 +28,7 @@ import {
 } from "../../run-termination.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
+import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -625,18 +626,15 @@ function prepareStream(
       }
       return {
         model: attempt.model,
+        promptCacheKey: attempt.promptCacheKey,
         systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
-          name,
-          description,
-          parameters,
-          ...(async === false ? { async } : {}),
-        })),
+        tools: activeSession.agent.state.tools,
         messages: activeSession.messages,
         projectMessages: input.projectSessionForkMessages,
         sessionVersion: activeSession.sessionManager.getHeader()?.version,
         boundary: input.readSessionForkBoundary?.(),
         blockImages: activeSession.settingsManager.getBlockImages(),
+        preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },
     isAborted: () => input.getRunState().aborted,

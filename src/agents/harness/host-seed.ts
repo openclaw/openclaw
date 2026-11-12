@@ -5,6 +5,7 @@ import { estimateTokens } from "../../../packages/agent-core/src/harness/compact
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionTranscriptContextSnapshot } from "../../config/sessions/session-history-read.types.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { boundContextEngineAssembly } from "../../context-engine/bounded-context.js";
 import {
@@ -18,11 +19,8 @@ import { requireCompactionWriterEntry } from "../embedded-agent-runner/compactio
 import { log } from "../embedded-agent-runner/logger.js";
 import { attachCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
-import {
-  createCompactionRequestBudget,
-  estimateCompactionHistoryTokens,
-} from "../sessions/compaction/request-budget.js";
-import { SessionManager } from "../sessions/session-manager.js";
+import { createCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import { readSessionManagerContextAsync } from "../sessions/session-manager-incognito.js";
 import type {
   AgentHarnessHostCapabilities,
   AgentHarnessContextMedia,
@@ -121,37 +119,50 @@ export function bindBoundedSeed(
     let retainedInputTokens = 0;
     let retainedHistoryTokens = 0;
     const read = async () => {
-      const history = await SessionManager.readSessionContextAsync(
+      const snapshot = await readSessionManagerContextAsync(
         sessionTarget,
-        (items) => Array.from(items),
-        { signal },
+        (items, _header, facts) => {
+          if (!facts) {
+            throw new Error("Native seed read did not return its selection facts");
+          }
+          return { messages: Array.from(items), facts };
+        },
+        {
+          signal,
+          seed: {
+            maxBytes: maxSeedBytes,
+            tokenBudget,
+            admittedKey,
+            beforeAdmittedUser: Boolean(handoff),
+          },
+        },
       );
       assert();
-      const current = history.findIndex(isAdmittedUser);
-      retainedInputTokens = estimateCompactionHistoryTokens(
-        current < 0 ? [] : history.slice(current),
-      );
+      const { messages: history, facts: seedFacts } = snapshot;
+      retainedInputTokens = seedFacts.retainedInputTokens;
       if (handoff) {
         const active = [
-          ...(refresh && current >= 0 && !handoff.some(isAdmittedUser) ? [history[current]!] : []),
+          ...(refresh && seedFacts.admittedUser && !handoff.some(isAdmittedUser)
+            ? [seedFacts.admittedUser]
+            : []),
           ...handoff,
         ];
         activeCount = active.length;
-        return [...(current < 0 ? history : history.slice(0, current)), ...active];
+        return { messages: [...history, ...active], facts: seedFacts };
       }
-      return history.filter((message) => !isAdmittedUser(message));
+      return snapshot;
     };
-    const select = async (messages: AgentMessage[]) => {
-      cut = 0;
+    const select = async (
+      messages: AgentMessage[],
+      seedFacts: NonNullable<SessionTranscriptContextSnapshot["seed"]>,
+    ) => {
+      cut = seedFacts.omittedCount;
       const history = activeCount ? messages.slice(0, -activeCount) : messages;
       const active = activeCount ? messages.slice(-activeCount) : [];
-      const bounded = boundContextEngineAssembly(
-        { messages: history, estimatedTokens: 0 },
-        maxSeedBytes,
-        tokenBudget,
-      );
-      if (!prepareMedia && !activeCount && bounded.messages.length === history.length) {
-        return bounded.messages;
+      // The snapshot reader already applied the initial byte/token cut before hydration.
+      const bounded = { messages: history, estimatedTokens: 0 };
+      if (!cut && !prepareMedia && !activeCount) {
+        return history;
       }
       const additionalBytes = new Map<AgentMessage, number>();
       if (prepareMedia) {
@@ -184,7 +195,7 @@ export function bindBoundedSeed(
       const boundHistory = () =>
         boundContextEngineAssembly(bounded, bytes, remainingTokens, additionalBytes).messages;
       let retained = boundHistory();
-      cut = history.length - retained.length;
+      cut = seedFacts.omittedCount + history.length - retained.length;
       if (cut) {
         const notice: AgentMessage = {
           role: "user",
@@ -201,7 +212,8 @@ export function bindBoundedSeed(
         }
         retainedHistoryTokens = Math.floor(bytes / 4);
         // A retained oversized turn must not crowd out the summary that covers its older history.
-        const summary = history.findLast((message) => message.role === "compactionSummary");
+        const summary =
+          seedFacts.summary ?? history.findLast((message) => message.role === "compactionSummary");
         const summaryBytes = summary ? Buffer.byteLength(JSON.stringify(summary)) + 1 : 0;
         const summaryTokens = summary ? estimateTokens(summary) : 0;
         const prefix =
@@ -212,16 +224,19 @@ export function bindBoundedSeed(
           bounded.messages = bounded.messages.filter((message) => message !== summary);
         }
         retained = boundHistory();
-        cut = history.length - retained.length;
+        cut = seedFacts.omittedCount + history.length - retained.length;
         return [notice, ...prefix, ...retained, ...active];
       }
       return activeCount ? [...retained, ...active] : retained;
     };
-    let messages = await read();
-    let bounded = await select(messages);
+    let snapshot = await read();
+    let bounded = await select(snapshot.messages, snapshot.facts);
     if (
       config?.agents?.defaults?.compaction?.enabled !== false &&
-      messages.slice(0, cut).some((message) => message.role !== "compactionSummary")
+      (snapshot.facts.omittedNonSummary ||
+        snapshot.messages
+          .slice(0, cut - snapshot.facts.omittedCount)
+          .some((message) => message.role !== "compactionSummary"))
     ) {
       const entry = await readSessionEntryReadOnlyInWorker(
         { ...sessionTarget, readConsistency: "latest" },
@@ -307,8 +322,8 @@ export function bindBoundedSeed(
         await emitCompactionProgress(end);
       }
       assert();
-      messages = await read();
-      bounded = await select(messages);
+      snapshot = await read();
+      bounded = await select(snapshot.messages, snapshot.facts);
     }
     assert();
     if (cut) {

@@ -1,0 +1,2 @@
+# Exact net test-line growth from PR #197392 (temporary SIGUSR2 shutdown phase trace; remove with the trace).
+44

@@ -29,6 +29,8 @@ export type MediaGenerationTaskHandle = {
   requesterOrigin?: DeliveryContext;
   detach: boolean;
   requesterTranscript?: SessionTranscriptTargetBinding & { lifecycleRevision: string | null };
+  /** Settles when the requester work active at tool-call time, i.e. the originating turn, ends. */
+  requesterSettlement?: Promise<void>;
   resolveGatewayContext?: GatewayContextResolver;
   taskLabel: string;
 };
@@ -136,6 +138,8 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   if (!handle) {
     return { status: "delivered" };
   }
+  // Media lands after the originating turn's own reply; its outcome does not matter here.
+  await handle.requesterSettlement?.catch(() => {});
   const target = handle.requesterTranscript;
   const isSourceCurrent = () => isMediaGenerationSourceCurrent(handle);
   let requesterEntry;

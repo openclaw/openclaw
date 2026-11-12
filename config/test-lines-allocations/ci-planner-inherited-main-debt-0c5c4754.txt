@@ -1,2 +1,0 @@
-# Inherited debt at 0c5c4754: https://github.com/openclaw/openclaw/pull/196346 added 138 LF against 10 prior slack.
-128

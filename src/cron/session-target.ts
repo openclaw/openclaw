@@ -30,6 +30,17 @@ export function resolveCronSessionTargetSessionKey(
 }
 
 /**
+ * The conversation a job continues in place. Its run starts only after that conversation's own
+ * turn ends; jobs without a captured operator source never wait for their session.
+ */
+export function resolveCronContinuationSessionKey(job: {
+  operatorSource?: unknown;
+  sessionTarget?: string | null;
+}): string | undefined {
+  return job.operatorSource ? resolveCronSessionTargetSessionKey(job.sessionTarget) : undefined;
+}
+
+/**
  * Returns whether cron executes the job under its own `cron:<jobId>` run key. A
  * `current` job is still a child of its creating conversation; this decides only the key.
  */

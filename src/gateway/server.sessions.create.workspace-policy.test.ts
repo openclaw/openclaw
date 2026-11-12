@@ -437,6 +437,9 @@ test.each([
   "sessions.create reset-in-place reports cleanup truth for $name",
   async ({ outcome }) => {
     await using fixture = await setupResetWorktree("openclaw-reset-retained-worktree-");
+    // Keep slow-operation telemetry outside the cleanup warning contract.
+    using diagnosticLogging = vi.spyOn(sessionLog, "isEnabled");
+    diagnosticLogging.mockReturnValue(false);
     using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
     const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
       ManagedWorktreeService.prototype,
@@ -493,6 +496,9 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     primary: "openai/current-model",
   });
   const { workspace, storePath, scope } = fixture;
+  // Keep slow-operation telemetry outside the cleanup warning contract.
+  using diagnosticLogging = vi.spyOn(sessionLog, "isEnabled");
+  diagnosticLogging.mockReturnValue(false);
   using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
   const resolved = { modelProvider: "openai", model: "current-model" };
   const created = await fixture.createWorktree({ permissionMode: "workspace" });
