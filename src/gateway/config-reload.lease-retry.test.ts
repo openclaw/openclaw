@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { traceFakeTimerDiagnostics } from "../../test/helpers/fake-timer-diagnostic.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as configJournal from "../config/config-journal-snapshot.js";
@@ -331,15 +332,18 @@ it("settles an exhausted admission receipt and retries a later observation with 
 });
 
 it("cancels a pending admission retry on shutdown without applying or leaking timers", async () => {
+  using timers = traceFakeTimerDiagnostics("config reload shutdown");
   const acquire = vi
     .spyOn(pluginLifecycleLease, "withPluginLifecycleLeaseAsync")
     .mockRejectedValueOnce(unavailableError());
   const harness = await admittedWrite("shutdown");
   await flushReload(harness.reloader);
+  timers.reportIfUnexpected(1);
   expect(vi.getTimerCount()).toBe(1);
 
   await harness.reloader.stop();
   await expect(harness.application.result).resolves.toBe("stopped");
+  timers.reportIfUnexpected(0);
   expect(vi.getTimerCount()).toBe(0);
   await vi.advanceTimersByTimeAsync(10_000);
   expect(acquire).toHaveBeenCalledTimes(1);

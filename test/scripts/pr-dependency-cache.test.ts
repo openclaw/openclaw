@@ -823,6 +823,7 @@ ${body}
     worker,
     completed,
     errors: () => stderr,
+    output: () => stdout,
     release: () => stdin.end("x"),
     ready(message: string, signal: AbortSignal) {
       const ready = createDeferred();
@@ -1101,7 +1102,8 @@ describePosix("PR cache anchor lifetime", () => {
           expect(existsSync(join(f.cache, "lifetime.sqlite"))).toBe(true);
         } else {
           expect(status).not.toBe(0);
-          expect(waiter.errors()).toContain("PR dependency cache directory changed");
+          expect(waiter.errors()).toMatch(/PR dependency cache directory changed|ENOENT/);
+          expect(waiter.output()).not.toContain("acquired");
           expect(holderStatus).not.toBe(0);
           expect(readdirSync(f.cache)).toEqual([]);
           expect(readdirSync(join(`${f.cache}.retained`, ".metadata-lock"))).toHaveLength(2);

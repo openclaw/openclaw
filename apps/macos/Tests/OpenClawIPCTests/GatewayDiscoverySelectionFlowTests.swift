@@ -193,6 +193,8 @@ struct GatewayDiscoverySelectionFlowTests {
                 try await TestWait.observed("connection-page discovery start") {
                     discovery.statusText != GatewayDiscoveryStatusText.idle
                 }
+                try await Self.press("Next", in: hosting)
+                try await Self.press("Nearby", in: hosting)
                 // Stop only this injected discovery producer before supplying its normal public
                 // projection. No delayed browse callback can overwrite the fixture during the click.
                 discovery.stop()
@@ -260,11 +262,30 @@ struct GatewayDiscoverySelectionFlowTests {
     }
 
     private static func button(_ title: String, in root: NSView) async throws -> AnyObject? {
-        let matches = try await AppKitTestSupport.accessibilityElements(in: root).filter {
+        let elements = try await AppKitTestSupport.accessibilityElements(in: root)
+        let matches = elements.filter {
             $0.accessibilityRole?() == .button && $0.isAccessibilityEnabled?() == true &&
                 [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].compactMap(\.self).contains {
                     $0 == title || (title == "Nearby selection fixture" && $0.contains(title))
                 }
+        }
+        if title == "Nearby", matches.isEmpty {
+            let knownLabels = [
+                "Welcome to OpenClaw", "Where should your assistant run?", "Find your OpenClaw",
+                "Nearby", "On this Mac", "On another computer", "Next", "Back", "Finish",
+            ]
+            let snapshot = elements.compactMap { element -> String? in
+                let text = [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element)]
+                    .compactMap(\.self)
+                let labels = knownLabels.compactMap { label -> String? in
+                    guard text.contains(where: { $0.contains(label) }) else { return nil }
+                    return "\(label):\(text.contains(label) ? "exact" : "composed")"
+                }
+                guard !labels.isEmpty else { return nil }
+                let role = element.accessibilityRole?()
+                return "role=\(role?.rawValue ?? "nil") enabled=\(element.isAccessibilityEnabled?() == true) labels=\(labels)"
+            }.prefix(32)
+            print("[nearby-ax] \(Array(snapshot))")
         }
         try #require(matches.count <= 1, "Ambiguous mounted button: \(title)")
         return matches.first

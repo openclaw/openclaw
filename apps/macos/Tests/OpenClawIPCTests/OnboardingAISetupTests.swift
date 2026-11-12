@@ -3284,10 +3284,12 @@ struct OnboardingAISetupTests {
         try #require(!AppProfile.current.isActive, "Run this fixture in an unprofiled disposable test process")
         let root = try makeTempDirForTests().resolvingSymlinksInPath()
         defer { try? FileManager.default.removeItem(at: root) }
+        print("[lane2430-mounted-ai] isolation queued")
         try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: root, env: [
             "OPENCLAW_STATE_DIR": root.appendingPathComponent("state").path,
             "OPENCLAW_CONFIG_PATH": root.appendingPathComponent("openclaw.json").path,
         ]) {
+            print("[lane2430-mounted-ai] isolation entered")
             try #require(LaunchAgentPlist.homeDirectoryURL.resolvingSymlinksInPath() == root)
             let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingEntry"))
             let oldGatewayID = GatewayDiscoveryPreferences.preferredStableID()
@@ -3400,6 +3402,7 @@ struct OnboardingAISetupTests {
             window.isReleasedWhenClosed = false
             @MainActor
             func cleanup() async {
+                print("[lane2430-mounted-ai] cleanup entered")
                 // Cleanup only: invalidate unstructured owner work before restoring fixtures.
                 probe.invalidate()
                 model.resetForGatewayChange(clearPendingHandoff: false)
@@ -3419,12 +3422,14 @@ struct OnboardingAISetupTests {
                 await harness.gateway.shutdown()
                 _ = await warmup.result
                 await snapshotTask.value
+                print("[lane2430-mounted-ai] cleanup settled")
             }
             do {
                 try await events.changed.wait("physical hello and health") {
                     events.healthFinished && events.sawSnapshot
                 }
                 try await warmup.value
+                print("[lane2430-mounted-ai] hello and health settled")
                 try #require(harness.session.snapshotMakeCount() == 1)
                 hosting.rootView = AnyView(view
                     .onAppear { appeared = true }
@@ -3436,6 +3441,7 @@ struct OnboardingAISetupTests {
                 try await events.changed.wait("initial onboarding snapshot") {
                     events.persistenceCalls == 2 && events.missingReplies >= 1
                 }
+                print("[lane2430-mounted-ai] mounted snapshot settled")
                 try #require(appeared)
                 // Finish a read-only inspection before navigation. Its generation retires
                 // any late startup response that could otherwise mask the page-entry gate.
@@ -3444,6 +3450,7 @@ struct OnboardingAISetupTests {
                     knownVisible: true
                 ))
                 await inspection.value
+                print("[lane2430-mounted-ai] read-only inspection settled")
                 try #require(events.persistenceCalls == 3)
                 try #require(await harness.recorder.snapshot().methods.allSatisfy { $0 == "agents.list" })
                 try #require(!isPending(defaults))
@@ -3456,6 +3463,7 @@ struct OnboardingAISetupTests {
                 try #require(events.persistenceCalls == 3)
                 try #require(await harness.recorder.snapshot().methods.allSatisfy { $0 == "agents.list" })
                 try await pressOnboardingEntryButton("Next", in: hosting)
+                print("[lane2430-mounted-ai] second Next press settled")
                 if blocked {
                     try await TestWait.state("unreadable ownership CLI gate") {
                         let ax = try await inspectAISetupAccessibility(hosting)
@@ -3465,17 +3473,20 @@ struct OnboardingAISetupTests {
                     #expect(events.persistenceCalls == 3)
                 } else {
                     try await harness.recorder.waitForMethod("openclaw.setup.detect")
+                    print("[lane2430-mounted-ai] setup detection observed")
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
-                        return ax.actions["Finish"] == false &&
+                        return ax.actions["Next"] == false &&
                             ax.actions.contains { $0.key.contains("API Keys") && $0.value }
                     }
+                    print("[lane2430-mounted-ai] manual controls settled")
                     try await pressOnboardingEntryButton("API Keys", in: hosting)
                     try await TestWait.state("API key provider form") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return model.showManualEntry && ax.labels.contains("OpenAI API key") &&
-                            ax.actions["Finish"] == false
+                            ax.actions["Next"] == false
                     }
+                    print("[lane2430-mounted-ai] provider form settled")
                     #expect(events.persistenceCalls == 4)
                 }
                 let methods = await harness.recorder.snapshot().methods
