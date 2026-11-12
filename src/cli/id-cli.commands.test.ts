@@ -11,6 +11,7 @@ import {
   type SignedStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { registerIdCli } from "./id-cli.js";
 
@@ -158,6 +159,32 @@ describe("registered id commands", () => {
       expect(process.exitCode).toBeUndefined();
     },
   );
+
+  it.each(["openclawId.status", "openclawId.people"])(
+    "quietly stops status when %s is interrupted",
+    async (method) => {
+      const work = new AsyncWorkScope();
+      const rpc = vi.mocked(callGatewayFromCli).getMockImplementation()!;
+      vi.mocked(callGatewayFromCli).mockImplementation(async (...args) => {
+        if (args[0] === method) {
+          work.beginClose();
+          args[3]?.signal?.throwIfAborted();
+        }
+        return await rpc(...args);
+      });
+
+      await expect(work.run(() => run("status"))).resolves.toBeUndefined();
+      expect(output).toBe("");
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(method === "openclawId.status" ? 1 : 2);
+      expect(commits).toHaveLength(0);
+    },
+  );
+
+  it("preserves ordinary status read failures", async () => {
+    readFailure = new Error("status read failed");
+    await expect(run("status")).rejects.toBe(readFailure);
+    expect(output).toBe("");
+  });
 
   it.each([true, false])(
     "reports an accepted commit when its publication read fails (json=%s)",
