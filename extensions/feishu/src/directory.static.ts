@@ -72,13 +72,12 @@ export async function listAuthorizedFeishuDirectoryGroups(
   const entries = listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
     groups: account.config.groups,
     allowFrom: account.config.groupAllowFrom,
-    normalizeUnicode: true,
   });
   const authorizedEntries = entries.filter((entry) =>
     isFeishuGroupReadAllowed(params.cfg, account, entry.id, false),
   );
   return applyDirectoryQueryAndLimit(
     authorizedEntries.map((entry) => entry.id),
-    params,
+    { ...params, normalizeUnicode: true },
   ).map((id) => ({ kind: "group", id }));
 }

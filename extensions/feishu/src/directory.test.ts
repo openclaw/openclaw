@@ -168,6 +168,18 @@ describe("feishu directory (config-backed)", () => {
     );
   });
 
+  it("matches canonically equivalent Unicode in authorized group queries", async () => {
+    const cfg = makeStaticCfg({
+      groupPolicy: "allowlist",
+      groups: { "#café": {} },
+      groupAllowFrom: ["#café"],
+    });
+
+    await expect(listAuthorizedFeishuDirectoryGroups({ cfg, query: "café" })).resolves.toEqual(
+      groups("#café"),
+    );
+  });
+
   it("falls back to static peers on live lookup failure by default", async () => {
     mockPeerList(vi.fn(expiredToken));
     await expect(livePeers({ query: "a" })).resolves.toEqual(users("alice", "carla"));
