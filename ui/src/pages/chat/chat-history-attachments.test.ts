@@ -49,7 +49,7 @@ it.each(["empty", "populated", "partial", "newer"] as const)(
     expect(state.chatMessages).toEqual(history.messages);
     expect(state.chatMessages[0]).toBe(history.messages?.[0]);
     // An older mounted window can have newer accepted rows outside its slice.
-    state.chatHistoryPagination.hasNewer = kind === "newer";
+    state.chatHistoryPagination.hasNewer = kind === "newer" ? true : undefined;
     const accepted = read();
     expect(accepted.entries).toHaveLength(populated ? 1 : 0);
     expect(accepted).toMatchObject({

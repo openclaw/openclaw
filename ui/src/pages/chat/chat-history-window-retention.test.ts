@@ -76,7 +76,7 @@ async function seedPackets(direction: "older" | "newer") {
     discardedSource: nativeHistoryMessageSourceIdentity(discarded),
     discarded: new WeakRef(discarded),
     content: new WeakRef(discarded.content),
-    media: new WeakRef(discarded.__openclaw.media[0]!),
+    media: new WeakRef(discarded["__openclaw"].media[0]!),
     control: new WeakRef({ unowned: true }),
   };
 }
