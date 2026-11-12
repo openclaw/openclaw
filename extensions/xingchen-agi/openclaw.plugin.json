@@ -1,0 +1,75 @@
+{
+  "id": "xingchen-agi",
+  "categories": [
+    "models"
+  ],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": [
+    "xingchen-agi"
+  ],
+  "modelCatalog": {
+    "providers": {
+      "xingchen-agi": {
+        "baseUrl": "https://api-maas.teleai.com.cn/v1",
+        "api": "openai-completions",
+        "defaultModel": "xing4.1-preview",
+        "models": [
+          {
+            "id": "xing4.1-preview",
+            "name": "Xing4.1-Preview",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ],
+            "contextWindow": 192000,
+            "maxTokens": 192000,
+            "cost": {
+              "input": 0.11,
+              "output": 0.45,
+              "cacheRead": 0.0022,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "xingchen-agi": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "xingchen-agi",
+        "envVars": [
+          "XINGCHEN_API_KEY"
+        ]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "xingchen-agi",
+      "method": "api-key",
+      "choiceId": "xingchen-agi-api-key",
+      "choiceLabel": "XingChen-AGI API key",
+      "groupId": "xingchen-agi",
+      "groupLabel": "XingChen-AGI",
+      "groupHint": "API key",
+      "optionKey": "xingchenApiKey",
+      "cliFlag": "--xingchen-api-key",
+      "cliOption": "--xingchen-api-key <key>",
+      "cliDescription": "XingChen-AGI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
