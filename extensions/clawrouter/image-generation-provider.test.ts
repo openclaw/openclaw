@@ -29,8 +29,8 @@ const authStore = {
     "openai:default": apiKeyProfile("openai", "synthetic-upstream-key"),
   },
 };
-function catalog(model = MODEL) {
-  return {
+function catalog(model = MODEL, edit = false) {
+  const result = {
     version: "clawrouter.client-catalog.v1",
     providers: [
       {
@@ -78,6 +78,27 @@ function catalog(model = MODEL) {
       },
     ],
   };
+  if (edit) {
+    const provider = result.providers[0]!;
+    provider.routes.push({
+      endpoint: "images_edits",
+      methods: ["POST"],
+      path: "/v1/images/edits",
+      requestFormat: "openai.images_edits",
+      responseFormat: "openai.images_generations",
+    });
+    provider.offers.push({
+      endpoint: "images_edits",
+      modelId: model,
+      transport: "http",
+      routeKind: "unified",
+      route: "/v1/images/edits",
+      eligible: true,
+      affordability: "request-dependent",
+    });
+    provider.models[0]!.capabilities.push("image.edit");
+  }
+  return result;
 }
 
 describe("registered ClawRouter image generation over HTTP", () => {
@@ -122,7 +143,7 @@ describe("registered ClawRouter image generation over HTTP", () => {
       if (request.url === "/v1/catalog") {
         response.statusCode = catalogStatus;
         response.end(JSON.stringify(inventory));
-      } else if (request.url === "/v1/images/generations") {
+      } else if (["/v1/images/generations", "/v1/images/edits"].includes(request.url ?? "")) {
         response.statusCode = status;
         response.end(JSON.stringify(payload));
       } else if (request.url === "/result.png") {
@@ -306,9 +327,10 @@ describe("registered ClawRouter image generation over HTTP", () => {
     },
   );
 
-  it.each(["catalog", "generation"])(
+  it.each(["catalog", "generation", "edit"])(
     "keeps %s HTTP failures terminal and private",
     async (stage) => {
+      inventory = catalog(MODEL, stage === "edit");
       if (stage === "catalog") {
         catalogStatus = 403;
         inventory = { error: { message: "synthetic-router-key Synthetic blue square" } };
@@ -316,12 +338,18 @@ describe("registered ClawRouter image generation over HTTP", () => {
         status = 403;
         payload = { error: { message: "synthetic-router-key Synthetic blue square" } };
       }
-      const message = String(await generate().catch((failure: unknown) => failure));
+      const message = String(
+        await generate(
+          stage === "edit" ? { inputImages: [{ buffer: PNG, mimeType: "image/png" }] } : {},
+        ).catch((failure: unknown) => failure),
+      );
       expect(message).toContain("HTTP 403");
       expect(message).not.toContain("synthetic-router-key");
       expect(message).not.toContain("Synthetic blue square");
       expect(calls.map((call) => call.url)).toEqual(
-        stage === "catalog" ? ["/v1/catalog"] : ["/v1/catalog", "/v1/images/generations"],
+        stage === "catalog"
+          ? ["/v1/catalog"]
+          : ["/v1/catalog", stage === "edit" ? "/v1/images/edits" : "/v1/images/generations"],
       );
     },
   );
@@ -402,15 +430,72 @@ describe("registered ClawRouter image generation over HTTP", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("rejects edits and streaming before dispatch", async () => {
+  it("requires an edit offer and rejects streaming before purchase", async () => {
     await expect(
       generate({ inputImages: [{ buffer: PNG, mimeType: "image/png" }] }),
-    ).rejects.toThrow(/reference|editing|support/i);
+    ).rejects.toThrow(/catalog/);
+    expect(calls.map((call) => call.url)).toEqual(["/v1/catalog"]);
+    calls.length = 0;
     await expect(generate({ providerOptions: { stream: true } })).rejects.toThrow(
       /only JSON generation/,
     );
     expect(calls).toHaveLength(0);
   });
+
+  it.each(["mime", "count", "image-bytes", "encoded-bytes", "json-overhead"])(
+    "rejects invalid edit %s before network or purchase",
+    async (reason) => {
+      const large = reason === "encoded-bytes" || reason === "json-overhead";
+      const bytes =
+        reason === "image-bytes"
+          ? Buffer.alloc(4 * 1024 * 1024 + 1)
+          : large
+            ? Buffer.concat([
+                PNG,
+                Buffer.alloc(3 * 1024 * 1024 - PNG.length + (reason === "encoded-bytes" ? 1 : 0)),
+              ])
+            : PNG;
+      const inputImages = Array.from({ length: reason === "count" ? 17 : large ? 2 : 1 }, () => ({
+        buffer: bytes,
+        mimeType: reason === "mime" ? "image/jpeg" : "image/png",
+      }));
+      await expect(generate({ inputImages })).rejects.toThrow(
+        large
+          ? /8 MiB/
+          : reason === "image-bytes"
+            ? /4 MiB/
+            : reason === "mime"
+              ? /PNG, JPEG or WebP/
+              : /support/,
+      );
+      expect(calls).toHaveLength(0);
+    },
+  );
+
+  it.each(["capability", "ineligible", "budget", "format"])(
+    "does not infer edit permission from generation after %s rejection",
+    async (reason) => {
+      const next = catalog(MODEL, true);
+      const provider = next.providers[0]!;
+      if (reason === "capability") {
+        provider.models[0]!.capabilities = ["image.generation"];
+      } else if (reason === "ineligible") {
+        provider.offers[1]!.eligible = false;
+      } else if (reason === "budget") {
+        provider.offers[1]!.affordability = "exact-blocked";
+      } else {
+        provider.routes[1]!.requestFormat = "unknown";
+      }
+      inventory = next;
+      await expect(
+        generate({ inputImages: [{ buffer: PNG, mimeType: "image/png" }] }),
+      ).rejects.toThrow(/catalog/);
+      expect(calls.map((call) => call.url)).toEqual(["/v1/catalog"]);
+      calls.length = 0;
+      await generate();
+      expect(calls.map((call) => call.url)).toEqual(["/v1/catalog", "/v1/images/generations"]);
+    },
+  );
 
   it("does not replace a broken selected profile with an upstream or other router credential", async () => {
     await expect(
@@ -433,6 +518,8 @@ describe("registered ClawRouter image generation over HTTP", () => {
     ["/v1/images/generations", false],
     ["/result.png", false],
     ["/v1/images/generations", true],
+    ["/v1/images/edits", false],
+    ["/v1/images/edits", true],
   ] as const)("releases held %s (deadline=%s) without retry", async (path, deadline) => {
     if (deadline) {
       // Warm auth/catalog before spending the existing 500 ms body deadline.
@@ -440,13 +527,19 @@ describe("registered ClawRouter image generation over HTTP", () => {
       calls.length = 0;
     }
     holdPath = path;
+    inventory = catalog(MODEL, path === "/v1/images/edits");
     if (path === "/result.png") {
       payload = { data: [{ url: baseUrl + "/result.png" }] };
     }
     const held = Promise.withResolvers<ServerResponse>();
     onHeld = held.resolve;
     const controller = new AbortController();
-    const pending = generate(deadline ? { timeoutMs: 500 } : { signal: controller.signal });
+    const pending = generate({
+      ...(deadline ? { timeoutMs: 500 } : { signal: controller.signal }),
+      ...(path === "/v1/images/edits"
+        ? { inputImages: [{ buffer: PNG, mimeType: "image/png" }] }
+        : {}),
+    });
     const settled = pending.catch(() => undefined);
     const response = await awaitHeld(held.promise, pending);
     const closed = once(response, "close");
@@ -457,49 +550,56 @@ describe("registered ClawRouter image generation over HTTP", () => {
     await closed;
     await settled;
     expect(response.destroyed).toBe(true);
-    expect(calls.filter((call) => call.url === "/v1/images/generations")).toHaveLength(
+    expect(calls.filter((call) => call.method === "POST")).toHaveLength(
       path === "/v1/catalog" ? 0 : 1,
     );
   });
 
-  it("publishes only same-key entitled image rows through the registered catalog family", async () => {
-    // Catalog discovery uses a literal synthetic key; runtime tests above use a real profile binding.
-    cfg.models!.providers!.clawrouter!.apiKey = "synthetic-router-key";
-    const selected = captured.modelCatalogProviders.find((provider) =>
-      provider.kinds.includes("image_generation"),
-    );
-    const resolveAuth = () => ({
-      apiKey: "synthetic-router-key",
-      discoveryApiKey: "synthetic-router-key",
-      mode: "api_key" as const,
-      source: "env" as const,
-    });
-    const context: UnifiedModelCatalogProviderContext = {
-      config: cfg,
-      env: {},
-      includeLive: true,
-      resolveProviderApiKey: resolveAuth,
-      resolveProviderAuth: resolveAuth,
-    };
-    const entitled = catalog();
-    entitled.providers[0]!.models[0]!.pricing.generation.maxImages = 2;
-    inventory = entitled;
-    const rows = await selected!.liveCatalog!(context);
-    expect(rows).toEqual([
-      expect.objectContaining({
-        kind: "image_generation",
-        provider: "clawrouter",
-        model: MODEL,
-        modes: ["generate"],
-        capabilities: expect.objectContaining({
-          generate: expect.objectContaining({ maxCount: 2 }),
+  it.each(["generate", "edit", "both"])(
+    "publishes only same-key entitled %s modes through the registered catalog family",
+    async (mode) => {
+      // Catalog discovery uses a literal synthetic key; runtime tests above use a real profile binding.
+      cfg.models!.providers!.clawrouter!.apiKey = "synthetic-router-key";
+      const selected = captured.modelCatalogProviders.find((provider) =>
+        provider.kinds.includes("image_generation"),
+      );
+      const resolveAuth = () => ({
+        apiKey: "synthetic-router-key",
+        discoveryApiKey: "synthetic-router-key",
+        mode: "api_key" as const,
+        source: "env" as const,
+      });
+      const context: UnifiedModelCatalogProviderContext = {
+        config: cfg,
+        env: {},
+        includeLive: true,
+        resolveProviderApiKey: resolveAuth,
+        resolveProviderAuth: resolveAuth,
+      };
+      const entitled = catalog(MODEL, mode !== "generate");
+      if (mode === "edit") {
+        entitled.providers[0]!.offers.shift();
+      }
+      entitled.providers[0]!.models[0]!.pricing.generation.maxImages = 2;
+      inventory = entitled;
+      const rows = await selected!.liveCatalog!(context);
+      expect(rows).toEqual([
+        expect.objectContaining({
+          kind: "image_generation",
+          provider: "clawrouter",
+          model: MODEL,
+          modes: mode === "both" ? ["generate", "edit"] : [mode],
+          capabilities: expect.objectContaining({
+            generate: expect.objectContaining({ maxCount: 2 }),
+            edit: expect.objectContaining({ enabled: mode !== "generate" }),
+          }),
         }),
-      }),
-    ]);
-    inventory = { version: "clawrouter.client-catalog.v1", providers: [] };
-    await expect(selected!.liveCatalog!(context)).resolves.toEqual([]);
-    expect(
-      calls.every((call) => call.headers.authorization === "Bearer synthetic-router-key"),
-    ).toBe(true);
-  });
+      ]);
+      inventory = { version: "clawrouter.client-catalog.v1", providers: [] };
+      await expect(selected!.liveCatalog!(context)).resolves.toEqual([]);
+      expect(
+        calls.every((call) => call.headers.authorization === "Bearer synthetic-router-key"),
+      ).toBe(true);
+    },
+  );
 });

@@ -457,18 +457,26 @@ different key or silently replacing the configured search provider.
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,
-`image_generate` tool, and `openclaw infer image generate` CLI. This is **JSON
-generation only** through `/v1/images/generations`: edits, masks, variations, and
-streaming are not supported. The ClawRouter deployment must support this route.
+`image_generate` tool, and `openclaw infer image generate` CLI. Text-only requests
+use `/v1/images/generations`; requests with reference images use the JSON
+`/v1/images/edits` route without changing the selected model. The ClawRouter
+deployment must support the requested route. Masks, variations, and streaming
+are not supported.
 Plugin readiness alone does not mean the current key can generate images.
 
 Supported wire-model IDs are `openai/gpt-image-2.5-flare`,
 `openai/gpt-image-2.5-sunburst`, and their `-2026-09-08` snapshots. These IDs are
-protocol support, not grants. Image discovery advertises a model only when the
+protocol support, not grants. Text-only generation is advertised only when the
 same key's live `/v1/catalog` contains its `image.generation` capability and an
-eligible HTTP offer for the unified `/v1/images/generations` route.
+eligible HTTP offer for the unified `/v1/images/generations` route. Editing
+requires its own `image.edit` capability and eligible `/v1/images/edits` offer;
+a generation grant alone does not enable edits. A model with only an edit offer
+is listed for editing, not text-only generation.
 Request-dependent affordability remains selectable; the service decides the
-actual request's grant and budget. Missing, unknown, empty, or failed catalogs
+actual request's grant and budget. The service cannot yet bound reference-image
+input tokens for an upfront reservation, so existing hard-budget policies reject
+these edit requests even when the model is granted. The plugin does not relax
+budget policy or switch credentials. Missing, unknown, empty, or failed catalogs
 never fall back to a static list or a previous successful image lookup.
 
 There is no implicit ClawRouter image default. Select an entitled image model
@@ -482,7 +490,14 @@ openclaw infer image generate \
   --size 1024x1024 --output-format png --output ./square.png
 ```
 
-Generation and the immediately preceding catalog check use the same resolved
+Reference images are sent as inline PNG, JPEG, or WebP data, with at most 16
+references, at most 4 MiB decoded per image, and an 8 MiB limit for the entire
+JSON request, including base64 encoding. Oversized or unsupported reference inputs fail before a paid request.
+The edit route does not accept remote reference URLs, file IDs, or masks.
+The tool can load an authorized uploaded image path and sends its bytes, not
+the path, to ClawRouter.
+
+Generation/editing and the immediately preceding catalog check use the same resolved
 ClawRouter credential, including a configured auth-profile binding. A missing
 or rejected bound profile does not switch to another profile or an upstream
 OpenAI key. HTTP failures preserve their status and do not retry a paid image
