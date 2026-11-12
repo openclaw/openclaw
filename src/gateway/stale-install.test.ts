@@ -87,23 +87,23 @@ describe("running installation replacement", () => {
     await writeIdentity("2026.9.4", "build-before");
     const counts: Record<string, number> = {};
     const restore: Array<() => void> = [];
-    // Linux exposes unsupported methods such as lchmodSync as undefined.
-    for (const key of Object.keys(syncFs).filter(
-      (name) => name.endsWith("Sync") && typeof Reflect.get(syncFs, name) === "function",
-    )) {
-      const descriptor = Object.getOwnPropertyDescriptor(syncFs, key)!;
-      Object.defineProperty(syncFs, key, {
-        ...descriptor,
-        value: new Proxy(descriptor.value, {
-          apply(fn, receiver, args) {
-            counts[key] = (counts[key] ?? 0) + 1;
-            return Reflect.apply(fn, receiver, args);
-          },
-        }),
-      });
-      restore.push(() => Object.defineProperty(syncFs, key, descriptor));
-    }
     try {
+      // Linux exposes unsupported methods such as lchmodSync as undefined.
+      for (const key of Object.keys(syncFs).filter(
+        (name) => name.endsWith("Sync") && typeof Reflect.get(syncFs, name) === "function",
+      )) {
+        const descriptor = Object.getOwnPropertyDescriptor(syncFs, key)!;
+        Object.defineProperty(syncFs, key, {
+          ...descriptor,
+          value: new Proxy(descriptor.value, {
+            apply(fn, receiver, args) {
+              counts[key] = (counts[key] ?? 0) + 1;
+              return Reflect.apply(fn, receiver, args);
+            },
+          }),
+        });
+        restore.push(() => Object.defineProperty(syncFs, key, descriptor));
+      }
       await owner.checkGatewayInstallationReplacement();
       await owner.checkGatewayInstallationReplacement();
     } finally {
