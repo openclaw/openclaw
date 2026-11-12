@@ -1000,15 +1000,13 @@ describe("runDaemonRestart health checks", () => {
       ["start", () => runDaemonStart({ json: true })],
       ["stop", () => runDaemonStop({ json: true })],
       ["uninstall", () => runDaemonUninstall({ json: true })],
-      ["preserved restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
+      ["restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
     ])("blocks native %s lifecycle access", async (action, run) => {
       const refusal = run();
       await expect(refusal).rejects.toThrow("managed by an external supervisor");
-      if (action !== "preserved restart") {
-        await expect(refusal).rejects.toMatchObject({
-          humanOutput: expect.stringMatching(`^Gateway ${action} blocked: OpenClaw gateway`),
-        });
-      }
+      await expect(refusal).rejects.toMatchObject({
+        humanOutput: expect.stringMatching(`^Gateway ${action} blocked: OpenClaw gateway`),
+      });
 
       expectNoCalls(
         runServiceStart,
