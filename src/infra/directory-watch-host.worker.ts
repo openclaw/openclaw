@@ -29,7 +29,14 @@ process.stdin.setEncoding("utf8").on("data", (chunk: string) => {
       continue;
     }
     try {
-      fs.watch(path, { persistent: false, recursive }, (event, filename) => {
+      // Node's Linux recursive fallback accepts missing roots without reporting failure.
+      if (recursive) {
+        fs.accessSync(path, fs.constants.R_OK);
+      }
+      // Windows short-name watch events can abort libuv when their long form arrives.
+      const watchPath =
+        process.platform === "win32" && path.includes("~") ? fs.realpathSync.native(path) : path;
+      fs.watch(watchPath, { persistent: false, recursive }, (event, filename) => {
         if (live.has(id)) {
           send({ id, event, filename });
         }
