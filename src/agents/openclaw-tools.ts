@@ -99,7 +99,6 @@ import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
-export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 export async function createOpenClawToolsAsync(
   options?: OpenClawToolsOptions,
   preparation: ToolConstructionPreparationOptions = {},
@@ -241,6 +240,9 @@ function* createOpenClawToolsSteps(
     nativeChannelId: options?.nativeChannelId,
     currentChannelId: options?.currentChannelId,
     currentMessagingTarget: options?.currentMessagingTarget,
+    ...(options?.currentMessageId !== undefined
+      ? { currentMessageId: String(options.currentMessageId) }
+      : {}),
     sessionKey: widgetSessionKey,
   };
   const widgetPresenters = resolveWidgetPresenters().map((registration) => registration.presenter);
@@ -490,7 +492,9 @@ function* createOpenClawToolsSteps(
     workspaceDir: spawnWorkspaceDir,
   };
   const tools: AnyAgentTool[] = [
-    ...createInstalledSkillTools(options?.installedSkills ?? []),
+    ...createInstalledSkillTools(options?.installedSkills ?? [], {
+      modelContextWindowTokens: options?.modelContextWindowTokens,
+    }),
     createDashboardTool({
       agentSessionKey:
         scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,

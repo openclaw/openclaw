@@ -152,7 +152,7 @@ export function parseOcPath(input: string): OcPath {
     fail(`Too many segments in oc:// path (max 4): ${printable(input)}`, "OC_PATH_TOO_DEEP");
   }
 
-  for (const seg of segments) {
+  for (const [slotIndex, seg] of segments.entries()) {
     const subs = splitRespectingBrackets(seg, ".", input);
     if (subs.length > MAX_SUB_SEGMENTS_PER_SLOT) {
       fail(
@@ -161,6 +161,10 @@ export function parseOcPath(input: string): OcPath {
       );
     }
     for (const sub of subs) {
+      // Dots are literal in filenames; a bare `.` file and structural slots still reject empty keys.
+      if (slotIndex === 0 && sub.length === 0 && file !== ".") {
+        continue;
+      }
       validateSubSegment(sub, input);
     }
   }

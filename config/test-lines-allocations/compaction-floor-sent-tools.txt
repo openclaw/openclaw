@@ -1,0 +1,3 @@
+# Compaction floor fix: the small-window regression now carries a registry larger than the sent
+# tool set, and the compaction fixture reads the transcript branch. Exact net test-line growth.
+14

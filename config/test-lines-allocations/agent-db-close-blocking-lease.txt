@@ -1,0 +1,2 @@
+# Existing close-receipt regression now covers changing blocker identity, journal text, and last-lease sealing.
+33

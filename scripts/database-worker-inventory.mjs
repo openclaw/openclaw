@@ -1610,6 +1610,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-canonical-read.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["readExactSessionEntryRowForCanonicalRepair"],
+        evidence:
+          "Exact-row reader extracted unchanged from canonical-repair.ts; worker-only legacy comparison and Doctor import/projection callers retain the same database custody and malformed-row contract without importing cold restoration.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-canonical-repair.ts",
     [
       {
@@ -1618,7 +1629,6 @@ const reviewedOperations = new Map([
           "ensureSqliteTranscriptGenerationsForCanonicalRepair",
           "rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch",
           "copySqliteSessionOwnedStateForRepair",
-          "readExactSessionEntryRowForCanonicalRepair",
         ],
         evidence:
           "Doctor canonical-key repair/import and worker-only legacy comparison in session-retirement-read.worker.ts; native full claims run only after detect returns, and allowCanonicalRepair is supplied only by Doctor canonical-key repair",
@@ -3652,6 +3662,7 @@ const workerModules = new Set([
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/session-cost-usage-worker.ts",
+  "src/infra/session-cost-usage-worker-refresh.ts", // Usage worker and worker-report callers run only under session-transcript.worker.ts.
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
   "src/infra/update-database-restore-source.ts", // Sole caller: update-candidate-state.worker database-restore-preparation; private output, parent retains native exclusions.

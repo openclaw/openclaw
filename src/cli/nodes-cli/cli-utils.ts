@@ -6,6 +6,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -54,5 +55,22 @@ export function runNodesCommand(label: string, action: () => Promise<void>) {
       );
     }
     defaultRuntime.exit(1);
+  });
+}
+
+/** Ctrl+C owns the exit of an inventory read; node operations keep their response custody. */
+export function runNodesReadCommand(
+  label: string,
+  action: (signal?: AbortSignal) => Promise<void>,
+) {
+  const signal = getAsyncWorkSignal();
+  return runNodesCommand(label, async () => {
+    try {
+      await action(signal);
+    } catch (error) {
+      if (!signal?.aborted) {
+        throw error;
+      }
+    }
   });
 }

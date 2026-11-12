@@ -2,10 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { root as fsRoot } from "@openclaw/fs-safe/root";
-import { readSecretFile } from "@openclaw/fs-safe/secret";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseDocument } from "yaml";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import type {
   GitHubIdentityFacts,
   ToolsGitHubStatusResult,
@@ -17,8 +14,9 @@ import {
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
+import { runGitWorkerOperation } from "../infra/git-worker.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resolveAgentEntry, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import {
   prepareAppGitHubIdentity,
@@ -36,7 +34,6 @@ import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
 import {
   clearNativeGitHubTokenCache,
   createGitHubReadIdentity,
-  GITHUB_IDENTITY_OUTPUT_LIMIT_BYTES as PROFILE_OUTPUT_LIMIT_BYTES,
   GitHubIdentityError,
   normalizeGitHubToken as normalizeManagedGitHubToken,
   readCachedNativeGitHubToken,
@@ -48,7 +45,7 @@ import {
   type PreparedGitHubReadIdentity,
   type PreparedGitHubSourceReadIdentity,
 } from "./github-read-identity.js";
-import { managedGitHubHosts, type GitHubToolAccount } from "./github-tool-account.js";
+import type { GitHubToolAccount } from "./github-tool-account.js";
 import {
   githubCredentialEnvironmentExclusions,
   managedGitHubIdentityEnvironment,
@@ -63,10 +60,7 @@ import type {
   PreparedGitHubToolEnvironment,
   SharedGitHubIdentityPreparation,
 } from "./github-tool-identity.types.js";
-import {
-  isPrivateManagedGitHubProfile,
-  writeManagedGitHubProfileFiles,
-} from "./github-tool-profile-files.js";
+import { isPrivateManagedGitHubProfile } from "./github-tool-profile-files.js";
 import { resolveManagedGitHubProfileDir } from "./github-tool-profile-path.js";
 
 export {
@@ -193,52 +187,14 @@ function githubIdentityProbeEnvironment(
 }
 
 async function readManagedGitHubToken(profileDir: string): Promise<string | undefined> {
-  if (!(await isPrivateManagedGitHubProfile(profileDir))) {
-    return undefined;
+  const token = await runGitWorkerOperation({
+    type: "github.profile-token",
+    input: { profileDir, nativeMode: getFsSafeNativeConfig().mode },
+  });
+  if (token) {
+    registerSecretValueForRedaction(token);
   }
-  try {
-    let hosts: Record<string, unknown> | undefined;
-    for (const name of ["hosts.yml", "config.yml"]) {
-      const filePath = path.join(profileDir, name);
-      const stat = await fs.lstat(filePath).catch((error: unknown) => {
-        if (name === "config.yml" && hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
-      });
-      if (!stat) {
-        continue;
-      }
-      if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
-        return undefined;
-      }
-      const raw = await readSecretFile(filePath, "Managed GitHub profile", {
-        maxBytes: PROFILE_OUTPUT_LIMIT_BYTES,
-        rejectSymlink: true,
-      });
-      // parse() logs YAML warnings containing file contents. Inspect the document
-      // instead so corrupt credentials never escape into parser diagnostics.
-      const document = parseDocument(raw, { prettyErrors: false });
-      if (document.errors.length || document.warnings.length) {
-        return undefined;
-      }
-      const value: unknown = document.toJS({ maxAliasCount: 0 });
-      if (!isRecord(value)) {
-        return undefined;
-      }
-      if (name === "hosts.yml") {
-        hosts = value;
-      }
-    }
-    const host = hosts?.[GITHUB_HOST];
-    // gh reads the active host token before considering the global keyring.
-    // User-keyed entries alone cannot prove isolation from native auth.
-    return isRecord(host) && typeof host.oauth_token === "string"
-      ? normalizeManagedGitHubToken(host.oauth_token)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return token;
 }
 
 export async function resolveGitHubToolIdentityStatus(
@@ -671,24 +627,17 @@ export async function refreshManagedGitHubProfile(params: {
   if (account.accountId !== params.expectedAccountId) {
     throw new GitHubAccountMismatchError("GitHub OAuth refresh returned a different account.");
   }
-  const targetHosts = path.join(params.profileDir, "hosts.yml");
-  const targetStat = await fs.lstat(targetHosts);
-  if (!targetStat.isFile() || targetStat.isSymbolicLink()) {
-    throw new Error("The configured GitHub identity profile is unavailable.");
-  }
-  const profile = await fsRoot(params.profileDir);
   await params.prepareEffect?.();
-  params.assertCurrent?.();
-  await profile.write(
-    "hosts.yml",
-    managedGitHubHosts({ login: account.login, token: credential }),
+  await runGitWorkerOperation(
     {
-      mode: 0o600,
-      mkdir: false,
-      durable: false,
-      mutationSymlinks: "reject",
-      assertBeforeMutation: params.assertCurrent,
+      type: "github.profile-refresh",
+      input: {
+        profileDir: params.profileDir,
+        identity: { login: account.login, token: credential },
+        nativeMode: getFsSafeNativeConfig().mode,
+      },
     },
+    { assertCurrent: params.assertCurrent },
   );
   clearNativeGitHubTokenCache();
   params.assertCurrent?.();
@@ -714,9 +663,13 @@ export async function installManagedGitHubProfile(params: {
   let committed = false;
   try {
     const { account, credential } = await verifyManagedGitHubCredential(params.token);
-    await writeManagedGitHubProfileFiles(stagedProfile, {
-      login: account.login,
-      token: credential,
+    await runGitWorkerOperation({
+      type: "github.profile-stage",
+      input: {
+        profileDir: stagedProfile,
+        identity: { login: account.login, token: credential },
+        nativeMode: getFsSafeNativeConfig().mode,
+      },
     });
     await params.prepareEffect?.();
     params.assertCurrent?.();
