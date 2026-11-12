@@ -591,11 +591,12 @@ async function verifySteeringPolicyCompatibility(
 // Holding Alice's outbound I/O separates admission from execution and policy publication.
 async function verifyCrossHumanAdmission(
   signal: AbortSignal,
-  allowCollaborativeSteering: boolean | undefined,
+  allowCollaborativeSteering: boolean,
   conversation: "same" | "different" = "same",
+  fallback?: "reject",
 ) {
   const collaborative = allowCollaborativeSteering === true && conversation === "same";
-  const id = `mixed_human_${conversation === "same" ? (allowCollaborativeSteering ?? "default") : "foreign"}`;
+  const id = `mixed_human_${conversation === "same" ? `${allowCollaborativeSteering}_${fallback ?? "queue"}` : "foreign"}`;
   const scenario = createScenario(
     {
       name: `cross-human ${collaborative ? "steer" : "explicit followup"}`,
@@ -638,7 +639,7 @@ async function verifyCrossHumanAdmission(
     {
       messages: {
         queue: {
-          collaborativeSteeringFallback: allowCollaborativeSteering === false ? "reject" : null,
+          collaborativeSteeringFallback: fallback ?? null,
         },
       },
     },
@@ -672,7 +673,7 @@ async function verifyCrossHumanAdmission(
     // The receipt waits for transcript commitment, which needs Alice's held
     // tool to finish. Observe real admission before releasing that tool.
     await steering.waitForAdmission(running.bob, signal);
-  } else if (allowCollaborativeSteering === false) {
+  } else if (fallback === "reject") {
     expect(await running.bob).toMatchObject({ collaborativeSteeringRefused: true });
     expect(scenario.sourceRequests).toEqual([]);
     expect(scenario.incumbentCompleted).toBe(false);
@@ -684,10 +685,9 @@ async function verifyCrossHumanAdmission(
   }
   const expectedReplies = collaborative
     ? []
-    : (allowCollaborativeSteering === false
-        ? [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY]
-        : [FOLLOWUP_REPLY]
-      ).map((text) => ({ sender: "bob", text }));
+    : (fallback === "reject" ? [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY] : [FOLLOWUP_REPLY]).map(
+        (text) => ({ sender: "bob", text }),
+      );
   expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
     expectedReplies,
   );
@@ -755,8 +755,11 @@ it(
       ["completed child followup", () => verifyCompletedChildFollowup(signal)],
       ["steering policy compatibility", () => verifySteeringPolicyCompatibility(signal, false)],
       ["steering policy change", () => verifySteeringPolicyCompatibility(signal, true)],
-      ["cross-human false", () => verifyCrossHumanAdmission(signal, false)],
-      ["cross-human default", () => verifyCrossHumanAdmission(signal, undefined)],
+      [
+        "cross-human strict refusal",
+        () => verifyCrossHumanAdmission(signal, false, "same", "reject"),
+      ],
+      ["cross-human default queue", () => verifyCrossHumanAdmission(signal, false)],
       ["cross-human true", () => verifyCrossHumanAdmission(signal, true)],
       ["different-conversation input", () => verifyCrossHumanAdmission(signal, true, "different")],
       ["collaborative cancellation", () => verifyCollaborativeCancellation(signal)],
