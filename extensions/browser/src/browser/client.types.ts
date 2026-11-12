@@ -134,6 +134,8 @@ export type BrowserTab = {
   label?: string;
   title: string;
   url: string;
+  /** Present when the tab's renderer crashed (OOM kill, renderer death); the browser itself is fine. */
+  crashed?: boolean;
   /** Listing-time observation; unavailable URLs stay redacted, not implicitly trusted. */
   urlUnavailableReason?: "navigation_blocked" | "navigation_check_failed";
   wsUrl?: string;

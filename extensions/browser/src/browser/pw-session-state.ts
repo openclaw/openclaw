@@ -21,6 +21,7 @@ import {
   type RoleRefsCacheEntry,
   BrowserObservedDialogBlockedError,
 } from "./pw-session-contracts.js";
+import { markPageCrashed } from "./pw-session-crash-state.js";
 
 // Best-effort cache to make role refs stable even if Playwright returns a different Page object
 // for the same CDP target across requests.
@@ -149,6 +150,9 @@ export function ensurePageState(page: Page): PageState {
   };
   pageStates.set(page, state);
 
+  page.on("crash", () => {
+    markPageCrashed(page);
+  });
   page.on("console", (msg: ConsoleMessage) => {
     const location = msg.location();
     const entry: BrowserConsoleMessage = {

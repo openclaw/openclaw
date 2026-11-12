@@ -19,7 +19,7 @@ import {
 import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
-import { BrowserTabNotFoundError } from "./errors.js";
+import { BrowserTabNotFoundError, CrashedBrowserTargetError } from "./errors.js";
 import type { RelayOperationReference } from "./extension-relay/owner-client.js";
 import {
   connectRelayBrowser,
@@ -40,6 +40,7 @@ import {
   type ContextState,
   type PlaywrightConnectionRetirement,
 } from "./pw-session-contracts.js";
+import { isPageCrashed, markCrashedTarget } from "./pw-session-crash-state.js";
 import { prepareMeetPlaybackObservation } from "./pw-session-meet-playback.js";
 import {
   isConnectionScopedTargetId,
@@ -562,6 +563,7 @@ async function getPageForTargetIdOnce(opts: {
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
+  allowCrashed?: boolean;
 }): Promise<Page> {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
@@ -588,6 +590,13 @@ async function getPageForTargetIdOnce(opts: {
     ? accessible.find((entry) => entry.targetId === opts.targetId)
     : accessible[0];
   if (found) {
+    if (!opts.allowCrashed && isPageCrashed(found.page)) {
+      // Learn the target id so raw target listings can mark the crashed tab.
+      if (found.targetId) {
+        markCrashedTarget(opts.cdpUrl, found.targetId);
+      }
+      throw new CrashedBrowserTargetError();
+    }
     bindRoleRefsTarget(found.page, opts.cdpUrl, found.targetId);
     if (!engine || engine === "chromium") {
       await prepareMeetPlaybackObservation(found.page);
@@ -607,6 +616,7 @@ export async function getPageForTargetId(opts: {
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
   relayReference?: RelayOperationReference;
+  allowCrashed?: boolean;
 }): Promise<Page> {
   const cachedBrowser = cachedByCdpUrl.get(normalizeCdpUrl(opts.cdpUrl))?.browser;
   if (isConnectionScopedTargetId(opts.targetId) && !cachedBrowser) {

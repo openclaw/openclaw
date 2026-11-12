@@ -108,7 +108,8 @@ function logBrowserTabs(tabs: BrowserTab[]) {
     const handles = [suggested, t.tabId ? `tab: ${t.tabId}` : undefined, labelHandle]
       .filter(Boolean)
       .join(" ");
-    return `${i + 1}. ${t.title || "(untitled)"}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
+    const crashed = t.crashed ? " (crashed; open the URL in a new tab)" : "";
+    return `${i + 1}. ${t.title || "(untitled)"}${crashed}${handles ? ` [${handles}]` : ""}\n   ${t.url}\n   id: ${t.targetId}`;
   });
 }
 
