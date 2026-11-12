@@ -235,3 +235,44 @@ it("shows selected capabilities without a catalog", () => {
   expect(container.textContent).toContain("Pages");
   expect(container.textContent).not.toMatch(/speechProviders:|sibling-|Video generation/);
 });
+
+it.each(["single-theme", "multiple-themes", "mixed-tools", "native-ui"] as const)(
+  "uses a palette identity only for a known single-purpose single theme: %s",
+  (scenario) => {
+    const plugin = createPlugin({ enabled: true, installed: true });
+    const inspection = createInspectResult();
+    if (scenario === "mixed-tools") {
+      inspection.declared.tools = ["search"];
+    }
+    if (scenario === "native-ui") {
+      inspection.overview = { hasNativeUi: true };
+    }
+    const descriptor = {
+      id: "workboard/forest" as const,
+      name: "Forest",
+      description: "A forest palette.",
+      source: "plugin" as const,
+      pluginId: plugin.id,
+      modes: ["dark" as const],
+    };
+    const { container } = mount({
+      result: createResult(plugin),
+      inspection,
+      themeCatalog: {
+        themes: [
+          descriptor,
+          ...(scenario === "multiple-themes"
+            ? [{ ...descriptor, id: "workboard/gold" as const }]
+            : []),
+        ],
+        error: null,
+      },
+    });
+    expect(
+      container.querySelectorAll(".plugin-catalog-detail__icon .settings-theme-card__swatch"),
+    ).toHaveLength(scenario === "single-theme" ? 1 : 0);
+    expect(container.querySelectorAll(".plugin-theme-preview__theme")).toHaveLength(
+      scenario === "multiple-themes" ? 2 : 1,
+    );
+  },
+);

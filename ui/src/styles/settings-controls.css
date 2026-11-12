@@ -358,3 +358,94 @@ select.settings-select {
     padding: 0;
   }
 }
+.settings-theme-card__swatch {
+  position: relative;
+  display: grid;
+  height: calc(56px * var(--control-ui-text-scale));
+  padding: 10px;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--theme-chip-bg, var(--bg-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 14%, transparent);
+  transition: box-shadow var(--duration-fast) ease;
+}
+
+.settings-theme-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.settings-theme-card__icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.settings-theme-card__check {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--text-strong);
+  color: var(--bg);
+}
+
+.settings-theme-card__check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3px;
+}
+
+/* Real-palette previews. Colors mirror the :root[data-theme] blocks in base.css
+   (claw = the default :root palette); keep both in sync when retuning a theme.
+   Catalog cards supply their own mode-aware variables. The browser import card
+   reads the live palette only while that imported theme is active. */
+.settings-theme-card__palette {
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  grid-template-rows: auto auto 1fr;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-theme-card__line {
+  width: 62%;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--theme-chip-ink, light-dark(black, white)) 45%, transparent);
+}
+
+.settings-theme-card__line--short {
+  width: 38%;
+  background: color-mix(in srgb, var(--theme-chip-ink, light-dark(black, white)) 22%, transparent);
+}
+
+.settings-theme-card__chips {
+  display: inline-flex;
+  align-items: center;
+  align-self: end;
+  gap: 4px;
+}
+
+.settings-theme-card__chip {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+.settings-theme-card__chip--accent {
+  width: 18px;
+  background: var(--theme-chip-accent);
+}
+
+.settings-theme-card__chip--accent-2 {
+  background: var(--theme-chip-accent-2);
+}

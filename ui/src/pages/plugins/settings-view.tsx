@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, Loading, Show, createMemo } from "solid-js";
+import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
 import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -11,14 +12,15 @@ import {
   SettingsSection,
   SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
+import { ThemeCardVisual } from "../../components/theme-card-visual.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
+import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -46,6 +48,7 @@ import {
 import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import { PluginRetryError } from "./settings-retry-error.tsx";
+import { PluginThemePreview } from "./theme-preview.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
 export type PluginSettingsTab = "installed" | "advanced";
 type SharedProps = Omit<
@@ -81,6 +84,9 @@ export type InventoryProps = SharedProps & {
 };
 export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
+    themeCatalog?: ThemeCatalogSnapshot;
+    themeMode?: "light" | "dark";
+    onRetryThemeCatalog?: () => void;
     resolveCredential?: PluginSettingsEditorProps["resolveCredential"];
     onAskPlugin?: () => void;
     onSelectPrompt?: (prompt: string) => void;
@@ -275,6 +281,22 @@ function PluginOverview(props: DetailProps): JSX.Element {
     props.result!.plugins.find((entry) => entry.id === props.pluginId)!,
   );
   const catalog = createMemo(() => props.catalog ?? props.inspection?.catalog);
+  const themes = createMemo(
+    () =>
+      props.themeCatalog?.themes.filter(
+        (theme) => theme.source === "plugin" && theme.pluginId === props.pluginId,
+      ) ?? [],
+  );
+  const singleTheme = createMemo(() => {
+    const inspection = props.inspection;
+    return themes().length === 1 &&
+      inspection &&
+      Object.values(inspection.declared).every((values) => values.length === 0) &&
+      !inspection.overview?.hasNativeUi &&
+      !inspection.overview?.capabilities?.ui?.length
+      ? themes()[0]
+      : undefined;
+  });
   const components = createMemo(() => props.inspection?.components);
   const mcpDescription = () => {
     const inspection = props.inspection;
@@ -340,39 +362,61 @@ function PluginOverview(props: DetailProps): JSX.Element {
         backLabel={props.backLabel}
         onBack={props.onBack}
         icon={
-          <PluginArtTile
-            registerIcon={props.registerIcon}
-            slug={plugin().id}
-            name={plugin().name}
-            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
-            onIconError={() => props.onIconError(plugin().id)}
-            authorIconUrl={authorIcon().src}
-            loading={
-              props.iconLoading?.(plugin().id) ||
-              props.catalogLoading ||
-              catalogIcon().loading ||
-              authorIcon().loading
+          <Show
+            when={singleTheme()}
+            fallback={
+              <PluginArtTile
+                registerIcon={props.registerIcon}
+                slug={plugin().id}
+                name={plugin().name}
+                iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+                onIconError={() => props.onIconError(plugin().id)}
+                authorIconUrl={authorIcon().src}
+                loading={
+                  props.iconLoading?.(plugin().id) ||
+                  props.catalogLoading ||
+                  catalogIcon().loading ||
+                  authorIcon().loading
+                }
+              />
             }
-          />
+          >
+            {(theme) => (
+              <ThemeCardVisual
+                id={theme().id}
+                activeTheme={theme().id}
+                palette={props.themeCatalog?.palettes?.get(theme().id)}
+              />
+            )}
+          </Show>
         }
         identity={renderPluginPublisher(catalog(), props.inspection?.overview?.publisherName)}
         recommendations={
-          <PluginRecommendedPrompts
-            id={plugin().id}
-            name={plugin().name}
-            prompts={
-              plugin().recommendedPrompts ??
-              props.inspection?.overview?.recommendedPrompts ??
-              catalog()?.detail.recommendedPrompts
-            }
-            iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
-            registerIcon={props.registerIcon}
-            onIconError={() => props.onIconError(plugin().id)}
-            busy={Boolean(props.busy[pluginRowKey(plugin().id)]) || props.promptBusy}
-            disabled={Boolean(props.promptBlockedReason)}
-            disabledReason={props.promptBlockedReason}
-            onSelect={props.onSelectPrompt}
-          />
+          <>
+            <PluginThemePreview
+              themes={themes()}
+              palettes={props.themeCatalog?.palettes}
+              mode={props.themeMode ?? "dark"}
+              error={props.themeCatalog?.error}
+              onRetry={() => props.onRetryThemeCatalog?.()}
+            />
+            <PluginRecommendedPrompts
+              id={plugin().id}
+              name={plugin().name}
+              prompts={
+                plugin().recommendedPrompts ??
+                props.inspection?.overview?.recommendedPrompts ??
+                catalog()?.detail.recommendedPrompts
+              }
+              iconUrl={props.iconUrls[plugin().id] ?? catalogIcon().src}
+              registerIcon={props.registerIcon}
+              onIconError={() => props.onIconError(plugin().id)}
+              busy={Boolean(props.busy[pluginRowKey(plugin().id)]) || props.promptBusy}
+              disabled={Boolean(props.promptBlockedReason)}
+              disabledReason={props.promptBlockedReason}
+              onSelect={props.onSelectPrompt}
+            />
+          </>
         }
         titleAction={
           <Show

@@ -1,4 +1,5 @@
 import { useApplication } from "../../lib/reactive/context.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { PluginsPageView } from "./plugins-page-view.tsx";
 import { createPluginsPage } from "./plugins-page.ts";
 import type { PluginsRouteData } from "./route-data.ts";
@@ -10,6 +11,10 @@ type PluginsPageProps = { routeData?: PluginsRouteData; surface?: "discovery" | 
 export function PluginsPage(props: PluginsPageProps) {
   let host!: HTMLElement;
   const context = useApplication();
+  const theme = projectOwner(context.theme, (source) => ({
+    catalog: source.catalog,
+    mode: source.resolvedMode,
+  }));
   const page = createPluginsPage({
     context,
     element: () => host,
@@ -22,7 +27,12 @@ export function PluginsPage(props: PluginsPageProps) {
         host = element;
       }}
     >
-      <PluginsPageView page={page} />
+      <PluginsPageView
+        page={page}
+        themeCatalog={theme.read().catalog}
+        themeMode={theme.read().mode}
+        onRetryThemeCatalog={() => context.theme.retryCatalog?.()}
+      />
     </openclaw-plugins-page>
   );
 }

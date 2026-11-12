@@ -145,6 +145,11 @@ const enPluginManagement = {
     },
   },
   pluginsPage: {
+    themePreview: {
+      label: "Theme preview",
+      greeting: "What would you like to work on?",
+      composer: "Message OpenClaw",
+    },
     auditClean: "Clean",
     auditReview: "Review",
     recommendedPrompts: {

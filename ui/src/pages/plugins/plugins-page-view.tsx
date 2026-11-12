@@ -15,6 +15,7 @@ import {
   pathForPluginSettings,
   pathForRoute,
 } from "../../app-route-paths.ts";
+import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
 import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -89,7 +90,12 @@ function PluginDetailBoundary(props: { children: JSX.Element; onRetry: () => voi
   );
 }
 
-export function PluginsPageView(props: { page: PluginsPageModel }) {
+export function PluginsPageView(props: {
+  page: PluginsPageModel;
+  themeCatalog?: ThemeCatalogSnapshot;
+  themeMode?: "light" | "dark";
+  onRetryThemeCatalog?: () => void;
+}) {
   const [query, setQuery] = createSignal("");
   const page = () => {
     props.page.read();
@@ -258,6 +264,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return (
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
         <PluginSettingsDetail
+          themeCatalog={props.themeCatalog}
+          themeMode={props.themeMode}
+          onRetryThemeCatalog={() => props.onRetryThemeCatalog?.()}
           {...shared()}
           promptBusy={page().recommendedPrompts.pending}
           configUnsupportedPaths={configAnalysis().unsupportedPaths}

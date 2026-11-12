@@ -1,12 +1,18 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Loading, Show } from "solid-js";
 
-export function PluginThemeArtwork(props: { url: string; class?: string; fallback?: JSX.Element }) {
+export function PluginThemeArtwork(props: {
+  url: string;
+  class?: string;
+  fallback?: JSX.Element;
+  background?: boolean;
+}) {
   const source = createMemo(async () => {
     const url = props.url;
+    const background = props.background;
     try {
       const { fetchPluginThemeArtworkBlobUrl } = await import("../pages/plugins/icon-loader.ts");
-      return await fetchPluginThemeArtworkBlobUrl({ url });
+      return await fetchPluginThemeArtworkBlobUrl({ url, background });
     } catch {
       return null;
     }
