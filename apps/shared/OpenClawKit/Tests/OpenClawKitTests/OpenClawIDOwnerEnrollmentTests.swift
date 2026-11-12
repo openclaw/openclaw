@@ -158,11 +158,11 @@ struct OpenClawIDOwnerEnrollmentTests {
     @Test func `handoff must name this claw and this device`() throws {
         let vectors = try Vectors()
         let keys = try vectors.keys
-        let binding = try #require(#require(vectors.node["response"]).fields([
-            "descriptor",
-            "snapshot",
-        ])["descriptor"]?
-            .fields(["v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at"])["binding"])
+        let response = try #require(vectors.node["response"])
+        let descriptor = try #require(response.fields(["descriptor", "snapshot"])["descriptor"])
+        let binding = try #require(descriptor.fields([
+            "v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at",
+        ])["binding"])
         let cert = try OpenClawIDStatement.sign(
             "OwnerDeviceCert",
             body: Self.certBody(keys, now: vectors.now),
