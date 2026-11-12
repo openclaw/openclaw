@@ -728,6 +728,25 @@ describe("tool use tracker retention bounds", () => {
     expect(starts[0]?.args).toEqual({});
   });
 
+  it("drops a start snapshot nested too deeply to measure instead of failing the turn", () => {
+    const { parser, toolStarts } = createRecordingParser();
+    // Deep enough that `JSON.stringify` overflows the stack on an input `JSON.parse` accepted:
+    // Node 24 gives out near 5,000 levels and the Bun test runtime between 20,000 and 100,000.
+    const depth = 200_000;
+    const input = `${'{"a":'.repeat(depth)}1${"}".repeat(depth)}`;
+
+    parser.push(`${parentMessageStartLine("msg_deep")}\n`);
+    parser.push(
+      `{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_deep","name":"Write","input":${input}}}}\n`,
+    );
+    parser.push(
+      `${parentStreamEventLine({ type: "content_block_stop", index: 0 })}\n${parentMessageStopLine}\n`,
+    );
+
+    expect(parser.getErrorText()).toBeNull();
+    expect(toolStarts).toMatchObject([{ toolCallId: "toolu_deep", name: "Write", args: {} }]);
+  });
+
   it("refunds exactly what each pending block charged", () => {
     const tracker = createToolUseTracker();
     const begin = (index: number, input?: Record<string, unknown>) =>

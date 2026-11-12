@@ -81,6 +81,21 @@ function evictOldestUntilBounded(entries: Set<string> | Map<string, string>, max
   }
 }
 
+/**
+ * `JSON.parse` accepts nesting far deeper than `JSON.stringify` can walk back
+ * out, so a valid frame can carry an input that throws `RangeError` here. An
+ * input whose size cannot be measured cannot be charged, so it reads as over
+ * the cap and only the snapshot is dropped — the same reading
+ * `measureToolArgChars` gives decoded arguments.
+ */
+function measurePendingToolSnapshotChars(blockInput: Record<string, unknown>): number {
+  try {
+    return JSON.stringify(blockInput).length;
+  } catch {
+    return MAX_PENDING_TOOL_INPUT_CHARS + 1;
+  }
+}
+
 export function releasePendingToolUse(
   tracker: ToolUseTracker,
   index: number,
@@ -131,7 +146,7 @@ export function beginPendingToolUse(
     // only the snapshot is dropped — the entry stays, so the block still settles
     // into a tool start (with `{}` args) and the start, result and attributed
     // progress the stall detector reads keep flowing.
-    const snapshotChars = JSON.stringify(init.blockInput).length;
+    const snapshotChars = measurePendingToolSnapshotChars(init.blockInput);
     if (tracker.pendingInputChars + snapshotChars <= MAX_PENDING_TOOL_INPUT_CHARS) {
       pending.blockInput = init.blockInput;
       pending.chargedChars = snapshotChars;
