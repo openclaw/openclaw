@@ -1,18 +1,20 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { cliRecoveryEntrypoints } from "../../cli/cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "../../cli/cli-process-child.test-helpers.js";
+import {
+  createBuiltRuntime,
+  runBuiltRuntime,
+} from "../../commands/doctor-config-preflight.process.test-support.js";
 import { runStartupConfigPreflight } from "../../commands/startup-config-preflight.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveBundledPluginPublicModulePath } from "../../test-utils/bundled-plugin-public-surface.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -23,7 +25,7 @@ import {
 } from "../gateway-boot-lifecycle.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import { quoteSqliteIdentifier } from "../sqlite-schema-sql.js";
 import {
   assertEngineStoreExecutionAllowed,
@@ -183,22 +185,34 @@ it.skipIf(!connection)(
       { channels: { msteams: { enabled: true } } },
       async ({ state, completion }) => {
         const authored = await fs.readFile(state.configPath, "utf8");
-        const nodeExecutable = resolveTestNodeExecPath();
-        const result = await runCliProcessChild({
-          nodeExecutable,
-          timeoutMs: 30_000,
-          nodeArgs: [
-            // Compiled CLI fixtures still discover source plugins and their native SDK imports.
-            "--import",
-            pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
-            ...resolveRuntimeWorkerArgv(
-              resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
-              nodeExecutable,
-            ),
-            "gateway",
-            "run",
-          ],
-          env: {
+        const prepared = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
+        const distRoot = fileURLToPath(new URL("./", prepared));
+        const runtimeRoot = createBuiltRuntime(state.path("cli"), distRoot, {
+          emptyExtensions: true,
+        });
+        const teams = path.join(runtimeRoot, "dist", "extensions", "msteams");
+        await fs.mkdir(teams);
+        const packageJson = JSON.parse(
+          await fs.readFile("extensions/msteams/package.json", "utf8"),
+        );
+        // Keep real setup/discovery metadata while matching the prepared graph's ESM output.
+        packageJson.openclaw.extensions = ["./index.js"];
+        packageJson.openclaw.setupEntry = "./setup-entry.js";
+        packageJson.openclaw.build.runtimeFormat = "esm";
+        await fs.writeFile(path.join(teams, "package.json"), JSON.stringify(packageJson));
+        await fs.copyFile(
+          "extensions/msteams/openclaw.plugin.json",
+          path.join(teams, "openclaw.plugin.json"),
+        );
+        for (const entry of await fs.readdir(path.join(distRoot, "extensions", "msteams"))) {
+          await fs.copyFile(
+            path.join(distRoot, "extensions", "msteams", entry),
+            path.join(teams, entry),
+          );
+        }
+        const result = await runBuiltRuntime(
+          runtimeRoot,
+          {
             ...process.env,
             ...state.envVars,
             // Real CLI startup rejects test-only bundle roots; use production discovery.
@@ -212,9 +226,13 @@ it.skipIf(!connection)(
             OPENCLAW_NO_RESPAWN: "1",
             OPENCLAW_HIDE_BANNER: "1",
           },
-        });
+          ["gateway", "run"],
+          30_000,
+        );
         const output = `${result.stdout}\n${result.stderr}`;
-        expect(output).not.toContain("Unable to load host Plugin SDK natively");
+        expect(output).not.toMatch(
+          /Unable to load host Plugin SDK natively|Failed to load plugin|failed to load (?:channel )?setup/i,
+        );
         expect(result, output).toMatchObject({ code: 78, signal: null });
         expect(output).toContain("openclaw doctor --fix");
         expect(output).toContain("Pinned channels.msteams.legacyWebhook");
