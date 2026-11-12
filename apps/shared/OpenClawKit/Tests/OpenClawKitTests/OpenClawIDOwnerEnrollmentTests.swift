@@ -220,9 +220,9 @@ struct OpenClawIDOwnerEnrollmentTests {
         for (change, seq) in zip(changes, [Int64(3), 4]) {
             let body = try change.fields(["v", "type", "body", "signer", "alg", "sig"])
             #expect(body["signer"] == .string(root.signingKey))
-            let fields = try #require(body["body"]?.fields(["claw_id", "seq", "target", "issued_at"]))
+            let fields = try #require(body["body"]).fields(["claw_id", "seq", "target", "issued_at"])
             #expect(fields["seq"] == .integer(seq))
-            let target = try #require(fields["target"]?.fields(["op", "cert", "node"]))
+            let target = try #require(fields["target"]).fields(["op", "cert", "node"])
             #expect(try target["node"]!.fields(["peer_key", "label", "description"])["peer_key"] ==
                 .string(#require(keys.node?.peerKey)))
             _ = try OpenClawIDNodeTrust.envelope(change, type: "MembershipChange", signer: root.signingKey)
