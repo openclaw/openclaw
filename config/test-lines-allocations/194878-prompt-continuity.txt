@@ -1,0 +1,2 @@
+# Exact net test-line growth from the authorized before_prompt_build continuity change (#194878): CLI invalidated/resumed, embedded, Codex and once-per-turn regressions.
+157

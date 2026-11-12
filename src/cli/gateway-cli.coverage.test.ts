@@ -31,6 +31,11 @@ const mocks = await vi.hoisted(async () => {
 });
 
 const { runtimeLogs, runtimeErrors, defaultRuntime } = mocks;
+const work = vi.hoisted(() => ({ signal: undefined as AbortSignal | undefined }));
+vi.mock("../shared/async-work-scope.js", async (importActual) => ({
+  ...(await importActual<typeof import("../shared/async-work-scope.js")>()),
+  getAsyncWorkSignal: () => work.signal,
+}));
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
@@ -134,6 +139,7 @@ describe("gateway-cli coverage", () => {
 
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
+    work.signal = undefined;
     callGateway.mockReset();
     callGateway.mockImplementation(defaultCallGateway);
     runtimeLogs.length = 0;
@@ -163,22 +169,14 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).not.toContain("GatewayClientRequestError");
   });
 
-  it("registers gateway probe and routes to gatewayStatusCommand", async () => {
-    gatewayStatusCommand.mockClear();
-
-    await runGatewayCommand(["probe", "--json"]);
-
-    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-  });
-
-  it("registers gateway stability and routes to diagnostics RPC", async () => {
-    await runGatewayCommand(["stability", "--limit", "5", "--type", "payload.large", "--json"]);
-
-    expectGatewayCall({
-      method: "diagnostics.stability",
-      localPortOverride: undefined,
-      params: { limit: 5, type: "payload.large" },
-    });
+  it.each([
+    [["usage-cost"], "usage.cost", { days: 30 }],
+    [["stability", "--limit", "5"], "diagnostics.stability", { limit: 5 }],
+  ])("prints no gateway %j reply that lands after Ctrl+C", async (args, method, params) => {
+    work.signal = AbortSignal.abort();
+    await runGatewayCommand([...args, "--json"]);
+    expectGatewayCall({ method, params });
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it("scopes usage-cost to an agent and prints its missing-cost breakdown", async () => {

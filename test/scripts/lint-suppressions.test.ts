@@ -210,6 +210,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/doctor-transcript-heap-probe.cjs|typescript/unbound-method|3",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/gateway-runtime-exit-listeners-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // Observe Node's stream allocation boundary while forwarding its original read size.
+        "scripts/perf/idle-gateway-measure-preload.mjs|no-underscore-dangle|2",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
         // The stack probe compares V8's formatter callback identity without invoking it.
