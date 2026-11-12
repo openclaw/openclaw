@@ -1690,7 +1690,7 @@ const startupEnglish = {
     codeBlock: {},
     workspaceConflict: {},
     compaction: {
-      savedTokens: "saved {count} tokens",
+      savedTokensWithPercent: "saved {count} tokens ({percent}%)",
     },
     sessionReset: {
       label: "Session reset",
