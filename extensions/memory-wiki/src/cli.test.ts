@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
+import { AsyncWorkScope } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatGptImportResult, ChatGptRollbackResult } from "./chatgpt-import.js";
@@ -451,6 +452,42 @@ describe("memory-wiki cli", () => {
 
     expect(process.exitCode).toBe(1);
     expect(gatewayCall).not.toHaveBeenCalled();
+  });
+
+  it("prints no gateway status reply that lands after Ctrl+C", async () => {
+    const { config } = await createBridgeCliVault();
+    const lateStatus = createGatewayStatus(config);
+    const work = new AsyncWorkScope();
+    // The read settles only after the command scope begins closing.
+    gatewayCall.mockImplementation(async () => {
+      work.beginClose();
+      return lateStatus;
+    });
+
+    await work.run(() => runWiki(config, ["status", "--json"]));
+
+    expect(stdoutWrite).not.toHaveBeenCalled();
+  });
+
+  it("prints no gateway doctor reply that lands after Ctrl+C", async () => {
+    const { config } = await createBridgeCliVault();
+    const lateReport: MemoryWikiDoctorReport = {
+      healthy: false,
+      warningCount: 1,
+      status: createGatewayStatus(config),
+      fixes: [],
+    };
+    const work = new AsyncWorkScope();
+    // The read settles only after the command scope begins closing.
+    gatewayCall.mockImplementation(async () => {
+      work.beginClose();
+      return lateReport;
+    });
+
+    await work.run(() => runWiki(config, ["doctor", "--json"]));
+
+    expect(stdoutWrite).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("sanitizes gateway status text output without changing JSON output", async () => {

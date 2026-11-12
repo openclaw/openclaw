@@ -1,15 +1,11 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
-import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  isRecord,
-  normalizeStringEntries,
-  uniqueStrings,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText, terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
@@ -20,6 +16,7 @@ import {
   type ChatGptImportResult,
   type ChatGptRollbackResult,
 } from "./chatgpt-import.js";
+import { callWikiGateway } from "./cli-gateway.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
   resolveMemoryWikiAgentConfig,
@@ -52,11 +49,7 @@ import {
 } from "./status.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-const WIKI_GATEWAY_TIMEOUT_MS = "30000";
 const GATEWAY_TERMINAL_STRING_MAX_CHARS = 2_000;
-const GATEWAY_RESPONSE_MAX_ARRAY_ITEMS = 10_000;
-const GATEWAY_RESPONSE_MAX_STRING_CHARS = 10_000;
-const GATEWAY_RESPONSE_MAX_CODE_CHARS = 256;
 const ANSI_ESCAPE_SEQUENCE_PATTERN = new RegExp(
   String.raw`(?:\x1B\[[0-?]*[ -/]*[@-~]|\x1B[@-Z\\-_]|\x9B[0-?]*[ -/]*[@-~])`,
   "g",
@@ -144,135 +137,6 @@ function shouldRouteBridgeRuntimeThroughGateway(config: ResolvedMemoryWikiConfig
   return (
     config.vaultMode === "bridge" && config.bridge.enabled && config.bridge.readMemoryArtifacts
   );
-}
-
-function isBoundedGatewayString(
-  value: unknown,
-  maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
-): value is string {
-  return typeof value === "string" && value.length <= maxChars;
-}
-
-function isBoundedGatewayStringArray(
-  value: unknown,
-  maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
-): value is string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= GATEWAY_RESPONSE_MAX_ARRAY_ITEMS &&
-    value.every((item) => isBoundedGatewayString(item, maxChars))
-  );
-}
-
-function hasNumberFields(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  return keys.every((key) => typeof value[key] === "number");
-}
-
-function isWarningList(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.length <= GATEWAY_RESPONSE_MAX_ARRAY_ITEMS &&
-    value.every(
-      (item) =>
-        isRecord(item) &&
-        isBoundedGatewayString(item.code, GATEWAY_RESPONSE_MAX_CODE_CHARS) &&
-        isBoundedGatewayString(item.message),
-    )
-  );
-}
-
-function isMemoryWikiStatus(value: unknown): value is MemoryWikiStatus {
-  if (!isRecord(value)) {
-    return false;
-  }
-  const bridge = value.bridge;
-  const obsidianCli = value.obsidianCli;
-  const unsafeLocal = value.unsafeLocal;
-  const pageCounts = value.pageCounts;
-  const sourceCounts = value.sourceCounts;
-  return (
-    isBoundedGatewayString(value.vaultScope, GATEWAY_RESPONSE_MAX_CODE_CHARS) &&
-    (isBoundedGatewayString(value.agentId, GATEWAY_RESPONSE_MAX_CODE_CHARS) ||
-      value.agentId === null) &&
-    isBoundedGatewayString(value.vaultMode, GATEWAY_RESPONSE_MAX_CODE_CHARS) &&
-    isBoundedGatewayString(value.renderMode, GATEWAY_RESPONSE_MAX_CODE_CHARS) &&
-    isBoundedGatewayString(value.vaultPath) &&
-    typeof value.vaultExists === "boolean" &&
-    (typeof value.bridgePublicArtifactCount === "number" ||
-      value.bridgePublicArtifactCount === null) &&
-    isRecord(bridge) &&
-    typeof bridge.enabled === "boolean" &&
-    isRecord(obsidianCli) &&
-    typeof obsidianCli.enabled === "boolean" &&
-    typeof obsidianCli.requested === "boolean" &&
-    typeof obsidianCli.available === "boolean" &&
-    (isBoundedGatewayString(obsidianCli.command) || obsidianCli.command === null) &&
-    isRecord(unsafeLocal) &&
-    typeof unsafeLocal.allowPrivateMemoryCoreAccess === "boolean" &&
-    typeof unsafeLocal.pathCount === "number" &&
-    isRecord(pageCounts) &&
-    hasNumberFields(pageCounts, ["source", "entity", "concept", "synthesis", "report"]) &&
-    isRecord(sourceCounts) &&
-    hasNumberFields(sourceCounts, ["native", "bridge", "bridgeEvents", "unsafeLocal", "other"]) &&
-    isWarningList(value.warnings)
-  );
-}
-
-function isMemoryWikiDoctorReport(value: unknown): value is MemoryWikiDoctorReport {
-  return (
-    isRecord(value) &&
-    typeof value.healthy === "boolean" &&
-    typeof value.warningCount === "number" &&
-    isMemoryWikiStatus(value.status) &&
-    isWarningList(value.fixes)
-  );
-}
-
-function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSourceSyncResult {
-  return (
-    isRecord(value) &&
-    hasNumberFields(value, [
-      "importedCount",
-      "updatedCount",
-      "skippedCount",
-      "removedCount",
-      "artifactCount",
-      "workspaces",
-    ]) &&
-    isBoundedGatewayStringArray(value.pagePaths) &&
-    typeof value.indexesRefreshed === "boolean" &&
-    isBoundedGatewayStringArray(value.indexUpdatedFiles) &&
-    isBoundedGatewayString(value.indexRefreshReason, GATEWAY_RESPONSE_MAX_CODE_CHARS)
-  );
-}
-
-async function callWikiGateway(method: "wiki.status", agentId?: string): Promise<MemoryWikiStatus>;
-async function callWikiGateway(
-  method: "wiki.doctor",
-  agentId?: string,
-): Promise<MemoryWikiDoctorReport>;
-async function callWikiGateway(
-  method: "wiki.bridge.import",
-  agentId?: string,
-): Promise<MemoryWikiImportedSourceSyncResult>;
-async function callWikiGateway(
-  method: "wiki.status" | "wiki.doctor" | "wiki.bridge.import",
-  agentId?: string,
-) {
-  const result = await callGatewayFromCli(
-    method,
-    { timeout: WIKI_GATEWAY_TIMEOUT_MS },
-    agentId ? { agentId } : undefined,
-    { progress: false },
-  );
-  if (
-    (method === "wiki.status" && isMemoryWikiStatus(result)) ||
-    (method === "wiki.doctor" && isMemoryWikiDoctorReport(result)) ||
-    (method === "wiki.bridge.import" && isMemoryWikiImportResult(result))
-  ) {
-    return result;
-  }
-  throw new Error(`Invalid Gateway response for ${method}.`);
 }
 
 function normalizeCliStringList(values?: string[]): string[] | undefined {
@@ -429,6 +293,8 @@ async function runWikiStatus(params: {
   doctor?: boolean;
 }) {
   const routeThroughGateway = shouldRouteBridgeRuntimeThroughGateway(params.config);
+  // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
+  const signal = getAsyncWorkSignal();
   let localStatus: MemoryWikiStatus | undefined;
   if (!routeThroughGateway) {
     await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
@@ -436,16 +302,36 @@ async function runWikiStatus(params: {
   }
   const format = routeThroughGateway ? formatGatewayJsonOrText : formatJsonOrText;
   if (params.doctor) {
-    const report = localStatus
-      ? buildMemoryWikiDoctorReport(localStatus)
-      : await callWikiGateway("wiki.doctor", params.agentId);
+    let report: MemoryWikiDoctorReport | undefined;
+    try {
+      report = localStatus
+        ? buildMemoryWikiDoctorReport(localStatus)
+        : await callWikiGateway("wiki.doctor", params.agentId, signal);
+    } catch (error) {
+      if (!signal?.aborted) {
+        throw error;
+      }
+    }
+    if (!report || signal?.aborted) {
+      return report;
+    }
     if (!report.healthy) {
       process.exitCode = 1;
     }
     writeOutput(format(report, params.json, renderMemoryWikiDoctor));
     return report;
   }
-  const status = localStatus ?? (await callWikiGateway("wiki.status", params.agentId));
+  let status = localStatus;
+  try {
+    status = localStatus ?? (await callWikiGateway("wiki.status", params.agentId, signal));
+  } catch (error) {
+    if (!signal?.aborted) {
+      throw error;
+    }
+  }
+  if (!status || signal?.aborted) {
+    return status;
+  }
   writeOutput(format(status, params.json, renderMemoryWikiStatus));
   return status;
 }
@@ -849,4 +735,3 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     }
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
