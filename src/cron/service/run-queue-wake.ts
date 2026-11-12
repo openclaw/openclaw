@@ -2,13 +2,14 @@ import type { CronServiceState } from "./state.js";
 
 const pendingQueues = new Map<CronServiceState, () => Promise<void>>();
 const queueTurns = new Map<CronServiceState, Set<() => void>>();
-const schedulers = new Map<CronServiceState, () => void>();
+const schedulers = new Map<CronServiceState, { refresh: () => void; drain: () => Promise<void> }>();
 
 export function registerCronSchedulerRefresh(
   state: CronServiceState,
   refresh: () => void,
+  drain: () => Promise<void>,
 ): () => void {
-  schedulers.set(state, refresh);
+  schedulers.set(state, { refresh, drain });
   return () => {
     schedulers.delete(state);
   };
@@ -30,14 +31,19 @@ export function listCronRunQueueOwners(state: CronServiceState): CronServiceStat
 
 export function wakeCronRunQueues(state: CronServiceState): void {
   const storeKey = state.deps.storeKey;
-  for (const owner of queueTurns.keys()) {
-    if (owner.deps.storeKey === storeKey) {
-      notifyCronRunQueueTurn(owner);
-    }
-  }
-  for (const [owner, refresh] of schedulers) {
+  // A handed-over owner no longer drains, so its slot waiters need the replacement's drain.
+  const handedOverWaiting = [...queueTurns.keys()].some(
+    (owner) => owner.handedOver && owner.deps.storeKey === storeKey,
+  );
+  notifyCronRunQueueTurn(state);
+  for (const [owner, { refresh, drain }] of schedulers) {
     if (owner.deps.storeKey === storeKey) {
       refresh();
+      if (handedOverWaiting && !pendingQueues.has(owner)) {
+        void drain().catch((error: unknown) =>
+          owner.deps.log.warn({ err: String(error) }, "cron: queue drain delayed"),
+        );
+      }
     }
   }
   for (const [owner, drain] of pendingQueues) {
@@ -78,9 +84,14 @@ export function awaitCronRunQueueTurn(
   return { turn, cancel };
 }
 
+/** Wakes slot waiters of every owner on this store: a reload's replacement hands them slots. */
 export function notifyCronRunQueueTurn(state: CronServiceState): void {
-  // Each waiter removes itself from the set as it settles.
-  for (const settle of queueTurns.get(state) ?? []) {
-    settle();
+  for (const [owner, waiters] of queueTurns) {
+    if (owner.deps.storeKey === state.deps.storeKey) {
+      // Each waiter removes itself from the set as it settles.
+      for (const settle of waiters) {
+        settle();
+      }
+    }
   }
 }

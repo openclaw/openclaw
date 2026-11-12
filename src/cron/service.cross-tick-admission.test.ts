@@ -6,7 +6,7 @@ import * as work from "../process/gateway-work-admission.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
-import { start, stop } from "./service/ops-lifecycle.js";
+import { handOver, start, stop } from "./service/ops-lifecycle.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
 import { startCronScheduler } from "./service/scheduler-actor.js";
 import { captureCronSchedulerWakeForTest } from "./service/scheduler-actor.test-support.js";
@@ -347,5 +347,66 @@ it("checks conditions while every run slot is busy and runs a fired payload when
     finish.resolve();
     await waitForCronRunQueue(state);
     stop(state);
+  }
+});
+
+it.each([
+  ["a cron config reload keeps", true],
+  ["a stop ends", false],
+])("%s a fired condition's wait for a run slot", async (_name, reload) => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const longs = Array.from({ length: 8 }, (_, index) => dueJob(`long-${index}`, nowMs, dueAtMs));
+  const watcher = Object.assign(dueJob("fires", nowMs, dueAtMs), {
+    schedule: { kind: "every" as const, everyMs: 300_000, anchorMs: dueAtMs },
+    trigger: { script: "return { fire: true }" },
+  });
+  const store = await seedJobs([...longs, watcher]);
+  const release = createDeferred();
+  const finish = createDeferred();
+  const started: string[] = [];
+  const deps = {
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    cronConfig: { triggers: { enabled: true } },
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      if (job.id.startsWith("long-")) {
+        await (job.id === "long-0" ? release : finish).promise;
+      }
+      return { status: "ok" as const, summary: job.id };
+    },
+    evaluateCronTrigger: async () => ({ kind: "evaluated" as const, fire: true }),
+  };
+  const state = cron.createCronRegressionState(deps);
+  const replacement = cron.createCronRegressionState(deps);
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(async () =>
+      expect(
+        (await loadCronStore(store.storePath)).jobs.find((job) => job.id === "fires")?.state
+          .runSlotWaitReceiptId,
+      ).toEqual(expect.any(String)),
+    );
+
+    // After a reload the replacement hands the waiting payload a slot once one frees.
+    if (reload) {
+      handOver(state);
+      await start(replacement);
+    } else {
+      stop(state);
+    }
+    release.resolve();
+    finish.resolve();
+    await waitForCronRunQueue(state);
+    expect(started.includes("fires")).toBe(reload);
+  } finally {
+    release.resolve();
+    finish.resolve();
+    await waitForCronRunQueue(state);
+    stop(state);
+    stop(replacement);
   }
 });

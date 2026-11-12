@@ -339,7 +339,8 @@ A scheduled check does not use one of the scheduler's eight run slots, so checks
 running while eight long runs are active. Only the payload of a fired condition needs a
 run slot. If a condition fires while all eight are busy, the run waits for a free slot and
 then runs its payload on the result of that one check; the wait does not count against
-the run's time budget. Freed slots go to waiting payloads and queued runs in due-time
+the run's time budget. A cron config change keeps the wait; a Gateway stop or restart
+ends it without running the payload. Freed slots go to waiting payloads and queued runs in due-time
 order, so a run due before the condition's check still starts first. A check started by a manual or stream
 run, and the check of a job with a script payload, takes a run slot first.
 

@@ -57,12 +57,15 @@ export type CronLaunchContext = {
 async function takeRunSlot(
   state: CronServiceState,
   run: CronQueuedRun,
-  context: OpenClawStateWorkerContext,
+  pending: CronLaunchContext,
   wait: ConditionFiredWait,
 ): Promise<ConditionFiredRunSlot> {
-  const signal = AbortSignal.any(
-    [state.schedulerScope.signal, wait.signal].filter((source) => source !== undefined),
-  );
+  const { context } = pending;
+  const signal = wait.signal ?? new AbortController().signal;
+  // A stop ends the wait. A reload handover does not: like runs already executing here, the
+  // payload goes on, and the replacement's drain hands it the slot.
+  const ended = () =>
+    signal.aborted || (state.lifecycleGeneration !== pending.generation && !state.handedOver);
   const settle = async () => {
     const { job, runSlot, stale } = await runOpenClawStateWorkerOperation(context, (scope) =>
       scope.execute({
@@ -85,7 +88,7 @@ async function takeRunSlot(
   let next: ReturnType<typeof awaitCronRunQueueTurn> | undefined;
   let waited = false;
   try {
-    while (!signal.aborted) {
+    while (!ended()) {
       // Registered before asking, so a slot handed out in between still wakes this run.
       next = awaitCronRunQueueTurn(state, signal);
       const answer = await settle().catch((error: unknown) => {
@@ -251,7 +254,7 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
-      onConditionFired: (wait) => takeRunSlot(state, entry, pending.context, wait),
+      onConditionFired: (wait) => takeRunSlot(state, entry, pending, wait),
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(
