@@ -187,3 +187,42 @@ it("retains a configured offline sender when its live action descriptor is empty
     ),
   ).toBe(true);
 });
+
+it("retains unbound configured senders when the bound channel has no route", async () => {
+  const cfg: OpenClawConfig = {
+    ...config,
+    bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+    channels: { telegram: { enabled: false }, signal: { enabled: true } },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  const sendText = vi.fn(async () => ({
+    channel: "signal" as const,
+    messageId: "unbound-receipt",
+  }));
+  const signal = {
+    ...createChannelTestPluginBase({ id: "signal", config: { isConfigured: () => true } }),
+    outbound: { deliveryMode: "direct" as const, sendText },
+  };
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: createChannelTestPluginBase({ id: "telegram" }),
+      },
+      { pluginId: "signal", source: "test", plugin: signal },
+    ]),
+  );
+  const tool = createOpenClawTools({ config: cfg, agentSessionKey: sessionKey }).find(
+    (candidate) => candidate.name === "message",
+  );
+  expect(tool).toBeDefined();
+  const result = await tool!.execute("unbound-send", {
+    action: "send",
+    channel: "signal",
+    target: "+15550000001",
+    message: "Unbound synthetic route",
+  });
+  expect(sendText).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(result)).toContain("unbound-receipt");
+});

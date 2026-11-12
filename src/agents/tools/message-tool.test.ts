@@ -1352,8 +1352,9 @@ it.each<{
 });
 
 it("keeps the tool definition stable through createOpenClawTools", () => {
+  registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
   const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
-    createOpenClawTools({ config: {}, sourceReplyDeliveryMode }).find(
+    createOpenClawTools({ config: {}, agentChannel: "slack", sourceReplyDeliveryMode }).find(
       (candidate) => candidate.name === "message",
     ),
   );

@@ -22,6 +22,7 @@ const { values: args } = parseArgs({
     state: { type: "string" },
     out: { type: "string" },
     route: { type: "string", default: "internal" },
+    "unbound-sender": { type: "boolean" },
     stage: { type: "string" },
     worker: { type: "boolean" },
     help: { type: "boolean" },
@@ -382,6 +383,10 @@ async function main() {
       'import fs from "node:fs";export default {id:"fixture-message",register(api){api.registerChannel({plugin:{id:"fixture-message",meta:{id:"fixture-message",label:"Synthetic outbound",selectionLabel:"Synthetic outbound",docsPath:"/channels/fixture",blurb:"Synthetic fixture"},capabilities:{chatTypes:["direct"]},config:{listAccountIds:()=>["default"],resolveAccount:()=>({enabled:true}),isConfigured:()=>true},messaging:{normalizeTarget:x=>x==="synthetic-recipient"?x:undefined,targetResolver:{looksLikeId:x=>x==="synthetic-recipient"}},outbound:{deliveryMode:"direct",resolveTarget:({to})=>({ok:true,to}),sendText:async()=>{fs.appendFileSync(process.env.MATRIX_RECEIPT_PATH,JSON.stringify({messageId:"synthetic-receipt"})+String.fromCharCode(10));return{channel:"fixture-message",messageId:"synthetic-receipt"}}}}})}};',
     );
     config.channels = { "fixture-message": { enabled: true } };
+    if (args["unbound-sender"]) {
+      config.bindings = [{ agentId: "main", match: { channel: "telegram" } }];
+      config.channels.telegram = { enabled: false };
+    }
     config.plugins = {
       allow: ["fixture-message"],
       slots: { memory: "none" },
@@ -398,10 +403,11 @@ async function main() {
     const output = path.join(out, stage);
     await fs.mkdir(output);
     let requests = 0;
+    let requestError;
     const server = http.createServer((req, res) => {
       const chunks = [];
       req.on("data", (data) => chunks.push(data));
-      req.on("end", async () => {
+      const respond = async () => {
         const raw = Buffer.concat(chunks);
         const n = ++requests;
         await fs.writeFile(path.join(output, "request-" + n + ".json"), raw);
@@ -448,7 +454,11 @@ async function main() {
             calls.push({ name: "message", input });
           }
         }
-        if (n === 1 && route === "configured") {
+        if (
+          n === 1 &&
+          route === "configured" &&
+          request.tools.some((tool) => tool.name === "message")
+        ) {
           calls.push({
             name: "message",
             input: {
@@ -490,6 +500,12 @@ async function main() {
         });
         event("message_stop", { type: "message_stop" });
         res.end();
+      };
+      req.on("end", () => {
+        void respond().catch((/** @type {unknown} */ error) => {
+          requestError = error;
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        });
       });
     });
     await new Promise((resolve, reject) => {
@@ -549,6 +565,7 @@ async function main() {
         server.close(resolve);
       });
     }
+    assert.equal(requestError, undefined, "Synthetic provider response failed");
     assert.equal(requests, 2, "Expected inventory/controls, then final response");
     rows.push(await summarize(output, stage, requests));
   }
