@@ -1085,7 +1085,8 @@ export function wrapReadToolWithSkillContent(
           : tool;
       // Instructions that fit are served whole, ignoring stray paging arguments. Larger
       // ones page through the normal read continuation, whose notice fits the budget.
-      const { offset, limit, cursor, ...instructionArgs } = { ...record, path: normalizedPath };
+      const readArgs: Record<string, unknown> = { ...record, path: normalizedPath };
+      const { offset, limit, cursor, ...instructionArgs } = readArgs;
       try {
         const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
         const details = result.details;
@@ -1093,9 +1094,7 @@ export function wrapReadToolWithSkillContent(
         if (detailsKind === "truncated") {
           resetDelivery();
           const windowed = offset !== undefined || limit !== undefined || cursor !== undefined;
-          return windowed
-            ? await instructionTool.execute(toolCallId, { ...record, path: normalizedPath }, signal)
-            : result;
+          return windowed ? await instructionTool.execute(toolCallId, readArgs, signal) : result;
         }
         if (detailsKind !== "text") {
           resetDelivery();
