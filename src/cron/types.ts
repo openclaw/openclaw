@@ -259,7 +259,6 @@ export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
   state?: unknown;
-  busy?: true;
 };
 
 export type CronJobExecutionResult = CronRunOutcome &

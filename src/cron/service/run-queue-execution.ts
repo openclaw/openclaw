@@ -242,8 +242,7 @@ export async function launchCronRun(
     });
   }
   options.onTriggerDisposition?.(
-    result.triggerEval?.busy ||
-      (hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy")
+    hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy"
       ? "busy"
       : result.status === "error"
         ? "error"
