@@ -921,6 +921,8 @@ src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
 src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
+src/gateway/openclaw-id/tunnel-principal.ts
+src/gateway/operator-run-recovery-source.codec.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
 src/gateway/worker-environments/desktop-endpoint.ts
@@ -1202,6 +1204,7 @@ src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/resolve-system-bin.ts
 src/infra/restart-stale-pids.ts
+src/infra/restart-recovery-errors.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
@@ -2214,6 +2217,7 @@ src/state/openclaw-state-db-schema-v36-template-names.ts
 src/state/openclaw-state-db-schema-v37-resource-receipts.ts
 src/state/openclaw-state-db-schema-v38-repository-disk.ts
 src/state/openclaw-state-db-schema-v39-worker-retention.ts
+src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
 src/state/openclaw-state-db-schema-v40-lazy-additions.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
@@ -2971,3 +2975,4 @@ src/agents/sessions/context-token-pressure.ts
 src/config/sessions/session-context-seed.ts
 src/agents/code-mode-session-store-replay.ts
 src/config/sessions/session-transcript-maintenance-suffix.ts
+src/state/user-channel-authorization-reference.ts

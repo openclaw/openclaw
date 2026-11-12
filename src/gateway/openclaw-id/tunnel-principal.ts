@@ -10,6 +10,7 @@ import type { NodeDescription } from "../../../packages/openclaw-id-protocol/src
 //   member's OpenClaw ID role (operator or viewer).
 // While OpenClaw ID is off no resolver is published and nothing here runs.
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import {
   APPROVALS_SCOPE,
@@ -263,7 +264,7 @@ export async function prepareOpenClawIdTunnelPrincipal(
 ): Promise<void> {
   await prepareLookup?.();
   if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-    throw new Error("OpenClaw ID membership authority changed");
+    throw new GatewayOperatorRecoveryAuthorizationError("OpenClaw ID membership authority changed");
   }
 }
 

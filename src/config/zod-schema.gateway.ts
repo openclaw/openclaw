@@ -389,6 +389,17 @@ export const GatewayConfigSchema = z
                   .refine(isAbsolute, "Expected an absolute credential file path"),
               })
               .optional(),
+            /** Optional organization commit credit, supplied only by the authenticated proxy. */
+            gitCoauthor: z
+              .strictObject({
+                nameHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailVerifiedHeader: z
+                  .string()
+                  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+                  .optional(),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({

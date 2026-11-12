@@ -440,18 +440,8 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       subagentsPanel[name] = panelCopy[name];
     }
   }
-  const continueInTerminal: TranslationMap = {};
-  for (const [key, value] of Object.entries(
-    registerChatSessionEnglish.catalog.chat.sessionHeader.continueInTerminal,
-  )) {
-    continueInTerminal[key] = value;
-    if (key === "action") {
-      Object.assign(
-        continueInTerminal,
-        registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.continueInTerminal,
-      );
-    }
-  }
+  const continueInTerminal =
+    registerChatSessionOptionalEnglish.catalog.chat.sessionHeader.continueInTerminal;
   const toolCards: TranslationMap = {};
   const toolContent = registerChatToolContentEnglish.catalog.chat.toolCards;
   for (const [key, value] of Object.entries(registerChatToolLabelsEnglish.catalog.chat.toolCards)) {
@@ -585,10 +575,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sessionDetails,
         sessionSharing,
         subagentsPanel,
-        sessionHeader: {
-          ...registerChatSessionEnglish.catalog.chat.sessionHeader,
-          continueInTerminal,
-        },
+        sessionHeader: Object.fromEntries(
+          Object.entries(registerChatSessionEnglish.catalog.chat.sessionHeader).map(
+            ([key, value]) => [key, key === "continueInTerminal" ? continueInTerminal : value],
+          ),
+        ),
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,

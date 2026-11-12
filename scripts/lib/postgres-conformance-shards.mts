@@ -36,6 +36,7 @@ const postgresConformanceTargets = [
   "src/infra/update-candidate-state.postgres.test.ts",
   "src/infra/update-managed-service-handoff-engine.test.ts",
   "src/snapshot/postgres-generation.postgres.test.ts",
+  "src/state/openclaw-worker-provision-source-migration.postgres.test.ts",
   "src/state/openclaw-state-db.postgres.test.ts",
   "src/state/openclaw-state-db-open.postgres.test.ts",
   "src/state/openclaw-agent-active-event-facts-migration.postgres.test.ts",

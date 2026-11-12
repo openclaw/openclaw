@@ -177,6 +177,11 @@ it.each([
     () => import("../pages/chat/components/chat-subagents-mobile.tsx"),
   ],
   [
+    "chat.sessionHeader.continueInTerminal.action",
+    "Continue in terminal…",
+    () => import("../pages/chat/components/chat-header-session-menu-content.tsx"),
+  ],
+  [
     "chat.sessionHeader.continueInTerminal.title",
     "Continue in terminal",
     () => import("../pages/chat/components/continue-in-terminal-dialog.tsx"),
@@ -200,14 +205,13 @@ it.each([
       "chat.sessionDetails.contextProject",
     );
     expect(manager.t("chat.sessionDiff.modeUnified")).toBe("chat.sessionDiff.modeUnified");
-  } else {
+  } else if (key !== "chat.sessionHeader.continueInTerminal.action") {
     expect(manager.t("chat.sessionSharing.copyPublicLink")).toBe(
       "chat.sessionSharing.copyPublicLink",
     );
   }
   expect(manager.t("chat.sessionSharing.publicIndicator")).toBe("Public");
   expect(manager.t("chat.subagentsPanel.stop", { name: "Build" })).toBe("Stop Build");
-  expect(manager.t("chat.sessionHeader.continueInTerminal.action")).toBe("Continue in terminal…");
   expect(manager.t("common.health")).toBe("Gesundheit");
   expect(manager.getLocale()).toBe("de");
   expect(en.chat.sessionSharing).toBe(sharing);

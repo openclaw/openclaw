@@ -166,6 +166,7 @@ export function dispatchNativeSessionShortcut(element: HTMLElement, key: "[" | "
 
 /** Validate native routes before acknowledging them; unknown routes retain native fallback. */
 export function nativeNavigationTarget(event: Event, basePath: string) {
+  // SAFETY: DashboardWindowController dispatches a CustomEvent; payloads are validated below.
   const detail = (event as CustomEvent<{ path?: unknown; search?: unknown }>).detail;
   const path = detail?.path;
   const schemeCandidate = typeof path === "string" ? path.slice(1) : "";

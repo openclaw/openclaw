@@ -108,14 +108,7 @@ const enChatSession = {
       subagentsRunning: "Subagents · {count} running",
       layout: "Layout",
       panels: "Panels",
-      continueInTerminal: {
-        action: "Continue in terminal…",
-        disconnected: "Reconnect to continue in a terminal.",
-        queryRouted:
-          "This Gateway address can’t open a terminal. Use the CLI or a Gateway address without a query string.",
-        unavailable:
-          "This session can’t continue in a terminal. Check the session and Gateway address.",
-      },
+      continueInTerminal: {},
       workspaceAria: "Workspace actions for {workspace}",
       revealFinder: "Reveal in Finder",
       revealFileExplorer: "Reveal in File Explorer",

@@ -1412,6 +1412,112 @@
   }
 }
 
+/* Command rows keep their own layout without changing the other completion menus. */
+.slash-menu--commands {
+  --slash-menu-row-gap: 10px;
+  --skeleton-animation: none;
+
+  .slash-menu__scroll {
+    scrollbar-width: none;
+  }
+
+  .oc-menu-heading {
+    min-height: 26px;
+    padding-inline: 10px;
+  }
+
+  .oc-menu-heading__label {
+    font-size: var(--control-ui-text-sm);
+    font-weight: var(--control-ui-font-weight-semibold);
+    line-height: 1.55;
+    letter-spacing: normal;
+    text-transform: none;
+  }
+
+  .slash-menu-item {
+    display: flex;
+    gap: var(--slash-menu-row-gap);
+    min-height: 36px;
+    padding: 0 10px;
+    font-family: var(--font-body);
+    font-size: calc(13px * var(--control-ui-text-scale));
+    line-height: 1.3;
+    white-space: nowrap;
+  }
+
+  .slash-menu-copy {
+    display: contents;
+  }
+
+  .slash-menu-icon {
+    flex: none;
+  }
+
+  .slash-menu-icon .session-css-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  .slash-menu-name {
+    flex: 0 0 auto;
+    min-width: 0;
+    max-width: 70%;
+    font-size: inherit;
+  }
+
+  .slash-menu-desc {
+    flex: 1 1 0;
+    font-size: inherit;
+    text-align: start;
+  }
+
+  .slash-menu-trail {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    padding-left: 8px;
+  }
+
+  .slash-menu-value {
+    color: var(--muted);
+  }
+
+  .slash-menu-item--current {
+    background: var(--surface-hover);
+  }
+
+  .slash-menu-chevron {
+    width: 14px;
+    height: 14px;
+    color: color-mix(in oklab, var(--muted) 70%, var(--chat-composer-surface));
+  }
+
+  [aria-busy="true"] .slash-menu-trail {
+    visibility: hidden;
+  }
+
+  .slash-menu-icon .skeleton {
+    border-radius: 5px;
+  }
+
+  .slash-menu-name .skeleton,
+  .slash-menu-desc .skeleton {
+    border-radius: 6px;
+  }
+}
+
+.slash-menu--args .slash-menu-name {
+  max-width: none;
+}
+
+@media (max-width: 640px) {
+  .slash-menu--commands {
+    --slash-menu-row-gap: 8px;
+  }
+}
+
 .chat-attachments-preview {
   /* Ease across most of a thumbnail and clear the frame before clipping, so a
      partially visible image does not read as a hard vertical border. */

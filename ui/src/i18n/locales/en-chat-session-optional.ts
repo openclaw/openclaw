@@ -374,11 +374,17 @@ const catalog = {
     },
     sessionHeader: {
       continueInTerminal: {
+        action: "Continue in terminal…",
         title: "Continue in terminal",
         description:
           "Copy this command to continue the current session. It is safe to paste in common terminals and shells.",
         authNote:
           "The command contains no secrets. The terminal signs in separately, and session access controls still apply.",
+        disconnected: "Reconnect to continue in a terminal.",
+        queryRouted:
+          "This Gateway address can’t open a terminal. Use the CLI or a Gateway address without a query string.",
+        unavailable:
+          "This session can’t continue in a terminal. Check the session and Gateway address.",
       },
     },
     workspaceConflict: {
