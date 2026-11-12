@@ -810,7 +810,11 @@ metadata through the worker. `statSessionEntrySync` remains available through
 only projects those values and does not query SQLite. `buildSessionEntry`
 also reads durable snapshots in the worker when an `onTranscriptMessage`
 observer is supplied, then invokes the observer on the caller with the original
-messages and timestamps.
+messages and timestamps. Because this legacy callback cannot retract observations,
+durable exports retain its original messages until each entry succeeds, discard
+abandoned attempts, and invoke the callback once per message in the successful
+snapshot. This applies to both full builders and streaming calls that supply the
+legacy observer; those calls may retain the full original message payloads.
 
 For memory indexing, use `streamSessionEntry(path, options, stream)` or
 `streamSessionEntries(inputs)` from the same SDK surface. `onPage` receives

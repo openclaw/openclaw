@@ -226,7 +226,11 @@ export type SessionEntriesWorkerInput = {
 /** The worker's acknowledged deliveries, in order, for one requested entry. */
 export type SessionEntriesWorkerUpdate =
   | { page: SessionEntryRenderedPage }
-  | { reset: true }
+  | {
+      reset: true;
+      /** Source restarts discard observations; late classification only discards rendered text. */
+      resetMessages?: true;
+    }
   | {
       value:
         | { summary: SessionEntrySummary | null; resetRecallCutoff: SessionResetRecallCutoff }

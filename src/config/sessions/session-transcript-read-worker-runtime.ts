@@ -108,14 +108,12 @@ type SessionEntriesStreamResult = Extract<SessionEntriesWorkerUpdate, { value: u
 
 /**
  * Streams a bounded group of exports through one background worker request. Each delivered page
- * and reset is acknowledged only after `deliver` settles, so neither side retains a whole export.
+ * and reset is acknowledged only after `deliver` settles. The final value settles per-entry
+ * observers before the worker advances to the next entry.
  */
 export async function streamSessionEntriesInWorker(
   entries: SessionEntriesWorkerInput["entries"],
-  deliver: (
-    index: number,
-    update: Exclude<SessionEntriesWorkerUpdate, { value: unknown }>,
-  ) => Promise<void>,
+  deliver: (index: number, update: SessionEntriesWorkerUpdate) => Promise<void>,
 ): Promise<SessionEntriesStreamResult[]> {
   const results: SessionEntriesStreamResult[] = [];
   let received = 0;
@@ -148,8 +146,14 @@ export async function streamSessionEntriesInWorker(
           if ("value" in update) {
             results[update.index] = update.value;
             received++;
+            await deliver(update.index, { value: update.value });
           } else {
-            await deliver(update.index, "page" in update ? { page: update.page } : { reset: true });
+            await deliver(
+              update.index,
+              "page" in update
+                ? { page: update.page }
+                : { reset: true, ...(update.resetMessages ? { resetMessages: true } : {}) },
+            );
           }
           return { input: undefined, timeoutMs: 60_000 };
         },

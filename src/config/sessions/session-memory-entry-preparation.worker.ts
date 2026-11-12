@@ -48,6 +48,12 @@ export async function prepareSessionMemoryEntries(
           : null,
     };
     let delivered = false;
+    const reset = async () => {
+      if (delivered) {
+        delivered = false;
+        await publish({ index, reset: true, resetMessages: true });
+      }
+    };
     const sink: SessionEntryRenderSink = {
       prefixLineCount: request.prefixLineCount,
       pageMessages: request.messages,
@@ -74,7 +80,7 @@ export async function prepareSessionMemoryEntries(
           : undefined,
       reset: async () => {
         if (delivered) {
-          delivered = false;
+          // Late classification discards rendered text, not the original observations.
           await publish({ index, reset: true });
         }
       },
@@ -135,14 +141,14 @@ export async function prepareSessionMemoryEntries(
         break;
       } catch (error) {
         if (error instanceof SessionTranscriptColdError) {
-          await sink.reset?.();
+          await reset();
           value = { cold: true };
           break;
         }
         if (!(error instanceof SessionTranscriptExportChangedError) || attempt >= MAX_EXPORT_ATTEMPTS) {
           throw error;
         }
-        await sink.reset?.();
+        await reset();
       }
     }
     await publish({ index, value });
