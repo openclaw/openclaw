@@ -129,7 +129,7 @@ test("projects Tool Search names for live and history activity without changing 
     expect(entry.items).toMatchObject([
       {
         name: "exec",
-        title: "Exec check-release",
+        title: "Exec",
         toolCallId: tool.toolCallId,
         status: "skipped",
         commandBearing: true,

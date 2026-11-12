@@ -395,6 +395,7 @@ function readClaudeToolDenials(args: readonly string[]): string[] {
 function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
+  options: { preserveSlashCommands?: boolean } = {},
 ): string[] {
   const preservedDenials = readClaudeToolDenials(baseArgs);
   const normalized = stripClaudeArgs(baseArgs, {
@@ -410,7 +411,9 @@ function resolveClaudeCliRestrictedExecutionArgs(
     "",
     CLAUDE_SETTINGS_ARG,
     CLAUDE_RESTRICTED_SETTINGS,
-    CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
+    // /compact IS a native slash command: keep the restricted tool set for
+    // cache parity, but don't disable the command being executed.
+    ...(options.preserveSlashCommands ? [] : [CLAUDE_DISABLE_SLASH_COMMANDS_ARG]),
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
     CLAUDE_TOOLS_ARG,
@@ -454,7 +457,9 @@ export function resolveClaudeCliExecutionArgs(
           context,
         );
   const resolvedArgs = context.toolAvailability
-    ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
+    ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability, {
+        preserveSlashCommands: context.controlOperation === "compact",
+      })
     : executionArgs;
   return options.excludeDynamicSystemPromptSections && context.executionMode !== "side-question"
     ? [...resolvedArgs, CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG]

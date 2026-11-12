@@ -183,6 +183,15 @@ it.each([
 });
 
 describe("resolveClaudeCliExecutionArgs", () => {
+  it("keeps slash commands enabled for compact while retaining tool restriction", () => {
+    const availability = { native: ["Read"], openClaw: [] as string[] };
+    const compact = executionArgs({ toolAvailability: availability, controlOperation: "compact" });
+    expect(compact).not.toContain("--disable-slash-commands");
+    expect(compact).toContain("--tools");
+    const turn = executionArgs({ toolAvailability: availability });
+    expect(turn).toContain("--disable-slash-commands");
+  });
+
   it.each([false, true])("layers exec policy before selecting bypass (resume=%s)", (useResume) => {
     type Exec = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
     const cases: [Exec | undefined, Exec | undefined, boolean][] = [

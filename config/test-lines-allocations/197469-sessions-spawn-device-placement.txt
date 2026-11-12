@@ -1,0 +1,5 @@
+# Regression tests for sessions_spawn placement {kind:"device"}: the paired-device target reaches
+# sessions.dispatch as {key, deviceId} and the receipt reports the device; device eligibility
+# rejects an unpaired, reconnected, or re-paired device before dispatch.
+# Exact net growth for PR #197469.
+55

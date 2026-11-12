@@ -1669,7 +1669,7 @@ it.each<{
     ],
   },
   {
-    name: "configured command truncation",
+    name: "canonical command title with truncated raw details",
     progress: { label: "Shelling", maxLineChars: 12, nativeTaskCards: true, commandText: "raw" },
     events: [
       toolStart(
