@@ -411,7 +411,13 @@ profile assignment with `role: null` remains allowed.
 
 Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
 `operator` and `viewer` presets. Existing definitions, defaults, and assignments
-are preserved. The operator preset grants read, write, approvals, questions, and
+are preserved. Installing presets rewrites the config file as JSON through the
+standard config writer and removes JSON5 comments. Startup installs them before
+publishing runtime policy, even with `gateway.reload.mode: "off"`. A saved
+activation that cannot apply at runtime is reported in OpenClaw ID service status
+with a request to restart the Gateway.
+
+The operator preset grants read, write, approvals, questions, and
 talk scopes with all agents and writable shared sessions. The viewer preset
 allows all agents and viewable shared sessions but grants only
 `operator.sessions.read`: conversation browsing, not logs, `users.list`, or general

@@ -394,7 +394,11 @@ No service URL has a production default yet; the Gateway reports
 OpenClaw ID members use their membership role's definition in
 `gateway.roles.definitions`, not a named role assigned to their Gateway profile.
 When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
-writes any missing presets without overwriting owner-edited definitions:
+writes any missing presets without overwriting owner-edited definitions. Installing
+presets uses the standard config writer: it rewrites the config file as JSON and
+removes JSON5 comments.
+
+The presets are:
 
 - `operator`: other people's sessions are writable, all agents are allowed, and
   scopes are `operator.read`, `operator.write`, `operator.approvals`,
@@ -417,7 +421,10 @@ existing behavior, including device-token-only reconnects. Existing team Gateway
 keep their default and enforcement. Owner devices and nodes are unchanged.
 A preset-write failure is logged and reported in OpenClaw ID service status;
 undefined member roles remain refused and owners retain access. Nothing is written
-while OpenClaw ID is off. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+while OpenClaw ID is off. Startup finishes installing presets before publishing
+its runtime policy, including when `gateway.reload.mode` is `"off"`. If runtime
+reload policy prevents a saved activation from applying, service status asks you
+to restart the Gateway to finish turning on member roles. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 ### Managing remote access
 

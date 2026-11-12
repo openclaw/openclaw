@@ -50,10 +50,10 @@ export function createOpenClawIdConnectionAccess(params: {
   };
 
   return {
-    /** Profile assignments cannot replace a current OpenClaw ID membership role. */
-    async isMemberProfile(profileId: string): Promise<boolean> {
+    /** Retains the selected profile through membership preparation and the role write. */
+    async prepareMemberProfileCheck(profileId: string): Promise<() => boolean> {
       if (!params.enabled()) {
-        return false;
+        return () => false;
       }
       const { prepareUserProfileRoleAuthority } =
         await import("../../state/user-channel-identity-operations.js");
@@ -62,14 +62,19 @@ export function createOpenClawIdConnectionAccess(params: {
       const profiles = await owner.memberProfiles(
         Object.keys(owner.current()?.authority?.members ?? {}),
       );
-      return (
-        params.enabled() &&
-        Object.entries(profiles).some(
-          ([accountId, profile]) =>
-            profile.id === target?.profileId &&
-            Object.hasOwn(owner.current()?.authority?.members ?? {}, accountId),
-        )
-      );
+      return () => {
+        if (target && !target.isCurrent()) {
+          throw new Error("Target profile changed; retry the role assignment.");
+        }
+        return (
+          params.enabled() &&
+          Object.entries(profiles).some(
+            ([accountId, profile]) =>
+              profile.id === target?.profileId &&
+              Object.hasOwn(owner.current()?.authority?.members ?? {}, accountId),
+          )
+        );
+      };
     },
     /** Prepares a synchronous current-owner guard for event publication. */
     prepareOwnerClientCheck,

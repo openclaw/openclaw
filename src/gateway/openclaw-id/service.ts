@@ -98,11 +98,14 @@ export function createOpenClawIdService(params: {
   /** The Gateway's primary HTTP listener; relayed requests are handed to it. */
   getGatewayServer: () => HttpServer | undefined;
   log: OpenClawIdLogger;
+  /** Startup's already-reconciled activation owner, including any write failure. */
+  memberRolePresets?: ReturnType<typeof createMemberRolePresetActivation>;
   /** Test seam for the persisted authority. */
   createAuthority?: () => Promise<OpenClawIdAuthority>;
 }) {
   let status: OpenClawIdStatus = { state: "off" };
-  const memberRolePresets = createMemberRolePresetActivation(params.log);
+  const memberRolePresets =
+    params.memberRolePresets ?? createMemberRolePresetActivation(params.log);
   let appliedKey: string | undefined;
   let runtime: TunnelRuntime | undefined;
   let authority: OpenClawIdAuthority | undefined;
@@ -682,11 +685,9 @@ export function createOpenClawIdService(params: {
       queue = queue.then(reconcile, reconcile);
       return queue;
     },
+    observeConfigApplication: memberRolePresets.observeConfigApplication,
     /** Current status; never touches the network. */
-    status(): OpenClawIdStatus {
-      const reason = memberRolePresets.error();
-      return reason && status.state !== "off" ? { state: "failed", reason } : status;
-    },
+    status: () => memberRolePresets.status(status),
 
     /**
      * What any admitted client may read about the link: whether the claw is linked,

@@ -705,8 +705,8 @@ it("requires gateway.roles.default to assign a named role from definitions alone
 });
 
 it("refuses assigning a member profile's role outside Access but permits clearing", async () => {
-  const isMemberProfile = vi.fn(async () => true);
-  const context = { ...roleConfig, openclawIdService: { isMemberProfile } };
+  const prepareMemberProfileCheck = vi.fn(async () => () => true);
+  const context = { ...roleConfig, openclawIdService: { prepareMemberProfileCheck } };
   const refused = await runUsersHandler(
     "users.setRole",
     { profileId: profile.id, role: "guest" },

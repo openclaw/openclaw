@@ -1,3 +1,4 @@
 # Member-definition authority across transport admission, retained/recovered work,
-# required access-policy plugins, and real Gateway activation/reload persistence.
-634
+# required access-policy plugins, real Gateway activation/reload persistence,
+# delayed startup/reload-off activation, and canonical profile-merge write guards.
+905

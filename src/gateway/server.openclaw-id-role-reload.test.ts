@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import http, { type IncomingMessage } from "node:http";
 import { expect, it, vi } from "vitest";
 import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
@@ -8,6 +9,10 @@ import {
 import { withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import {
+  getRuntimeConfigSnapshot,
+  hasManagedRuntimeConfigWriteOwner,
+} from "../config/runtime-snapshot.js";
+import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
@@ -17,8 +22,10 @@ import { getFreePort } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
+import * as presetActivation from "./openclaw-id/member-role-presets.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { isOpenClawIdTunnelPrincipalAdmitted } from "./openclaw-id/tunnel-principal.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
@@ -163,6 +170,108 @@ it("activates presets without breaking device-token reconnect, and reloads a mem
     }
     await server?.close();
     intercepted.mockRestore();
+    await state.cleanup();
+  }
+});
+
+it("orders delayed startup presets before live policy and reports reload-off activation", async ({
+  signal,
+}) => {
+  const state = await createOpenClawTestState(
+    kernelGatewayTestStateOptions("member-role-startup-off"),
+  );
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const createActivation = presetActivation.createMemberRolePresetActivation;
+  const delayed = vi
+    .spyOn(presetActivation, "createMemberRolePresetActivation")
+    .mockImplementation((log) => {
+      const activation = createActivation(log);
+      return {
+        ...activation,
+        async reconcile(enabled) {
+          if (enabled) {
+            entered.resolve();
+            await release.promise;
+          }
+          return activation.reconcile(enabled);
+        },
+      };
+    });
+  let starting: ReturnType<typeof startGatewayServerCore> | undefined;
+  let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
+  let owner: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+  const apply = async (config: OpenClawConfig) => {
+    const application = createRuntimeConfigWriteApplication();
+    await writeConfigFile(config, attachRuntimeConfigWriteApplication({}, application));
+    return withinTest(application.result, signal);
+  };
+  try {
+    const port = await getFreePort();
+    const token = "member-role-startup-test-token";
+    await state.writeConfig({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "token", token },
+        reload: { mode: "off" },
+        openclawId: { enabled: true },
+      },
+    });
+    starting = startGatewayServerCore(port, { bind: "loopback", controlUiEnabled: false });
+    await withinTest(entered.promise, signal);
+    const publishedBeforePresets = getRuntimeConfigSnapshot()?.gateway?.openclawId?.enabled;
+    const managedBeforePresets = hasManagedRuntimeConfigWriteOwner(state.configPath);
+    release.resolve();
+    server = await starting;
+    expect(publishedBeforePresets).not.toBe(true);
+    expect(managedBeforePresets).toBe(false);
+    expect(getRuntimeConfig().gateway?.roles).toEqual({ definitions: MEMBER_ROLE_PRESETS });
+    expect(
+      JSON.parse(await fs.readFile(state.configPath, "utf8")).gateway.roles.definitions,
+    ).toEqual(MEMBER_ROLE_PRESETS);
+    expect(
+      isOpenClawIdTunnelPrincipalAdmitted({
+        kind: "member",
+        peerKey: `iroh:${"ab".repeat(32)}`,
+        accountId: "existing",
+        role: "operator",
+      }),
+    ).toBe(true);
+    owner = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token,
+      scopes: ["operator.admin"],
+      signal,
+    });
+    const config = structuredClone(getRuntimeConfig());
+    config.gateway!.openclawId = { enabled: false };
+    config.gateway!.reload = { mode: "hybrid" };
+    expect(await apply(config)).toBe("applied");
+    const disabled = structuredClone(getRuntimeConfig());
+    expect(
+      await apply({
+        ...disabled,
+        gateway: { ...disabled.gateway, reload: { mode: "off" }, openclawId: { enabled: true } },
+      }),
+    ).toBe("failed");
+    expect(getRuntimeConfig().gateway?.openclawId?.enabled).toBe(false);
+    expect(await owner.request("openclawId.status", {})).toMatchObject({
+      status: {
+        state: "failed",
+        reason: expect.stringContaining("Restart the Gateway to finish turning on"),
+      },
+    });
+    expect(await apply(disabled)).toBe("applied");
+    expect(await owner.request("openclawId.status", {})).toMatchObject({
+      status: { state: "off" },
+    });
+  } finally {
+    release.resolve();
+    await owner?.stopAndWait();
+    server ??= await starting?.catch(() => undefined);
+    await server?.close();
+    delayed.mockRestore();
     await state.cleanup();
   }
 });
