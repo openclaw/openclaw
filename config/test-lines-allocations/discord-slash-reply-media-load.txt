@@ -1,0 +1,3 @@
+# Discord slash-command reply regression proving a failed attachment load keeps the reply text
+# with a per-file receipt while the attachments that loaded are still sent.
+3
