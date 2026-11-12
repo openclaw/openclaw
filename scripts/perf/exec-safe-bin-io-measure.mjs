@@ -9,6 +9,7 @@
 // Async bookkeeping can cost CPU/allocation; report that tradeoff explicitly.
 // Counts are fs API calls per 18 operations, not kernel or elapsed-minute counts.
 // --owner command measures uncached approval identity and warm command preparation.
+// --owner shell prepares host spawns with configured and service-placeholder shells.
 // Under Bun, --native-mode require exercises the native worker; --cold measures its first operation.
 // Worker counts are task admissions; native-addon calls are outside the JS fs spy.
 import assert from "node:assert/strict";
@@ -16,7 +17,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import { createRequire } from "node:module";
-import { loadavg } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -36,7 +37,24 @@ assert(!values.counts || !values.allocation, "Measure counts and allocation sepa
 assert(process.platform !== "win32", "This fixture requires /usr/bin/wc");
 const ownerUrl = (name) =>
   pathToFileURL(path.resolve(values["source-root"], "src/infra", `${name}.ts`));
-assert(["safe-bin", "command"].includes(values.owner), "Unknown filesystem owner");
+assert(["safe-bin", "command", "shell"].includes(values.owner), "Unknown filesystem owner");
+const shellFixture =
+  values.owner === "shell"
+    ? await fsp.mkdtemp(path.join(tmpdir(), "openclaw-shell-io-"))
+    : undefined;
+if (shellFixture) {
+  for (const key of ["HOME", "USERPROFILE", "OPENCLAW_HOME"]) {
+    process.env[key] = shellFixture;
+  }
+  process.env.OPENCLAW_STATE_DIR = path.join(shellFixture, "state");
+  process.env.PATH = "/usr/bin:/bin";
+}
+const shellSpawn = shellFixture
+  ? await import(
+      pathToFileURL(path.resolve(values["source-root"], "src/agents/bash-tools.exec-host-spawn.ts"))
+        .href
+    )
+  : undefined;
 const command = await import(ownerUrl("exec-command-resolution").href);
 const policy = await import(ownerUrl("exec-safe-bin-runtime-policy").href);
 const trust = await import(ownerUrl("exec-safe-bin-trust").href);
@@ -94,7 +112,21 @@ if (values.counts && values.owner === "command") {
 }
 try {
   for (const disabled of values.cold ? [true] : [true, false]) {
+    if (shellFixture) {
+      process.env.SHELL = disabled ? "/bin/sh" : "/usr/bin/false";
+    }
     const operation = async () => {
+      if (shellSpawn) {
+        const prepared = await shellSpawn.prepareHostExecSpawn({
+          command: "true",
+          execCommand: "true",
+          workdir: shellFixture,
+          env: { PATH: "/usr/bin:/bin", HOME: shellFixture },
+          usePty: false,
+        });
+        assert.equal(path.basename(prepared.argv[0]), "sh");
+        return;
+      }
       if (values.owner === "command") {
         const resolved = await command.resolveCommandResolutionFromArgv(
           ["wc", "-w"],
@@ -153,13 +185,17 @@ try {
     console.log(
       JSON.stringify({
         scenario:
-          values.owner === "command"
+          values.owner === "shell"
             ? disabled
-              ? "exec-uncached"
-              : "exec-warm"
-            : disabled
-              ? "disabled"
-              : "default-wc-admission",
+              ? "shell-configured"
+              : "shell-service-placeholder"
+            : values.owner === "command"
+              ? disabled
+                ? "exec-uncached"
+                : "exec-warm"
+              : disabled
+                ? "disabled"
+                : "default-wc-admission",
         runtime: { node: process.version, bun: process.versions.bun ?? null },
         platform: process.platform,
         arch: process.arch,
@@ -192,6 +228,9 @@ try {
     restore();
   }
   inspector.disconnect();
+  if (shellFixture) {
+    await fsp.rm(shellFixture, { recursive: true, force: true });
+  }
   if (values.owner === "command") {
     const lifecycle = await import(
       pathToFileURL(path.resolve(values["source-root"], "src/shared/global-singleton.ts")).href
