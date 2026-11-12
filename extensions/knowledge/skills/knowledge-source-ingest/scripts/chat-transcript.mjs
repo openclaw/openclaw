@@ -46,6 +46,13 @@ async function run(argv) {
       .split("\n")
       .filter((line) => line.trim())
       .map((line) => JSON.parse(line));
+    // Reject rows without a usable UTC timestamp before sorting: a missing or
+    // null occurred_at would otherwise throw inside the sort key below.
+    for (const row of rows) {
+      if (!row.occurred_at?.endsWith("Z") || !Number.isFinite(Date.parse(row.occurred_at))) {
+        throw new Error("Row " + row.id + " needs a UTC occurred_at");
+      }
+    }
     // Ignore fractional padding without losing nanoseconds or changing the original timestamps.
     const timeKey = (row) => {
       const [seconds, fraction = ""] = row.occurred_at.slice(0, -1).split(".");
@@ -243,9 +250,6 @@ async function run(argv) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const days = new Map();
   for (const row of rows) {
-    if (!row.occurred_at?.endsWith("Z") || !Number.isFinite(Date.parse(row.occurred_at))) {
-      throw new Error("Row " + row.id + " needs a UTC occurred_at");
-    }
     const day = row.occurred_at.slice(0, 10);
     if (!days.has(day)) {
       days.set(day, []);

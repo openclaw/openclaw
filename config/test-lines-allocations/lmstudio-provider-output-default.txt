@@ -1,0 +1,2 @@
+# Real LM Studio setup/output-default regression plus header-auth sibling assertion.
+99

@@ -300,6 +300,9 @@ export function shouldPrepareVitestCoreWorkers(
   }
   const configs = [config];
   const workers = [
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.unit-fast.config.ts")
+      ? ["src/agents/sessions/windows-git-bash-path.test.ts"]
+      : []),
     ...(includesRuntimeConfig(configs, "test/vitest/vitest.infra.config.ts")
       ? databaseWorkerCoreTestFiles
       : []),
