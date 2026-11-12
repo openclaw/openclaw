@@ -157,3 +157,135 @@
 .deep-research-pane [hidden] {
   display: none;
 }
+
+/* Transcript card: one quiet row in the chat's card vocabulary; only failures add color. */
+.deep-research-card {
+  display: grid;
+  gap: var(--space-2, 8px);
+  width: 560px;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin-top: var(--space-2, 8px);
+  padding: var(--space-3, 12px) var(--space-3, 12px) var(--space-3, 12px) var(--space-4, 16px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 14px);
+  background: var(--card, var(--bg-elevated));
+  color: var(--text);
+  font: inherit;
+}
+.deep-research-card p {
+  margin: 0;
+}
+.deep-research-card__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3, 12px) 14px;
+  min-width: 0;
+}
+.deep-research-card__icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+[data-tone="running"] .deep-research-card__icon {
+  animation: deep-research-card-breathe 1.8s ease-in-out infinite;
+}
+.deep-research-card__text {
+  display: grid;
+  flex: 1 1 220px;
+  gap: var(--space-1, 4px);
+  min-width: 0;
+}
+.deep-research-card__title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-strong, var(--text));
+  font-size: var(--control-ui-text-md, 14px);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.deep-research-card__detail {
+  display: flex;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+/* Narrow cards wrap between counts, never inside one; the status sentence may wrap. */
+.deep-research-card__detail > span:not(.deep-research-card__status) {
+  white-space: nowrap;
+}
+.deep-research-card__separator {
+  margin-inline: 6px;
+}
+[data-tone="failed"] .deep-research-card__status {
+  color: var(--danger);
+}
+.deep-research-card__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1, 4px);
+  margin-inline-start: auto;
+}
+.deep-research-card__button,
+.deep-research-card__quiet {
+  min-height: 32px;
+  border-radius: var(--radius-md, 10px);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+.deep-research-card__button {
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+}
+.deep-research-card__button:hover {
+  border-color: var(--border-strong, var(--border));
+}
+.deep-research-card__quiet {
+  padding: 0 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+}
+.deep-research-card__quiet:hover:not(:disabled) {
+  color: var(--text);
+}
+.deep-research-card__quiet:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.deep-research-card__button:focus-visible,
+.deep-research-card__quiet:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.deep-research-card__error {
+  padding-inline-start: 32px;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+@keyframes deep-research-card-breathe {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-tone="running"] .deep-research-card__icon {
+    animation: none;
+  }
+}

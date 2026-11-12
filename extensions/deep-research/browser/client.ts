@@ -29,6 +29,8 @@ export function createResearchClient(
   signal: AbortSignal,
   selected: () => string | undefined,
   select: (id: string) => void,
+  // Card views never own the panel's pending-start record; only the panel recovers starts.
+  retainStarts = true,
 ) {
   let snapshot: Snapshot = {
     jobs: [],
@@ -47,17 +49,19 @@ export function createResearchClient(
   let pending: PendingStart | undefined;
   let retainedPending: PendingStart | undefined;
   let recoveryStorage: ControlUiRecoveryStorageV1 | undefined;
-  let recoveryLoaded = false;
+  let recoveryLoaded = !retainStarts;
   // These pre-account keys have no provable owner. Delete them; never migrate their text.
-  try {
-    for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
-      const key = sessionStorage.key(index);
-      if (key?.startsWith("deep-research.pending:")) {
-        sessionStorage.removeItem(key);
+  if (retainStarts) {
+    try {
+      for (let index = sessionStorage.length - 1; index >= 0; index -= 1) {
+        const key = sessionStorage.key(index);
+        if (key?.startsWith("deep-research.pending:")) {
+          sessionStorage.removeItem(key);
+        }
       }
+    } catch {
+      /* Storage availability is checked before admitting a start. */
     }
-  } catch {
-    /* Storage availability is checked before admitting a start. */
   }
   const requireRecoveryStorage = () => {
     recoveryStorage ??= host.recoveryStorage ?? undefined;
@@ -91,11 +95,13 @@ export function createResearchClient(
     recoveryLoaded = true;
   };
   const savePending = (value?: PendingStart) => {
-    const storage = requireRecoveryStorage();
-    if (value) {
-      storage.setItem(storageKey, JSON.stringify(value));
-    } else {
-      storage.removeItem(storageKey);
+    if (retainStarts) {
+      const storage = requireRecoveryStorage();
+      if (value) {
+        storage.setItem(storageKey, JSON.stringify(value));
+      } else {
+        storage.removeItem(storageKey);
+      }
     }
     pending = value;
     retainedPending = undefined;
@@ -263,6 +269,9 @@ export function createResearchClient(
     const epoch = authorityEpoch;
     const incarnation = snapshot.incarnation;
     if (action === "start") {
+      if (!retainStarts) {
+        return;
+      }
       try {
         restorePending();
         requireRecoveryStorage();

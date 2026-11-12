@@ -1,6 +1,6 @@
 /** @jsxImportSource @solidjs/web */
 import { Dynamic } from "@solidjs/web";
-import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import type { ResearchView, ResearchViewSource } from "../api.js";
 import type { createResearchClient, Snapshot } from "./client.js";
 import { reportBlocks, safeSourceUrl, sourceDomain } from "./report.js";
@@ -10,9 +10,21 @@ const labels = {
   "retrieved-text": "Retrieved text",
   "supplied-document": "Supplied document",
 };
-export function ResearchPane(props: { client: ReturnType<typeof createResearchClient> }) {
+export function ResearchPane(props: {
+  client: ReturnType<typeof createResearchClient>;
+  /** Latest tab named by a transcript card; each request object is applied once. */
+  tabRequest?: () => { tab: string } | undefined;
+}) {
   const [snapshot, setSnapshot] = createSignal<Snapshot>(() => props.client.read());
   const [tab, setTab] = createSignal("Progress");
+  createEffect(
+    () => props.tabRequest?.(),
+    (request) => {
+      if (request) {
+        setTab(request.tab);
+      }
+    },
+  );
   const [question, setQuestion] = createSignal(() => props.client.pending()?.question ?? "");
   const [focusSource, setFocusSource] = createSignal<string>();
   const details = new Map<string, { details: HTMLDetailsElement; summary: HTMLElement }>();
