@@ -1664,7 +1664,6 @@ function loadLegacySessionSurface(rootPath: string) {
       hookOwner: { generation: { registrations: [] } },
       isHookLoadable: () => true,
       resolveInternalHookSelection: async () => ({ configured: true }),
-      prepareWorkspaceHookEntries: () => ({ entries: [entry], sources: [] }),
       safeRealpathSync: (name: string) => fs.realpathSync(name),
       openRootFile: async () => {
         throw new Error("Unexpected physical handler open");
@@ -1677,6 +1676,11 @@ function loadLegacySessionSurface(rootPath: string) {
       __openclawStandaloneImport: importHandler,
     });
     const filename = path.join(runtime, "dist/hooks-loader.js");
+    // Discovery is now lazy; keep its module fixture separate from the embedded handler.
+    fs.writeFileSync(
+      path.join(path.dirname(filename), "workspace.js"),
+      `export function prepareWorkspaceHookEntries() { return ${JSON.stringify({ entries: [entry], sources: [] })}; }`,
+    );
     const transformed = adapter.transform({
       filename,
       contents: ownerSource("src/hooks/loader.ts", "prepareInternalHooks"),
@@ -1692,6 +1696,7 @@ function loadLegacySessionSurface(rootPath: string) {
         parse,
       }),
       context,
+      { filename, importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER },
     );
     const prepared = await context.prepareInternalHooks({}, runtime);
     expect(prepared.loadedCount).toBe(1);
