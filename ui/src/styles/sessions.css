@@ -592,6 +592,10 @@
   white-space: nowrap;
 }
 
+.session-key-cell__primary .session-link {
+  color: inherit;
+}
+
 .session-key-display-name,
 .session-detail-stat__value {
   min-width: 0;
