@@ -18,6 +18,8 @@ export type MediaFileRef = {
 export type MediaImageRef = MediaFileRef & {
   aliases: string[];
   detect?: boolean;
+  /** Execution-only staged copy; the sandbox bridge owns this read. */
+  staged?: boolean;
   factIndex: number;
   hydrate: boolean;
   workspaceDir?: string;
@@ -79,6 +81,7 @@ export function mediaFactToImageRef(fact: MediaFact, factIndex: number): MediaIm
       Boolean(value),
     ),
     ...(!usableRef ? { detect: false } : {}),
+    ...(fact.staged === true ? { staged: true } : {}),
     factIndex,
     hydrate: Boolean(usableRef) && fact.hydrationSuppressed !== true,
     ...(fact.workspaceDir ? { workspaceDir: fact.workspaceDir } : {}),

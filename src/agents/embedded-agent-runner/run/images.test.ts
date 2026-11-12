@@ -26,6 +26,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
+import { registerAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import { describedImageUnderstanding } from "./image-description.test-support.js";
 import {
@@ -641,6 +642,41 @@ describe("admitted media references", () => {
       sandbox: sandboxAt(sandboxRoot),
     });
     expect(result.images[0]).toMatchObject(image());
+  });
+  it("reads a staged sandbox copy when the workspace binding can prepare attachments", async () => {
+    const sandboxRoot = tempDirs.make("openclaw-native-image-staged-bound-");
+    const mediaId = "bound-photo.png";
+    const stagedPath = `media/inbound/${mediaId}`;
+    await writeImage(sandboxRoot, stagedPath);
+    const release = registerAgentWorkspaceAccess(sandboxRoot, {
+      bridge: createHostSandboxFsBridge(sandboxRoot),
+      prepareTurnAttachments: async () => undefined,
+    });
+
+    try {
+      const result = await loadImages({
+        prompt: "",
+        media: [
+          {
+            path: stagedPath,
+            url: `media://inbound/${mediaId}`,
+            staged: true,
+            contentType: "image/png",
+          },
+        ],
+        workspaceDir: sandboxRoot,
+        workspaceOnly: true,
+        sandbox: sandboxAt(sandboxRoot),
+      });
+
+      expect(result).toMatchObject({
+        loadedCount: 1,
+        failedMediaCount: 0,
+        images: [image()],
+      });
+    } finally {
+      release();
+    }
   });
   it.each([false, true])(
     "rejects encoded traversal claim-check facts (sandbox=%s)",
