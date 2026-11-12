@@ -396,6 +396,7 @@ vi.mock("./models-config.core.js", () => ({
     preparedModelRuntimeMocks.planOpenClawModelsJsonSource(...args),
 }));
 
+// mock-isolation: Lifecycle fixtures own static-catalog timing and failures without initializing provider discovery or its auth stores.
 vi.mock("./models-config.providers.implicit.js", () => ({
   prepareImplicitProviderStaticCatalog: (...args: unknown[]) =>
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),

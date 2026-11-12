@@ -6,9 +6,12 @@ import { createSlackDispatchSetup } from "./dispatch-setup.js";
 import { createSlackStreamingDeliveryRuntime } from "./dispatch-streaming.js";
 import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
 
-vi.mock("../../draft-stream.js", async () => {
+vi.mock("../../draft-stream.js", async (importOriginal) => {
   const { createDraftStreamStub } = await import("./dispatch.compact-progress.test-support.js");
-  return { createSlackDraftStream: vi.fn(createDraftStreamStub) };
+  return {
+    ...(await importOriginal<typeof import("../../draft-stream.js")>()),
+    createSlackDraftStream: vi.fn(createDraftStreamStub),
+  };
 });
 afterEach(() => vi.restoreAllMocks());
 

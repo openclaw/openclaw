@@ -19,7 +19,7 @@ function formatNonTextPlaceholder(content: unknown): string | null {
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typeRaw = (block as { type?: unknown }).type;
+    const typeRaw = "type" in block ? block.type : undefined;
     const type = typeof typeRaw === "string" && typeRaw.trim().length > 0 ? typeRaw : "unknown";
     if (type === "text") {
       continue;
@@ -40,16 +40,13 @@ export function formatContextMessage(message: AgentMessage): string | null {
   } else if (message.role === "user") {
     roleLabel = formatCompactionUserLabel(message);
   } else if (message.role === "toolResult") {
-    const toolName = (message as { toolName?: unknown }).toolName;
+    const toolName = message.toolName;
     const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
     roleLabel = `Tool result (${safeToolName})`;
   } else {
     return null;
   }
-  const rendered = [
-    extractMessageText(message),
-    formatNonTextPlaceholder((message as { content?: unknown }).content),
-  ]
+  const rendered = [extractMessageText(message), formatNonTextPlaceholder(message.content)]
     .filter(Boolean)
     .join("\n");
   if (!rendered) {
