@@ -541,7 +541,7 @@ export function installRemainingPluginMock(fixture: RemainingFixture) {
                 index: { state: "ready", lag: false, snapshot: fixture.hash, message: "" },
               }),
         });
-      } else if (operation === "record") {
+      } else if (operation === "record_detail") {
         const record = fixture.pages.find((entry) => entry.id === input.id) ?? fixture.pages[0]!;
         const preview = input.maxChars === 5000;
         const initial =
