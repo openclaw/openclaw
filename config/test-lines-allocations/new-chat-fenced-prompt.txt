@@ -1,2 +1,0 @@
-# New-chat submission proves source preservation and readable fenced text on desktop/mobile.
-59
