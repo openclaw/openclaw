@@ -6,7 +6,7 @@ import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-s
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Browser previews inside tool work" });
+const suite = createControlUiE2eSuite({ name: "Browser tool results without preview cards" });
 const sessionKey = "agent:main:dashboard:browser-tool-previews";
 const url = "https://github.com/openclaw/openclaw/pull/197528";
 const visit = (id: string, profile: string, runId: string) => ({
@@ -47,7 +47,7 @@ const history = [
 
 suite.define(() => {
   it.each(["light", "dark"] as const)(
-    "keeps verification previews in disclosures after reload (%s)",
+    "keeps browser output without automatic cards after expansion and reload (%s)",
     async (theme) => {
       await suite.withPage(
         { viewport: { width: 1200, height: 950 }, colorScheme: theme, reducedMotion: "reduce" },
@@ -79,13 +79,15 @@ suite.define(() => {
           await tool.waitFor();
           expect(await thread.locator("openclaw-browser-tab-card").count()).toBe(0);
           await tool.click();
-          const preview = thread.locator(".chat-tool-msg-body openclaw-browser-tab-card").first();
-          await preview.waitFor();
-          expect(await preview.locator(".url").textContent()).toBe(url);
+          const output = thread.locator(".chat-tool-msg-body").first();
+          await output.getByText("Page inspected.", { exact: true }).waitFor();
           await fs.writeFile(
             path.join(directory, "expanded.png"),
-            await takeControlUiElementScreenshot(page, page.locator(".chat-main"), [preview]),
+            await takeControlUiElementScreenshot(page, page.locator(".chat-main"), [output]),
           );
+          expect(await thread.locator("openclaw-browser-tab-card").count()).toBe(0);
+          expect(await gateway.getRequests("browser.request")).toHaveLength(0);
+          expect(await gateway.getRequests("controlUi.linkPreview")).toHaveLength(0);
           await work.first().click();
           await expect.poll(() => thread.locator("openclaw-browser-tab-card").count()).toBe(0);
           expect(await composer.inputValue()).toBe("Keep this draft while I inspect the work.");

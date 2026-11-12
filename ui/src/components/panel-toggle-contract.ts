@@ -54,7 +54,7 @@ export type BrowserPanelToggleDetail = {
   expanded?: boolean;
   newTab?: boolean;
   open?: boolean;
-  /** Existing tab to focus when the panel opens (browser-tab chat cards). */
+  /** Existing tab to focus when the panel opens. */
   browserTab?: BrowserTabTarget;
   url?: string;
   /** User-opened WKWebView tab on the native macOS host. */

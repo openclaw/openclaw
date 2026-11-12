@@ -1,13 +1,11 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For, Show, createMemo, createSignal, lazy } from "solid-js";
-import { browserTabKey } from "../../../components/browser/browser-target.ts";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { TabPanel, Tabs } from "../../../components/solid/tabs.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
-import { browserTabCardRevision } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
@@ -24,18 +22,12 @@ import {
 } from "../../../lib/chat/tool-output.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
-import "./browser-tab-card.css";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
-import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { RawOutputToggle, ToolDataBlock, ToolOutcome } from "./chat-tool-content.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 
 registerEnglishCatalog(registerChatToolContentEnglish);
-
-const BrowserTabCardHost = lazy(() => import("./browser-tab-card.tsx"), {
-  export: "BrowserTabCardHost",
-});
 
 const KV_MAX_KEYS = 12;
 const KV_MAX_VALUE_CHARS = 400;
@@ -333,15 +325,6 @@ function GenericBody(props: { state: ContentState }) {
 
 export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRenderOptions }) {
   const state = createMemo(() => prepareContent(props.card, props.options));
-  // Browsing is tool work, not a delivered answer. The tool disclosure owns
-  // its preview in ordinary messages, activity groups, and completed turns.
-  const browserPreview = () =>
-    props.options.mediaReadAllowed !== false &&
-    state().outcome === "succeeded" &&
-    props.card.preview?.kind === "browser-tab"
-      ? props.card.preview
-      : undefined;
-  const browserRevision = () => browserTabCardRevision(props.card);
   const sidebarAction = () => (
     <Show when={props.options.onOpenSidebar}>
       <openclaw-tooltip prop:content={t("chat.toolCards.openDetails")}>
@@ -407,25 +390,6 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
             }
           >
             <div class="chat-tool-card__actions">{sidebarAction()}</div>
-          </Show>
-          <Show when={browserPreview()}>
-            {(preview) => (
-              <ChatLazyBoundary>
-                <BrowserTabCardHost
-                  preview={preview()}
-                  revision={
-                    browserRevision()
-                      ? JSON.stringify([props.options.sessionKey, browserRevision()])
-                      : undefined
-                  }
-                  latest={Boolean(
-                    browserRevision() &&
-                    props.options.latestBrowserTabs?.get(browserTabKey(preview()))?.revision ===
-                      browserRevision(),
-                  )}
-                />
-              </ChatLazyBoundary>
-            )}
           </Show>
           {variant === "command" ? (
             <CommandBody state={state()} />

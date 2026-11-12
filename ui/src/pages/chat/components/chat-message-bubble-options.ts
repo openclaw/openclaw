@@ -37,7 +37,6 @@ export type MessageRenderOptions = {
   mediaOwner?: object;
   /** Saved transcript text can render before live resource admission. */
   mediaReadAllowed?: boolean;
-  latestBrowserTabs?: ToolRenderOptions["latestBrowserTabs"];
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;

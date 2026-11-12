@@ -329,7 +329,6 @@ export function projectChatTranscript(
       onSteerNow: actions.onSteerNow,
       messageReactions: props.messageReactions,
       onReact: props.onReact,
-      latestBrowserTabs: props.latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,
       activityRunId,
@@ -433,7 +432,6 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
     recovery.revision,
-    props.latestBrowserTabs,
     ...actionDependencies,
     props.sessionKey,
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
