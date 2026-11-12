@@ -378,6 +378,7 @@ export function projectChatTranscript(
         ? { parts: continuation, options: streamGroupOptions }
         : undefined,
       turnRecap: recapForGroup(item.key),
+      turnDurations: transcriptChain.runDurations,
       latestAssistant: item.key === latestAssistantItemKey,
       searchResult: searchFiltering,
     } satisfies NativeMessageGroupOptions;
@@ -401,7 +402,8 @@ export function projectChatTranscript(
     }
     const recap = recapForGroup(item.key);
     const recapKey = recap ? `${recap.runtimeMs}:${recap.outputTokens ?? ""}` : "";
-    const statusKey = `${recapKey}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
+    const duration = item.runId ? transcriptChain.runDurations.get(item.runId) : undefined;
+    const statusKey = `${recapKey}|${duration ?? ""}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
     if (item.kind === "agent-run-frame") {
       const hasWorkingIndicator = item.parts.some(
         (part) =>

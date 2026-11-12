@@ -12,6 +12,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 
 const groupsRuntimeLoader = createLazyImportLoader(() => import("./groups.runtime.js"));
+const silentReplyGuidance = `If no text reply is needed, including after a reaction or other action, reply with exactly "${SILENT_REPLY_TOKEN}" as the entire final answer, without commentary, punctuation, or formatting. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
 
 async function resolveRuntimeChannelId(raw?: string | null): Promise<string | null> {
   const normalized = normalizeOptionalLowercaseString(raw);
@@ -141,9 +142,7 @@ function buildGroupChatContext(params: {
       `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send).`,
     );
   }
-  lines.push(
-    `If no text reply is needed, including after a reaction or other action, reply with exactly "${SILENT_REPLY_TOKEN}" as the entire final answer, without commentary, punctuation, or formatting. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
-  );
+  lines.push(silentReplyGuidance);
   return lines.join(" ");
 }
 
@@ -155,6 +154,11 @@ function buildDirectChatContext(params: {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   return [
     `You are in a ${providerLabel} direct conversation.`,
+    ...(isInternalMessageChannel(params.sessionCtx.Provider)
+      ? [
+          "Other people may participate here. A mention of another person is not a request for you to reply. If addressed to someone else, stay silent unless invited or correcting key facts. Reply only when you are asked to help or can add clear value; do not acknowledge routine exchanges just because you received the message.",
+        ]
+      : []),
     ...(params.sourceReplyDeliveryMode === "message_tool_only"
       ? [
           "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
@@ -163,6 +167,8 @@ function buildDirectChatContext(params: {
       : [
           "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
         ]),
+    silentReplyGuidance,
+    "Do not use silence to abandon an outstanding request or hide a failure.",
   ].join(" ");
 }
 
@@ -171,11 +177,13 @@ export function buildSourceConversationContext(
   params: Parameters<typeof buildGroupChatContext>[0],
 ): string {
   const chatType = normalizeOptionalLowercaseString(params.sessionCtx.ChatType);
-  return chatType === "direct" || chatType === "dm"
-    ? buildDirectChatContext(params)
-    : chatType === "group" || chatType === "channel"
-      ? buildGroupChatContext(params)
-      : "";
+  const context =
+    chatType === "direct" || chatType === "dm"
+      ? buildDirectChatContext(params)
+      : chatType === "group" || chatType === "channel"
+        ? buildGroupChatContext(params)
+        : "";
+  return context ? `### Conversation Behavior\n${context}` : "";
 }
 
 /** Builds the channel-specific group intro injected into the system prompt. */

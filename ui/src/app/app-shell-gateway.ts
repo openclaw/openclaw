@@ -393,7 +393,7 @@ export class ShellGatewayOwner {
             commandParams.agentId !== undefined &&
             commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
-        this.host.shellNavigation.selectChatSession(sessionKey, commandParams.agentId);
+        return; // Background panel requests must not steal navigation or replay on return.
       }
       const panelEvent = new CustomEvent(
         {

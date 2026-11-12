@@ -52,6 +52,7 @@ it.for(["active", "revoked", "non-owner"] as const)(
           profile: "full",
           allow: ["openclaw"],
           exec: { host: "gateway", security: "full", ask: "off" },
+          openclaw: { autoApproveChanges: true },
         },
         gateway: {
           roles: {

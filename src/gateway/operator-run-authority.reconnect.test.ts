@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
+import { toSandboxProvisioningError } from "../agents/sandbox/provisioning-error.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -8,7 +9,10 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../infra/device-pairing-identity.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
+import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { createOpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -17,6 +21,7 @@ import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import {
   acceptGatewayDeviceSourceAuthority,
+  closeGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
@@ -33,9 +38,61 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 type Capture = NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   resetGatewayWorkAdmission();
 });
+
+it.each([
+  ["source-current", "source-invalidated"],
+  ["source-revocation", "source-invalidated"],
+  ["gateway-current", "gateway-identity-retired"],
+  ["before-sources", "closure-released"],
+] as const)("records the %s failure once through sandbox and lane wrappers", (check, reason) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profile = ensureProfileForEmail("authority-diagnostic@example.test");
+    using proof = fixture(profile.id);
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const gateway = vi.spyOn(proof.context, "resolveGatewayContext");
+    const captured = await proof.capture(proof.connect().client);
+    const log = vi.spyOn(diagnosticLogger, "error").mockImplementation(() => {});
+    clock.mockReturnValue(2_500);
+    if (check === "source-current") {
+      closeGatewayDeviceRevocation(proof.context);
+    } else if (check === "source-revocation") {
+      invalidateGatewayDeviceRevocation(proof.context, "reconnect-device", "operator");
+    } else if (check === "gateway-current") {
+      gateway.mockReturnValue(createDirectChatContext());
+    } else {
+      captured.release();
+    }
+    await expect(
+      enqueueCommandInLane("authority-diagnostic", async () => {
+        try {
+          captured.authority.assertCurrent();
+        } catch (error) {
+          throw toSandboxProvisioningError(
+            createOpenClawStateLeaseError(
+              "OPENCLAW_STATE_LEASE_ABORTED",
+              "local sandbox workspace operation was aborted",
+              error,
+            ),
+            "local",
+          );
+        }
+      }),
+    ).rejects.toThrow("Reconnect to the Gateway");
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("lane task error: lane=authority-diagnostic"),
+      {
+        errorName: "SandboxProvisioningError",
+        operatorAuthorityReason: reason,
+        operatorAuthorityCheck: check,
+        operatorAuthorityAgeMs: 1_500,
+      },
+    );
+  }),
+);
 
 function device(overrides: { deviceId?: string; token?: string } = {}): PairedDevice {
   return {
@@ -191,7 +248,15 @@ it("keeps retained source comparison across an authenticated browser reconnect",
     invalidateGatewayDeviceRevocation(proof.context, "reconnect-device", "operator");
     expect(() => original.authority.assertCurrent()).toThrow();
     expect(() => reconnected.authority.assertCurrent()).toThrow();
-    expect(() => afterRelease.authority.assertCurrent()).toThrow();
+    expect(afterRelease.authority.signal?.reason).toMatchObject({
+      message: expect.stringContaining("Reconnect to the Gateway"),
+    });
+    expect(() => afterRelease.authority.assertCurrent()).toThrow("Reconnect to the Gateway");
+    for (let turn = 0; turn < 3; turn++) {
+      const fresh = await proof.capture(proof.connect().client);
+      fresh.authority.assertCurrent();
+      expect(() => afterRelease.authority.assertCurrent()).toThrow("Reconnect to the Gateway");
+    }
   }));
 
 it("keeps unproven, reduced, foreign and rotated reconnect sources separate", () =>

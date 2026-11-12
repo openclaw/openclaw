@@ -22,12 +22,12 @@ async function fixture(
   await select.updateComplete;
   const trigger = select.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
   const menu = select.querySelector<HTMLElement>(".agent-select__menu")!;
+  // Keyboard navigation exposes the active option on the element that owns focus.
+  const activeId = () => document.activeElement?.getAttribute("aria-activedescendant");
   const open = async () => {
     await page.elementLocator(trigger).click();
     await expect.poll(() => menu.matches(":popover-open")).toBe(true);
-    await expect
-      .poll(() => select.querySelector('[role="listbox"]')?.getAttribute("aria-activedescendant"))
-      .toBeTruthy();
+    await expect.poll(activeId).toBeTruthy();
   };
   return {
     select,
@@ -41,9 +41,7 @@ async function fixture(
       return select.querySelector<HTMLElement>('[role="listbox"]')!;
     },
     get active() {
-      return select.querySelector<HTMLElement>(
-        `[id="${this.list.getAttribute("aria-activedescendant")}"]`,
-      );
+      return select.querySelector<HTMLElement>(`[id="${activeId()}"]`);
     },
   };
 }
@@ -208,14 +206,15 @@ it("windows a large catalog while revealing keyboard targets and filtering searc
   expect(f.active?.getAttribute("aria-posinset")).toBe("251");
   expect(f.active?.getAttribute("aria-setsize")).toBe("300");
   await expect.poll(requested).toEqual(visibleTargets());
+  // Home and End edit the focused search field; the list's own surface walks every row.
+  f.list.focus();
   await userEvent.keyboard("{End}");
   await expect.poll(() => f.active?.getAttribute("value")).toBe("agent-299");
   await expect.poll(() => requested().includes("agent-299")).toBe(true);
   expect(Math.max(...ensure.mock.calls.map(([ids]) => ids.length))).toBeLessThan(60);
   await userEvent.keyboard("{Home}{ArrowDown}");
   await expect.poll(() => f.active?.getAttribute("value")).toBe("agent-1");
-  const search = f.select.querySelector<HTMLButtonElement>(".header-search__toggle")!;
-  await page.elementLocator(search).click();
+  // Typing on a row searches: the first key moves focus into the visible field.
   await userEvent.keyboard("Agent 297");
   await expect.poll(() => f.items.map((item) => item.getAttribute("value"))).toEqual(["agent-297"]);
   await expect.poll(requested).toEqual(["agent-250", "agent-297"]);

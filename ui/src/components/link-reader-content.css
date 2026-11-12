@@ -5,7 +5,7 @@
 }
 .lr-eyebrow {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
 }
 .lr-metadata {
@@ -21,12 +21,12 @@
 }
 .lr-metric dt {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   margin-bottom: 2px;
 }
 .lr-metric dd {
   margin: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -62,7 +62,7 @@
   color: var(--muted);
   padding: 6px 9px;
   font: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 550;
   cursor: default;
 }
@@ -76,7 +76,7 @@
   padding: 0 5px;
   color: var(--muted);
   background: color-mix(in srgb, var(--text) 7%, transparent);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -145,7 +145,7 @@
   gap: 2px;
 }
 .lr-checks-heading strong {
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 650;
 }
 .lr-checks-chevron {
@@ -235,7 +235,7 @@
   gap: 8px;
   border-top: 1px solid var(--border);
   padding: 12px 16px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   color: var(--muted);
 }
 .lr-checks .lr-note a,
@@ -284,7 +284,7 @@
   display: block;
   margin-top: 5px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 .lr-image > a {
@@ -295,12 +295,12 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 0 7px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .lr-review-location {
   margin: 8px 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 .lr-review-location a {
   font-family: var(--mono);
@@ -318,7 +318,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   min-height: 64px;
 }
 .lr-section-loading--checks {

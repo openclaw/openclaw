@@ -1132,9 +1132,11 @@ baselines and diagnostic session activity states. `openclaw_session_projection_o
 counts live projection owners. Both gauges have no labels or session identities.
 
 `openclaw_session_projection_rows_retained_bytes` estimates plain data reachable
-from those rows, deduplicating shared objects within each projection. Sampling
-uses existing memory samples (normally every 30 seconds during diagnostic
-activity), with a fixed 100,000-visit and 64-depth budget per projection. It
+from those rows, deduplicating shared objects within each projection. Entry counts
+follow existing memory samples (normally every 30 seconds during diagnostic
+activity). Byte and truncation estimates refresh on the first sample and at most
+once every five minutes afterward, with a fixed 100,000-visit and 64-depth budget
+per projection; between refreshes they retain the last estimate. The estimator
 never serializes contents, invokes getters, reads SQLite, or walks data on writes
 or Prometheus scrapes. `openclaw_session_projection_rows_estimate_truncated`
 counts owners whose estimate hit that budget or unsupported data; a nonzero value
