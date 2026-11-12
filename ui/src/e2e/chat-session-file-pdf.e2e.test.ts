@@ -86,7 +86,7 @@ suite.define(() => {
             chatMessage(
               "assistant",
               "Open [small.pdf](/workspace/small.pdf) or [report.pdf](/workspace/report.pdf).",
-              { timestamp: 1 },
+              { timestamp: 1, __openclaw: { id: "pdf-links" } },
             ),
           ],
           methodResponses: {
@@ -152,6 +152,7 @@ suite.define(() => {
           expect((await gateway.getRequests("sessions.files.download")).at(-1)?.params).toEqual({
             sessionKey,
             agentId: "main",
+            messageEntryId: "pdf-links",
             path: `/workspace/${file.name}`,
           });
           await exactButton(page, `Close tab: ${file.name}`).click();

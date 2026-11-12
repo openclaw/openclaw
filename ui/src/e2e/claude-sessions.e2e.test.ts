@@ -1,8 +1,18 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import {
+  CHAT_RESIDENT_ENTRY_TARGET,
+  CHAT_RESIDENT_WEIGHT_TARGET,
+} from "../pages/chat/chat-history-cost.ts";
+import {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+} from "../pages/chat/chat-history-request-params.ts";
+import { MAX_RESIDENT_SEGMENTS } from "../pages/chat/chat-history-window.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { textContent } from "./chat-flow.test-support.ts";
 import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
+import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
 import {
   expectTranscriptLayoutCommitted,
   hostGroupedNativeCatalogs,
@@ -541,18 +551,17 @@ suite.define(() => {
       timestamp: Date.now() + seq,
     });
     const recent = Array.from({ length: 100 }, (_, index) =>
-      historyMessage(index + 1001, "recent native message"),
+      historyMessage(index + 201, "recent native message"),
     );
-    const older = Array.from({ length: 1000 }, (_, index) =>
-      historyMessage(index + 1, "older native message"),
+    // Keep seven body packets plus the tail within the eight-segment window.
+    // Empty filtered pages advance raw cursors, including the one parked prefetch.
+    const olderPages = Array.from({ length: MAX_RESIDENT_SEGMENTS - 1 }, (_packet, pageIndex) =>
+      Array.from({ length: 20 }, (_, index) =>
+        historyMessage(181 - pageIndex * 20 + index, "older native message"),
+      ),
     );
-    const historyPage = (
-      messages: ReturnType<typeof historyMessage>[],
-      totalMessages = 1100,
-      nextOffset?: number,
-    ) => ({
+    const historyPage = (messages: ReturnType<typeof historyMessage>[], nextOffset?: number) => ({
       messages,
-      totalMessages,
       hasMore: nextOffset !== undefined,
       ...(nextOffset === undefined
         ? {}
@@ -563,18 +572,22 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
-        "chat.startup": historyPage(recent, 1100, 100),
+        "chat.startup": historyPage(recent, 100),
         "chat.history": {
           cases: [
-            { match: { cursor: "older-native-100" }, response: historyPage(older) },
-            { match: { cursor: "older-native-1100" }, response: historyPage([], 1140) },
+            ...olderPages.map((messages, index) => ({
+              match: { cursor: `older-native-${100 + index * 20}` },
+              response: historyPage(messages, 120 + index * 20),
+            })),
+            { match: { cursor: "older-native-240" }, response: historyPage([], 260) },
+            { match: { cursor: "older-native-260" }, response: historyPage([]) },
           ],
         },
       },
     });
 
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.getByText(/^recent native message 1100\n/).waitFor();
+    await page.getByText(/^recent native message 300\n/).waitFor();
     const thread = page.locator(".chat-thread");
     await expect
       .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
@@ -618,32 +631,33 @@ suite.define(() => {
     await expectHistoryBoundaryState(page, true);
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     await preservePaintedAnchor(thread, async () => {
-      await gateway.resolveDeferred("chat.history", historyPage(older, 1140, 1100));
-      await expect
-        .poll(() =>
-          page
-            .locator("openclaw-chat-pane")
-            .evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
-            ),
-        )
-        .toBe(1100);
+      await gateway.resolveDeferred("chat.history", historyPage(olderPages[0]!, 120));
+      await expect.poll(() => historyMessageCount(page.locator("openclaw-chat-pane"))).toBe(240);
       await expectHistoryBoundaryState(page, false);
     });
     // Stage the next older cursor without entering the loading state.
     await expect
       .poll(() => gateway.getRequests("chat.history").then((requests) => requests.length))
-      .toBe(failedRequestCount + 2);
+      .toBe(failedRequestCount + MAX_RESIDENT_SEGMENTS + 1);
     const requestsAfterPrefetch = await gateway.getRequests("chat.history");
-    expect(requestsAfterPrefetch.at(-2)?.params).toMatchObject({
-      limit: 1000,
-      cursor: "older-native-100",
-    });
-    expect(requestsAfterPrefetch.at(-1)?.params).toMatchObject({
-      limit: 1000,
-      cursor: "older-native-1100",
+    const boundedReads = requestsAfterPrefetch.slice(failedRequestCount);
+    expect(boundedReads.map(({ params }) => (params as { cursor: string }).cursor)).toEqual(
+      Array.from(
+        { length: MAX_RESIDENT_SEGMENTS + 1 },
+        (_, index) => `older-native-${100 + index * 20}`,
+      ),
+    );
+    for (const request of boundedReads) {
+      const { limit, maxBytes } = request.params as { limit: number; maxBytes: number };
+      expect(limit).toBeGreaterThanOrEqual(CHAT_HISTORY_REQUEST_LIMIT);
+      expect(limit).toBeLessThanOrEqual(CHAT_RESIDENT_ENTRY_TARGET);
+      expect(maxBytes).toBeGreaterThanOrEqual(CHAT_HISTORY_REQUEST_MAX_BYTES);
+      expect(maxBytes).toBeLessThanOrEqual(CHAT_RESIDENT_WEIGHT_TARGET);
+    }
+    expect(boundedReads.at(-1)?.params).toMatchObject({
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
+      maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
+      cursor: "older-native-260",
     });
     await page.evaluate(
       () =>
@@ -652,14 +666,19 @@ suite.define(() => {
         }),
     );
     // Single staging slot: the parked page must not chain further prefetches.
-    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(
+      failedRequestCount + MAX_RESIDENT_SEGMENTS + 1,
+    );
     // Consume the staged page without a round trip or new upward scroll intent.
     await thread.evaluate((element) => {
       element.querySelector<HTMLButtonElement>(".chat-history-boundary__action")?.click();
     });
+    await expect.poll(() => historyMessageCount(page.locator("openclaw-chat-pane"))).toBe(240);
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
-    expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 2);
+    expect(await gateway.getRequests("chat.history")).toHaveLength(
+      failedRequestCount + MAX_RESIDENT_SEGMENTS + 1,
+    );
     await page.close();
   });
 

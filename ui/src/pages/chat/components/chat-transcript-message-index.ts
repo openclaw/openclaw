@@ -378,9 +378,17 @@ export function projectTranscriptIndex(
       if (chain.continuations.has(item.key) || streaming) {
         return { kind: "item", key, item, streaming };
       }
-      // Settled items keep their identity across unrelated live-tail changes.
-      // Reactions replace their map; active and continuation rows never enter this memo.
-      const revision = rowRevisions(item, [key, props.messageReactions], () => {
+      const sources = groups.flatMap((group) => group.messages.map(({ message }) => message));
+      // Source envelopes are immutable; outcome and per-source reactions own row changes.
+      const revisionInputs: unknown[] = [
+        key,
+        item.kind === "agent-run-frame" ? item.outcome.kind : undefined,
+        ...(item.kind === "message" ? [item.message] : sources),
+        ...sources.map((message) =>
+          props.messageReactions?.get(persistedMessageEntryId(message) ?? ""),
+        ),
+      ];
+      const revision = rowRevisions(item, revisionInputs, () => {
         const messages = groups.flatMap((group) =>
           group.messages.map(({ message }) => [
             message && typeof message === "object" ? messageRevision(message) : message,

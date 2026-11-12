@@ -1,7 +1,20 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
+import type { ChatReadingBookmark, ChatScrollToEndOptions } from "../scroll.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
-import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
+import type { ChatMessageReveal } from "./chat-message-reveal.ts";
+import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
+  isTranscriptRangeCommitted,
+  maxTranscriptScrollOffset,
+} from "./chat-transcript-geometry.ts";
+import type { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
+import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
+import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
+import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
+import {
+  type TranscriptCallbacks,
+  type createTranscriptPresentation,
   CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES,
   CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES,
   type ChatTranscriptPendingScrollOffset,
@@ -24,6 +37,80 @@ export function cancelPendingScrollRetry(
   if (owner.pendingScrollFrame !== null) {
     cancelAnimationFrame(owner.pendingScrollFrame);
     owner.pendingScrollFrame = null;
+  }
+}
+
+type TranscriptScrollCancellationOwner = {
+  readonly offsetState: TranscriptOffsetState;
+  readonly bookmarkState: { bookmark?: ChatReadingBookmark };
+  readonly virtualizer: Pick<
+    Virtualizer<HTMLDivElement, HTMLElement>,
+    "cancelScroll" | "scrollToOffset"
+  >;
+  readonly initialRange: Pick<TranscriptInitialRange, "finishEnd" | "finishEndWhenSettled">;
+  readonly endAnchor: Pick<TranscriptEndAnchor, "capture" | "clear">;
+  readonly prependAnchor: Pick<TranscriptPrependAnchor, "clear">;
+  readonly scrollRestoreHost: Pick<TranscriptScrollRestoreHost, "pendingScrollFrame">;
+  getScrollElement(): HTMLDivElement | null;
+  getLifecycle(): unknown;
+  measureRowsWithoutScrollAdjustment(): void;
+};
+
+export function cancelTranscriptScroll(
+  owner: TranscriptScrollCancellationOwner,
+  preserveEnd = false,
+): void {
+  const command = owner.offsetState.scrollCommand;
+  const pendingOffset = owner.offsetState.pendingScrollOffset;
+  const unissuedEnd = command?.target === "end" && command.offset === undefined && !pendingOffset;
+  const element = owner.getScrollElement();
+  const lifecycle = owner.getLifecycle();
+  owner.bookmarkState.bookmark = undefined;
+  // Retire the old owner before range work can refresh and admit another command.
+  owner.offsetState.scrollCommand = null;
+  owner.offsetState.pendingScrollOffset = null;
+  cancelPendingScrollRetry(owner.scrollRestoreHost);
+  // Completing a smooth journey can reveal skipped row sizes. Retain its
+  // resting edge before that measurement moves the end; reader input clears it.
+  if (preserveEnd) {
+    owner.endAnchor.capture(element);
+  } else {
+    owner.endAnchor.clear();
+  }
+  owner.prependAnchor.clear();
+  if (!preserveEnd || unissuedEnd) {
+    // Retire the vendor target before range work can admit a replacement.
+    // Unissued preparation must not manufacture a native offset target.
+    owner.virtualizer.cancelScroll();
+  }
+  if (preserveEnd) {
+    owner.initialRange.finishEndWhenSettled();
+  } else {
+    owner.initialRange.finishEnd();
+  }
+  if (
+    (!command && !pendingOffset) ||
+    owner.offsetState.hasPendingCommand ||
+    element !== owner.getScrollElement() ||
+    lifecycle !== owner.getLifecycle()
+  ) {
+    return;
+  }
+  // Even an unissued smooth journey may have skipped row measurements.
+  // Replay them before reader input; only an issued target needs a native stop.
+  if (command?.behavior === "smooth") {
+    owner.measureRowsWithoutScrollAdjustment();
+  }
+  if (
+    !unissuedEnd &&
+    element &&
+    !owner.offsetState.hasPendingCommand &&
+    element === owner.getScrollElement() &&
+    lifecycle === owner.getLifecycle()
+  ) {
+    // The measured end owner renews later; a dynamic destination would also
+    // follow new rows before end preparation admits their native geometry.
+    owner.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
   }
 }
 
@@ -117,4 +204,134 @@ function settlePendingScroll(owner: TranscriptScrollRestoreHost, scrollTop: numb
   });
   // Publish the restored reader before queued hydration/resize follow runs.
   owner.onReaderScroll();
+}
+
+type TranscriptLayoutRestoreHost = {
+  bookmarkState: { bookmark?: ChatReadingBookmark; pending: boolean };
+  isConnected(): boolean;
+  scrollElement: HTMLDivElement | null;
+  threadInnerElement: HTMLDivElement | null;
+  rowCount: number;
+  callbacks: TranscriptCallbacks;
+  prependAnchor: TranscriptPrependAnchor;
+  rowIndexesByKey: ReadonlyMap<string, number>;
+  offsetState: TranscriptOffsetState;
+  initialRange: TranscriptInitialRange;
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
+  messageReveal: ChatMessageReveal;
+  messageRowKeysById: ReadonlyMap<string, string>;
+  presentation: ReturnType<typeof createTranscriptPresentation>;
+  messageElements: TranscriptMessageElements;
+  renderer: ChatTranscriptRenderer;
+  scrollRestoreHost: TranscriptScrollRestoreHost;
+  canAutoFollow(): boolean;
+  scrollToEnd(options: ChatScrollToEndOptions): boolean;
+  invalidate(): void;
+};
+
+/** One restoration flow owns saved semantic and measured initial positioning. */
+export function completeTranscriptLayout(owner: TranscriptLayoutRestoreHost): void {
+  if (!owner.isConnected() || owner.virtualizer.scrollElement !== owner.scrollElement) {
+    return;
+  }
+  // A recorded manual command owns the next frame; an older bookmark must not
+  // reclaim the reader and cancel that command while its history read settles.
+  if (owner.callbacks.hasPendingScrollCommand?.()) {
+    owner.bookmarkState.bookmark = undefined;
+    owner.bookmarkState.pending = false;
+    owner.offsetState.pendingScrollOffset = null;
+  }
+  const bookmark = owner.bookmarkState.bookmark;
+  if (bookmark) {
+    const sessionId = owner.callbacks.getSessionId?.();
+    if (!sessionId) {
+      return;
+    }
+    if (sessionId !== bookmark.sessionId) {
+      owner.bookmarkState.bookmark = undefined;
+      owner.offsetState.pendingScrollOffset = null;
+    } else {
+      const rowKey = owner.prependAnchor.committedMessageRows.get(bookmark.messageKey);
+      const index = rowKey ? owner.rowIndexesByKey.get(rowKey) : undefined;
+      if (index !== undefined && owner.scrollElement) {
+        // Reuse the measured prepend owner after a remount; cached pixels
+        // alone cannot identify a reader in a different resident window.
+        owner.offsetState.pendingScrollOffset = null;
+        owner.initialRange.finish();
+        owner.prependAnchor.restoreBookmark(bookmark, owner.scrollElement);
+        owner.virtualizer.scrollToIndex(index, { align: "start", behavior: "instant" });
+        // A saved reader owns follow policy even while the initial range is clamped.
+        owner.callbacks.onReaderScroll?.(false, "bookmark");
+        owner.bookmarkState.bookmark = undefined;
+        owner.invalidate();
+      } else if (!owner.bookmarkState.pending && owner.callbacks.canRestoreBookmark?.() !== false) {
+        owner.bookmarkState.pending = true;
+        void (
+          owner.callbacks.restoreBookmark?.(
+            bookmark,
+            () =>
+              owner.bookmarkState.bookmark === bookmark &&
+              !owner.callbacks.hasPendingScrollCommand?.(),
+          ) ?? Promise.resolve(false)
+        ).then((restored) => {
+          if (owner.bookmarkState.bookmark === bookmark) {
+            owner.bookmarkState.pending = false;
+            if (restored === false) {
+              owner.bookmarkState.bookmark = undefined;
+            }
+            if (owner.isConnected() && owner.callbacks.canRestoreBookmark?.() !== false) {
+              owner.invalidate();
+            }
+          }
+        });
+      }
+      return;
+    }
+  }
+  owner.messageReveal.complete(
+    owner.threadInnerElement,
+    owner.offsetState,
+    owner.virtualizer,
+    owner.messageRowKeysById,
+    owner.rowIndexesByKey,
+  );
+  if (!owner.initialRange.pending || !owner.rowCount || !owner.scrollElement?.clientHeight) {
+    return;
+  }
+  const [measured, applyRail] = owner.presentation.measureInitialRows(owner.messageElements);
+  if ((owner.initialRange.pending && owner.initialRange.extend(owner.scrollElement)) || measured) {
+    owner.invalidate();
+    return;
+  }
+  if (owner.offsetState.pendingScrollOffset) {
+    applyPendingScrollOffset(owner.scrollRestoreHost);
+    return;
+  }
+  if (
+    owner.canAutoFollow() &&
+    !(owner.offsetState.pendingInteractionAnchor || owner.offsetState.touchActive)
+  ) {
+    const behavior = owner.offsetState.scrollCommand?.behavior ?? "instant";
+    owner.scrollToEnd({ source: "auto", behavior });
+    owner.offsetState.syncNativeOffset?.();
+  }
+  if (isTranscriptRangeCommitted(owner.threadInnerElement, owner.virtualizer)) {
+    applyRail?.();
+    owner.initialRange.complete();
+    owner.renderer.syncInitialPosition();
+  }
+  owner.invalidate();
+}
+
+export function canFollowTranscriptEnd(
+  bookmarkState: { bookmark?: ChatReadingBookmark },
+  offsetState: Pick<TranscriptOffsetState, "scrollCommand">,
+  callbacks: Pick<TranscriptCallbacks, "canFollowEnd">,
+): boolean {
+  const command = offsetState.scrollCommand;
+  return (
+    !bookmarkState.bookmark &&
+    (!command || command.target === "end") &&
+    (callbacks.canFollowEnd?.() ?? true)
+  );
 }

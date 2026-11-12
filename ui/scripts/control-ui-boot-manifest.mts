@@ -56,8 +56,8 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
     }
     res.setHeader("Content-Type", mime[path.extname(filePath)] ?? "application/octet-stream");
     const source = fs.readFileSync(filePath);
-    // Like the Gateway, anchor entries and import-map keys/targets before a
-    // deep-route reload; rooting only src/href leaves placeholder imports unmapped.
+    // Like the Gateway, root asset URLs and import-map keys and targets before
+    // a canonical deep route reloads; relative maps leave stable aliases unresolved.
     res.end(
       filePath.endsWith("index.html")
         ? source.toString("utf8").replaceAll('"./assets/', '"/assets/')

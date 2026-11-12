@@ -53,6 +53,10 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-attachment-handoff.test.ts",
   "ui/src/pages/chat/chat-pane-board.test.ts",
   "ui/src/pages/chat/chat-pane-catalog.test.ts",
+  "ui/src/pages/chat/chat-pane-history-packets.test.ts",
+  // Cold paging imports must not reuse a prior suite's resolved runtime.
+  "ui/src/pages/chat/chat-pane-history-runtime-failure.test.ts",
+  "ui/src/pages/chat/chat-pane-history-runtime-loading.test.ts",
   "ui/src/pages/chat/chat-pane-history.test.ts",
   "ui/src/pages/chat/chat-pane-identity.test.ts",
   "ui/src/pages/chat/chat-pane-keyboard-focus.test.ts",

@@ -144,6 +144,27 @@ async function withTranscript(
 }
 
 describe("historical page recovery context", () => {
+  it.each([1, 80])("selects the canonical around window at source limit %s", async (max) => {
+    await withTranscript(
+      [
+        ["previous", { role: "assistant", content: "Previous answer" }],
+        ["target", { role: "user", content: "Short reader target" }],
+        ["newer", { role: "assistant", content: "Newer answer below the target" }],
+      ],
+      async ({ read }) => {
+        const page = await read({ max, messageId: "target" });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(
+          max === 1 ? ["target"] : ["previous", "target", "newer"],
+        );
+        expect(page.anchor).toMatchObject({
+          oldestMessageId: max === 1 ? "target" : "previous",
+          newestMessageId: max === 1 ? "target" : "newer",
+          hasNewer: max === 1,
+        });
+      },
+    );
+  });
+
   it("hides active attempt diagnostics on reload and publishes one persisted final notice", async () => {
     const partial = { ...failed, content: [{ type: "text", text: "Useful partial output" }] };
     await withTranscript(

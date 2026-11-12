@@ -203,6 +203,7 @@ export async function installHistoryPaginationProbe(
         observer.disconnect();
         mutations.disconnect();
         resize.disconnect();
+        observed.clear();
         pane.render = originalRender;
         thread.removeEventListener("wheel", wheel, true);
         thread.removeEventListener("scroll", scrolled);

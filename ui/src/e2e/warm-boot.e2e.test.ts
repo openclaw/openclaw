@@ -4,9 +4,11 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { captureUiProofEnabled, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { historyMessageCount } from "./chat-history-pagination-probe.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -443,10 +445,10 @@ suite.define(() => {
         const shortTail = profile === "short-tail";
         const olderMessages =
           profile === "large" || shortTail || imported
-            ? Array.from({ length: imported ? 119 : 1_099 }, (_, index) => ({
-                role: shortTail && index >= 1_020 ? "toolResult" : index % 2 ? "assistant" : "user",
+            ? Array.from({ length: imported ? 119 : shortTail ? 159 : 239 }, (_, index) => ({
+                role: shortTail && index >= 80 ? "toolResult" : index % 2 ? "assistant" : "user",
                 content: `Older history ${index + 1}`,
-                ...(shortTail && index >= 1_020
+                ...(shortTail && index >= 80
                   ? { toolCallId: `older-tool-${index}`, toolName: "read" }
                   : {}),
                 __openclaw: {
@@ -796,10 +798,8 @@ suite.define(() => {
             },
           },
         ];
-        const pageSize = imported ? 50 : 1_000;
         const heldStart = messages.length - 80;
-        const firstStart = Math.max(0, heldStart - pageSize);
-        const firstPage = messages.slice(firstStart, heldStart);
+        const firstPage = messages.slice(0, heldStart);
         if (profile === "large" || shortTail || imported) {
           // Short tool-heavy tails can refill as soon as hello is released.
           await gateway.setMethodResponse("chat.history", {
@@ -816,14 +816,6 @@ suite.define(() => {
                 match: { cursor: "warm-before-held" },
                 response: {
                   messages: firstPage,
-                  sessionId: currentRow.sessionId,
-                  ...(firstStart ? { olderCursor: "warm-before-first" } : {}),
-                },
-              },
-              {
-                match: { cursor: "warm-before-first" },
-                response: {
-                  messages: messages.slice(0, firstStart),
                   sessionId: currentRow.sessionId,
                 },
               },
@@ -860,7 +852,9 @@ suite.define(() => {
           await gateway.resolveDeferred("chat.startup", {
             sessionId: "profile-b-session",
             sessionInfo: { ...currentRow, sessionId: "profile-b-session" },
-            messages: [{ role: "assistant", content: "This is profile B's conversation." }],
+            messages: prepareChatHistoryFixture([
+              { role: "assistant", content: "This is profile B's conversation." },
+            ]).messages,
             hasMore: false,
             deltaCursor: "profile-b-cursor",
             metadata: { models: [] },
@@ -885,10 +879,8 @@ suite.define(() => {
         await capture(`warm-${profile}-after-hello.png`);
         if (profile === "large" || shortTail || imported) {
           await waitForChatScrollIdle(page);
-          const messageCount = () =>
-            page
-              .locator(".chat-pane-cache__pane--active")
-              .evaluate((element) => Reflect.get(element, "state").chatMessages.length);
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          const messageCount = () => historyMessageCount(pane);
           const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
           if (!shortTail) {
             expect(await gateway.getRequests("chat.history")).toEqual([]);
@@ -900,9 +892,12 @@ suite.define(() => {
           });
           expect(history.params).toMatchObject({ messageId: `older-${heldStart + 1}`, limit: 1 });
           expect(history.params).not.toHaveProperty("offset");
-          await gateway.waitForRequest("chat.history", { match: { cursor: "warm-before-held" } });
+          const fill = await gateway.waitForRequest("chat.history", {
+            match: { cursor: "warm-before-held" },
+          });
           await expect.poll(messageCount).toBe(firstPage.length + 80);
           if (shortTail) {
+            expect(fill.params).toMatchObject({ limit: 80, maxBytes: 256 * 1024 });
             expect(await gateway.getRequests("chat.history")).toHaveLength(2);
           }
           await page
@@ -911,20 +906,11 @@ suite.define(() => {
           await waitForChatScrollIdle(page);
           await thread.hover();
           await page.mouse.wheel(0, -1_000_000);
-          if (firstStart) {
-            const older = await gateway.waitForRequest("chat.history", {
-              match: { cursor: "warm-before-first" },
-            });
-            expect(older.params).not.toHaveProperty("offset");
-          }
           await expect.poll(messageCount).toBe(messages.length);
-          // An exhausted imported page only scrolls to the top on the second wheel;
-          // otherwise the second prepend preserves its own adjacent source boundary.
-          const finalBoundary = Math.max(1, firstStart);
-          if (!firstStart) {
-            await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
-            expect(await gateway.getRequests("chat.history")).toHaveLength(2);
-          }
+          // Reopening restores all bounded history; the next wheel reaches its exhausted edge.
+          const finalBoundary = 1;
+          await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+          expect(await gateway.getRequests("chat.history")).toHaveLength(2);
           await page
             .getByText(`Older history ${finalBoundary}`, { exact: true })
             .waitFor({ state: "attached" });

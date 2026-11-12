@@ -4,7 +4,10 @@ import type { AgentActivityItem } from "../../../../packages/gateway-protocol/sr
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
+import {
+  coalesceToolActivityMessages,
+  retireCoalescedMessageSources,
+} from "./chat-tool-activity-coalesce.ts";
 
 type Fields = Record<string, unknown>;
 function result(id: string) {
@@ -118,4 +121,53 @@ it.each(["text", "thinking"])("keeps %s apart from its calls and prepared activi
   const cards = rows.map(extractToolCardsCached);
   expect(cards.map((list) => list.map((card) => card.callId))).toEqual([[], ["active"], [], ["b"]]);
   expect(rows.flatMap(readPreparedActivity)).toEqual([activity()]);
+});
+
+it("retires memo dependencies without changing a peer's published bundles", () => {
+  const first = invocation("retired");
+  const second = invocation("retained");
+  const initial = messages([...first.items(), ...second.items()]);
+  retireCoalescedMessageSources([first.output]);
+  expect(extractToolCardsCached(initial[0])[0]).toMatchObject({
+    callId: "retired",
+    completed: true,
+  });
+  expect(extractToolCardsCached(initial[1])[0]).toMatchObject({
+    callId: "retained",
+    completed: true,
+  });
+  const rebuilt = messages([...first.items(), ...second.items()]);
+  expect(sameReferences(rebuilt, initial)).toEqual([false, true]);
+  expect(extractToolCardsCached(rebuilt[0])[0]).toMatchObject({
+    callId: "retired",
+    completed: true,
+  });
+});
+
+it("keeps prose memo identity through reassembly until its canonical source retires", () => {
+  const text = { type: "text", text: "Retained commentary" };
+  const source = assistant([text, toolCall("prose-call")]);
+  const output = { role: "toolResult", content: [result("prose-call")] };
+  const sibling = invocation("sibling");
+  const items = () => [
+    item(source, "prose-owner"),
+    item(output, "prose-result"),
+    ...sibling.items(),
+  ];
+  const prose = (rows: unknown[]) =>
+    rows.find((message) => (message as { content?: unknown[] }).content?.includes(text));
+  const initial = prose(messages(items()));
+  expect(initial).toBeDefined();
+  const published = JSON.stringify(initial);
+
+  // Change a sibling to bypass the full-turn cache without changing this source.
+  sibling.output.content = [{ ...result("sibling"), text: "updated sibling" }];
+  expect(prose(messages(items()))).toBe(initial);
+  retireCoalescedMessageSources([sibling.output]);
+  expect(prose(messages(items()))).toBe(initial);
+
+  const retired = retireCoalescedMessageSources([source]);
+  expect(retired).toContain(initial);
+  expect(prose(messages(items()))).not.toBe(initial);
+  expect(JSON.stringify(initial)).toBe(published);
 });

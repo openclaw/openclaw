@@ -75,7 +75,7 @@ suite.define(() => {
         /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
       );
       await page.keyboard.press(shortcut);
-      const search = pane.getByRole("textbox", { name: "Search messages", exact: true });
+      const search = pane.getByRole("textbox", { name: "Search loaded messages", exact: true });
       await search.fill(keyword);
       // The unrelated prompt leaving the DOM proves the filter has committed.
       await expect.poll(() => prompt.count()).toBe(0);
@@ -177,7 +177,7 @@ suite.define(() => {
         /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
       );
       await page.keyboard.press(shortcut);
-      const search = pane.getByRole("textbox", { name: "Search messages", exact: true });
+      const search = pane.getByRole("textbox", { name: "Search loaded messages", exact: true });
       await search.fill("Titel: fix(review)");
       await expect.poll(() => prompt.count()).toBe(0);
       await expect.poll(marked).toEqual([

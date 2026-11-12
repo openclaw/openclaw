@@ -19,19 +19,18 @@ import {
   MAX_CACHED_CHAT_SESSIONS,
   setSessionCacheValue,
 } from "./session-cache.ts";
-import {
-  MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
-  MAX_CACHED_CHAT_WEIGHT,
-  type ChatCacheObserver,
-  type ChatMessageCache,
-  type ChatSessionSnapshot,
-} from "./session-message-cache.ts";
+import type { ChatCacheObserver, ChatMessageCache } from "./session-message-cache.ts";
 import {
   accessSidebarSnapshot,
   sidebarRecordBytes,
   SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
   type SidebarRecord,
 } from "./session-sidebar-snapshot.ts";
+import {
+  MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
+  MAX_CACHED_CHAT_WEIGHT,
+} from "./session-snapshot-budget.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import {
   isPersistableChatSnapshotKey,
   CHAT_SNAPSHOT_METADATA_STORE_NAME,

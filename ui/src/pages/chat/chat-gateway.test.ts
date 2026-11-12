@@ -1,15 +1,14 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { sessionListResult } from "../../test-helpers/chat-model.ts";
-import { createState } from "./chat-gateway.test-support.ts";
+import { createHistoryStateForClient, createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -252,32 +251,9 @@ function createHistorySnapshot(messages: Array<unknown>, overrides: Partial<Chat
   return createResolvedHistoryState({ messages, thinkingLevel: "low" }, overrides);
 }
 
-function createHistoryStateForClient(
-  client: NonNullable<ChatState["client"]>,
-  overrides: Partial<ChatHistoryHost> = {},
-): ChatHistoryHost {
-  const state = createState({ client, ...overrides });
-  if (overrides.sessions) {
-    return { ...state, sessions: overrides.sessions };
-  }
-  const sessions = createTestSessionCapability({
-    snapshot: {
-      client: state.client,
-      phase: state.connected ? "connected" : "reconnecting",
-      hello: state.hello,
-      sessionKey: state.sessionKey,
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  });
-  vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
-  onTestFinished(() => sessions.dispose());
-  return { ...state, sessions };
-}
-
 function createAssistantHistory(text: string, overrides: Omit<HistoryResult, "messages"> = {}) {
   return {
-    messages: [replyText(text)],
+    messages: [replyText(text, { seq: 1 })],
     ...overrides,
   };
 }
@@ -1141,13 +1117,19 @@ describe("loadChatHistory filtering", () => {
         content: [{ type: "text", text: repair }],
       },
     ];
+    const messages = [...hidden, ...visible];
+    for (const [index, message] of messages.entries()) {
+      Object.assign(message, {
+        __openclaw: { ...("__openclaw" in message ? message["__openclaw"] : {}), seq: index + 1 },
+      });
+    }
     const { state } = createResolvedHistoryState({
-      messages: [...hidden, ...visible],
+      messages,
       thinkingLevel: "low",
       verboseLevel: "full",
     });
     await loadChatHistory(state);
-    expect(state.chatMessages).toEqual(visible);
+    expect(state.chatMessages).toEqual(messages.slice(hidden.length));
     expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatLoading).toBe(false);
   });
@@ -1195,7 +1177,7 @@ describe("loadChatHistory filtering", () => {
   });
 
   it("caches global history under the selected agent only", async () => {
-    const messages = [replyText("work history")];
+    const messages = [replyText("work history", { seq: 1 })];
     const { state } = createResolvedHistoryState(
       { messages },
       {
@@ -1252,11 +1234,11 @@ describe("loadChatHistory retry handling", () => {
     expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(true);
     await loadChatHistory(secondState);
     expect(request).toHaveBeenCalledTimes(3);
-    expect(secondState.chatMessages).toEqual([replyText("awake")]);
+    expect(secondState.chatMessages).toEqual([replyText("awake", { seq: 1 })]);
     expect(firstState.chatMessages).toEqual([]);
     secondAttempt.resolve(createAssistantHistory("expired"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(secondState.chatMessages).toEqual([replyText("awake")]);
+    expect(secondState.chatMessages).toEqual([replyText("awake", { seq: 1 })]);
   });
 
   const historyTool = (id: string, text: string, timestamp: number, seq: number) => ({
@@ -1528,7 +1510,7 @@ describe("loadChatHistory retry handling", () => {
       if (outcome === "success") {
         freshRequest.resolve(createAssistantHistory("fresh history", { thinkingLevel: "low" }));
         await freshLoad;
-        expect(state.chatMessages).toEqual([replyText("fresh history")]);
+        expect(state.chatMessages).toEqual([replyText("fresh history", { seq: 1 })]);
         expect(state.chatLoading).toBe(false);
       } else {
         expect(state.lastError).toBeNull();

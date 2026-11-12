@@ -147,11 +147,25 @@ export function trackJsdomResources(): JsdomResourceTracking | undefined {
   };
   const NativeMutationObserver = MutationObserver;
   class TrackedMutationObserver extends NativeMutationObserver {
+    private readonly owned: boolean;
+
     constructor(callback: MutationCallback) {
       super(callback);
-      if (isRepoOwnedRegistrationStack(new Error().stack)) {
+      this.owned = isRepoOwnedRegistrationStack(new Error().stack);
+    }
+
+    override observe(target: Node, options?: MutationObserverInit): void {
+      super.observe(target, options);
+      if (this.owned) {
         observers.add(this);
       }
+    }
+
+    override disconnect(): void {
+      super.disconnect();
+      // Only active registrations belong to the generation. Retaining a
+      // disconnected observer also retains its callback's retired DOM owner.
+      observers.delete(this);
     }
   }
   // Vitest's jsdom globals and window are distinct objects. Source may use either.

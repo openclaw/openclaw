@@ -24,7 +24,6 @@ import {
 } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
@@ -192,7 +191,6 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
   }
   const [root, setRoot] = createSignal<HTMLDivElement>();
   let stopSelectionGesture: (() => void) | undefined;
-  const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => {
     const element = root();
@@ -381,14 +379,10 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
         ref={[
           elementRef((element: HTMLDivElement) => {
             setRoot(element);
-            // Retained roots can settle before refs; bind viewport and input together here.
+            // Retained roots can settle before refs; bind viewport custody here.
             const releaseViewport = input.bindViewport?.(element);
-            const stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
-              listen(element, type, historyIntent, { passive: true }),
-            );
             return () => {
               stopSelectionGesture?.();
-              stopHistory.forEach((stop) => stop());
               releaseViewport?.();
             };
           }),
@@ -450,10 +444,10 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
             input.props.onOpenSessionLink?.(sessionTarget);
             return;
           }
+          // Solid delegates keydown: the native observer already took over,
+          // but link handling must own the key before boundary paging.
           input.props.onHistoryIntent?.(event);
         }}
-        onTouchEnd={(event) => input.props.onHistoryIntent?.(event)}
-        onTouchCancel={(event) => input.props.onHistoryIntent?.(event)}
         onClick={(event) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);

@@ -6,7 +6,7 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { chatHistoryRequestParams } from "../pages/chat/chat-history-request-params.ts";
 import { peekPrewarmedChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
-import type { ChatSessionSnapshot } from "../pages/chat/session-message-cache.ts";
+import type { ChatSessionSnapshot } from "../pages/chat/session-snapshot-contract.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import type { prepareApplicationStartup } from "./bootstrap-connection.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";

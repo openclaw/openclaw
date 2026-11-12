@@ -1,28 +1,19 @@
 /* @vitest-environment jsdom */
 import { Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
-import {
-  canAutoFollowChat,
-  type ChatScrollHost,
-  handleChatScroll,
-  handleChatScrollTakeover,
-} from "../scroll.ts";
+import { makeChatHost } from "../chat-host.test-support.ts";
+import { canAutoFollowChat, handleChatScroll, handleChatScrollTakeover } from "../scroll.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
-import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
+import { readerScroll } from "./chat-transcript-offset-observer.test-support.ts";
 import {
   isTranscriptProgrammaticScroll,
+  isTranscriptMaintenanceScroll,
   observeTranscriptOffset,
-  scrollTranscriptOffset,
   scrollTranscriptToEnd,
   TranscriptOffsetState,
 } from "./chat-transcript-offset-observer.ts";
-import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
-import { createTranscriptPresentation } from "./chat-transcript-session.ts";
-import {
-  installTranscriptDomMocks,
-  resetTranscriptTestDom,
-  resizeObservers,
-} from "./chat-transcript.test-support.ts";
+import type { TranscriptNativeScroll } from "./chat-transcript-scroll-events.ts";
+import { clampedMeasurements, offsetOwner } from "./chat-transcript.test-support.ts";
 
 it("waits for measured rows before renewing a growing end destination", () => {
   const element = document.createElement("div");
@@ -88,28 +79,11 @@ function createWheelForecastObserver() {
   virtualizer.scrollOffset = 1000;
   virtualizer.targetWindow = window;
   const onWheel = vi.fn();
+  const onHistoryIntent = vi.fn();
   const onOffset = vi.fn();
   onTestFinished(
     observeTranscriptOffset(
-      {
-        state,
-        getScrollElement: () => element,
-        endAnchor: new TranscriptEndAnchor(() => {}),
-        prependAnchor: new TranscriptPrependAnchor(
-          new Map(),
-          () => {},
-          () => false,
-        ),
-        canFollowEnd: () => false,
-        isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-        cancelScroll: () => {},
-        onLayoutCorrection: () => {},
-        invalidate: () => {},
-        onOffset,
-        onWheel,
-        onReaderScroll: () => {},
-        onComposerLayout: () => {},
-      },
+      offsetOwner(state, element, { onOffset, onWheel, onHistoryIntent }),
       virtualizer,
       (offset) => {
         virtualizer.scrollOffset = offset;
@@ -118,7 +92,7 @@ function createWheelForecastObserver() {
   );
   onWheel.mockClear();
   onOffset.mockClear();
-  return { element, virtualizer, onWheel, onOffset };
+  return { element, virtualizer, onWheel, onOffset, onHistoryIntent };
 }
 
 it.each([
@@ -251,20 +225,7 @@ it.each([undefined, 1000])(
     });
     onTestFinished(
       observeTranscriptOffset(
-        {
-          state,
-          getScrollElement: () => element,
-          endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-          canFollowEnd: () => true,
-          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-          cancelScroll,
-          onLayoutCorrection: vi.fn(),
-          invalidate: vi.fn(),
-          onOffset: vi.fn(),
-          onReaderScroll: vi.fn(),
-          onComposerLayout: vi.fn(),
-        },
+        offsetOwner(state, element, { canFollowEnd: () => true, cancelScroll }),
         virtualizer,
         vi.fn(),
       ),
@@ -335,30 +296,26 @@ it.each([
     recordedEnd.push(endAnchor.isRecordedEnd(offset));
     order.push("virtualizer");
   });
-  const onNativeScroll = vi.fn((event: Event) => {
-    expect(event.currentTarget).toBe(element);
-    expect(event.target).toBe(element);
-    paneRecordedEnd.push(endAnchor.isRecordedEnd(element.scrollTop));
+  const onNativeScroll = vi.fn((scroll: TranscriptNativeScroll) => {
+    expect(scroll.viewport).toEqual({
+      scrollTop: element.scrollTop,
+      clientHeight: 100,
+      scrollHeight: 120,
+    });
+    paneRecordedEnd.push(endAnchor.isRecordedEnd(scroll.viewport.scrollTop));
     order.push("pane");
   });
   onTestFinished(
     observeTranscriptOffset(
-      {
-        state,
-        getScrollElement: () => element,
+      offsetOwner(state, element, {
         endAnchor,
-        prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-        canFollowEnd: () => false,
-        isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
         cancelScroll,
-        onLayoutCorrection: vi.fn(),
-        invalidate: vi.fn(),
         onOffset,
         onReaderScroll,
         onRequestEnd,
         onComposerLayout: () => order.push("composer"),
         onNativeScroll,
-      },
+      }),
       virtualizer,
       deliver,
     ),
@@ -369,13 +326,14 @@ it.each([
   recordedEnd.length = 0;
   element.scrollTop = 20;
   element.dispatchEvent(new Event("scroll"));
-  expect(order).toEqual(["composer", "virtualizer", "pane"]);
+  expect(order).toEqual(["composer", "pane", "virtualizer"]);
+  expect(onNativeScroll).toHaveBeenCalledExactlyOnceWith(readerScroll(20, 20, 100, 120));
   expect(state.nativeInputActive).toBe(false);
   expect(deliver).toHaveBeenCalledWith(20, true);
   expect(onOffset).toHaveBeenCalledOnce();
   expect(recordedEnd).toEqual([true]);
   expect(paneRecordedEnd).toEqual([true]);
-  expect(geometryReads).toEqual([false, false]);
+  expect(geometryReads).toEqual([false, false, false, false]);
   // Earlier PageUp motion can arrive while a newer Latest prepares its destination.
   state.scrollCommand = { target: "end", behavior: "smooth" };
   element.scrollTop = 12;
@@ -487,17 +445,15 @@ it.each([
   element.scrollTop = 400;
   const state = new TranscriptOffsetState();
   const endAnchor = new TranscriptEndAnchor(() => {});
-  const policy: ChatScrollHost = {
+  const policy = makeChatHost({
     renderLifecycle: { afterCommit: () => () => {} },
     chatScrollElement: () => element,
     chatLastScrollTop: 400,
     chatHasAutoScrolled: true,
     chatUserNearBottom: false,
-    chatFollowLocked: false,
-    chatReadingHistory: false,
-    chatNewMessagesBelow: false,
+    chatHistoryPagination: { hasMore: false },
     chatIsProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-  };
+  });
   handleChatScrollTakeover(policy);
   expect(canAutoFollowChat(policy)).toBe(false);
 
@@ -512,20 +468,13 @@ it.each([
     observeElementRect: (_, callback) => callback({ width: 800, height: 200 }),
     observeElementOffset: (instance, callback) =>
       observeTranscriptOffset(
-        {
-          state,
-          getScrollElement: () => element,
+        offsetOwner(state, element, {
           endAnchor,
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
           canFollowEnd: () => canAutoFollowChat(policy),
-          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-          cancelScroll: vi.fn(),
           onLayoutCorrection: (before, after) => endAnchor.recordLayoutCorrection(before, after),
-          invalidate: vi.fn(),
-          onOffset: vi.fn(),
           onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
-          onComposerLayout: vi.fn(),
-        },
+          onNativeScroll: (scroll) => handleChatScroll(policy, scroll),
+        }),
         instance,
         callback,
       ),
@@ -533,9 +482,6 @@ it.each([
   const { _didMount: mount, _willUpdate: update } = virtualizer;
   onTestFinished(mount());
   update();
-  const onScroll = (event: Event) => handleChatScroll(policy, event);
-  element.addEventListener("scroll", onScroll);
-  onTestFinished(() => element.removeEventListener("scroll", onScroll));
   element.dispatchEvent(new Event("scroll"));
 
   // ResizeObserver can synchronize physical movement before the native scroll event.
@@ -557,81 +503,8 @@ it.each([
   { action: "accumulates separate resize deliveries", command: false, expected: 500 },
   { action: "settles an explicit no-op command before measurement", command: true, expected: 300 },
 ])("$action while native compensation is clamped", async ({ command, expected }) => {
-  installTranscriptDomMocks();
-  const element = document.body.appendChild(document.createElement("div"));
-  let scrollHeight = 400;
-  let scrollTop = 300;
-  Object.defineProperties(element, {
-    clientHeight: { value: 100 },
-    scrollHeight: { get: () => scrollHeight },
-    scrollTop: {
-      get: () => scrollTop,
-      set: (value: number) => {
-        scrollTop = Math.max(0, Math.min(value, scrollHeight - 100));
-      },
-    },
-    scrollTo: {
-      value: (options: ScrollToOptions) => {
-        element.scrollTop = options.top ?? element.scrollTop;
-      },
-    },
-  });
-  const rows = Array.from({ length: 4 }, (_, index) => {
-    const row = element.appendChild(document.createElement("div"));
-    row.dataset.index = String(index);
-    return row;
-  });
-  const state = new TranscriptOffsetState();
-  const host = { layout: new TranscriptLayoutOwner(vi.fn()), contentElement: null };
-  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: rows.length,
-    initialOffset: 300,
-    overscan: 3,
-    getScrollElement: () => element,
-    estimateSize: () => 100,
-    scrollToFn: (offset, options, instance) =>
-      scrollTranscriptOffset(state, host, 0, offset, options, instance),
-    observeElementRect: (_, callback) => callback({ width: 800, height: 100 }),
-    observeElementOffset: (instance, callback) =>
-      observeTranscriptOffset(
-        {
-          state,
-          getScrollElement: () => element,
-          endAnchor: new TranscriptEndAnchor(() => {}),
-          prependAnchor: new TranscriptPrependAnchor(new Map(), vi.fn(), () => false),
-          canFollowEnd: () => false,
-          isProgrammaticScroll: () => isTranscriptProgrammaticScroll(state, element),
-          cancelScroll: vi.fn(),
-          onLayoutCorrection: vi.fn(),
-          invalidate: vi.fn(),
-          onOffset: vi.fn(),
-          onReaderScroll: vi.fn(),
-          onComposerLayout: vi.fn(),
-        },
-        instance,
-        callback,
-      ),
-    measureElement: (row, entry) => presentation.measureElement(row, entry),
-  });
-  const presentation = createTranscriptPresentation(
-    () => element,
-    virtualizer,
-    () => rows,
-    () => state.syncNativeOffset?.(),
-  );
-  const { _didMount: mount, _willUpdate: update } = virtualizer;
-  const dispose = mount();
-  onTestFinished(() => {
-    dispose();
-    resetTranscriptTestDom();
-  });
-  update();
-  for (const row of rows) {
-    virtualizer.measureElement(row);
-  }
-  for (const observer of resizeObservers) {
-    observer.emitTarget(rows[0]!, 800, 200);
-  }
+  const { element, range, state, virtualizer, update, measure } = clampedMeasurements();
+  measure(0, 200);
   expect(virtualizer.scrollOffset).toBe(400);
   expect(element.scrollTop).toBe(300);
 
@@ -641,14 +514,74 @@ it.each([
     virtualizer.scrollToOffset(300, { behavior: "instant" });
     state.syncNativeOffset?.();
   } else {
-    for (const observer of resizeObservers) {
-      observer.emitTarget(rows[1]!, 800, 200);
-    }
+    measure(1, 200);
   }
   expect.soft(virtualizer.scrollOffset).toBe(expected);
   if (!command) {
-    scrollHeight = 600;
+    range.height = 600;
     update();
     expect(element.scrollTop).toBe(expected);
   }
+});
+
+it("preserves reader policy when virtual measurement retries a clamped adjustment", () => {
+  const policy = makeChatHost({
+    chatHasAutoScrolled: true,
+    chatFollowLocked: true,
+    chatReadingHistory: true,
+    chatLastScrollTop: 300,
+  });
+  const { element, range, state, virtualizer, update, owner, measure } = clampedMeasurements();
+  policy.chatScrollElement = () => element;
+  policy.chatIsProgrammaticScroll = () => isTranscriptProgrammaticScroll(state, element);
+  policy.chatIsMaintenanceScroll = () => isTranscriptMaintenanceScroll(state, element);
+  Object.assign(owner, {
+    canFollowEnd: () => canAutoFollowChat(policy),
+    onReaderScroll: (towardEnd: boolean | undefined) => handleChatScrollTakeover(policy, towardEnd),
+    onNativeScroll: (scroll: TranscriptNativeScroll) => handleChatScroll(policy, scroll),
+  });
+  const native = (offset = element.scrollTop) => {
+    element.scrollTop = offset;
+    element.dispatchEvent(new Event("scroll"));
+  };
+  measure(0, 200);
+  expect(virtualizer.scrollOffset).toBe(400);
+  expect(element.scrollTop).toBe(300);
+  native();
+  // Partial and complete sizer commits retry the same absolute target.
+  for (const [height, offset] of [
+    [416, 316],
+    [500, 400],
+  ] as const) {
+    range.height = height;
+    update();
+    expect(element.scrollTop).toBe(offset);
+    native();
+    expect([policy.chatFollowLocked, policy.chatReadingHistory]).toEqual([true, true]);
+  }
+  range.height -= 8;
+  native(392);
+  expect([policy.chatFollowLocked, policy.chatReadingHistory]).toEqual([true, true]);
+  element.dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
+  expect([policy.chatFollowLocked, policy.chatReadingHistory]).toEqual([false, false]);
+  expect(isTranscriptProgrammaticScroll(state, element)).toBe(false);
+});
+
+it("forecasts a clamped wheel before one history intent without writing its position", () => {
+  const { element, virtualizer, onWheel, onHistoryIntent } = createWheelForecastObserver();
+  element.scrollTop = 0;
+  virtualizer.scrollOffset = 0;
+  const order: string[] = [];
+  onWheel.mockImplementation(() => order.push("forecast"));
+  onHistoryIntent.mockImplementation(() => order.push("history"));
+  const write = vi.spyOn(virtualizer, "scrollToOffset");
+  const event = new WheelEvent("wheel", { deltaY: -240, bubbles: true, cancelable: true });
+  element.dispatchEvent(event);
+  expect(onWheel).toHaveBeenCalledExactlyOnceWith(-240);
+  expect(onHistoryIntent).toHaveBeenCalledExactlyOnceWith(event);
+  expect(order).toEqual(["forecast", "history"]);
+  expect(event.defaultPrevented).toBe(false);
+  expect(element.scrollTop).toBe(0);
+  expect(virtualizer.scrollOffset).toBe(0);
+  expect(write).not.toHaveBeenCalled();
 });

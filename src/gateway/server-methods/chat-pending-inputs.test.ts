@@ -426,6 +426,38 @@ describe("pending input read boundary", () => {
       expect(await lookup()).toEqual({ ok: false, unavailableReason: "not_found" });
     }));
 
+  it("keeps pending input custody when its oversized display has no native sequence", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("oversized-input");
+      await using inputs = pendingInputs(scope);
+      const receipt = await inputs.stage("oversized-run", {
+        content: "Pending input ".repeat(20_000),
+      });
+      const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 300_000 });
+      expect(page).toMatchObject({
+        total: 1,
+        items: [
+          {
+            id: receipt.inputId,
+            runId: "oversized-run",
+            state: "queued",
+            message: {
+              role: "user",
+              content: [{ text: "[chat.history omitted: message too large]" }],
+              __openclaw: {
+                id: `pending:${receipt.inputId}`,
+                truncated: true,
+                reason: "oversized",
+              },
+            },
+          },
+        ],
+      });
+      expect(page.items[0]?.message).not.toHaveProperty("__openclaw.seq");
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(128 * 1024);
+      expect(await loadTranscriptEvents(scope)).toEqual([]);
+    }));
+
   it("does not reveal an input hidden by the canonical history visibility policy", () =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const scope = await createScope("hidden-input", "hidden-session");

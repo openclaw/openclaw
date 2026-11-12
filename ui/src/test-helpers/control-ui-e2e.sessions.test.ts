@@ -3,13 +3,16 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
+import { normalizeScenario } from "./control-ui-mock-scenario.ts";
 import { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
 import { sessionClient } from "./session-gateway-client.test-support.ts";
 
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
 
 it("serves requested initial history through the startup response owner", async ({ connect }) => {
-  const messages = [{ role: "assistant", content: "Cached conversation" }];
+  const messages = [
+    { role: "assistant", content: "Cached conversation", __openclaw: { id: "cached", seq: 1 } },
+  ];
   const client = sessionClient(
     await connect({ sessions: [notes], sessionTranscripts: { [notes.key]: { messages } } }),
     notes.key,
@@ -199,12 +202,13 @@ it.for(
     const history = expectDefined(transcripts[key], "onboarding history");
     const runId = "workboard-onboarding-run";
     const preview = expectDefined(history.inFlightRun, "onboarding run preview");
-    const connection = await connect({
+    const scenario = normalizeScenario({
       sessions: seed.cardSessions,
       sessionTranscripts:
         source === "transcript" ? transcripts : { [key]: { messages: history.messages } },
       ...(source === "scenario" ? { inFlightRun: preview } : {}),
     });
+    const connection = await connect(scenario);
     const client = sessionClient(connection, key);
     expect((await client.transcript(method)).inFlightRun).toMatchObject({
       runId,
@@ -216,6 +220,6 @@ it.for(
       inFlightRun: null,
       sessionInfo: { key, status: "killed", hasActiveRun: false, activeRunIds: [] },
     });
-    expect(reopened.messages).toEqual(history.messages);
+    expect(reopened.messages).toEqual(scenario.sessionTranscripts[key]!.messages);
   },
 );

@@ -2,9 +2,10 @@
 
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createComponent, createMemo, merge } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { nativeHistoryMessageSourceIdentity } from "../../lib/chat/history-message-identity.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -20,15 +21,20 @@ import { message, renderedText } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   appendChatThread,
+  appendSentinel,
+  installHistoryObserver,
+  historyPage,
+  pagination,
+  sparsePrefetchRequest,
   createNativeShowEarlierPane,
   createRefreshChatPane,
   createStagedPrefetchPane,
   createTestChatPane,
   nativeHistoryMessage,
   nativeHistorySeq,
-  stagedPagesRequest,
+  transcriptScrollFact,
 } from "./chat-pane-history.test-support.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import { applyChatPendingInputs, readChatInputRunIds } from "./chat-pending-inputs.ts";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
@@ -40,16 +46,6 @@ import {
 } from "./session-message-cache.ts";
 import { agentEvent } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
-
-type HistoryPageOverrides = Partial<Omit<ChatHistoryResult, "messages">>;
-
-function historyPage(seqs = [1, 2], extra: HistoryPageOverrides = {}) {
-  return {
-    messages: seqs.map((seq) => nativeHistoryMessage(seq)),
-    ...pagination(),
-    ...extra,
-  };
-}
 
 function testPane(request = vi.fn()) {
   return createTestChatPane({ client: { request } as unknown as GatewayBrowserClient });
@@ -68,13 +64,13 @@ function expectOlderRequest(
   sessionKey: string,
   offset = 2,
   index = -1,
+  budget = { limit: 80, maxBytes: 256 * 1024 },
 ) {
   expect(request.mock.calls.at(index)).toEqual([
     "chat.history",
     {
       sessionKey,
-      limit: 1000,
-      maxBytes: 3 * 1024 * 1024,
+      ...budget,
       toolResultMaxChars: 2_000,
       cursor: `older-${offset}`,
     },
@@ -82,54 +78,20 @@ function expectOlderRequest(
   ]);
 }
 
-function pagination(totalMessages = 4, nextOffset?: number): ChatHistoryPagination {
-  return nextOffset === undefined
-    ? { hasMore: false, totalMessages }
-    : { hasMore: true, nextOffset, olderCursor: `older-${nextOffset}`, totalMessages };
-}
-
-function installHistoryObserver(intersect = true) {
-  const observe = vi.fn();
-  const disconnect = vi.fn();
-  const construct =
-    vi.fn<(callback: IntersectionObserverCallback, observer: IntersectionObserver) => void>();
-  let rootMargin: string | undefined;
-  class FakeIntersectionObserver {
-    readonly root: IntersectionObserver["root"] | undefined;
-    constructor(
-      private readonly callback: IntersectionObserverCallback,
-      options?: IntersectionObserverInit,
-    ) {
-      rootMargin = options?.rootMargin;
-      this.root = intersect ? undefined : (options?.root ?? null);
-      construct(callback, this as unknown as IntersectionObserver);
-    }
-    disconnect() {
-      disconnect();
-    }
-    observe(target: Element) {
-      observe(target);
-      if (intersect) {
-        this.callback(
-          [{ isIntersecting: true } as IntersectionObserverEntry],
-          this as unknown as IntersectionObserver,
-        );
-      }
-    }
-  }
-  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
-  onTestFinished(() => {
-    vi.unstubAllGlobals();
-  });
-  return { observe, disconnect, construct, rootMargin: () => rootMargin };
-}
-
-function appendSentinel(thread: HTMLElement, pane: { historySentinel: HTMLElement | null }) {
-  const sentinel = document.createElement("div");
-  sentinel.className = "chat-history-sentinel";
-  thread.append(sentinel);
-  pane.historySentinel = sentinel;
-  return sentinel;
+function expectHistoryPagination(
+  state: { chatMessages: unknown[]; chatHistoryPagination: ChatHistoryPagination },
+  expected: ChatHistoryPagination,
+) {
+  const { segments, ...edges } = state.chatHistoryPagination;
+  expect(edges).toEqual(expected);
+  expect(new Set(segments?.flatMap((segment) => segment.sources))).toEqual(
+    new Set(
+      state.chatMessages.flatMap((row) => {
+        const source = nativeHistoryMessageSourceIdentity(row);
+        return source ? [source] : [];
+      }),
+    ),
+  );
 }
 
 it("passes only a proven profile viewer identity to transcript rendering", () => {
@@ -400,10 +362,9 @@ it("reveals a final catalog page even when its cursor is exhausted", async () =>
 
 it("keeps a failed older load blocked across a layout-induced scroll", async () => {
   const { pane, thread, request } = historyPane(Promise.reject(new Error("history unavailable")));
-  pane.transcriptScrollTop = 500;
 
   await pane.loadOlderMessages();
-  pane.handleTranscriptScroll({ currentTarget: thread, target: thread } as unknown as Event);
+  pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, 0));
 
   expect(pane.historyAutoLoadBlocked).toBe(true);
   expect(request).toHaveBeenCalledOnce();
@@ -428,7 +389,10 @@ it.each(["strictly older", "joined", "empty", "overlapping"])(
     );
     await Promise.all(loading);
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4]);
-    expect(state.chatHistoryPagination).toEqual(pagination(totalMessages));
+    expect(state.chatHistoryPagination).toMatchObject(pagination(totalMessages));
+    expect(
+      new Set(state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources)),
+    ).toEqual(new Set([1, 2, 3, 4].map((seq) => `seq:${seq}`)));
     expect(state.lastError).toBeNull();
     expect(pane.hasOlderMessages()).toBe(false);
     expect(scrollToOffset).not.toHaveBeenCalled();
@@ -507,10 +471,7 @@ it.each(["initial placement", "programmatic reveal"])(
       placement === "programmatic reveal",
     );
     const thread = appendChatThread(pane, { scrollTop: 80 });
-    pane.transcriptScrollTop = 100;
-    const event = new Event("scroll");
-    Object.defineProperty(event, "target", { value: thread });
-    pane.handleTranscriptScroll(event);
+    pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -20));
     expect(pane.historyObserverArmed).toBe(false);
   },
 );
@@ -521,11 +482,8 @@ it("prefetches older history from upward intent well before the top edge", async
   const thread = appendChatThread(pane, { scrollHeight: 4_000, clientHeight: 600 });
   appendSentinel(thread, pane);
   const observer = installHistoryObserver();
-  pane.transcriptScrollTop = 900;
   thread.scrollTop = 800;
-  const event = new Event("scroll");
-  Object.defineProperty(event, "target", { value: thread });
-  pane.handleTranscriptScroll(event);
+  pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -100));
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
   expectOlderRequest(request, state.sessionKey);
   expect(observer.rootMargin()).toBe("1200px 0px 0px");
@@ -538,18 +496,15 @@ it("resumes an armed history observation after a row correction in the same gest
   const { construct } = installHistoryObserver(false);
   const maintenance = vi.spyOn(pane.transcript, "isMaintenanceScroll", "get");
   maintenance.mockReturnValue(false);
-  const event = new Event("scroll");
-  Object.defineProperty(event, "target", { value: thread });
-  pane.transcriptScrollTop = 900;
   thread.scrollTop = 800;
-  pane.handleTranscriptScroll(event);
+  pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -100));
   const [notify, observer] = construct.mock.calls[0]!;
   maintenance.mockReturnValue(true);
   notify([{ isIntersecting: true } as IntersectionObserverEntry], observer);
   expect(request).not.toHaveBeenCalled();
   maintenance.mockReturnValue(false);
   thread.scrollTop = 700;
-  pane.handleTranscriptScroll(event);
+  pane.handleTranscriptScroll(transcriptScrollFact(pane, thread, -100));
   expect(construct).toHaveBeenCalledTimes(2);
   const [resume, replacement] = construct.mock.calls[1]!;
   resume([{ isIntersecting: true } as IntersectionObserverEntry], replacement);
@@ -557,9 +512,9 @@ it("resumes an armed history observation after a row correction in the same gest
 });
 
 it.each([false, true])("joins an in-flight prefetch (tail refreshed=%s)", async (refresh) => {
-  const held = createDeferred<unknown>();
-  const pages = stagedPagesRequest({
-    4: () => held.promise,
+  const held = createDeferred<ChatHistoryResult>();
+  const pages = sparsePrefetchRequest({
+    8: () => held.promise,
     5: () => historyPage([1, 2], { totalMessages: 9, sessionId: "current" }),
   });
   const request = vi.fn((method, params: { cursor?: string }) =>
@@ -569,31 +524,34 @@ it.each([false, true])("joins an in-flight prefetch (tail refreshed=%s)", async 
   );
   const { pane, state } = createStagedPrefetchPane(request);
   await pane.loadOlderMessages();
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
   const joined = pane.loadOlderMessages();
   if (refresh) {
     await loadChatHistory(state);
   }
-  held.resolve(historyPage([3, 4], { totalMessages: 8 }));
+  held.resolve(historyPage([5, 6], pagination(20, 10)));
   await expect(joined).resolves.toBe(true);
-  expect(request.mock.calls.filter(([, params]) => params.cursor === "older-4")).toHaveLength(1);
+  expect(request.mock.calls.filter(([, params]) => params.cursor === "older-8")).toHaveLength(1);
   expect(state.chatMessages.map(nativeHistorySeq)).toEqual(
-    refresh ? [1, 2, 7, 8, 9] : [3, 4, 5, 6, 7, 8],
+    refresh ? [1, 2, 7, 8, 9] : [1, 2, 3, 4, 5, 6, 7, 8],
   );
   if (refresh) {
-    expectOlderRequest(request, state.sessionKey, 5);
+    expectOlderRequest(request, state.sessionKey, 5, -1, {
+      limit: 400,
+      maxBytes: 3 * 1024 * 1024 - 1,
+    });
   }
 });
 
 it.each([
   { change: "cursor moves", offset: 5, total: 9, seqs: [31, 32], reset: false },
-  { change: "same-cursor projection resets", offset: 4, total: 8, seqs: [41, 42], reset: true },
+  { change: "same-cursor projection resets", offset: 8, total: 20, seqs: [41, 42], reset: true },
 ])("discards a staged page when the $change", async (row) => {
   let reads = 0;
   const replacement = row.seqs.map((seq) =>
     nativeHistoryMessage(seq, seq === 41 ? "post-rewind branch" : undefined),
   );
-  const request = stagedPagesRequest({
+  const request = sparsePrefetchRequest({
     [row.offset]: () => ({
       ...historyPage([], { totalMessages: row.total }),
       messages:
@@ -603,35 +561,21 @@ it.each([
     }),
   });
   const { pane, state } = createStagedPrefetchPane(request);
+  readChatInputRunIds(state);
   await pane.loadOlderMessages();
-  await vi.waitFor(() => expect(pane.stagedOlder.page).not.toBeNull());
+  await vi.waitFor(() => expect(pane.stagedHistory.page).not.toBeNull());
   if (row.reset) {
     resetChatHistoryProjection(state);
   }
   state.chatHistoryPagination = pagination(row.total, row.offset);
   await expect(pane.loadOlderMessages()).resolves.toBe(true);
-  expectOlderRequest(request, state.sessionKey, row.offset);
+  expectOlderRequest(request, state.sessionKey, row.offset, -1, {
+    limit: 400,
+    maxBytes: 3 * 1024 * 1024 - 1,
+  });
   expect(reads).toBe(row.reset ? 2 : 1);
-  const expectedTail = row.reset ? [] : historyPage([5, 6, 7, 8]).messages;
+  const expectedTail = row.reset ? [] : historyPage([7, 8]).messages;
   expect(state.chatMessages).toEqual([...replacement, ...expectedTail]);
-});
-
-it("keeps prefetch failures silent and retries reactively", async () => {
-  const nextPage = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("prefetch boom"))
-    .mockReturnValue(historyPage([3, 4], { totalMessages: 8 }));
-  const request = stagedPagesRequest({ 4: nextPage });
-  const { pane, state } = createStagedPrefetchPane(request);
-
-  await pane.loadOlderMessages();
-  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-  await vi.waitFor(() => expect(pane.stagedOlder.load).toBeNull());
-
-  expect(state.lastError).toBeNull();
-  await expect(pane.loadOlderMessages()).resolves.toBe(true);
-  expect(nextPage).toHaveBeenCalledTimes(2);
-  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([3, 4, 5, 6, 7, 8]);
 });
 
 it("reuses an armed history observer and ignores its queued callback after reset", async () => {
@@ -721,9 +665,10 @@ it.each([false, true])(
 
     await pane.loadOlderMessages();
 
-    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, undefined, 2, 3, 4, 5]);
-    expect(state.chatMessages.slice(2)).toEqual(held);
-    expect(state.chatHistoryPagination).toEqual(pagination(5));
+    // The synthetic prefix has no native identity or live/pending custody; residency retires it.
+    expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5]);
+    expect(state.chatMessages.slice(1)).toEqual(held);
+    expectHistoryPagination(state, pagination(5));
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[0]?.[1]).toMatchObject({ messageId: "source-2", limit: 1 });
     expect(request.mock.calls[1]?.[1]).toMatchObject({ cursor: "before-two" });
@@ -777,8 +722,18 @@ it.each([
     await loadChatHistory(state, { deferBranches: true });
     const held = state.chatMessages;
     await pane.loadOlderMessages(false);
-    const accepted = state.chatHistoryPagination;
-    expect(accepted).toEqual(
+    const { segments: acceptedSegments, ...acceptedEdges } = state.chatHistoryPagination;
+    expect(acceptedSegments).toEqual([
+      {
+        sources: empty ? [] : ["seq:5", "seq:6"],
+        hasOlder: true,
+        olderCursor: "older-A",
+        hasNewer: false,
+        boundedPacket: true,
+      },
+    ]);
+    expectHistoryPagination(
+      state,
       exhausted
         ? { hasMore: false, totalMessages: 6 }
         : { hasMore: true, olderCursor: "older-B", totalMessages: 6 },
@@ -787,11 +742,20 @@ it.each([
     await loadChatHistory(state, { deferBranches: true });
 
     expect(state.chatMessages).toEqual(held);
-    expect(state.chatHistoryPagination).toEqual(accepted);
+    expectHistoryPagination(state, acceptedEdges);
+    expect(state.chatHistoryPagination.segments).toEqual([
+      {
+        sources: empty ? [] : ["seq:5", "seq:6"],
+        hasOlder: !exhausted,
+        olderCursor: exhausted ? undefined : "older-B",
+        hasNewer: false,
+        boundedPacket: undefined,
+      },
+    ]);
     expect(
       readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: state.sessionKey })
         ?.pagination,
-    ).toEqual(accepted);
+    ).toEqual(state.chatHistoryPagination);
   },
 );
 
@@ -805,6 +769,56 @@ it.each([false, true])("silently stops unanchored history (trimmed=%s)", async (
   expect(request).not.toHaveBeenCalled();
   expect(pane.history.olderError).toBeNull();
   expect(pane.hasOlderMessages()).toBe(false);
+});
+
+it.each([false, true])("recovers an unavailable older edge (held prefix=%s)", async (prefix) => {
+  const held = (prefix ? [3, 4, 5, 6] : [5, 6]).map((seq) =>
+    Object.assign(nativeHistoryMessage(seq), { __openclaw: { seq, id: `held-${seq}` } }),
+  );
+  const tail = {
+    messages: held,
+    sessionId: "current",
+    hasMore: true,
+    nextOffset: held.length,
+    totalMessages: 6,
+  };
+  const { pane, state, request } = historyPane(
+    tail,
+    { ...tail, messages: held.slice(-2), nextOffset: 2, olderCursor: "older-A" },
+    ...(prefix ? [{ messages: [held[0]], sessionId: "current", olderCursor: "before-held" }] : []),
+    {
+      messages: (prefix ? [1, 2] : [1, 2, 3, 4]).map((seq) => nativeHistoryMessage(seq)),
+      sessionId: "current",
+    },
+  );
+  await loadChatHistory(state, { deferBranches: true });
+  await pane.loadOlderMessages(false);
+  expect(pane.history.olderError).toBeNull();
+  assert(state.chatHistoryPagination.hasMore);
+  expect(state.chatHistoryPagination.needsBoundary).not.toBe(true);
+  expect(state.chatHistoryPagination.olderCursor).toBeUndefined();
+  expect(request).toHaveBeenCalledTimes(1);
+
+  await loadChatHistory(state, { deferBranches: true });
+  expect(state.chatMessages).toEqual(held);
+  assert(state.chatHistoryPagination.hasMore);
+  if (prefix) {
+    expect(state.chatHistoryPagination).toMatchObject({ needsBoundary: true });
+  } else {
+    expect(state.chatHistoryPagination).toMatchObject({ olderCursor: "older-A" });
+    expect(state.chatHistoryPagination.needsBoundary).not.toBe(true);
+  }
+  await pane.loadOlderMessages();
+
+  expect(request.mock.calls[2]?.[1]).toMatchObject(
+    prefix ? { messageId: "held-3", limit: 1 } : { cursor: "older-A" },
+  );
+  expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+    cursor: prefix ? "before-held" : "older-A",
+  });
+  expect(state.chatMessages.map(nativeHistorySeq)).toEqual([1, 2, 3, 4, 5, 6]);
+  expect(state.chatMessages.slice(-held.length)).toEqual(held);
+  expect(state.chatHistoryPagination.hasMore).toBe(false);
 });
 
 it.each([
@@ -831,7 +845,7 @@ it.each([
   await loadChatHistory(state, { deferBranches: true });
 
   expect(state.chatMessages).toEqual([]);
-  expect(state.chatHistoryPagination).toEqual({
+  expectHistoryPagination(state, {
     hasMore: true,
     olderCursor: "older-A",
     nextOffset: 2,
@@ -859,7 +873,7 @@ it.each([false, true])("adopts authoritative full exhaustion (empty=%s)", async 
   await loadChatHistory(state, { deferBranches: true });
 
   expect(state.chatMessages).toEqual(messages);
-  expect(state.chatHistoryPagination).toEqual({ hasMore: false, totalMessages: 6 });
+  expectHistoryPagination(state, { hasMore: false, totalMessages: 6 });
 });
 
 it.each([
@@ -900,9 +914,10 @@ it.each([
     });
     await (older ? pane.loadOlderMessages() : loadChatHistory(state));
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual(expected);
-    expect(state.chatHistoryPagination).toEqual(pagination(total, hasMore ? 2 : undefined));
+    expectHistoryPagination(state, pagination(total, hasMore ? 2 : undefined));
     expect(pane.hasOlderMessages()).toBe(hasMore);
     if (kind === "replacement") {
+      // The prior physical session cannot authorize an adaptive reservation.
       expectOlderRequest(request, state.sessionKey, 2, 0);
       expect(request).toHaveBeenNthCalledWith(
         2,

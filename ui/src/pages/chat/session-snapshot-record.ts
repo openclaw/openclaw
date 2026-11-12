@@ -28,13 +28,36 @@ import {
   prewarmedHistoryStateValidator,
 } from "./chat-snapshot-prewarm.ts";
 import { detailsSnapshotSchema } from "./session-details-snapshot-schema.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);
 const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
+const residentCoverageSchema = {
+  intrinsicSource: json.optional(json.text),
+  newerCursor: json.optional(json.text),
+  hasNewer: json.optional(json.literal(true)),
+  needsNewerBoundary: json.optional(json.literal(true)),
+  segments: json.optional(
+    json.array(
+      json.object(
+        {
+          sources: json.array(json.text, 400),
+          olderCursor: json.optional(json.text),
+          newerCursor: json.optional(json.text),
+          hasOlder: json.boolean,
+          hasNewer: json.boolean,
+          boundedPacket: json.optional(json.literal(true)),
+        },
+        true,
+      ),
+      8,
+    ),
+  ),
+};
 const completePaginationSchema = json.object(
   {
+    ...residentCoverageSchema,
     completeSnapshot: json.optional(json.literal(true)),
     hasMore: json.literal(false),
     totalMessages: json.optional(nonnegative),
@@ -43,6 +66,7 @@ const completePaginationSchema = json.object(
 );
 const morePaginationSchema = json.object(
   {
+    ...residentCoverageSchema,
     hasMore: json.literal(true),
     nextOffset: json.optional(nonnegative),
     olderCursor: json.optional(json.refine(json.text, (value) => value.length > 0)),
@@ -220,7 +244,7 @@ export async function createSnapshotRecord(
       // Display rows are not Gateway page boundaries. Reopen the held oldest
       // source before paging; the original cursor would skip the discarded rows.
       changes.messages = messages.slice(start);
-      changes.pagination = trimmedChatHistoryPagination(source.pagination);
+      changes.pagination = trimmedChatHistoryPagination(source.pagination, changes.messages);
     }
     let historyChanged = false;
     const retainedMessages = changes.messages ?? messages;

@@ -169,6 +169,134 @@ describe("memory actor history", () => {
     });
   });
 
+  it("validates incognito append continuity without treating shared or historical anchors as proof", async () => {
+    const { append, read, storage } = await fixture([
+      message("root", null, "user", "shared root"),
+      message("old-leaf", "root", "assistant", "old branch"),
+    ]);
+    const previous = await read("recent", { options: { maxMessages: 80 } });
+    expect(previous.activeLeafEntryId).toBe("old-leaf");
+    expect(previous.deltaCursor).toEqual(expect.any(String));
+    assert(previous.deltaCursor);
+    const continuity = { cursor: previous.deltaCursor, activeLeafEntryId: "old-leaf" };
+    await append(message("appended", "old-leaf", "assistant", "same branch append"));
+    for (const messageId of ["root", "missing"]) {
+      const page = await read("around-id", {
+        options: { messageId, maxMessages: 80, maxBytes: 256 * 1024, continuity },
+      });
+      expect(page.found).toBe(messageId === "root");
+      expect(page.continuity).toEqual({ ...continuity, accepted: true });
+      expect(page.activeLeafEntryId).toBe("appended");
+      expect(page.deltaCursor).toEqual(expect.any(String));
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThanOrEqual(256 * 1024);
+    }
+    await append(message("sibling", "root", "assistant", "different branch"));
+    const sibling = await read("around-id", {
+      options: { messageId: "root", maxMessages: 80, continuity },
+    });
+    expect(sibling.found).toBe(true);
+    expect(sibling.continuity).toEqual({ ...continuity, accepted: false });
+    expect(sibling.activeLeafEntryId).toBe("sibling");
+    expect(messageIds(sibling.messages)).toEqual(["root", "sibling"]);
+
+    assert(sibling.deltaCursor);
+    const beforeReset = { cursor: sibling.deltaCursor, activeLeafEntryId: "sibling" };
+    const reset = await mutateMemory(storage, "session.metadata.append", {
+      scope: { agentId: "main", storePath, sessionKey, sessionId },
+      event: JSON.stringify({
+        type: "reset",
+        id: "reset",
+        parentId: "sibling",
+        reason: "new",
+        timestamp: "2026-10-31T00:00:00.000Z",
+      }),
+      options: {},
+    });
+    expect(reset.kind).toBe("committed");
+    expect(
+      (await read("around-id", { options: { messageId: "root", maxMessages: 80 } })).found,
+    ).toBe(true);
+    const page = await read("around-id", {
+      options: { messageId: "root", maxMessages: 80, continuity: beforeReset },
+    });
+    expect(page.found).toBe(false);
+    expect(page.messages).toEqual([]);
+    expect(page.continuity).toEqual({ ...beforeReset, accepted: false });
+    expect(page.activeLeafEntryId).toBe("reset");
+    const closed = {
+      messageId: "reset",
+      closedResetInterval: true,
+      direction: "older" as const,
+      maxMessages: 80,
+    };
+    expect(messageIds((await read("around-id", { options: closed })).messages)).toEqual([
+      "root",
+      "sibling",
+    ]);
+    const guardedClosed = await read("around-id", {
+      options: { ...closed, continuity: beforeReset },
+    });
+    expect(guardedClosed.continuity).toEqual({ ...beforeReset, accepted: false });
+    expect(messageIds(guardedClosed.messages)).not.toContain("root");
+    expect(messageIds(guardedClosed.messages)).not.toContain("sibling");
+  });
+
+  it("rejects old continuity after a same-branch generation rewrite", async () => {
+    const root = message("root", null, "user", "shared root");
+    const leaf = message("leaf", "root", "assistant", "original payload");
+    const { read, storage } = await fixture([root, leaf]);
+    const previous = await read("recent", {
+      options: { maxMessages: 80, captureReadWindow: true },
+    });
+    assert(previous.deltaCursor);
+    expect(previous.activeLeafEntryId).toBe("leaf");
+    const continuity = { cursor: previous.deltaCursor, activeLeafEntryId: "leaf" };
+    expect(
+      (await read("around-id", { options: { messageId: "root", maxMessages: 80, continuity } }))
+        .continuity,
+    ).toEqual({ ...continuity, accepted: true });
+    const hydrated = await read("hydrate", {});
+    assert(hydrated.kind === "full");
+    const before = hydrated.snapshot;
+    const replacement = { ...leaf, message: { ...leaf.message, content: "rewritten payload" } };
+    const outcome = await mutateMemory(storage, "session.transcript.replaceSuffix", {
+      scope: { agentId: "main", storePath, sessionKey, sessionId },
+      args: [[leaf], [replacement], 2, before.version.updatedAt, true, []],
+    });
+    assert(outcome.kind === "committed");
+    expect(outcome.value.replaced).toBe(true);
+    expect(outcome.value.version?.generation).not.toBe(before.version.generation);
+    const rewritten = await read("hydrate", {});
+    assert(rewritten.kind === "full");
+    expect(rewritten.snapshot.eventSeqs).toEqual(before.eventSeqs);
+    expect(rewritten.snapshot.version.rawSeq).toBe(before.version.rawSeq);
+    expect(rewritten.snapshot.events).toEqual([...before.events.slice(0, 2), replacement]);
+    const current = await read("recent", {
+      options: { maxMessages: 80, captureReadWindow: true },
+    });
+    expect(current.activeLeafEntryId).toBe(previous.activeLeafEntryId);
+    expect(current.readWindow?.latestResetRawSeq).toBe(previous.readWindow?.latestResetRawSeq);
+    const rejected = await read("around-id", {
+      options: { messageId: "root", maxMessages: 80, continuity },
+    });
+    expect(rejected.found).toBe(true);
+    expect(rejected.continuity).toEqual({ ...continuity, accepted: false });
+    expect(rejected.activeLeafEntryId).toBe("leaf");
+    expect(messageIds(rejected.messages)).toEqual(["root", "leaf"]);
+    expect(rejected.messages).toMatchObject([
+      { content: "shared root" },
+      { content: "rewritten payload" },
+    ]);
+    assert(rejected.deltaCursor);
+    expect(rejected.deltaCursor).not.toBe(previous.deltaCursor);
+    const fresh = { cursor: rejected.deltaCursor, activeLeafEntryId: "leaf" };
+    const accepted = await read("around-id", {
+      options: { messageId: "root", maxMessages: 80, continuity: fresh },
+    });
+    expect(accepted.continuity).toEqual({ ...fresh, accepted: true });
+    expect(accepted.messages).toEqual(rejected.messages);
+  });
+
   it("preserves reset-relative history, historical anchors, and detached reads", async () => {
     const { append, read } = await fixture([
       message("old-user", null, "user", "Before reset"),

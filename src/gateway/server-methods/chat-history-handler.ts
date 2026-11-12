@@ -56,11 +56,14 @@ import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import {
   resolveEmbeddedAgentRunRecoverySnapshot,
-  respondChatHistoryUnavailable,
   respondChatHistoryReadError,
+  respondChatHistoryUnavailable,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
-import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import {
+  prepareChatHistorySessionRead,
+  type RetainedChatHistoryRead,
+} from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { withChatStartupDiagnostics } from "./chat-server-timing.js";
@@ -85,11 +88,7 @@ export async function handleChatHistoryRequest({
 }: Omit<GatewayRequestHandlerOptions, "params"> & {
   params: ChatHistoryParams;
   method: ChatHistoryMethod;
-  retainedTranscript?: {
-    sessionId: string;
-    requireCurrentSession?: boolean;
-    verifyRetainedState?: () => Promise<boolean>;
-  };
+  retainedTranscript?: RetainedChatHistoryRead;
 }) {
   const {
     sessionKey,
@@ -104,6 +103,7 @@ export async function handleChatHistoryRequest({
     maxBytes,
     pendingBefore,
     inputRunIds,
+    continuity,
   } = params;
   const pageCursor = decodeChatHistoryPageCursor(cursor);
   const includePluginSteering = client?.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
@@ -131,6 +131,7 @@ export async function handleChatHistoryRequest({
     agentIdOverride: normalizeOptionalString(params.agentId),
     requestedSessionId,
     retainedSessionId,
+    requireCurrentSession: Boolean(continuity),
   });
   if (!selection) {
     return;
@@ -264,6 +265,7 @@ export async function handleChatHistoryRequest({
                     offset,
                     messageId,
                     ...(pageCursor ? { pageCursor } : {}),
+                    ...(continuity ? { continuity } : {}),
                   },
                   signal,
                   projectMentions,
@@ -525,13 +527,6 @@ export async function handleChatHistoryRequest({
           });
           let delta: Awaited<ReturnType<typeof readChatHistoryDelta>>;
           try {
-            const scope = {
-              agentId: sessionAgentId,
-              sessionEntry: entry,
-              sessionId,
-              sessionKey: canonicalKey,
-              storePath,
-            };
             delta = await readChatHistoryDelta(
               {
                 maxChars: effectiveMaxChars,
@@ -540,7 +535,13 @@ export async function handleChatHistoryRequest({
                 agentId: sessionAgentId,
                 cursor: deltaCursor,
                 maxBytes: maxResponseBytes,
-                scope,
+                scope: {
+                  agentId: sessionAgentId,
+                  sessionEntry: entry,
+                  sessionId,
+                  sessionKey: canonicalKey,
+                  storePath,
+                },
                 sessionKey: canonicalKey,
                 sessionSnapshot,
                 incognito: entry?.incognito,
@@ -555,7 +556,7 @@ export async function handleChatHistoryRequest({
           return withReadySessionRows(rowProjection, queries, (publicationRead) => {
             const publicationSharing = readCurrentSharing(publicationRead);
             if (!publicationSharing) {
-              return undefined;
+              return;
             }
             // Delta envelopes already contain budgeted session metadata from before restoration.
             if (
@@ -567,11 +568,11 @@ export async function handleChatHistoryRequest({
                 respond,
                 "session changed while reading history; reload the conversation",
               );
-              return undefined;
+              return;
             }
             if (delta.kind === "reset") {
               respond(true, delta);
-              return undefined;
+              return;
             }
             sessionInfo.activeLeafEntryId = delta.activeLeafEntryId;
             const boundedInFlightRun = boundInFlightRunSnapshotForChatHistory({
@@ -592,7 +593,6 @@ export async function handleChatHistoryRequest({
               ...(startupMetadata ? { metadata: startupMetadata } : {}),
             };
             respond(true, presentHistory(payload));
-            return undefined;
           });
         };
       }
@@ -610,6 +610,7 @@ export async function handleChatHistoryRequest({
         pendingInputs,
         ...(inputReceipts ? { inputReceipts, inputConsumptions } : {}),
         ...(historyPage.deltaCursor ? { deltaCursor: historyPage.deltaCursor } : {}),
+        ...(historyPage.continuity ? { continuity: historyPage.continuity } : {}),
         ...(historyPage.windowReset ? { windowReset: true } : {}),
         ...(historyPage.responseOffset !== undefined ? { offset: historyPage.responseOffset } : {}),
         defaults,

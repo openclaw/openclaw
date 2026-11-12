@@ -59,6 +59,7 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
+import { readTranscriptContinuityFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
 import { createTranscriptRawDeltaCursor } from "./session-transcript-raw-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -615,8 +616,16 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
   options: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageAnchorPage {
   const history = resolveVisibleHistoryProjection(projection);
+  const currentRead = options.continuity
+    ? readTranscriptContinuityFromProjection(
+        projection,
+        options.continuity,
+        history.latestResetRawSeq,
+      )
+    : {};
   const anchor = readDisplayableActiveEventMetadataById(projection, options.messageId);
   if (
+    !options.continuity &&
     options.closedResetInterval === true &&
     options.direction === "older" &&
     anchor?.event_type === "reset"
@@ -641,7 +650,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     options.expectedReadWindow,
   );
   const anchorSeq = anchor && resolveHistoryEventSequence(projection, history, anchor);
-  if (windowChange && anchorSeq === undefined) {
+  if (!options.continuity && windowChange && anchorSeq === undefined) {
     return {
       ...readSessionTranscriptHistoryEventPageFromProjection(projection, {
         offset: 0,
@@ -660,7 +669,9 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
     // active-path row. Unanchored history and current-display lookup stay
     // latest-reset-relative; missing or off-path IDs stay not-found.
     const historical =
-      anchor && readHistoricalHistoryAnchorPage(projection, history.displaySource, anchor, options);
+      !options.continuity &&
+      anchor &&
+      readHistoricalHistoryAnchorPage(projection, history.displaySource, anchor, options);
     if (historical) {
       return {
         ...historical,
@@ -669,6 +680,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
       };
     }
     return {
+      ...currentRead,
       events: [],
       found: false,
       hasOverreadContext: false,
@@ -703,6 +715,7 @@ export function readSessionTranscriptHistoryAnchorPageFromProjection(
   );
   const events = readVisibleHistoryRange(projection, start, endExclusive, history);
   return {
+    ...currentRead,
     events,
     ...(windowChange ? { windowReset: true } : {}),
     ...(windowChange || options.captureReadWindow

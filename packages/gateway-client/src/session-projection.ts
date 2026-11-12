@@ -2,15 +2,16 @@
 
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as readNonemptyString } from "@openclaw/normalization-core/string-coerce";
+import { entryMatches } from "./session-projection-entry-match.js";
 import {
   canRecoverSessionProjectionFinal,
   hasSessionProjectionAcceptedFinal,
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
-  isSessionProjectionToolContinuation,
   isToolUsePersistedFinalRow,
-  readFinalContentIdentity,
   readSessionProjectionFinalMessageIdentity,
+  readSessionProjectionPrimary,
+  type SessionProjectionPrimary,
 } from "./session-projection-final-identity.js";
 import {
   hasDisplayableSessionMessage,
@@ -21,13 +22,15 @@ import {
   isLocallyOptimisticSessionMessage,
   sameTranscriptIdentity,
   normalizeSessionProjectionRunId,
-  readAssistantStreamSegmentIdentity,
   sameAssistantPersistenceReceipt,
   type SessionMessageEnvelope,
   type SessionMessageIdentity,
   type SessionProjectionEntry,
 } from "./session-projection-message-identity.js";
-import { insertSessionProjectionEntry as insertEntry } from "./session-projection-order.js";
+import {
+  insertSessionProjectionEntry as insertEntry,
+  localOutputPlacement,
+} from "./session-projection-order.js";
 import { retainSessionProjectionRuns } from "./session-projection-run-retention.js";
 export {
   hasSessionProjectionAcceptedFinal,
@@ -81,6 +84,10 @@ export type SessionProjectionRun = {
   seq?: number;
   status: SessionProjectionRunStatus;
   message?: unknown;
+  primary?: SessionProjectionPrimary;
+  // Async observers hold only these tokens. Residency changes are not run activity.
+  revision?: symbol;
+  messageRevision?: symbol;
   acceptedFinalMessageIdentities?: readonly string[];
   inferredSnapshotTerminal?: {
     entry: SessionProjectionEntry;
@@ -118,6 +125,8 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
         messages: readonly unknown[];
         options?: SessionProjectionSnapshotOptions;
       }
+    | { type: "residencyChanged"; messages: readonly unknown[]; pinnedRunIds?: readonly string[] }
+    | { type: "localOutput"; message: unknown; sourceEmpty?: true }
     | ({
         type: "messagePersisted";
         message: unknown;
@@ -194,124 +203,6 @@ function readEventScope(event: ScopedSessionProjectionEvent): SessionProjectionS
   return scope;
 }
 
-function entryMatches(
-  left: SessionProjectionEntry,
-  right: SessionProjectionEntry,
-  allowSnapshotPromotion = false,
-): boolean {
-  const leftSegment = readAssistantStreamSegmentIdentity(left.message);
-  const rightSegment = readAssistantStreamSegmentIdentity(right.message);
-  // One transcript row can contain separate commentary and tool display parts.
-  if (leftSegment?.itemId !== rightSegment?.itemId) {
-    return false;
-  }
-  if (sameTranscriptIdentity(left.identity, right.identity)) {
-    return true;
-  }
-  if (sameAssistantPersistenceReceipt(left.identity, right.identity)) {
-    return true;
-  }
-  if (
-    left.identity?.role === "assistant" &&
-    right.identity?.role === "assistant" &&
-    left.identity.idempotencyKey &&
-    right.identity.idempotencyKey &&
-    left.identity.idempotencyKey !== right.identity.idempotencyKey
-  ) {
-    return false;
-  }
-  const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
-  const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
-  const durableMetadata = readRecord(readRecord(durableEntry?.message)?.["__openclaw"]);
-  if (
-    durableEntry?.identity?.role === "assistant" &&
-    provisionalEntry?.identity?.role === "assistant" &&
-    !durableEntry.identity.isImported &&
-    !provisionalEntry.identity.isImported &&
-    !provisionalEntry.identity.id
-  ) {
-    const durableSegment = durableEntry === left ? leftSegment : rightSegment;
-    const provisionalSegment = durableEntry === left ? rightSegment : leftSegment;
-    // Terminal cleanup can materialize commentary before cursor history catches up.
-    // Adopt its exact item/run without joining distinct durable rows or equal prose.
-    if (
-      provisionalEntry.identity.sequence === null &&
-      durableSegment?.runId &&
-      durableSegment.runId === provisionalSegment?.runId &&
-      durableSegment.itemId === provisionalSegment.itemId
-    ) {
-      return true;
-    }
-    // Commentary and tool continuations cannot own an unkeyed final answer.
-    if (
-      provisionalEntry.live &&
-      !durableSegment &&
-      !isSessionProjectionToolContinuation(durableEntry.message) &&
-      // Admitting a text-only toolUse-persisted final must not let it merge
-      // with a *different* same-run answer in either direction: the kept side
-      // suppresses or replaces the other without any content comparison
-      // downstream. Scope the content requirement to that newly admitted
-      // class only; pre-existing matches (identity promotions, non-toolUse
-      // rows) keep their established semantics.
-      (!isToolUsePersistedFinalRow(durableEntry.message) ||
-        readFinalContentIdentity(durableEntry.message) ===
-          readFinalContentIdentity(provisionalEntry.message)) &&
-      provisionalEntry.identity.sequence === null &&
-      (provisionalEntry.afterSequence === undefined ||
-        (provisionalEntry.afterSequence !== null &&
-          durableEntry.identity.sequence !== null &&
-          durableEntry.identity.sequence > provisionalEntry.afterSequence)) &&
-      durableEntry.identity.runId &&
-      durableEntry.identity.runId === provisionalEntry.identity.runId &&
-      (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
-        durableMetadata?.runTerminal === true)
-    ) {
-      return true;
-    }
-  }
-  const persisted = left.identity;
-  const observed = right.identity;
-  if (
-    allowSnapshotPromotion &&
-    right.live &&
-    persisted &&
-    observed &&
-    persisted.role === observed.role &&
-    !persisted.isImported &&
-    !observed.isImported &&
-    persisted.id &&
-    !observed.id &&
-    persisted.sequence !== null &&
-    persisted.sequence === observed.sequence
-  ) {
-    // Only current-scope history can promote an observed native sequence.
-    return true;
-  }
-  if (left.pending && right.pending) {
-    return Boolean(
-      left.identity?.role === right.identity?.role &&
-      left.pendingRunId &&
-      left.pendingRunId === right.pendingRunId,
-    );
-  }
-  const pending = left.pending ? left : right.pending ? right : null;
-  const authoritative = pending === left ? right : pending === right ? left : null;
-  return Boolean(
-    pending &&
-    authoritative &&
-    pending.identity &&
-    authoritative.identity &&
-    pending.identity.role === authoritative.identity.role &&
-    !pending.identity.isImported &&
-    !authoritative.identity.isImported &&
-    pending.pendingRunId &&
-    pending.pendingRunId === (authoritative.identity.sendId ?? authoritative.identity.runId) &&
-    (pending.identity.sequence === null ||
-      authoritative.identity.sequence === null ||
-      pending.identity.sequence === authoritative.identity.sequence),
-  );
-}
-
 function withEntries(
   state: SessionProjectionState,
   entries: readonly SessionProjectionEntry[],
@@ -363,7 +254,10 @@ export function projectLiveSessionMessage(
         const inferredSnapshotTerminal = { entry: provisional, matchedIdentity: durable.identity };
         state = {
           ...state,
-          runs: { ...state.runs, [runId]: { ...run, inferredSnapshotTerminal } },
+          runs: {
+            ...state.runs,
+            [runId]: { ...run, inferredSnapshotTerminal, revision: Symbol("run") },
+          },
         };
       }
     }
@@ -421,9 +315,17 @@ export function reconcileSessionProjectionSnapshot(
   const runs: Record<string, SessionProjectionRun> = { ...state.runs };
   for (const current of state.entries) {
     if (
-      (!current.live && !current.pending) ||
+      (!current.live && !current.pending && !current.localOutput) ||
       options.shouldIncludeMessage?.(current.message) === false
     ) {
+      continue;
+    }
+    if (current.localOutput) {
+      const existing = entries.findIndex((entry) => entry.message === current.message);
+      entries =
+        existing < 0
+          ? insertEntry(entries, current, runs)
+          : entries.toSpliced(existing, 1, current);
       continue;
     }
     const matches = entries.filter((entry) => entryMatches(entry, current, true));
@@ -445,6 +347,7 @@ export function reconcileSessionProjectionSnapshot(
         // Tentative history matches retain their original live ordering until confirmed.
         runs[current.identity.runId] = {
           ...run,
+          revision: Symbol("run"),
           inferredSnapshotTerminal: {
             entry: current,
             matchedIdentity: terminalMatch.entry.identity,
@@ -474,7 +377,7 @@ export function reconcileSessionProjectionSnapshot(
       entries = insertEntry(entries, inferred.entry, runs);
     }
     const { inferredSnapshotTerminal: _inferred, ...settledRun } = run;
-    runs[runId] = settledRun;
+    runs[runId] = { ...settledRun, revision: Symbol("run") };
   }
   return {
     ...withEntries(state, entries),
@@ -515,11 +418,12 @@ function updateRun(
   if (current && current.status !== "streaming" && !resumesErrorProjection) {
     const incomingFinalIdentity = readSessionProjectionFinalMessageIdentity(incoming.message);
     const incomingIsFinal = incoming.status === "completed" || incoming.status === "yielded";
-    const currentHasDisplayableMessage = hasDisplayableSessionMessage(current.message);
+    const currentHasDisplayableMessage =
+      current.primary?.displayable ?? hasDisplayableSessionMessage(current.message);
     const canAcceptFinal = currentHasDisplayableMessage
       ? current.status === incoming.status ||
         (current.acceptedFinalMessageIdentities?.length ?? 0) > 0
-      : canRecoverSessionProjectionFinal(current.message, incoming.message);
+      : canRecoverSessionProjectionFinal(current.message, incoming.message, current.primary);
     const acceptFinal =
       incomingIsFinal &&
       canAcceptFinal &&
@@ -540,7 +444,8 @@ function updateRun(
     if (!acceptFinal && !recoverError && !updateTerminalSequence && !suppressError) {
       return state;
     }
-    const firstFinalIdentity = readSessionProjectionFinalMessageIdentity(current.message);
+    const firstFinalIdentity =
+      current.primary?.finalIdentity ?? readSessionProjectionFinalMessageIdentity(current.message);
     const previousFinalIdentities =
       current.acceptedFinalMessageIdentities ?? (firstFinalIdentity ? [firstFinalIdentity] : []);
     return {
@@ -549,9 +454,16 @@ function updateRun(
         ...state.runs,
         [incoming.runId]: {
           ...current,
+          revision: Symbol("run"),
           ...(suppressError ? { suppressErrorNotice: true, errorMessage: undefined } : {}),
           ...(updateTerminalSequence ? { seq: incomingSeq } : {}),
-          ...(recoverMessage ? { message: incoming.message } : {}),
+          ...(recoverMessage
+            ? {
+                message: incoming.message,
+                primary: readSessionProjectionPrimary(incoming.message),
+                messageRevision: Symbol("message"),
+              }
+            : {}),
           ...(acceptFinal && incomingFinalIdentity
             ? {
                 acceptedFinalMessageIdentities: [
@@ -589,6 +501,14 @@ function updateRun(
     current && current.status === "streaming" && incoming.status !== "streaming"
       ? Object.fromEntries(Object.entries(state.runs).filter(([runId]) => runId !== incoming.runId))
       : state.runs;
+  const effectiveMessage =
+    incoming.message === undefined && !resumesErrorProjection ? current?.message : incoming.message;
+  const primary =
+    incoming.status === "streaming"
+      ? undefined
+      : incoming.message === undefined && current?.primary && !resumesErrorProjection
+        ? current.primary
+        : readSessionProjectionPrimary(effectiveMessage);
   const acceptedFinalIdentity =
     incoming.status === "completed" || incoming.status === "yielded"
       ? readSessionProjectionFinalMessageIdentity(incoming.message)
@@ -598,6 +518,14 @@ function updateRun(
     [incoming.runId]: {
       ...(resumesErrorProjection ? {} : current),
       ...normalizedIncoming,
+      primary,
+      revision: Symbol("run"),
+      messageRevision:
+        effectiveMessage === current?.message
+          ? current?.messageRevision
+          : effectiveMessage === undefined
+            ? undefined
+            : Symbol("message"),
       ...(acceptedFinalIdentity ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] } : {}),
       ...(!resumesErrorProjection &&
       incoming.message === undefined &&
@@ -635,6 +563,92 @@ export function reduceSessionProjection(
     return state;
   }
   switch (event.type) {
+    case "localOutput": {
+      const placement = localOutputPlacement(state, event.sourceEmpty);
+      return withEntries(state, [
+        ...state.entries,
+        { ...createEntry(event.message), localOutput: true, ...placement },
+      ]);
+    }
+    case "residencyChanged": {
+      const admitted = new Set(event.messages);
+      const pinnedRuns = new Set(event.pinnedRunIds);
+      const inferredMessages = new Set(
+        Object.values(state.runs).flatMap((run) =>
+          run.inferredSnapshotTerminal ? [run.inferredSnapshotTerminal.entry.message] : [],
+        ),
+      );
+      const inferredCandidates = Object.values(state.runs).flatMap((run) =>
+        run.inferredSnapshotTerminal ? [run.inferredSnapshotTerminal.matchedIdentity] : [],
+      );
+      const existing = new Map(state.entries.map((entry) => [entry.message, entry]));
+      const incoming = createProjectionEntries(event.messages);
+      const retainedMessages = new Set(event.messages);
+      for (const entry of state.entries) {
+        const run = entry.identity?.runId ? state.runs[entry.identity.runId] : undefined;
+        const provisional =
+          entry.live &&
+          entry.identity &&
+          !entry.identity.id &&
+          entry.identity.sequence === null &&
+          !entry.identity.externalSource;
+        const pinned =
+          entry.pending ||
+          provisional ||
+          inferredMessages.has(entry.message) ||
+          inferredCandidates.some((identity) => sameTranscriptIdentity(identity, entry.identity)) ||
+          (run &&
+            entry.message === run.message &&
+            (run.status === "streaming" || run.status === "error" || pinnedRuns.has(run.runId)));
+        if (
+          !admitted.has(entry.message) &&
+          pinned &&
+          !(
+            entry.pending &&
+            incoming.some(
+              (candidate) =>
+                !existing.get(candidate.message)?.pending && entryMatches(entry, candidate, true),
+            )
+          )
+        ) {
+          retainedMessages.add(entry.message);
+        }
+      }
+      // Retirement changes residency, never the canonical relative order of
+      // retained live/pending rows around durable sequence boundaries.
+      let entries: readonly SessionProjectionEntry[] = state.entries.filter((entry) =>
+        retainedMessages.has(entry.message),
+      );
+      for (const entry of incoming) {
+        if (!existing.has(entry.message)) {
+          entries = insertEntry(entries, entry, state.runs);
+        }
+      }
+      const retained = new Set(entries.map((entry) => entry.message));
+      let runs = state.runs;
+      for (const [runId, run] of Object.entries(state.runs)) {
+        if (
+          run.message === undefined ||
+          retained.has(run.message) ||
+          run.status === "streaming" ||
+          run.status === "error" ||
+          run.inferredSnapshotTerminal ||
+          pinnedRuns.has(runId)
+        ) {
+          continue;
+        }
+        if (runs === state.runs) {
+          runs = Object.assign({}, runs);
+        }
+        const { message: _message, ...retired } = run;
+        Object.assign(runs, { [runId]: retired });
+      }
+      return entries.length === state.entries.length &&
+        entries.every((entry, index) => entry === state.entries[index]) &&
+        runs === state.runs
+        ? state
+        : { ...withEntries(state, entries), runs };
+    }
     case "messagePersisted":
       return projectLiveSessionMessage(state, event.message, event.envelope ?? event, scope);
     case "sendPending": {

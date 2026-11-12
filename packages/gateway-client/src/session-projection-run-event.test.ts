@@ -65,6 +65,21 @@ it("does not invent a baseline from an orphan append", () => {
   expect(orphan.currentRun?.message).toBeUndefined();
 });
 
+it("keeps the effective message fence when an empty delta resumes a diagnostic", () => {
+  const message = { role: "assistant", content: "provider unavailable", stopReason: "error" };
+  const failed = runEvent(projection(), {
+    state: "error",
+    seq: 10,
+    errorMessage: "provider unavailable",
+    message,
+  });
+  const resumed = runEvent(failed.projection, { state: "delta", seq: 11, deltaText: "" });
+  expect(resumed.currentRun?.status).toBe("streaming");
+  expect(resumed.currentRun?.message).toBe(message);
+  expect(resumed.currentRun?.revision).not.toBe(failed.currentRun?.revision);
+  expect(resumed.currentRun?.messageRevision).toBe(failed.currentRun?.messageRevision);
+});
+
 it.each([
   { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 11, resumes: false },
   { terminalSeq: 10, repeatedSeq: 12, deltaSeq: 13, resumes: true },

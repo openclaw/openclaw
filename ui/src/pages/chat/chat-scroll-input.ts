@@ -147,6 +147,42 @@ export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
 
 const HISTORY_TOUCH_INTENT_PX = 8;
 const HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
+const HISTORY_DOWNWARD_KEYS = new Set(["ArrowDown", "PageDown", "End"]);
+
+/** Nested/native controls own their gesture before transcript boundary paging. */
+function ownsTranscriptGesture(event: Event, direction: number): boolean {
+  if (event.defaultPrevented) {
+    return false;
+  }
+  for (const target of event.composedPath()) {
+    if (target === event.currentTarget) {
+      break;
+    }
+    if (!(target instanceof HTMLElement)) {
+      continue;
+    }
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLMediaElement && target.controls)
+    ) {
+      return false;
+    }
+    const style = getComputedStyle(target);
+    const canScroll =
+      direction < 0
+        ? target.scrollTop > 0
+        : target.scrollTop < target.scrollHeight - target.clientHeight;
+    if (
+      /^(auto|scroll)$/.test(style.overflowY) &&
+      (canScroll || style.overscrollBehaviorY === "contain" || style.overscrollBehaviorY === "none")
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export class TranscriptHistoryInput {
   private touchY: number | null = null;
@@ -155,30 +191,55 @@ export class TranscriptHistoryInput {
     this.touchY = null;
   }
 
-  isUpward(event: Event): boolean {
-    let upward =
-      (event instanceof WheelEvent && event.deltaY < 0) ||
-      (event instanceof KeyboardEvent &&
-        HISTORY_UPWARD_KEYS.has(event.key) &&
-        isTranscriptScrollKey(event));
+  readBoundaryDirection(event: Event, margin: number): -1 | 0 | 1 {
+    const direction = this.readDirection(event);
+    const root = event.currentTarget;
+    if (!(root instanceof HTMLElement) || direction === 0) {
+      return 0;
+    }
+    const distance =
+      direction < 0 ? root.scrollTop : root.scrollHeight - root.clientHeight - root.scrollTop;
+    return distance <= margin ? direction : 0;
+  }
+
+  private readDirection(event: Event): -1 | 0 | 1 {
+    if (event instanceof WheelEvent) {
+      if (
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.shiftKey ||
+        !event.deltaY ||
+        Math.abs(event.deltaX) > Math.abs(event.deltaY) ||
+        !ownsTranscriptGesture(event, event.deltaY)
+      ) {
+        return 0;
+      }
+      return event.deltaY < 0 ? -1 : 1;
+    }
+    if (event instanceof KeyboardEvent && isTranscriptScrollKey(event)) {
+      if (HISTORY_UPWARD_KEYS.has(event.key) || (event.key === " " && event.shiftKey)) {
+        return -1;
+      }
+      return HISTORY_DOWNWARD_KEYS.has(event.key) || event.key === " " ? 1 : 0;
+    }
     if (typeof TouchEvent !== "undefined" && event instanceof TouchEvent) {
-      const touchY = event.touches[0]?.clientY ?? null;
+      const touchY = event.touches.length === 1 ? (event.touches[0]?.clientY ?? null) : null;
       if (event.type === "touchstart") {
         this.touchY = touchY;
-        return false;
+        return 0;
       }
-      if (event.type === "touchend" || event.type === "touchcancel") {
+      if (event.type === "touchend" || event.type === "touchcancel" || touchY === null) {
         this.touchY = null;
-        return false;
+        return 0;
       }
       const previousTouchY = this.touchY;
-      if (touchY !== null && previousTouchY !== null) {
-        upward = touchY - previousTouchY >= HISTORY_TOUCH_INTENT_PX;
-        if (upward || touchY < previousTouchY) {
-          this.touchY = touchY;
-        }
+      if (previousTouchY !== null && Math.abs(touchY - previousTouchY) >= HISTORY_TOUCH_INTENT_PX) {
+        this.touchY = touchY;
+        const direction = touchY > previousTouchY ? -1 : 1;
+        return ownsTranscriptGesture(event, direction) ? direction : 0;
       }
     }
-    return upward;
+    return 0;
   }
 }

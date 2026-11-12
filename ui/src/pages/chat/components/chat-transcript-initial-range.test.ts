@@ -477,3 +477,63 @@ it.each([
     }
   },
 );
+
+it.each(["cancel", "parked replacement"] as const)(
+  "retains %s ownership through settlement invalidation",
+  async (change) => {
+    const animation = mockAnimationFrames();
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: 1,
+      getScrollElement: () => null,
+      estimateSize: () => 100,
+      scrollToFn: () => {},
+      observeElementRect: () => () => {},
+      observeElementOffset: () => () => {},
+    });
+    let presented = true;
+    let invalidate = () => {};
+    const range = new TranscriptInitialRange(
+      0,
+      () => virtualizer,
+      defaultRangeExtractor,
+      () => invalidate(),
+      () => 0,
+      () => presented,
+      () => 100,
+      queueMicrotask,
+      () => false,
+      () => true,
+    );
+    onTestFinished(() => range.disconnect());
+    range.finish();
+    const replacementReady = vi.fn();
+    let changed = false;
+    invalidate = () => {
+      if (changed || !range.preparingEnd) {
+        return;
+      }
+      changed = true;
+      if (change === "cancel") {
+        range.finishEnd();
+      } else {
+        presented = false;
+        range.prepareEnd(replacementReady, () => true, false);
+      }
+    };
+    range.finishEndWhenSettled();
+    expect(changed).toBe(true);
+    if (change === "cancel") {
+      expect(range.preparingEnd).toBe(false);
+      expect(animation.pending()).toBe(0);
+    } else {
+      await Promise.resolve();
+      animation.paint();
+      expect(replacementReady).not.toHaveBeenCalled();
+      presented = true;
+      range.didCommit();
+      animation.paint();
+      expect(replacementReady).toHaveBeenCalledOnce();
+      expect(range.preparingEnd).toBe(true);
+    }
+  },
+);

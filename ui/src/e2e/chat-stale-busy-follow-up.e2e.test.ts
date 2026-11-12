@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -33,7 +34,7 @@ const idle = {
 const completed = {
   sessionId,
   sessionInfo: idle,
-  messages: [{ role: "assistant", content: reply }],
+  messages: prepareChatHistoryFixture([{ role: "assistant", content: reply }]).messages,
   inFlightRun: null,
 };
 

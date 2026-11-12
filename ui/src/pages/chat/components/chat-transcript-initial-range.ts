@@ -318,11 +318,6 @@ export class TranscriptInitialRange {
   // Keep the destination in flow until its real size and native endpoint agree.
   readonly finishEndWhenSettled = (): void => {
     this.pendingWheel = undefined;
-    if (!this.preparingEnd) {
-      this.preparingEnd = true;
-      this.refresh();
-      this.invalidate();
-    }
     const endWork = createTranscriptEndSettlement(
       this.virtualizer(),
       () => this.canPrepare() && this.endWork === endWork,
@@ -330,7 +325,13 @@ export class TranscriptInitialRange {
       this.queueEndWork,
       () => this.finishEnd(),
     );
+    // Publish ownership before refresh/invalidation can admit a replacement.
     this.endWork = endWork;
+    if (!this.preparingEnd) {
+      this.preparingEnd = true;
+      this.refresh();
+      this.invalidate();
+    }
     this.queueEndWork();
   };
 

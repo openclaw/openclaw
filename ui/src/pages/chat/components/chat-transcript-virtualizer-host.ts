@@ -7,7 +7,11 @@ import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
-import type { ChatSessionScrollPosition, ChatScrollToEndOptions } from "../scroll.ts";
+import type {
+  ChatReadingBookmark,
+  ChatSessionScrollPosition,
+  ChatScrollToEndOptions,
+} from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import { ChatMessageReveal } from "./chat-message-reveal.ts";
@@ -16,11 +20,7 @@ import {
   type TranscriptAnnouncement,
 } from "./chat-transcript-announcement.ts";
 import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
-import {
-  initialTranscriptRect,
-  isTranscriptRangeCommitted,
-  createPositionRailGutter,
-} from "./chat-transcript-geometry.ts";
+import { initialTranscriptRect, createPositionRailGutter } from "./chat-transcript-geometry.ts";
 import { commitTranscriptRows, reconcileTranscriptHeaderMargin } from "./chat-transcript-header.ts";
 import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 import { resolveChatTranscriptInteractionAnchor } from "./chat-transcript-interaction-anchor.ts";
@@ -44,6 +44,9 @@ import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   applyPendingScrollOffset,
   cancelPendingScrollRetry,
+  cancelTranscriptScroll,
+  completeTranscriptLayout,
+  canFollowTranscriptEnd,
   type TranscriptScrollRestoreHost,
 } from "./chat-transcript-scroll-restore.ts";
 import {
@@ -145,6 +148,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     });
   };
   private readonly rowRefs: TranscriptRowRefs;
+  // The retained renderer must not capture a historical render snapshot.
+  private readonly measureRowRefFor = (key: string) => this.rowRefs.forKey(key);
   private readonly readerAnchor = new TranscriptReaderAnchor(this, this.reconcilePosition);
   private readonly captureInteractionResize = (event: Event) => {
     const anchor = resolveChatTranscriptInteractionAnchor(event);
@@ -174,6 +179,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private renderPreviousRows: (() => HTMLDivElement) | null = null;
   private readonly announcement = new TranscriptAnnouncementState();
   private readonly mcpAppUnmountGate: ReturnType<typeof createMcpAppUnmountGate>;
+  private readonly bookmarkState: { bookmark?: ChatReadingBookmark; pending: boolean };
 
   constructor(
     // Native geometry and touch-held history must commit before paint.
@@ -181,7 +187,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
+    bookmark?: ChatReadingBookmark,
   ) {
+    this.bookmarkState = { bookmark, pending: false };
     this.initialRange = new TranscriptInitialRange(
       initialOffset,
       () => this.virtualizer,
@@ -256,8 +264,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             getScrollElement: () => this.scrollElement,
             prependAnchor: this.prependAnchor,
             endAnchor: this.endAnchor,
-            canFollowEnd: () => this.canAutoFollow(),
+            canFollowEnd: this.canAutoFollow,
             isProgrammaticScroll: () => this.isProgrammaticScroll,
+            isMaintenanceScroll: (command) => this.readMaintenanceScroll(command),
             cancelScroll: (preserveEnd) => this.cancelScroll(preserveEnd),
             onLayoutCorrection: this.recordEndLayoutCorrection,
             invalidate,
@@ -271,8 +280,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
               this.presentation.flushChange();
-              callbacks.onNativeScroll?.(event);
+              this.callbacks.onNativeScroll?.(event);
             },
+            onHistoryIntent: this.callbacks.onHistoryIntent,
           },
           instance,
           callback,
@@ -288,7 +298,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
-    // Initial placement owns compensation until it finishes; the reader anchor owns it after.
+    // Positioning owners restore their anchors; boot offsets must follow native measurements.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = this.readerAnchor.landSize;
     // A boot re-anchor can precede its native extent; only reader geometry may override it.
     const syncOffset = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.(true);
@@ -298,6 +308,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       () => this.rowRefs.elements,
       syncOffset,
       this.layout.measureRow,
+      this.readerAnchor.recordOwnedMeasurement,
     );
     this.rowRefs = new TranscriptRowRefs(this.virtualizer, {
       isCurrentRow: (element, key) =>
@@ -398,7 +409,10 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (!interactionResizePending && this.prependAnchor.messageKey !== null) {
       this.renderer.queueAfterCommit(this.reconcilePosition);
     }
-    if (!this.initialRange.pending || (this.layout.ready && this.rowKeys.length === 0)) {
+    if (
+      !this.bookmarkState.bookmark &&
+      (!this.initialRange.pending || (this.layout.ready && this.rowKeys.length === 0))
+    ) {
       applyPendingScrollOffset(this.scrollRestoreHost);
       if (this.initialRange.pending) {
         this.initialRange.finish();
@@ -451,6 +465,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   dispose(): void {
+    this.bookmarkState.bookmark = undefined;
     this.disconnect();
     // Temporary disconnect preserves restoration facts; terminal disposal releases their owner.
     Object.assign(this.layout, { rows: [], rowLayout: undefined });
@@ -586,7 +601,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           header: header?.content ?? null,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
-          measureRowRefFor: (key) => this.rowRefs.forKey(key),
+          measureRowRefFor: this.measureRowRefFor,
         });
       },
       () =>
@@ -603,9 +618,13 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   get isMaintenanceScroll(): boolean {
+    return this.readMaintenanceScroll();
+  }
+
+  private readMaintenanceScroll(command = this.offsetState.scrollCommand): boolean {
     return (
-      // Intermediate end-command movement remains owned until native input cancels it.
-      (this.offsetState.scrollCommand?.target === "end" && this.canAutoFollow()) ||
+      // Intermediate issued motion remains owned; capture can exclude a retiring preparation.
+      (command?.target === "end" && this.canAutoFollow()) ||
       (this.endAnchor.isResizeAnchor(this.scrollElement) && this.canAutoFollow()) ||
       isTranscriptMaintenanceScroll(this.offsetState, this.scrollElement)
     );
@@ -616,13 +635,20 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   get isPositionSettled(): boolean {
-    return this.layout.ready && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
+    return (
+      this.layout.ready &&
+      !this.bookmarkState.bookmark &&
+      !this.initialRange.pending &&
+      !this.offsetState.pendingScrollOffset
+    );
   }
 
-  private canAutoFollow(): boolean {
-    const command = this.offsetState.scrollCommand;
-    return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
+  captureBookmark() {
+    return this.prependAnchor.bookmark(this.scrollElement);
   }
+
+  private readonly canAutoFollow = () =>
+    canFollowTranscriptEnd(this.bookmarkState, this.offsetState, this.callbacks);
 
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
     // Hydration/resize follow cannot replace a saved reader. A new latest
@@ -647,34 +673,22 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   cancelScroll(preserveEnd = false): void {
-    // Completing a smooth journey can reveal skipped row sizes. Retain its
-    // resting edge before that measurement moves the end; reader input clears it.
-    if (preserveEnd) {
-      this.initialRange.finishEndWhenSettled();
-      this.endAnchor.capture(this.scrollElement);
-    } else {
-      this.initialRange.finishEnd();
-      this.endAnchor.clear();
-      this.virtualizer.cancelScroll();
-    }
-    this.prependAnchor.clear();
-    if (!this.offsetState.hasPendingCommand) {
-      return;
-    }
-    const measureSkippedRows = this.offsetState.scrollCommand?.behavior === "smooth";
-    this.offsetState.scrollCommand = null;
-    this.offsetState.pendingScrollOffset = null;
-    cancelPendingScrollRetry(this.scrollRestoreHost);
-    // The smooth journey may already be automatic when its skipped sizes settle.
-    if (measureSkippedRows) {
-      this.presentation.measureRowsWithoutScrollAdjustment();
-    }
-    const element = this.scrollElement;
-    // The end anchor owns later measurements. A completed dynamic destination
-    // would also follow new, unmeasured rows before end preparation admits them.
-    if (element) {
-      this.virtualizer.scrollToOffset(element.scrollTop, { behavior: "instant" });
-    }
+    cancelTranscriptScroll(
+      {
+        offsetState: this.offsetState,
+        bookmarkState: this.bookmarkState,
+        virtualizer: this.virtualizer,
+        initialRange: this.initialRange,
+        endAnchor: this.endAnchor,
+        prependAnchor: this.prependAnchor,
+        scrollRestoreHost: this.scrollRestoreHost,
+        getScrollElement: () => this.scrollElement,
+        getLifecycle: () => this.cleanupVirtualizer,
+        measureRowsWithoutScrollAdjustment: () =>
+          this.presentation.measureRowsWithoutScrollAdjustment(),
+      },
+      preserveEnd,
+    );
   }
 
   syncMessageRows(
@@ -736,49 +750,42 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
 
   private queueLayout(): void {
     const initial = this.initialRange.pending && this.rowKeys.length > 0;
-    if (initial || this.offsetState.scrollCommand?.target === "message") {
+    if (
+      initial ||
+      this.offsetState.scrollCommand?.target === "message" ||
+      this.bookmarkState.bookmark
+    ) {
+      // A saved reader bookmark owns initial layout; only unanchored tail work yields.
       const yieldToBrowser =
-        initial && !this.offsetState.pendingScrollOffset && this.rowKeys.length > 1;
+        initial &&
+        !this.bookmarkState.bookmark &&
+        !this.offsetState.pendingScrollOffset &&
+        this.rowKeys.length > 1;
       this.renderer.queueAfterCommit(this.completeLayout, yieldToBrowser);
     }
   }
 
-  private readonly completeLayout = () => {
-    if (!this.connected || this.virtualizer.scrollElement !== this.scrollElement) {
-      return;
-    }
-    this.messageReveal.complete(
-      this.threadInnerElement,
-      this.offsetState,
-      this.virtualizer,
-      this.messageRowKeysById,
-      this.initialRange.rowIndexes,
-    );
-    if (!this.initialRange.pending || !this.rowKeys.length || !this.scrollElement?.clientHeight) {
-      return;
-    }
-    const [measured, applyRail] = this.presentation.measureInitialRows(this.messageElements);
-    if ((this.initialRange.pending && this.initialRange.extend(this.scrollElement)) || measured) {
-      this.invalidate();
-      return;
-    }
-    if (this.offsetState.pendingScrollOffset) {
-      applyPendingScrollOffset(this.scrollRestoreHost);
-      return;
-    }
-    if (
-      this.canAutoFollow() &&
-      !(this.offsetState.pendingInteractionAnchor || this.offsetState.touchActive)
-    ) {
-      const behavior = this.offsetState.scrollCommand?.behavior ?? "instant";
-      this.scrollToEnd({ source: "auto", behavior });
-      this.offsetState.syncNativeOffset?.();
-    }
-    if (isTranscriptRangeCommitted(this.threadInnerElement, this.virtualizer)) {
-      applyRail?.();
-      this.initialRange.complete();
-      this.renderer.syncInitialPosition();
-    }
-    this.invalidate();
-  };
+  private readonly completeLayout = () =>
+    completeTranscriptLayout({
+      bookmarkState: this.bookmarkState,
+      isConnected: () => this.connected,
+      scrollElement: this.scrollElement,
+      threadInnerElement: this.threadInnerElement,
+      rowCount: this.rowKeys.length,
+      callbacks: this.callbacks,
+      prependAnchor: this.prependAnchor,
+      rowIndexesByKey: this.initialRange.rowIndexes,
+      offsetState: this.offsetState,
+      initialRange: this.initialRange,
+      virtualizer: this.virtualizer,
+      messageReveal: this.messageReveal,
+      messageRowKeysById: this.messageRowKeysById,
+      messageElements: this.messageElements,
+      presentation: this.presentation,
+      renderer: this.renderer,
+      scrollRestoreHost: this.scrollRestoreHost,
+      canAutoFollow: this.canAutoFollow,
+      scrollToEnd: (options) => this.scrollToEnd(options),
+      invalidate: this.invalidate,
+    });
 }

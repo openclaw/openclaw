@@ -1,6 +1,7 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { captureSessionActorTranscriptRead } from "../../config/sessions/session-actor-transcript-read.js";
 import { readSessionHistoryPageInWorker } from "../../config/sessions/session-history-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -26,6 +27,12 @@ import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { respondChatHistoryUnavailable, type ChatHistoryMethod } from "./chat-history-recovery.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+export type RetainedChatHistoryRead = {
+  sessionId: string;
+  requireCurrentSession?: boolean;
+  verifyRetainedState?: () => Promise<boolean>;
+};
+
 /** Select and revalidate history metadata through its prepared row and sharing owners. */
 export async function prepareChatHistorySessionRead({
   context,
@@ -38,6 +45,7 @@ export async function prepareChatHistorySessionRead({
   agentIdOverride,
   requestedSessionId,
   retainedSessionId,
+  requireCurrentSession,
 }: Pick<
   GatewayRequestHandlerOptions,
   "context" | "client" | "respond" | "signal" | "sessionMutationAuthorization"
@@ -47,6 +55,7 @@ export async function prepareChatHistorySessionRead({
   agentIdOverride?: string;
   requestedSessionId?: string;
   retainedSessionId?: string;
+  requireCurrentSession?: boolean;
 }) {
   const unavailable = (message: string) => respondChatHistoryUnavailable(method, respond, message);
   const rowProjection = getSessionRowProjection(context);
@@ -144,19 +153,42 @@ export async function prepareChatHistorySessionRead({
     return undefined;
   }
   const { agentId: sessionAgentId, storePath, canonicalKey, entry } = selectedSession;
+  // Ordinary around reads may visit retained physical transcripts. Continuity
+  // can only transfer custody within the logical session currently selected.
+  if (requireCurrentSession && requestedSessionId !== entry?.sessionId) {
+    unavailable("session changed while reading history; reload the conversation");
+    return undefined;
+  }
   const readTranscriptOwner = async () => {
     if (!requestedSessionId) {
       return true;
     }
-    const transcript = await readSessionHistoryPageInWorker(
+    // Private transcripts own their binding in the actor, never a SQLite worker.
+    // Both readers return the stored physical owner before alias normalization.
+    const memory = captureSessionActorTranscriptRead(
       {
-        kind: "transcript-binding",
-        params: {
-          target: { agentId: sessionAgentId, sessionId: requestedSessionId, storePath },
-        },
+        agentId: sessionAgentId,
+        sessionKey: canonicalKey,
+        sessionId: requestedSessionId,
+        storePath,
+        sessionEntry: entry,
       },
       signal,
     );
+    const transcript = memory
+      ? memory.missing
+        ? undefined
+        : { sessionKey: memory.target.sessionKey }
+      : await readSessionHistoryPageInWorker(
+          {
+            kind: "transcript-binding",
+            params: {
+              target: { agentId: sessionAgentId, sessionId: requestedSessionId, storePath },
+            },
+          },
+          signal,
+        );
+    memory?.assertCurrent();
     if (!transcript) {
       return false;
     }

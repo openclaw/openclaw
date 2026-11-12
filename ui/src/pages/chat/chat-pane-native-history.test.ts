@@ -80,7 +80,7 @@ it("keeps the aggregate oldest edge across a staged page and an appended tail re
   });
   await loadChatHistory(state, { deferBranches: true });
   await pane.loadOlderMessages();
-  await vi.waitFor(() => expect(pane.stagedOlder.load).toBeNull());
+  await vi.waitFor(() => expect(pane.stagedHistory.load).toBeNull());
   refreshed = true;
   await loadChatHistory(state, { deferBranches: true });
 
@@ -135,7 +135,7 @@ it("hands an empty cursor reset to authoritative history instead of adopting an 
   expect(request.mock.calls).toHaveLength(3);
   expect(request.mock.calls[2]![1]).not.toHaveProperty("cursor");
   expect(request.mock.calls[2]![1]).not.toHaveProperty("offset");
-  expect(pane.stagedOlder.page).toBeNull();
+  expect(pane.stagedHistory.page).toBeNull();
 });
 
 it("reopens a disk-trimmed held boundary after tail refresh without skipping discarded rows", async () => {
@@ -180,3 +180,108 @@ it("reopens a disk-trimmed held boundary after tail refresh without skipping dis
     expect(state.chatMessages[index + 22]).toBe(held[index]);
   }
 });
+
+it("preserves an admitted intrinsic source while reopening a disk-trimmed older boundary", async () => {
+  const giant = Array.from({ length: 401 }, (_, index) => ({
+    ...sourceMessage(90),
+    content: [{ type: "text", text: `fragment-${index}` }],
+  }));
+  const { pane, state, request } = historyPane(({ messageId, cursor }) => {
+    if (messageId === "source-90") {
+      return page([90], "before-intrinsic");
+    }
+    if (cursor === "before-intrinsic") {
+      return page([89]);
+    }
+    throw new Error("unexpected history selector");
+  });
+  const prepared = await createSnapshotRecord(state.sessionKey, {
+    savedAt: 1,
+    snapshot: {
+      messages: [
+        ...Array.from({ length: 89 }, (_, index) => sourceMessage(index + 1)),
+        ...giant,
+        sourceMessage(91),
+      ],
+      sessionId: "physical-session",
+      pagination: { hasMore: false, totalMessages: 91, intrinsicSource: "id:source-90" },
+    },
+  });
+  const restored = await parseSnapshotRecord(prepared!.record, state.sessionKey);
+  expect(restored).not.toBeNull();
+  applyChatCacheSnapshot(state, restored!.snapshot);
+  state.readTranscriptReaderSnapshot = () => ({
+    anchor: "id:source-91",
+    visibleSources: ["id:source-91"],
+  });
+  expect(state.chatMessages).toEqual([...giant, sourceMessage(91)]);
+  expect(state.chatHistoryPagination).toMatchObject({
+    needsBoundary: true,
+    intrinsicSource: "id:source-90",
+  });
+
+  expect(await pane.loadOlderMessages()).toBe(true);
+
+  expect(request.mock.calls.map(([, selector]) => selector)).toEqual([
+    expect.objectContaining({ messageId: "source-90", limit: 1 }),
+    expect.objectContaining({ cursor: "before-intrinsic" }),
+  ]);
+  expect(state.chatMessages).toEqual([sourceMessage(89), ...giant, sourceMessage(91)]);
+  expect(state.chatHistoryPagination.intrinsicSource).toBe("id:source-90");
+  expect(pane.history.olderError).toBeNull();
+  expect(
+    readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey: state.sessionKey })
+      ?.pagination.intrinsicSource,
+  ).toBe("id:source-90");
+});
+
+it.each(["unchanged", "replace", "append", "remove"] as const)(
+  "retains old packet provenance only for unchanged overlapping tail bodies (%s)",
+  async (operation) => {
+    const original = [1, 2, 3].map((seq) => nativeHistoryMessage(seq));
+    const fragment = (text: string) => ({
+      ...original[1],
+      content: [{ type: "text", text }],
+    });
+    const sibling = fragment("Second native projection");
+    const initialTail = [original[1], sibling, original[2]];
+    const refreshedTail =
+      operation === "replace"
+        ? [fragment("Refreshed native projection"), sibling, original[2]]
+        : operation === "append"
+          ? [original[1], sibling, fragment("Additional native projection"), original[2]]
+          : operation === "remove"
+            ? [original[1], original[2]]
+            : [{ ...original[1] }, { ...sibling }, original[2]];
+    let refreshed = false;
+    const { pane, state } = historyPane(({ cursor }) =>
+      cursor === "older-A"
+        ? {
+            messages: [original[0], ...initialTail.slice(0, 2)],
+            sessionId: "physical-session",
+            newerCursor: "after-two",
+          }
+        : {
+            messages: refreshed ? refreshedTail : initialTail,
+            sessionId: "physical-session",
+            hasMore: true,
+            olderCursor: "older-A",
+            totalMessages: 3,
+            nextOffset: 2,
+          },
+    );
+    await loadChatHistory(state, { deferBranches: true });
+    await pane.loadOlderMessages();
+    state.readTranscriptReaderSnapshot = () => ({ anchor: "seq:2", visibleSources: ["seq:2"] });
+    const oldPacket = () =>
+      state.chatHistoryPagination.segments?.find((segment) => segment.sources.includes("seq:1"));
+    expect(oldPacket()).toMatchObject({ boundedPacket: true, hasNewer: true });
+    expect(state.chatHistoryPagination.hasNewer).toBeUndefined();
+    refreshed = true;
+
+    await loadChatHistory(state, { deferBranches: true });
+
+    expect(state.chatMessages).toEqual([original[0], ...refreshedTail]);
+    expect(oldPacket()?.boundedPacket).toBe(operation === "unchanged" ? true : undefined);
+  },
+);

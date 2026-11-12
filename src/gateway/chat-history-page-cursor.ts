@@ -45,10 +45,13 @@ export function decodeChatHistoryPageCursor(
 }
 
 export function resolveChatHistorySelectorError(
-  { offset, messageId, cursor, sessionId }: ChatHistoryParams,
+  { offset, messageId, cursor, sessionId, continuity }: ChatHistoryParams,
   pageCursor: ChatHistoryPageCursor | null | undefined,
   retainedSessionId: string | undefined,
 ): string | undefined {
+  if (continuity && (!messageId || !sessionId || cursor !== undefined || offset !== undefined)) {
+    return "continuity requires messageId and sessionId without cursor or offset";
+  }
   if (pageCursor === null) {
     return "invalid history page cursor";
   }

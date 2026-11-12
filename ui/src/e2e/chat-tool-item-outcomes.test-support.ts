@@ -91,8 +91,12 @@ export function registerItemOnlyOutcomeTest(
         ];
         const history = {
           messages: [
-            { role: "user", content: prompt, timestamp: 1 },
-            ...activityMessages.map(({ messageId, message }) => ({ ...message, messageId })),
+            { role: "user", content: prompt, timestamp: 1, __openclaw: { id: "verify-prompt" } },
+            ...activityMessages.map(({ messageId, message }) => ({
+              ...message,
+              messageId,
+              __openclaw: { id: messageId },
+            })),
           ],
           activity: projectAgentHistoryActivity(activityMessages),
           sessionId: "session:" + sessionKey,
@@ -145,7 +149,10 @@ export function registerItemOnlyOutcomeTest(
           ...history,
           inFlightRun: undefined,
           sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
-          messages: [...history.messages, { ...result, messageId: "build-result" }],
+          messages: [
+            ...history.messages,
+            { ...result, messageId: "build-result", __openclaw: { id: "build-result" } },
+          ],
           activity: projectAgentHistoryActivity([
             ...activityMessages,
             { messageId: "build-result", message: result },
@@ -219,6 +226,7 @@ export function registerItemOnlyOutcomeTest(
         const messages = items.map((item, index) => ({
           role: "assistant",
           messageId: `stored-${index}`,
+          __openclaw: { id: `stored-${index}` },
           runId,
           content: [{ type: "toolCall", id: item.toolCallId, name: "subagents", arguments: {} }],
           timestamp: index + 1,

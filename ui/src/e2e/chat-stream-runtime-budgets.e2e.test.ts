@@ -501,6 +501,7 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
       role,
       content: [{ type: "text", text }],
       timestamp: Date.now() - (messageCount - index) * 1_000,
+      __openclaw: { id: `runtime-history-${index + 1}`, seq: index + 1 },
     };
   });
 }

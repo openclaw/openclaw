@@ -41,6 +41,37 @@ async function settle() {
   }
 }
 
+function preparedGroup(
+  group: ReturnType<typeof createMessageGroup>,
+  kind: "group" | "frame",
+  frameKey = group.key,
+) {
+  return new GuardedTranscriptItem(
+    [group],
+    kind === "group"
+      ? { kind, group, options: { showReasoning: false } }
+      : {
+          kind,
+          frame: {
+            kind: "agent-run-frame",
+            key: frameKey,
+            runId: group.key,
+            boundaryId: group.key,
+            outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
+            parts: [group],
+          },
+          options: {
+            streamOptions: {},
+            workPreviews: new Map(),
+            partDependencies: (part) => [part],
+            renderGroupOptions: () => ({ showReasoning: false }),
+            isWorkExpanded: () => false,
+            onToggleWork: () => {},
+          },
+        },
+  );
+}
+
 async function transcriptFixture(
   initialOffset: number | null = 0,
   idlePreparation = false,
@@ -151,6 +182,7 @@ async function transcriptFixture(
   const rowHeights = new WeakMap<HTMLElement, number>();
   const resizeRow = (row: HTMLElement, height: number) => {
     rowHeights.set(row, height);
+    row.style.height = `${height}px`;
     emitTranscriptResize(row, 800, height);
   };
   const renderRow = vi.fn((row: TranscriptRow<number>) => {
@@ -159,34 +191,7 @@ async function transcriptFixture(
       return <span>Message {row.kind === "item" ? row.item : ""}</span>;
     }
     const group = groups[row.kind === "item" ? row.item : 0]!;
-    return new GuardedTranscriptItem(
-      [group],
-      completedFrame
-        ? {
-            kind: "frame",
-            frame: {
-              kind: "agent-run-frame",
-              key: `frame:${group.key}`,
-              runId: group.key,
-              boundaryId: group.key,
-              outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
-              parts: [group],
-            },
-            options: {
-              streamOptions: {},
-              workPreviews: new Map(),
-              partDependencies: (part) => [part],
-              renderGroupOptions: () => ({ showReasoning: false }),
-              isWorkExpanded: () => false,
-              onToggleWork: () => {},
-            },
-          }
-        : {
-            kind: "group",
-            group,
-            options: { showReasoning: false },
-          },
-    );
+    return preparedGroup(group, completedFrame ? "frame" : "group", `frame:${group.key}`);
   });
   let renderer = renderRow;
   const draw = vi.fn(() => {
@@ -267,7 +272,7 @@ async function transcriptFixture(
           for (const row of container.querySelectorAll<HTMLElement>(
             ".chat-virtual-row:not([data-prepared-row]), [data-preparing-row]",
           )) {
-            emitTranscriptResize(row, 800, rowHeights.get(row) ?? 100);
+            resizeRow(row, rowHeights.get(row) ?? 100);
           }
         }
         await settle();
@@ -285,7 +290,7 @@ async function transcriptFixture(
       for (const row of container.querySelectorAll<HTMLElement>(
         ".chat-virtual-row:not([data-prepared-row]), [data-preparing-row]",
       )) {
-        emitTranscriptResize(row, 800, rowHeights.get(row) ?? 100);
+        resizeRow(row, rowHeights.get(row) ?? 100);
       }
       await settle();
     },
@@ -373,33 +378,8 @@ it.each(["group", "frame"] as const)(
       expect(prewarmGroupedMessage(message, {}, "html")).toBe(true);
     }
     const renderer = new ChatTranscriptRenderer();
-    renderer.contentFor(
-      [{ kind: "item", key: group.key, item: group }],
-      () =>
-        new GuardedTranscriptItem(
-          [group],
-          kind === "group"
-            ? { kind, group, options: { showReasoning: false } }
-            : {
-                kind,
-                frame: {
-                  kind: "agent-run-frame",
-                  key: group.key,
-                  runId: group.key,
-                  boundaryId: group.key,
-                  outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
-                  parts: [group],
-                },
-                options: {
-                  streamOptions: {},
-                  workPreviews: new Map(),
-                  partDependencies: (part) => [part],
-                  renderGroupOptions: () => ({ showReasoning: false }),
-                  isWorkExpanded: () => false,
-                  onToggleWork: () => {},
-                },
-              },
-        ),
+    renderer.contentFor([{ kind: "item", key: group.key, item: group }], () =>
+      preparedGroup(group, kind),
     );
     for (let source = 0; source < 8; source++) {
       expect(renderer.prewarmRow(0, "fragment")).toBe(true);
@@ -902,31 +882,7 @@ it.each(["group", "frame"] as const)(
         { kind: "item", key: group.key, item: group },
         { kind: "item", key: `${group.key}-neighbor`, item: group },
       ],
-      () =>
-        new GuardedTranscriptItem(
-          [group],
-          kind === "group"
-            ? { kind, group, options: { showReasoning: false } }
-            : {
-                kind,
-                frame: {
-                  kind: "agent-run-frame",
-                  key: group.key,
-                  runId: group.key,
-                  boundaryId: group.key,
-                  outcome: { kind: "completed", actionOwner: group.messages.at(-1)! },
-                  parts: [group],
-                },
-                options: {
-                  streamOptions: {},
-                  workPreviews: new Map(),
-                  partDependencies: (part) => [part],
-                  renderGroupOptions: () => ({ showReasoning: false }),
-                  isWorkExpanded: () => false,
-                  onToggleWork: () => {},
-                },
-              },
-        ),
+      () => preparedGroup(group, kind),
     );
     let work = 0;
     while (work < 125 && renderer.prewarmRow(0, "fragment")) {

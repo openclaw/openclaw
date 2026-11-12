@@ -2422,12 +2422,7 @@ export async function installMockGateway(
   if (shouldWaitForControlUiMockRoster(normalizedScenario, scenario.awaitInitialRoster)) {
     installControlUiRosterNavigationWait(page);
   }
-  return createMockGatewayControls(
-    page,
-    normalizedScenario.sessionKey,
-    diagnosticEvents,
-    normalizedScenario.methodResponses,
-  );
+  return createMockGatewayControls(page, normalizedScenario, diagnosticEvents);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

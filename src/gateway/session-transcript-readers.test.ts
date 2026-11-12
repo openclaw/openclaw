@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import { constants, zstdCompressSync } from "node:zlib";
-import { describe, expect, test } from "vitest";
+import { assert, describe, expect, test } from "vitest";
 import { realisticTranscriptText } from "../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveSessionArchiveReadPath } from "../config/sessions/archive-compression.js";
-import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptEvent,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
@@ -162,6 +165,92 @@ describe("session transcript reader facade", () => {
         totalMessages: 2,
       },
     );
+  });
+
+  test("validates append continuity in the same native around snapshot, independently of anchor presence", async () => {
+    const scope = await writeTranscript("reader-continuity", [
+      event("root", null, { role: "user", content: "shared root" }),
+      event("old-leaf", "root", { role: "assistant", content: "old branch" }),
+    ]);
+    const previous = await readRecent(scope, { maxMessages: 80 });
+    expect(previous.activeLeafEntryId).toBe("old-leaf");
+    expect(previous.deltaCursor).toEqual(expect.any(String));
+    assert(previous.deltaCursor);
+    const continuity = { cursor: previous.deltaCursor, activeLeafEntryId: "old-leaf" };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "appended",
+          parentId: "old-leaf",
+          message: { role: "assistant", content: "same branch append" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    for (const messageId of ["root", "missing"]) {
+      const page = await readAround(scope, {
+        messageId,
+        maxMessages: 80,
+        maxBytes: 256 * 1024,
+        continuity,
+      });
+      expect(page.found).toBe(messageId === "root");
+      expect(page.continuity).toEqual({ ...continuity, accepted: true });
+      expect(page.activeLeafEntryId).toBe("appended");
+      expect(page.deltaCursor).toEqual(expect.any(String));
+      expect(Buffer.byteLength(JSON.stringify(page.messages))).toBeLessThanOrEqual(256 * 1024);
+    }
+
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "sibling",
+          parentId: "root",
+          message: { role: "assistant", content: "different branch" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const sibling = await readAround(scope, { messageId: "root", maxMessages: 80, continuity });
+    expect(sibling.found).toBe(true);
+    expect(sibling.continuity).toEqual({ ...continuity, accepted: false });
+    expect(sibling.activeLeafEntryId).toBe("sibling");
+    expect(sibling.messages).not.toContainEqual(expect.objectContaining({ content: "old branch" }));
+
+    assert(sibling.deltaCursor);
+    const beforeReset = { cursor: sibling.deltaCursor, activeLeafEntryId: "sibling" };
+    await appendTranscriptEvent(scope, {
+      type: "reset",
+      id: "reset",
+      parentId: "sibling",
+      reason: "new",
+      timestamp: "2026-10-31T00:00:00.000Z",
+    });
+    expect((await readAround(scope, { messageId: "root", maxMessages: 80 })).found).toBe(true);
+    const reset = await readAround(scope, {
+      messageId: "root",
+      maxMessages: 80,
+      continuity: beforeReset,
+    });
+    expect(reset.found).toBe(false);
+    expect(reset.messages).toEqual([]);
+    expect(reset.continuity).toEqual({ ...beforeReset, accepted: false });
+    expect(reset.activeLeafEntryId).toBe("reset");
+    const closed = {
+      messageId: "reset",
+      closedResetInterval: true,
+      direction: "older" as const,
+      maxMessages: 80,
+    };
+    expect((await readAround(scope, closed)).messages.map(readChatHistoryMessageId)).toEqual([
+      "root",
+      "sibling",
+    ]);
+    const guardedClosed = await readAround(scope, { ...closed, continuity: beforeReset });
+    expect(guardedClosed.continuity).toEqual({ ...beforeReset, accepted: false });
+    expect(guardedClosed.messages.map(readChatHistoryMessageId)).not.toContain("root");
+    expect(guardedClosed.messages.map(readChatHistoryMessageId)).not.toContain("sibling");
   });
 
   test("bounds source pages and freezes their sequence across appends", async () => {
@@ -419,6 +508,27 @@ describe("session transcript reader facade", () => {
     await expect(
       readPage(scope, { offset: 0, maxMessages: 1, allowResetArchiveFallback: true }),
     ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
+    const continuity = { cursor: "earlier-native-cursor", activeLeafEntryId: "old-leaf" };
+    const missing = await readAround(scope, {
+      messageId: "retained",
+      maxMessages: 80,
+      allowResetArchiveFallback: true,
+      continuity,
+    });
+    expect(missing).toMatchObject({ found: false, messages: [] });
+    expect(missing.continuity).toBeUndefined();
+    expect(missing.deltaCursor).toBeUndefined();
+    await expect(
+      readAround(scope, {
+        messageId: "retained",
+        maxMessages: 80,
+        allowResetArchiveFallback: false,
+        continuity,
+      }),
+    ).rejects.toMatchObject({
+      name: "SessionTranscriptStorageUnavailableError",
+      reason: "database-missing",
+    });
   });
 
   // #190690 refused both: a ~10x production transcript and its own 2 MiB repeated-byte frame.

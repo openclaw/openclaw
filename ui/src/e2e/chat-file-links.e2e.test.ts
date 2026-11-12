@@ -28,13 +28,14 @@ const withPage = (run: (page: Page) => Promise<void>) =>
 const previewResponse = <T extends object>(name: string, fields: T) => ({
   root: "/workspace",
   sessionKey,
-  file: fileInfo(name, fields),
+  file: { kind: "read", missing: false, name, path: name, workspacePath: name, ...fields },
 });
-const fileRequest = (path: string) => ({ agentId: "main", path, sessionKey });
-
-function fileInfo<T extends object>(name: string, fields: T) {
-  return { kind: "read", missing: false, name, path: name, workspacePath: name, ...fields };
-}
+const fileRequest = (path: string, messageEntryId?: string) => ({
+  agentId: "main",
+  path,
+  sessionKey,
+  ...(messageEntryId ? { messageEntryId } : {}),
+});
 
 function textPreview(path: string, content: string, fields: object = {}) {
   return previewResponse(nodePath.posix.basename(path), {
@@ -120,7 +121,11 @@ suite.define(() => {
       const source = `# Review report\n\n[Browser evidence](evidence/${name}#browser-components)\n\n[Summary](../summary.md)\n`;
       const gateway = await installMockGateway(page, {
         workspace: "/workspace/nested-cwd",
-        historyMessages: [chatMessage("assistant", `[Report](${requestPath(report)})`)],
+        historyMessages: [
+          chatMessage("assistant", `[Report](${requestPath(report)})`, {
+            __openclaw: { id: "review-report" },
+          }),
+        ],
         methodResponses: {
           "sessions.files.get": {
             cases: [
@@ -176,11 +181,11 @@ suite.define(() => {
       await reader.getByText("Summary", { exact: true }).click();
       await polledText(reader).toContain("The parent-directory link works.");
       expect(page.url()).toBe(chatUrl);
-      expect((await gateway.getRequests("sessions.files.get")).map((r) => r.params)).toEqual([
-        fileRequest(requestPath(report)),
-        fileRequest(targetPath(evidence)),
-        fileRequest(summaryRequest),
-      ]);
+      expect((await gateway.getRequests("sessions.files.get")).map((r) => r.params)).toEqual(
+        [requestPath(report), targetPath(evidence), summaryRequest].map((path) =>
+          fileRequest(path, "review-report"),
+        ),
+      );
       await reportTab.click();
       await polledText(reader).toContain("Review report");
     });
@@ -339,7 +344,7 @@ suite.define(() => {
               ...files.slice(2).map((file) => `[${file.name}](${encodeURI(file.requestPath)}:7)`),
               "See docs/README.md.",
             ].join("\n"),
-            { timestamp: 1 },
+            { timestamp: 1, __openclaw: { id: "authored-files" } },
           ),
         ],
         methodResponses: {
@@ -396,11 +401,9 @@ suite.define(() => {
         { path: "qa241-unicode/café 日本語 emoji-🌱 100% ready.txt", line: "7" },
         { path: "docs/README.md", line: null },
       ]);
-      expect(requests.map((request) => request.params)).toEqual([
-        fileRequest("/workspace/src/file.ts"),
-        fileRequest("workspace/src/file.ts"),
-        fileRequest("qa241-unicode/café 日本語 emoji-🌱 100% ready.txt"),
-      ]);
+      expect(requests.map((request) => request.params)).toEqual(
+        files.map(({ requestPath }) => fileRequest(requestPath, "authored-files")),
+      );
       expect(labels.map((label) => label.text)).toEqual([
         "/workspace/src/file.ts:7",
         "workspace/src/file.ts:7",
@@ -670,11 +673,7 @@ suite.define(() => {
 
       expect(
         (await gateway.getRequests("sessions.files.get")).map((request) => request.params),
-      ).toEqual([
-        fileRequest("/workspace/notes.txt"),
-        fileRequest("/workspace/openclaw.png"),
-        fileRequest("/workspace/unsupported-binary.bmp"),
-      ]);
+      ).toEqual(Object.keys(responses).map((path) => fileRequest(path)));
     });
   });
 

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
   renderChatInto,
@@ -8,6 +9,7 @@ import {
   requireElement,
   waitForElement,
 } from "./chat-view.test-helpers.ts";
+import { createChatTranscript } from "./components/chat-transcript-controller.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -54,8 +56,21 @@ describe("chat history pagination", () => {
   });
 
   it("loads older history from upward wheel and keyboard intent across transcript updates", async () => {
-    const onHistoryIntent = vi.fn();
+    const historyInput = new TranscriptHistoryInput();
+    const onBoundaryRead = vi.fn();
+    const onHistoryIntent = (event: Event) => {
+      const direction = historyInput.readBoundaryDirection(event, 0);
+      if (direction) {
+        onBoundaryRead(direction);
+      }
+    };
+    const onRequestEnd = vi.fn();
+    const transcript = createChatTranscript(() => "pagination-input", {
+      onHistoryIntent: (event) => onHistoryIntent(event),
+      onRequestEnd,
+    });
     const props = {
+      transcript,
       messages: [{ role: "assistant", content: "Current history" }],
       historyPagination: {
         hasMore: true,
@@ -65,13 +80,13 @@ describe("chat history pagination", () => {
       onHistoryIntent,
     };
     const container = renderChatView(props);
-    const thread = requireElement(container, ".chat-thread", "chat thread");
     const sentinel = await waitForElement(container, ".chat-history-sentinel");
+    const thread = requireElement(container, ".chat-thread", "chat thread");
 
     expect(sentinel.querySelector("button")).toBeNull();
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
     thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
-    expect(onHistoryIntent).toHaveBeenCalledTimes(2);
+    expect(onBoundaryRead).toHaveBeenCalledTimes(2);
 
     renderChatInto(container, {
       ...props,
@@ -80,7 +95,12 @@ describe("chat history pagination", () => {
     expect(container.querySelector(".chat-history-sentinel")).toBe(sentinel);
     expect(thread.contains(sentinel)).toBe(true);
     thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
-    expect(onHistoryIntent).toHaveBeenCalledTimes(3);
+    expect(onBoundaryRead).toHaveBeenCalledTimes(3);
+    const end = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true });
+    thread.dispatchEvent(end);
+    expect(end.defaultPrevented).toBe(true);
+    expect(onRequestEnd).toHaveBeenCalledOnce();
+    expect(onBoundaryRead).toHaveBeenCalledTimes(3);
 
     renderChatInto(container, { messages: props.messages, onHistoryIntent });
     expect(container.querySelector(".chat-history-sentinel")).toBeNull();

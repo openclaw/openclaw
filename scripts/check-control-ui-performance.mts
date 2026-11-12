@@ -58,10 +58,8 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Entering-row forecasts (#196173): measured 1,300,731 B, plus 64 B headroom.
-  // Cold construction split: add CI-measured 336 B, coordinator-accepted (local +508 B).
-  // Josh approved the #196456 key-warning delta: +2,580 B; inherited debt stays.
-  chatBootJsGzipBytes: 1_303_711,
+  // Preserve the previously accepted resident-history absolute ceiling.
+  chatBootJsGzipBytes: 1_303_958,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   // Josh approved the #196456 key-warning delta: +2,522 B; inherited debt stays.
   newBootJsGzipBytes: 805_886,

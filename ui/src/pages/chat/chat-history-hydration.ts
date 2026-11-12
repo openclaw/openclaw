@@ -1,4 +1,6 @@
+import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import { t } from "../../i18n/index.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import {
   isHiddenAssistantStreamText,
@@ -9,9 +11,11 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
+import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   captureChatHistoryRun,
   chatHistoryRequestParams,
+  loadChatHistoryTailPreparation,
   requestSharedHistory,
 } from "./chat-history-request.ts";
 import { formatChatHistoryLoadError, isRetryableChatReadError } from "./chat-history-retry.ts";
@@ -20,7 +24,6 @@ import {
   isHistoryCursor,
   resolveChatHistoryPagination,
   historySessionId,
-  reconcileHistoryTail,
   commitCurrentChatHistorySnapshot,
 } from "./chat-history-snapshot.ts";
 import {
@@ -38,14 +41,18 @@ import {
   materializeVisibleAssistantStreamMessages,
   persistsChatCommentary,
   readRunProjections,
-  applyHistoryRun,
+  applyHistoryTerminalRun,
 } from "./chat-history-stream.ts";
+import { prepareChatHistoryTail, prepareChatHistoryPacket } from "./chat-history-window.ts";
 import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
+  readChatSessionPublication,
+  type ChatHistoryStartCapability,
+  readChatLocalOutputEntries,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   publishChatSessionProjection,
@@ -78,6 +85,7 @@ export async function hydrateChatHistory(
   method: "chat.history" | "chat.startup",
   inputRunIds: string[],
   requestKeyPrefix: string,
+  sourceReceipt?: { emptySource?: ChatHistoryStartCapability },
 ): Promise<ObservedChatHistoryResult | undefined> {
   const requests = chatHistoryRequests(state);
   requests.historyRead?.abort();
@@ -175,11 +183,31 @@ export async function hydrateChatHistory(
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
     setChatError(state, null);
-    let response = await request(readChatHistoryCursor(state));
+    const priorCursor = readChatHistoryCursor(state);
+    const { captureHeldHistoryContinuity, readContinuousHeldHistory } =
+      priorCursor && state.chatHistoryPagination.hasNewer
+        ? await import("./chat-history-held-gap.ts")
+        : {};
+    if (!isCurrent()) {
+      return undefined;
+    }
+    const predecessor = priorCursor
+      ? captureHeldHistoryContinuity?.(state, priorCursor)
+      : undefined;
+    let continuousRead:
+      | {
+          scope: SessionProjectionScope;
+          ownsReader: () => boolean;
+          preparePages: typeof import("./chat-history-page-preparation.ts").prepareChatHistoryPages;
+        }
+      | undefined;
+    const beforeRead = readChatSessionPublication(state);
+    let response = await request(priorCursor);
     if (!isCurrent()) {
       return undefined;
     }
     const cursorReset = isHistoryCursor(response) && response.kind === "reset";
+    let heldGapPagination: ChatHistoryPagination | undefined;
     if (cursorReset) {
       // Retain the rejected cursor until publication so a superseding read
       // repeats the reset and fills any held prefix before adopting its tail.
@@ -192,7 +220,7 @@ export async function hydrateChatHistory(
     // its start; a window reset asks for a fresh window instead.
     if (cursorReset && !isHistoryCursor(response) && !requests.windowReset?.isCurrent()) {
       const { fillHeldHistoryGap } = await import("./chat-history-held-gap.ts");
-      response = await fillHeldHistoryGap(
+      const filled = await fillHeldHistoryGap(
         state,
         client,
         sessionKey,
@@ -201,18 +229,77 @@ export async function hydrateChatHistory(
         isCurrent,
         read.signal,
       );
+      response = filled.result;
+      heldGapPagination = filled.pagination;
       if (!isCurrent()) {
         return undefined;
       }
+    }
+    if (
+      cursorReset &&
+      predecessor &&
+      readContinuousHeldHistory &&
+      !isHistoryCursor(response) &&
+      historySessionId(response) === predecessor.scope.sessionId &&
+      !requests.windowReset?.isCurrent()
+    ) {
+      const recovered = await readContinuousHeldHistory(
+        state,
+        client,
+        sessionKey,
+        requestAgentId,
+        predecessor,
+        response.observation,
+        isCurrent,
+        read.signal,
+      );
+      if (!recovered) {
+        return undefined;
+      }
+      response = recovered.result;
+      continuousRead = {
+        scope: recovered.scope,
+        ownsReader: recovered.ownsReader,
+        preparePages: recovered.preparePages,
+      };
     }
     const inFlightEvents =
       isHistoryCursor(response) && response.kind === "reset"
         ? undefined
         : response.inFlightRun?.events;
-    const replayAgentEvent = inFlightEvents?.length
-      ? (await loadChatLiveTools()).handleAgentEvent
-      : undefined;
+    const inFlightRunId =
+      isHistoryCursor(response) && response.kind === "reset"
+        ? undefined
+        : response.inFlightRun?.runId?.trim();
+    const liveHistory =
+      inFlightEvents?.length || inFlightRunId
+        ? await subscribeToSharedRequest(
+            { promise: loadChatLiveTools(), subscribers: new Set<AbortController>() },
+            read,
+            read.signal,
+          )
+        : undefined;
+    const replayAgentEvent = liveHistory?.handleAgentEvent;
+    const applyHistoryRun =
+      liveHistory && inFlightRunId ? liveHistory.applyHistoryInFlightRun : applyHistoryTerminalRun;
+    // Load continuity code before capturing mutable view state; a fresh session needs only one tail.
+    const tailPreparation =
+      !isHistoryCursor(response) &&
+      state.currentSessionId &&
+      state.currentSessionId === historySessionId(response)
+        ? await subscribeToSharedRequest(
+            {
+              promise: loadChatHistoryTailPreparation(),
+              subscribers: new Set<AbortController>(),
+            },
+            read,
+            read.signal,
+          )
+        : undefined;
     if (!isCurrent()) {
+      return undefined;
+    }
+    if (continuousRead && !continuousRead.ownsReader()) {
       return undefined;
     }
     // Live history wins even if a pending IndexedDB read settles in the next microtask.
@@ -300,6 +387,17 @@ export async function hydrateChatHistory(
       throw new Error("chat history page request returned a cursor reset");
     }
     const res = response;
+    const sourceEmpty =
+      res.totalMessages === 0 &&
+      !res.inFlightRun &&
+      !res.pendingInputs?.total &&
+      !res.pendingInputs?.items.length &&
+      readChatSessionPublication(state) === beforeRead;
+    const publicationReceipt: {
+      publication?: symbol;
+      previousPublication?: symbol;
+      uninterrupted?: boolean;
+    } = {};
     // Fence concurrent run lifecycle before applying the response. A remount
     // may replace the map itself, so compare its canonical run entries.
     const runProjectionsBeforeApply = readRunProjections(state, sessionKey, requestAgentId);
@@ -318,28 +416,65 @@ export async function hydrateChatHistory(
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
       : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
+      !continuousRead &&
       !requests.windowReset?.isCurrent() &&
       res.windowReset !== true &&
       (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
       (previousDisplayedLeafEntryId === undefined ||
         previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
     const reconciledHistory = retainsTranscriptIdentity
-      ? reconcileHistoryTail({
+      ? (tailPreparation?.reconcileHistoryTail({
           nextMessages: visibleMessages,
           nextPagination,
           nextSessionId,
           previousMessages: previousTerminalMessages,
           previousPagination,
           previousSessionId,
-        })
+        }) ?? null)
       : null;
-    const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const scope = readChatSessionProjectionScope(state, {
       sessionKey,
       agentId: requestAgentId,
       sessionId: nextSessionId,
       ...(hasActiveLeafEntryId ? { activeLeafEntryId: nextDisplayedLeafEntryId } : {}),
     });
+    const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
+    if (continuousRead) {
+      // Check current local replies at this synchronous publication, including
+      // commands received while the continuity request was pending.
+      const prepared = continuousRead.preparePages(
+        state,
+        [res],
+        "around",
+        readChatLocalOutputEntries(state),
+        { messages: [], pagination: { hasMore: false }, scope },
+      );
+      if (!prepared.fits) {
+        throw new Error(t("chat.thread.historyCapacity"));
+      }
+      heldGapPagination = prepared.pagination;
+    }
+    state.chatHistoryPagination =
+      heldGapPagination ??
+      (reconciledHistory && previousPagination.hasNewer
+        ? previousPagination
+        : reconciledHistory?.retainedCoverage && tailPreparation
+          ? tailPreparation.extendChatHistoryWindow(
+              previousPagination,
+              previousTerminalMessages,
+              visibleMessages,
+              nextPagination,
+              res.newerCursor,
+              "tail",
+              reconciledHistory.pagination,
+              prepareChatHistoryPacket(visibleMessages, nextPagination, res.newerCursor),
+            )
+          : prepareChatHistoryTail(
+              visibleMessages,
+              nextPagination,
+              res.newerCursor,
+              prepareChatHistoryPacket(visibleMessages, nextPagination, res.newerCursor),
+            ));
     state.chatSubmissions?.observeInitialSession(sessionKey, client, nextSessionId);
     // Only the pane-owned reducer proves which live and pending rows survive;
     // terminal-renderer cleanup must not reclassify them as history. A new
@@ -353,6 +488,8 @@ export async function hydrateChatHistory(
       },
       {
         scope,
+        publicationReceipt,
+        localOutputScope: continuousRead?.scope,
         runActive:
           res.sessionInfo &&
           (typeof res.sessionInfo.hasActiveRun === "boolean" ||
@@ -364,11 +501,12 @@ export async function hydrateChatHistory(
     if (hasActiveLeafEntryId) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
-    state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     delete requests.windowReset;
     state.currentSessionId = nextSessionId;
     applyChatPendingInputs(state, res.pendingInputs, {
-      queriedRunIds: inputRunIds,
+      // The selected-page probe did not query receipts; omitted receipts cannot
+      // retire custody observed by the earlier, different tail read.
+      queriedRunIds: continuousRead ? [] : inputRunIds,
       receipts:
         !previousSessionId || previousSessionId === nextSessionId ? res.inputReceipts : undefined,
     });
@@ -476,6 +614,18 @@ export async function hydrateChatHistory(
       resetStream,
     });
 
+    if (
+      sourceReceipt &&
+      sourceEmpty &&
+      publicationReceipt.publication &&
+      publicationReceipt.previousPublication === beforeRead &&
+      publicationReceipt.uninterrupted
+    ) {
+      sourceReceipt.emptySource = {
+        publication: publicationReceipt.publication,
+        scope: historyProjection.scope,
+      };
+    }
     return res;
   } catch (err) {
     if (!isCurrent()) {

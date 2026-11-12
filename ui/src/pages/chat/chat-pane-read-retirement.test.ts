@@ -5,7 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { createNativeShowEarlierPane } from "./chat-pane-history.test-support.ts";
+import { appendChatThread, createNativeShowEarlierPane } from "./chat-pane-history.test-support.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
 
 function heldTranscriptPane() {
@@ -35,7 +35,7 @@ it("retires hidden startup and resumes authoritative admission without losing dr
   const { pane, state, reads } = heldTranscriptPane();
   state.chatMessage = "Unsent draft";
   const attachments = state.chatAttachments;
-  pane.transcriptScrollTop = 240;
+  const thread = appendChatThread(pane, { scrollTop: 240 });
   const pending = loadChatHistory(state, { startup: true, deferBranches: true });
   await vi.waitFor(() => expect(reads).toHaveLength(1));
   expect(isInitialChatHistoryUnavailable(state)).toBe(true);
@@ -52,7 +52,7 @@ it("retires hidden startup and resumes authoritative admission without losing dr
   expect(state.chatError).toBeNull();
   expect(state.chatMessage).toBe("Unsent draft");
   expect(state.chatAttachments).toBe(attachments);
-  expect(pane.transcriptScrollTop).toBe(240);
+  expect(thread.scrollTop).toBe(240);
   expect(pane.transcriptLoading).toBe(true);
 
   pane.presented = true;

@@ -1,3 +1,4 @@
+import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -8,6 +9,7 @@ import type { ChatEventPayload } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatHistoryHost } from "./chat-state-contract.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { visibleCurrentAssistantStreamTail } from "./stream-reconciliation.ts";
 import { agentEvent } from "./tool-stream.test-helpers.ts";
 import type { handleAgentEvent } from "./tool-stream.ts";
@@ -144,3 +146,27 @@ export const toolEvent = (call: string) => ({
   }),
   ts: 1000,
 });
+
+export const historyMessage = (
+  role: "assistant" | "user",
+  text: string,
+  metadata?: Record<string, unknown>,
+) => ({
+  role,
+  content: [{ type: "text", text }],
+  ...(metadata ? { __openclaw: metadata } : {}),
+});
+
+export function publishLive(
+  state: TestState,
+  live: unknown,
+  scope: ReturnType<typeof getChatSessionProjection>["scope"] = { sessionKey: state.sessionKey },
+) {
+  const projection = reduceSessionProjection(getChatSessionProjection(state, scope), {
+    type: "messagePersisted",
+    message: live,
+    scope,
+  });
+  publishChatSessionProjection(state, projection);
+  state.chatMessages = [...projection.messages];
+}

@@ -10,11 +10,13 @@ function installControlUiPaneRuntimeTestAdapter() {
   const scope = window as Window & {
     openclawRenderLifecycleTestHook?: typeof notifyRenderLifecycleForTest;
     openclawPaneRuntimeTestAdapterInstalled?: boolean;
+    openclawPaneRuntimeForTest?: (element: HTMLElement) => object | undefined;
   };
   if (scope.openclawPaneRuntimeTestAdapterInstalled) {
     return;
   }
   const owners = new WeakMap<HTMLElement, WeakRef<object>>();
+  scope.openclawPaneRuntimeForTest = (element) => owners.get(element)?.deref();
   let probe = scope.openclawRenderLifecycleTestHook;
 
   const forwardPaneProbes = (element: HTMLElement) => {

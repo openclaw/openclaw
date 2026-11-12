@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
-import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -277,10 +277,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return { ...sessionListFixture(sessions, 0), path: "" };
-}
-
 function deviceSessionRow(
   key: string,
   status: "available" | "offline",
@@ -323,6 +319,7 @@ describe("refreshChat", () => {
     const message = {
       role: "assistant",
       content: [{ type: "text", text: "Transcript paints before metadata" }],
+      __openclaw: { seq: 1 },
     };
     const host = makeChatHost({
       hello: gatewayHelloForMethods(["chat.metadata", "chat.startup"], []),
@@ -439,7 +436,7 @@ describe("refreshChat", () => {
         },
       },
       sessionKey: "main",
-      sessionsResult: createSessionsResult([
+      sessionsResult: sessionListResult(0, [
         row("main", { hasActiveRun: false, status: "done", updatedAt: 10 }),
       ]),
     });
@@ -467,7 +464,7 @@ describe("refreshChat", () => {
       hello: gatewayHelloForMethods(["chat.startup"], []),
       requestHandlers: {
         "chat.startup": () => startup.promise,
-        "sessions.list": createSessionsResult([]),
+        "sessions.list": sessionListResult(0, []),
       },
       sessionKey: key,
     });
@@ -498,7 +495,7 @@ describe("refreshChat", () => {
     });
     const client = clientWithRequest(
       makeRequestMock({
-        "sessions.list": createSessionsResult([current]),
+        "sessions.list": sessionListResult(0, [current]),
         "chat.history": {
           messages: [],
           sessionInfo: {
@@ -518,7 +515,7 @@ describe("refreshChat", () => {
       sessions: createTestSessionCapability(gateway),
       sessionKey: "agent:work:main",
       agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
-      sessionsResult: createSessionsResult([row("agent:main:main")]),
+      sessionsResult: sessionListResult(0, [row("agent:main:main")]),
       sessionsResultAgentId: "main",
     });
     host.sessions.reconcile(row("agent:main:main"), undefined, { resultAgentId: "main" });
@@ -554,7 +551,7 @@ describe("refreshChat", () => {
           ? "agent:work:dashboard"
           : "agent:main:dashboard";
       const message = "after reload";
-      const primarySessions = createSessionsResult([
+      const primarySessions = sessionListResult(0, [
         row("agent:main:main", { hasActiveRun: false, status: "done" }),
       ]);
       const expectedSend = {
@@ -694,7 +691,7 @@ describe("refreshChat", () => {
       sessionKey,
       chatMessage: message,
       chatFollowUpMode: "queue",
-      sessionsResult: createSessionsResult([
+      sessionsResult: sessionListResult(0, [
         row(sessionKey, {
           sessionId: "dashboard-session",
           hasActiveRun: true,
@@ -753,7 +750,7 @@ describe("refreshChat", () => {
       },
       sessionKey,
       chatQueue: restoredQueue,
-      sessionsResult: createSessionsResult([row(sessionKey, { ...expectedSession, startedAt: 9 })]),
+      sessionsResult: sessionListResult(0, [row(sessionKey, { ...expectedSession, startedAt: 9 })]),
     });
     admitHostQueueItems(host);
 
@@ -1034,7 +1031,7 @@ describe("handleSendChat", () => {
   it.each(["timeout", "ok"] as const)(
     "settles a reset's %s ACK without replacing the Sessions table",
     async (status) => {
-      const archivedSessions = createSessionsResult([
+      const archivedSessions = sessionListResult(0, [
         row("agent:main:archived", { archived: true, status: "done" }),
       ]);
       const host = makeChatHost({
@@ -1047,7 +1044,7 @@ describe("handleSendChat", () => {
             ? {
                 "chat.history": idleChatHistory(),
                 "sessions.list": () =>
-                  createSessionsResult([
+                  sessionListResult(0, [
                     row("agent:main", { hasActiveRun: false, status: "done" }),
                   ]),
               }
@@ -1212,7 +1209,7 @@ describe("handleSendChat", () => {
 
   it("waits for a settings patch started in another split pane", async () => {
     const thinkingUpdate = createDeferred<unknown>();
-    const sessionsResult = createSessionsResult([
+    const sessionsResult = sessionListResult(0, [
       row("agent:work:main", {
         thinkingLevel: "low",
       }),
@@ -1760,7 +1757,7 @@ describe("handleSendChat", () => {
           sessionKey: "agent:main",
         }),
       ],
-      sessionsResult: createSessionsResult([
+      sessionsResult: sessionListResult(0, [
         row("agent:main", { hasActiveRun: true, status: "running", updatedAt: 10 }),
       ]),
     });
@@ -1778,7 +1775,7 @@ describe("handleSendChat", () => {
     // Once the row goes idle the same head reconciles through history again.
     const idleRow = row("agent:main", { hasActiveRun: false, status: "done", updatedAt: 11 });
     host.sessions.reconcile(idleRow);
-    host.sessionsResult = createSessionsResult([idleRow]);
+    host.sessionsResult = sessionListResult(0, [idleRow]);
     host.request.mockImplementation((method: string) =>
       method === "chat.history"
         ? Promise.resolve(idleChatHistory("agent:main"))
@@ -3595,7 +3592,7 @@ describe("handleSendChat", () => {
       chatRunId: "run-1",
       chatMessage: "/steer tighten the plan",
       sessionKey: "agent:main:main",
-      sessionsResult: createSessionsResult([
+      sessionsResult: sessionListResult(0, [
         row("agent:main:main", {
           activeLeafEntryId: "leaf-active",
           activeRunIds: ["run-1"],
@@ -3827,7 +3824,7 @@ describe("handleSendChat", () => {
         }),
       ],
       sessionKey: "agent:main:elsewhere",
-      sessionsResult: createSessionsResult([
+      sessionsResult: sessionListResult(0, [
         row("global", { agentId: "main", label: "Main global chat" }),
         row("global", { agentId: "writer", label: "Writer global chat" }),
       ]),

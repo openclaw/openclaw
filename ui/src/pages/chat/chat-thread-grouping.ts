@@ -66,6 +66,23 @@ const groupedSegments = new WeakMap<
   { inputs: unknown[]; items: Array<ChatItem | MessageGroup> }
 >();
 
+export function retireChatGroupingSources(messages: readonly unknown[]): void {
+  // A surviving source can key a memo containing its retired neighbors.
+  // Clear the shared value before deleting old keys, including for hidden panes.
+  for (const source of messages) {
+    const message = asRecord(source);
+    if (!message) {
+      continue;
+    }
+    const segment = groupedSegments.get(message);
+    if (segment) {
+      segment.inputs = [];
+      segment.items = [];
+      groupedSegments.delete(message);
+    }
+  }
+}
+
 /** Search hides rows, not turns: a row after a hidden turn start never joins the group before it. */
 function rowsAfterHiddenTurns(items: ChatItem[], context: ChatItem[]): Set<string> {
   const visible = new Set(items.map((item) => item.key));

@@ -1,4 +1,4 @@
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 // Measure caller admission separately from spies on the store's deferred projection.

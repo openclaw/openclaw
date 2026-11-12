@@ -10,25 +10,27 @@ import { createState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { projectTranscriptAttachments } from "./components/chat-transcript-attachments.ts";
 
-it.each(["empty", "populated", "partial"] as const)(
+it.each(["empty", "populated", "partial", "newer"] as const)(
   "retains accepted %s attachment coverage during history refresh, not initial load or reset",
   async (kind) => {
+    const populated = kind === "populated" || kind === "newer";
+    const coverage = kind === "partial" || kind === "newer" ? "partial" : "complete";
     const history: ChatHistoryResult = {
       sessionId: "attachment-session",
-      messages:
-        kind === "populated"
-          ? [
-              {
-                role: "user",
-                content: "",
-                __openclaw: {
-                  media: [
-                    { url: "media://inbound/report.pdf", kind: "document", fileName: "report.pdf" },
-                  ],
-                },
+      messages: populated
+        ? [
+            {
+              role: "user",
+              content: "",
+              __openclaw: {
+                seq: 1,
+                media: [
+                  { url: "media://inbound/report.pdf", kind: "document", fileName: "report.pdf" },
+                ],
               },
-            ]
-          : [],
+            },
+          ]
+        : [],
       hasMore: kind === "partial",
     };
     const state = createState(history);
@@ -44,11 +46,15 @@ it.each(["empty", "populated", "partial"] as const)(
     expect(read()).toMatchObject({ loading: true, coverage: "unknown" });
     initial.resolve(history);
     await loading;
+    expect(state.chatMessages).toEqual(history.messages);
+    expect(state.chatMessages[0]).toBe(history.messages?.[0]);
+    // An older mounted window can have newer accepted rows outside its slice.
+    state.chatHistoryPagination.hasNewer = kind === "newer" ? true : undefined;
     const accepted = read();
-    expect(accepted.entries).toHaveLength(kind === "populated" ? 1 : 0);
+    expect(accepted.entries).toHaveLength(populated ? 1 : 0);
     expect(accepted).toMatchObject({
       loading: false,
-      coverage: kind === "partial" ? "partial" : "complete",
+      coverage,
     });
 
     const refreshing = loadChatHistory(state);
@@ -56,10 +62,10 @@ it.each(["empty", "populated", "partial"] as const)(
       const refreshingAttachments = read();
       expect(refreshingAttachments).toMatchObject({
         loading: false,
-        coverage: kind === "partial" ? "partial" : "complete",
+        coverage,
       });
       expect(refreshingAttachments.entries.map((entry) => entry.label)).toEqual(
-        kind === "populated" ? ["report.pdf"] : [],
+        populated ? ["report.pdf"] : [],
       );
     } finally {
       refresh.resolve(history);

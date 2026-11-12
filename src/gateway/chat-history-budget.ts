@@ -10,7 +10,7 @@ import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes
 import { logLargePayload } from "../logging/diagnostic-payload.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
-import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 
 const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
 
@@ -101,11 +101,14 @@ export function createChatHistoryDeltaByteCounter(sessionSnapshot: Record<string
   };
 }
 
-function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
+function buildChatHistoryUnavailableSentinel(message: unknown): Record<string, unknown> {
+  // Drop unbounded metadata while retaining the native source needed for resident admission.
+  const seq = readChatHistoryMessageSeq(message);
   return {
     role: "assistant",
     timestamp: Date.now(),
     content: [{ type: "text", text: CHAT_HISTORY_UNAVAILABLE_SENTINEL }],
+    ...(seq !== undefined ? { __openclaw: { seq } } : {}),
   };
 }
 
@@ -164,7 +167,7 @@ export function replaceOversizedChatHistoryMessages(params: {
     const placeholder = buildOversizedHistoryPlaceholder(message);
     return byteCounter.messageBytes(placeholder) <= maxSingleMessageBytes
       ? placeholder
-      : buildChatHistoryUnavailableSentinel();
+      : buildChatHistoryUnavailableSentinel(message);
   });
   return { messages: next, replacedCount };
 }

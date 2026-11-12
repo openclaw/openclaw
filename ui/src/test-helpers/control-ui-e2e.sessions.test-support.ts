@@ -32,16 +32,13 @@ export const sessionGatewayTest = mockGatewayTest.extend<{
       const sampledAt = Date.now();
       window.Date.now = () => sampledAt;
       execute(createControlUiMockGatewayInitScript(scenario));
-      const socket = new window.WebSocket("ws://mock-gateway");
-      const frames: Frame[] = [];
-      socket.addEventListener("message", (event: MessageEvent) => {
-        frames.push(JSON.parse(String(event.data)) as Frame);
-      });
+      const socket = gatewayPage.connect();
+      const frames = socket.frames as Frame[];
       await flushMockTimers();
       let sequence = 0;
       const send = async (method: string, params: Row = {}) => {
         const id = String(++sequence);
-        socket.send(JSON.stringify({ type: "req", id, method, params }));
+        socket.send(id, method, params);
         await flushMockTimers();
         return id;
       };

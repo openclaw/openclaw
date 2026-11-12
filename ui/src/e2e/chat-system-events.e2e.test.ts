@@ -113,7 +113,7 @@ suite.define(() => {
           if (grouped) {
             await page.keyboard.press("ControlOrMeta+f");
             await page
-              .getByRole("textbox", { name: "Search messages", exact: true })
+              .getByRole("textbox", { name: "Search loaded messages", exact: true })
               .fill("workspace connection");
             await expect.poll(() => disclosure.count()).toBe(0);
             await expect

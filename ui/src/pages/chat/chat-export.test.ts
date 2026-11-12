@@ -46,7 +46,15 @@ it("downloads every page chronologically without modifying rendered history", as
       ? page([message(1), message(2)])
       : page([message(3)], { hasMore: true, nextOffset: 1 }),
   );
+  host.chatMessages = [message(2)];
+  host.chatHistoryPagination = {
+    hasMore: true,
+    olderCursor: "before-middle",
+    hasNewer: true,
+    newerCursor: "after-middle",
+  };
   const rendered = host.chatMessages;
+  const coverage = host.chatHistoryPagination;
   await expect(exportCurrentChat(host, () => true)).resolves.toBe("downloaded");
   expect(downloadTextFile).toHaveBeenCalledWith(
     expect.stringMatching(/\.md$/),
@@ -54,6 +62,7 @@ it("downloads every page chronologically without modifying rendered history", as
     "text/markdown",
   );
   expect(host.chatMessages).toBe(rendered);
+  expect(host.chatHistoryPagination).toBe(coverage);
 });
 
 it("does not download partial history when an older page fails", async () => {

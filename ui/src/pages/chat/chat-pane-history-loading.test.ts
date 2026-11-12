@@ -12,6 +12,24 @@ import { createRefreshChatPane, nativeHistoryMessage } from "./chat-pane-history
 import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 
 describe("chat pane history loading", () => {
+  it("announces the actionable capacity reason in the existing history boundary", () => {
+    const reason = "Move further into the loaded messages, then try again.";
+    const retry = vi.fn();
+    const { container } = mountSolid(() =>
+      createComponent(ChatHistoryBoundary, {
+        hasMore: true,
+        loading: false,
+        connected: true,
+        error: reason,
+        onShowEarlier: retry,
+      }),
+    );
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe(reason);
+    container.querySelector<HTMLButtonElement>("button")!.click();
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps earlier history disabled while a cached transcript hydrates", async () => {
     const response = createDeferred<ChatHistoryResult>();
     const request = vi.fn((method: string) =>

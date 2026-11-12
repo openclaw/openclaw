@@ -6,7 +6,25 @@ export function createTranscriptActions(
   context: ChatThreadState["transcriptRenderContext"],
   props: ChatThreadProps,
 ) {
-  context.actions = props;
+  // Retained dispatchers own action targets, never a full historical publication.
+  context.actions = {
+    onOpenSidebar: props.onOpenSidebar,
+    onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onFindWorkspaceFile: props.onFindWorkspaceFile,
+    onPermissionRetry: props.onPermissionRetry,
+    onOpenImage: props.onOpenImage,
+    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+    onOpenSessionLink: props.onOpenSessionLink,
+    onOpenSubagent: props.onOpenSubagent,
+    onOpenSubagents: props.onOpenSubagents,
+    onRetryQueuedMessage: props.onRetryQueuedMessage,
+    onSteerNow: props.onSteerNow,
+    onRewindMessage: props.onRewindMessage,
+    onFocusComposer: props.onFocusComposer,
+    loadFullAssistantMessage: props.loadFullAssistantMessage,
+    personActivity: props.personActivity,
+    displayFacts: props.displayFacts,
+  };
   const displayFacts = props.displayFacts;
   // Retained parts keep these dispatchers; each call uses the current pane owner.
   const actions: NonNullable<typeof context.actions> = {

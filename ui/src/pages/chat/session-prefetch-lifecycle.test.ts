@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { registerChatPane } from "./chat-pane-elements.ts";
-import { resolveChatSnapshotKey, type ChatSessionSnapshot } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
   prefetchHistoryRequest as historyRequest,
@@ -14,6 +14,7 @@ import {
   prefetchSessionKeyFromCall as sessionKeyFromCall,
   settleSessionPrefetch as settlePromises,
 } from "./session-prefetch.test-support.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-contract.ts";
 /* @vitest-environment jsdom */
 import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 

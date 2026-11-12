@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   chatMessage,
@@ -26,11 +27,15 @@ suite.define(() => {
     const draft = "Draft retained through the parked startup";
     const current = "Authoritative history after reopening";
     const obsolete = "Obsolete history from the parked read";
+    const [currentMessage, obsoleteMessage] = prepareChatHistoryFixture([
+      chatMessage("assistant", current),
+      chatMessage("assistant", obsolete),
+    ]).messages;
     const gateway = await installMockGateway(page, {
       subscriptionInitialHistory: false,
       sessionKey: "agent:main:session-a",
       historyMessages: [chatMessage("assistant", "Established conversation")],
-      sessionTranscripts: { [key]: { messages: [chatMessage("assistant", current)] } },
+      sessionTranscripts: { [key]: { messages: [currentMessage] } },
       methodResponses: { "sessions.list": chatSessionListResponse() },
     });
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
@@ -63,7 +68,7 @@ suite.define(() => {
     await gateway.resolveDeferred(
       "chat.startup",
       {
-        messages: [chatMessage("assistant", obsolete)],
+        messages: [obsoleteMessage],
         sessionId: "session-b",
       },
       { match: { sessionKey: key } },
@@ -77,7 +82,7 @@ suite.define(() => {
     await gateway.resolveDeferred(
       "chat.startup",
       {
-        messages: [chatMessage("assistant", current)],
+        messages: [currentMessage],
         sessionId: "session-b",
       },
       { match: { sessionKey: key } },
