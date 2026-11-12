@@ -41,11 +41,6 @@ import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { boundedWorkerError } from "./worker-error.js";
 
-export {
-  workerPlacementMoveFromRow,
-  readWorkerPlacementMovesReadOnly,
-} from "./placement-move-row-codec.js";
-
 type MoveSourceCompletion = {
   operationId: string;
   sessionId: string;
