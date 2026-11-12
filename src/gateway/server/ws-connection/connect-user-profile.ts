@@ -195,11 +195,36 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     };
   state: Pick<DeviceAuthorizedGatewayConnect, "authResult" | "role" | "authMethod">;
   ownerProfileExpected: boolean;
+  /** The profile an OpenClaw ID owner device's linked account names (OCF-510). */
+  linkedOwnerProfile?: { profileId: string; updatedAt: number } | null;
   authenticatedUserId: string | undefined;
   resolveAuthenticatedGitHubIdentity: ReturnType<typeof createAuthenticatedGitHubIdentitySync>;
   assertCurrent?: () => void;
 }): Promise<{ ok: true; prepared?: PreparedConnectProfile } | { ok: false }> {
   const { context, state, ownerProfileExpected, authenticatedUserId } = params;
+  if (params.linkedOwnerProfile) {
+    // Attribution only: a profile that vanished since the lookup returns the owner device
+    // to the shared owner rather than refusing its certificate.
+    try {
+      const prepared = await resolveAuthenticatedProfile(
+        params.linkedOwnerProfile.profileId,
+        params.linkedOwnerProfile.updatedAt,
+        params.assertCurrent,
+        context.recordAttachTiming,
+      );
+      params.assertCurrent?.();
+      return { ok: true, prepared };
+    } catch (error) {
+      context.handler.logWsControl.warn(
+        `linked owner profile resolution failed conn=${context.handler.connId}: ${formatForLog(error)}`,
+      );
+      return await resolveGatewayConnectProfileAdmission({
+        ...params,
+        linkedOwnerProfile: null,
+        ownerProfileExpected: true,
+      });
+    }
+  }
   const profileRequired =
     Boolean(state.authResult.delegation) ||
     Boolean(context.configSnapshot.gateway?.roles) ||

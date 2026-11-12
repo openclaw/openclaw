@@ -16,8 +16,10 @@ import {
   resolveOpenClawIdSignInRoute,
 } from "../openclaw-id/channel.js";
 import { decodeInviteProofKey } from "../openclaw-id/invites-view.js";
+import { resolveOpenClawIdOwnerAccount } from "../openclaw-id/owner-account.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
+import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 // Responds with the service, or an unavailable error when this Gateway has none.
@@ -157,12 +159,6 @@ async function handleAccount(opts: GatewayRequestHandlerOptions, action: string)
   }
 }
 
-// Sign in with OpenClaw ID on a connection with a verified personal profile (see
-// resolveOpenClawIdSignInRoute), by action. It needs only read scope: the account proves
-// which OpenClaw ID this browser holds, is never recorded in the claw record, and grants
-// nothing.
-// - device_begin: a device sign-in's user code and verification page;
-// - device_poll: polls it once; returns pending, or the account and ID token.
 // Whether `opts.client` is still the live personal connection of profile `owner`, with
 // OpenClaw ID on: checked again right before an account leaves the Gateway.
 function isCurrentDeviceSignIn(opts: GatewayRequestHandlerOptions, owner: string): boolean {
@@ -174,6 +170,49 @@ function isCurrentDeviceSignIn(opts: GatewayRequestHandlerOptions, owner: string
   );
 }
 
+// Captures the caller's live authority over its own profile for a link change: the current
+// personal source and profile, the device route and the Labs switch. Refuses and returns
+// undefined when any is already gone.
+async function prepareProfileLink(
+  opts: GatewayRequestHandlerOptions,
+  owner: string,
+): Promise<(() => void) | undefined> {
+  const assertRoute = () => {
+    if (
+      opts.context.getRuntimeConfig().gateway?.openclawId?.enabled !== true ||
+      resolveOpenClawIdSignInRoute(opts.client) !== "device" ||
+      opts.client?.authenticatedUserProfile?.profileId !== owner
+    ) {
+      throw new Error("this connection changed");
+    }
+  };
+  try {
+    assertRoute();
+    const action = await preparePersonalProfileAction(opts);
+    if (action.owner !== owner) {
+      throw new Error("this connection changed");
+    }
+    return () => {
+      action.assertCurrent();
+      assertRoute();
+    };
+  } catch {
+    refuse(opts, { code: "not_personal_connection", detail: "this connection changed" });
+    return undefined;
+  }
+}
+
+// Sign in with OpenClaw ID on a connection with a verified personal profile (see
+// resolveOpenClawIdSignInRoute), by action. It needs only read scope: the account proves
+// which OpenClaw ID this browser holds, is never recorded in the claw record, and grants
+// nothing.
+// - device_begin: a device sign-in's user code and verification page;
+// - device_poll: polls it once; returns pending, or the account and ID token. With
+//   `link: true`, the verified account is also linked to this connection's profile
+//   (OCF-510): both sides are proven on this one connection, so there is no picker.
+//   Owner devices of a linked account then arrive as this profile;
+// - link_status: the OpenClaw ID accounts linked to this connection's profile;
+// - unlink: removes them; owner devices return to the shared owner.
 async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
   const config = opts.context.getRuntimeConfig().gateway?.openclawId;
   if (config?.enabled !== true) {
@@ -213,7 +252,54 @@ async function handleDeviceAccount(opts: GatewayRequestHandlerOptions) {
         refuse(opts, { code: "not_personal_connection", detail: "this connection changed" });
         return;
       }
-      respondSignIn(opts, result);
+      if (params.link !== true || !("account" in result)) {
+        respondSignIn(opts, result);
+        return;
+      }
+      // The poll awaited the issuer: the write keeps the live personal source, profile and
+      // Labs switch current through its commit.
+      const assertCurrent = await prepareProfileLink(opts, owner);
+      if (!assertCurrent) {
+        return;
+      }
+      const { linkCanonicalOpenClawIdUserProfile } =
+        await import("../../state/user-profile-openclaw-id.js");
+      const linked = await linkCanonicalOpenClawIdUserProfile(
+        { profileId: owner, accountId: result.account.sub, email: result.account.email },
+        { assertCurrent },
+      );
+      // The write awaited the state worker; the token again leaves only to the same connection.
+      if (!isCurrentDeviceSignIn(opts, owner)) {
+        refuse(opts, { code: "not_personal_connection", detail: "this connection changed" });
+        return;
+      }
+      opts.respond(true, { ...result, link: linked.ok ? "linked" : linked.code });
+      return;
+    }
+    if (params.action === "link_status") {
+      const { readOpenClawIdLinksOfProfile } =
+        await import("../../state/user-profile-openclaw-id.js");
+      const ownerAccount = resolveOpenClawIdOwnerAccount();
+      // Account IDs stay on the Gateway; the row shows each email and the claw role.
+      opts.respond(true, {
+        linked: (await readOpenClawIdLinksOfProfile(owner)).map((link) => ({
+          email: link.email,
+          owner: link.accountId === ownerAccount,
+        })),
+      });
+      return;
+    }
+    if (params.action === "unlink") {
+      const assertCurrent = await prepareProfileLink(opts, owner);
+      if (!assertCurrent) {
+        return;
+      }
+      const { unlinkCanonicalOpenClawIdUserProfile } =
+        await import("../../state/user-profile-openclaw-id.js");
+      opts.respond(
+        true,
+        await unlinkCanonicalOpenClawIdUserProfile({ profileId: owner }, { assertCurrent }),
+      );
       return;
     }
     refuse(opts, { code: "malformed", detail: `unknown account action ${String(params.action)}` });
