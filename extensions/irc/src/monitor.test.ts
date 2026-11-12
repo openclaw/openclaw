@@ -602,6 +602,43 @@ describe("irc monitor reconnect", () => {
 });
 
 describe("irc monitor inbound target", () => {
+  it.for(["allowlist", "open"] as const)(
+    "honors an empty channel sender list over wildcard and account senders with %s group policy",
+    async (groupPolicy, { signal }) => {
+      await withIngressQueue(async (ingressQueue) => {
+        const core = createPluginRuntimeMock();
+        setIrcRuntime(core);
+        const dispatch = vi.mocked(core.channel.reply.dispatchReplyWithBufferedBlockDispatcher);
+        const server = await startInboundIrcServer();
+        let monitor: Awaited<ReturnType<typeof monitorIrcProvider>> | undefined;
+        try {
+          monitor = await monitorIrcProvider({
+            config: monitorConfig(server.port, "bot", {
+              groupPolicy,
+              groupAllowFrom: ["*"],
+              groups: {
+                "*": { allowFrom: ["*"], requireMention: false },
+                "#ops": { allowFrom: [], requireMention: false },
+              },
+            }),
+            ingressQueue,
+          });
+          const denied = observeIngressCompletion(ingressQueue);
+          server.sendInbound("#ops");
+          await withinTest(denied, signal);
+          expect(dispatch).not.toHaveBeenCalled();
+          const allowed = observeIngressCompletion(ingressQueue);
+          server.sendInbound("#other");
+          await withinTest(allowed, signal);
+          expect(dispatch).toHaveBeenCalledOnce();
+        } finally {
+          await monitor?.stop();
+          await server.close();
+        }
+      });
+    },
+  );
+
   it.each([
     {
       label: "channel",
