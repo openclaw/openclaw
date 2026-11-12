@@ -1,0 +1,3 @@
+# sessions suggestions: the CLI forwards the canonical session.suggestions.list RPC and covers
+# empty, JSON, failure, and terminal-safety rendering. Exact net test-line growth.
+129
