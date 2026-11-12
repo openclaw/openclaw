@@ -100,13 +100,7 @@ suite.define(() => {
           exact: true,
           includeHidden: true,
         });
-        if (width <= 640) {
-          await page.getByRole("button", { name: "Filter", exact: true }).click();
-        }
         await autoFollow.uncheck();
-        if (width <= 640) {
-          await page.keyboard.press("Escape");
-        }
         await gateway.setMethodResponse("logs.tail", tail(2_000, 0));
         const after = await gateway.deferNext("logs.tail");
         await gateway.waitForRequest("logs.tail", { after });
@@ -137,7 +131,8 @@ suite.define(() => {
           })
           .toBe(true);
         expect(await page.locator(".log-row").count()).toBeLessThan(100);
-        expect(await autoFollow.isChecked()).toBe(false);
+        // Scrolling back to the end resumes following.
+        await expect.poll(() => autoFollow.isChecked()).toBe(true);
         expect(errors).toEqual([]);
       } finally {
         await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());

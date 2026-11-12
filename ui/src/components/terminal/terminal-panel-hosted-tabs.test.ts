@@ -58,17 +58,7 @@ async function mount(props: Partial<OpenClawTerminalPanel> = {}) {
     }
     return (method === "terminal.list" ? { sessions: [] } : { ok: true }) as T;
   });
-  const panel = mountPanel(
-    tagName,
-    {
-      available: true,
-      embedded: true,
-      tabsInHeader: true,
-      client,
-      ...props,
-    },
-    false,
-  );
+  const panel = createPanel(client, { embedded: true, tabsInHeader: true, ...props });
   await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
   await panel.updateComplete;
   return {
@@ -94,9 +84,8 @@ function mountActions(panel: OpenClawTerminalPanel) {
   return container;
 }
 
-function button(container: HTMLElement, label: string) {
-  return container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
-}
+const button = (container: HTMLElement, label: string) =>
+  panelButton(container, `[aria-label="${label}"]`)!;
 
 describe("Terminal panel hosted tabs", () => {
   beforeEach(() => {
@@ -206,9 +195,16 @@ describe("Terminal panel hosted tabs", () => {
       await panel.updateComplete;
       expect(changed.mock.calls.length).toBeGreaterThan(openingCount);
       const readyCount = changed.mock.calls.length;
-      panel.selectHostedTab(firstId);
+      const firstController = await createGhosttyTerminalMock.mock.results[0]!.value;
+      firstController.terminal.focus.mockClear();
+      firstController.terminal.renderer.render.mockClear();
+      panel.selectHostedTab(firstId, new KeyboardEvent("keydown", { key: "ArrowLeft" }));
       expect(panel.activeHostedTabId).toBe(firstId);
       await panel.updateComplete;
+      expect(firstController.terminal.focus).not.toHaveBeenCalled();
+      expect(firstController.terminal.renderer.render).toHaveBeenCalled();
+      panel.hostedTabs.find((tab) => tab.id === firstId)!.onActivate!();
+      await waitForFast(() => expect(firstController.terminal.focus).toHaveBeenCalledOnce());
       expect(changed.mock.calls.length).toBeGreaterThan(readyCount);
       const stableCount = changed.mock.calls.length;
       panel.themeMode = "light";
@@ -309,6 +305,7 @@ describe("Terminal panel hosted tabs", () => {
       const id = panel.activeHostedTabId!;
       const closing = panel.closeHostedTab(id);
       if (outcome === "cancel") {
+        await import("../confirm-dialog-view.tsx");
         await waitForFast(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
         const cancel = [
           ...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button'),
@@ -327,8 +324,8 @@ describe("Terminal panel hosted tabs", () => {
   );
 });
 
-function createPanel(client: TerminalGatewayClient, embedded = false) {
-  return mountPanel(tagName, { client, available: true, embedded }, !embedded);
+function createPanel(client: TerminalGatewayClient, props: Partial<OpenClawTerminalPanel> = {}) {
+  return mountPanel(tagName, { client, available: true, ...props }, !props.embedded);
 }
 
 function createPickerClient(
@@ -391,7 +388,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
   it("keeps tab and session-picker references inside each split terminal", async () => {
     const ids: string[] = [];
     for (let index = 0; index < 2; index += 1) {
-      const panel = createPanel(createPickerClient(true), true);
+      const panel = createPanel(createPickerClient(true), { embedded: true });
       await waitForFast(() =>
         expect(panel.querySelector('.tabstrip-tab[aria-selected="true"]')).not.toBeNull(),
       );
@@ -518,8 +515,7 @@ function terminalUploadFile(name: string, content: string): File {
 }
 
 async function mountReadyPanel(client: TerminalGatewayClient) {
-  const panel = mountPanel(tagName, { client, available: true }, false);
-  panel.toggle();
+  const panel = createPanel(client);
   await waitForFast(() => expect(panelButton(panel, ".tp-upload")?.disabled).toBe(false));
   return panel;
 }

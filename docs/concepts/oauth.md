@@ -8,6 +8,10 @@ read_when:
 title: "OAuth"
 ---
 
+In **Settings → Models**, choose **Add account** to save a provider sign-in.
+**Accounts** are saved ways to use a provider; API keys supplied by config or the
+environment remain managed at their source. **Sign out** removes the saved sign-in.
+
 OpenClaw supports OAuth ("subscription auth") for providers that offer it,
 notably **OpenAI Codex (ChatGPT OAuth)** and **Anthropic Claude CLI reuse**.
 For Anthropic, the practical split is:
@@ -38,8 +42,8 @@ same entry point:
 openclaw models auth login --provider <id>
 ```
 
-In the Control UI, open **Settings → Models → Connect provider** to save a
-supported account without requesting a model reply. **Connect provider** in
+In the Control UI, open **Settings → Models → Add account** to save a
+supported account without requesting a model reply. **Add account** in
 Model Setup opens the same picker and connection flow. Choose **Test & use** when
 you want to verify a model and select it. Plugins that only support full setup
 keep their separate setup action.
@@ -158,9 +162,11 @@ and [Z.AI / GLM Coding Plan](/providers/zai).
 
 OpenClaw's OAuth registry and adapters live in `src/llm/utils/oauth/`. Shared provider helpers live in `src/plugin-sdk/provider-oauth-runtime.ts` and `src/plugin-sdk/provider-auth-runtime.ts`. The auth commands in `src/commands/models/auth.ts` run the selected provider method and persist the returned profiles.
 
-### Restarting sign-in in Model Setup
+<a id="restarting-sign-in-in-model-setup" />
 
-In **Model Setup**, starting the same sign-in again replaces your unfinished
+### Restarting sign-in in Models
+
+In **Models**, starting the same sign-in again replaces your unfinished
 attempt for the same agent and workspace. This includes **Sign in with ChatGPT**
 and other provider sign-in flows. Use the newest browser link; callbacks from
 the previous attempt are no longer accepted.
@@ -258,9 +264,8 @@ Example (session override):
 
 ### 3) Multi-user: personal accounts
 
-On a shared gateway, each verified person can save several accounts per provider
-in **Settings → Profile → Connected accounts** and choose one as their new-chat
-default. **Add account** and `openclaw models accounts login` use the same
+On a shared Gateway, each verified person can save several accounts per provider
+in **Settings → Profile → Saved accounts** and choose one as their **New session default**. **Add account** and `openclaw models accounts login` use the same
 Gateway-owned provider and sign-in method catalog. Anthropic personal setup
 accepts an API key, not a Claude subscription token; system/agent auth remains
 a separate flow.
@@ -269,8 +274,10 @@ scope before requesting provider credentials. Gateway identity and provider
 sign-in are separate; a shared Gateway token does not identify a person. See
 [personal-account CLI setup](/cli/models#personal-model-accounts).
 
-The model picker in New session or an existing chat can select an
-account for that chat without changing the default. Ordered shared accounts
+The model picker in **New session** or an existing session can select an
+account for that session without changing the default. **Use for new sessions**
+changes only the default for future sessions. **Use shared default** clears that
+personal default without removing saved accounts or changing existing sessions. Ordered shared accounts
 remain same-provider failover candidates; the selection is not a billing
 guarantee. Personal credentials stay outside the shared profile list. See
 [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).

@@ -4,6 +4,7 @@ import { isMainThread } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { assertEngineStoreExecutionAllowed } from "../infra/database-engine/admission-scope.js";
+import { observeConnection } from "../infra/database-engine/observation.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -67,9 +68,15 @@ export type OpenClawAgentDatabaseReadOnlyResult<T> =
 export function readOpenClawAgentDatabase<T>(
   database: OpenClawAgentReadOnlyDatabase,
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
-): { found: true; value: T } {
+): { found: true; value: T } | { found: false; reason: "schema-missing" } {
   try {
-    return { found: true, value: operation(database) };
+    return runSqliteReadOperationSync(database.db, () => {
+      // DDL revokes schema admission independently of the retained physical handle.
+      // These assertions reuse admitted facts until that schema lifetime changes.
+      return hasAdmittedAgentReadOnlySchema(database)
+        ? ({ found: true, value: operation(database) } as const)
+        : ({ found: false, reason: "schema-missing" } as const);
+    });
   } catch (error) {
     throw sqlitePrimaryResultCode(error) === 1
       ? classifyOpenClawAgentDatabaseReadError(database.db, error)
@@ -108,11 +115,13 @@ export function readOpenClawAgentDatabaseSnapshot<T>(
   database: OpenClawAgentReadOnlyDatabase,
   operation: (database: OpenClawAgentReadOnlyDatabase) => T,
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
-  const value = runSqliteReadSnapshotSync(
-    database.db,
-    () => readOpenClawAgentDatabase(database, operation).value,
-  );
-  return { found: true, value };
+  let result!: OpenClawAgentDatabaseReadOnlyResult<T>;
+  runSqliteReadSnapshotSync(database.db, () => {
+    result = readOpenClawAgentDatabase(database, operation);
+    // Keep the kernel value unwrapped so the transaction owner still rejects Promises.
+    return result.found ? result.value : undefined;
+  });
+  return result;
 }
 
 /** Fresh-only callers do not need the writable runtime's process-held connection cache. */
@@ -212,6 +221,7 @@ export function openOpenClawAgentDatabaseReadOnly(
       registerOpenClawAgentDatabaseIdentity(selected);
       database = { agentId, db: selected, path: pathname, close };
     } else {
+      observeConnection(db);
       enableNodeSqliteKyselyStatementCache(db);
       registerOpenClawAgentDatabaseIdentity(db);
       const privatePath = isArtifactPreservingStateRead("agent", pathname)

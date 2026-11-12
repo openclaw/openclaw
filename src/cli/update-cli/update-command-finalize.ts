@@ -94,6 +94,7 @@ import {
   UpdateFinalizationLifecycle,
   type UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
+import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
 import { restoreRepairGateway } from "./update-repair-service.js";
 import {
   reportRetainedUpdateCustody,
@@ -120,6 +121,7 @@ async function finalizeUpdate(
   handoff?: ManagedHandoffRepair,
   retained?: RetainedUpdateCustodyReport,
 ): Promise<void> {
+  await settleManagedHandoffPluginCohort();
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
   await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();

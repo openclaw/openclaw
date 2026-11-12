@@ -440,30 +440,24 @@ describe("curated meeting capture", () => {
     },
   );
 
-  it("normalizes edited values and explicitly clears optional fields without rewriting untouched values", async () => {
-    const source = {
-      providerId: "test-voice",
-      title: "Original title",
-      sessionId: " daily ",
-      accountId: " team ",
-      guildId: " guild ",
-      channelId: " room ",
-      meetingUrl: " https://example.test/old?invitation=synthetic ",
-    };
-    const { page, runtimeConfig } = await mount({ source });
+  it("normalizes edits after unrelated autosave and explicitly clears optional fields", async () => {
+    const { page, runtimeConfig } = await mount();
     click(page, "Edit source 1");
     input(page, "accountId", " new-account ");
     input(page, "meetingUrl", " https://example.test/new?invitation=updated ");
     input(page, "sessionId", "");
     input(page, "title", " ");
+    runtimeConfig.patchForm(["messages", "ackReaction"], "updated");
+    await runtimeConfig.flushFormChanges();
+    flush();
     click(page, "Edit source 1");
     click(page, "Save source");
     expectSources(runtimeConfig, [
       {
         providerId: "test-voice",
         accountId: "new-account",
-        guildId: " guild ",
-        channelId: " room ",
+        guildId: "guild",
+        channelId: "room",
         meetingUrl: "https://example.test/new?invitation=updated",
       },
     ]);
@@ -581,8 +575,8 @@ describe("curated meeting capture", () => {
     await expectSaved(runtimeConfig, request, [
       { providerId: "test-voice", guildId: "second-guild", channelId: "second-room" },
     ]);
-    flush();
-    click(page, "Add source");
+    await waitForSolid(() => expect(settingsButton(page, "Add source").disabled).toBe(false));
+    click(page, "Add source", true);
     expect(providerSelect(page).value).toBe("");
     input(page, "title", "Discard this draft");
     click(page, "Cancel");

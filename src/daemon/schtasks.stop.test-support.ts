@@ -46,11 +46,19 @@ vi.mock("node:child_process", async () => {
   return { ...actual, spawnSync };
 });
 
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: (port: number) =>
     findVerifiedGatewayListenerPidsOnPortSync(port),
+  findVerifiedGatewayListenerPidsOnPort: async (port: number) =>
+    findVerifiedGatewayListenerPidsOnPortSync(port),
 }));
-vi.mock("../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease }));
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
+vi.mock("../infra/gateway-owner-lease.js", () => ({
+  readGatewayOwnerLease,
+  readGatewayOwnerLeaseAsync: async (...args: Parameters<typeof readGatewayOwnerLease>) =>
+    readGatewayOwnerLease(...args),
+}));
 vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
   readActiveGatewayLockIdentity,

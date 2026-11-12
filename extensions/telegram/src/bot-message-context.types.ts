@@ -19,6 +19,8 @@ export type TelegramMediaRef = {
   path?: string;
   contentType?: string;
   fileName?: string;
+  /** Telegram source identity, stable across file-id changes and local restaging. */
+  fileUniqueId?: string;
   stickerMetadata?: StickerMetadata;
   sourceMessageId?: string;
   unavailable?: { reason: "oversize"; limit: string } | { reason: "download-failed" };
@@ -74,6 +76,10 @@ export type BuildTelegramMessageContextParams = {
   replyMedia?: TelegramMediaRef[];
   replyChain?: TelegramReplyChainEntry[];
   promptContext?: TelegramPromptContextEntry[];
+  /** Hydrates images the sender posted just before addressing the bot in a mention-gated group. */
+  resolveSenderMedia?: () => Promise<
+    { media: TelegramMediaRef[]; promptContext: TelegramPromptContextEntry[] } | undefined
+  >;
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;

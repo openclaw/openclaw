@@ -27,7 +27,7 @@
 
 .transcripts-layout:not(.transcripts-layout--selected) .transcripts-library {
   width: 100%;
-  max-width: 960px;
+  max-width: 1120px;
   margin-inline: auto;
 }
 
@@ -61,6 +61,13 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+/* Action buttons share the control height of the refresh icon and the filter fields beside them. */
+.transcripts-actions .btn,
+.transcripts-search .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
 }
 
 .transcripts-actions svg,
@@ -316,6 +323,12 @@
   white-space: pre-wrap;
 }
 
+.meetings-notes {
+  /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
 .meetings-notes pre {
   overflow-x: auto;
 }
@@ -403,6 +416,12 @@
 .transcripts-filter-popover__panel {
   display: grid;
   gap: var(--space-3);
+}
+
+/* The sheet owns the inset. */
+.oc-sheet .transcripts-filter-popover__panel {
+  width: auto;
+  padding: 0;
 }
 
 /* A full date plus its calendar needs more than half of the narrowest phones. */

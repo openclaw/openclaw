@@ -1,5 +1,5 @@
 export function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+  return value.replace(/[=]+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
 }
 
 /** Validates base64 structure and returns its decoded size without allocating a decode buffer. */

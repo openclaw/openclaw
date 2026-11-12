@@ -3,33 +3,16 @@ import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
 import { phase } from "../../test-helpers/solid-menu.tsx";
-import { HeaderSearch } from "./header-search.tsx";
 import { PhoneSheet } from "./phone-sheet.tsx";
 import type { PopoverHandle } from "./popover.tsx";
 
 afterEach(cleanup);
 
-function mountSheet(search = false) {
+function mountSheet() {
   let handle!: PopoverHandle;
   const view = render(() => (
     <form data-testid="form">
-      <PhoneSheet
-        id="filters-sheet"
-        label="Filters"
-        ref={(next) => (handle = next)}
-        headerAction={
-          search ? (
-            <HeaderSearch
-              title="Filters"
-              label="Search"
-              query="slack"
-              open
-              onOpenChange={() => {}}
-              onQueryChange={() => {}}
-            />
-          ) : undefined
-        }
-      >
+      <PhoneSheet id="filters-sheet" label="Filters" ref={(next) => (handle = next)}>
         <input name="provider" aria-label="Provider" value="slack" />
         <button type="submit">Filter</button>
       </PhoneSheet>
@@ -75,13 +58,12 @@ describe("PhoneSheet", () => {
     expect(handle.overlay.open).toBe(false);
   });
 
-  it("keeps reverse Tab inside a sheet with a restored search", async () => {
-    const { view, surface } = mountSheet(true);
+  it("ignores a hide while closed, so the next opening stays open", async () => {
+    const { view, handle, surface } = mountSheet();
+    expect(handle.hide()).toBe(false);
     await userEvent.click(view.getByRole("button", { name: "Filters" }));
     await phase(surface, "open");
-    expect(document.activeElement).toBe(surface);
-    await userEvent.tab({ shift: true });
-    expect(document.activeElement).toBe(view.getByRole("button", { name: "Filter" }));
+    expect(handle.overlay.open).toBe(true);
   });
 
   it("wraps Tab between its first and last controls", async () => {

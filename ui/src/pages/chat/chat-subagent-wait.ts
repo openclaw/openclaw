@@ -243,9 +243,17 @@ function unfinishedChildren(input: SubagentSession) {
   );
 }
 
+/**
+ * Running counts match Details' Working count: a queued child is still waiting
+ * for a concurrency slot, and dashboard children are sessions in their own right.
+ */
+function isWorkingSubagent(row: GatewaySessionRow) {
+  return row.status !== "queued" && !isDashboardSessionKey(row.key);
+}
+
 /** Header counts need child membership, not transcript handoffs or activity presentation. */
 export function countRunningSubagents(input: SubagentSession): number {
-  return unfinishedChildren(input).filter((row) => !isDashboardSessionKey(row.key)).length;
+  return unfinishedChildren(input).filter(isWorkingSubagent).length;
 }
 
 // Launch order stays stable as activity updates reorder the source roster.
@@ -393,6 +401,7 @@ export function projectSubagentStatus(
   // line names every child the handoff waits on.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const running = children.length;
+  const working = children.filter(isWorkingSubagent).length;
   // Paused children alone keep the wait. Once the parent has resumed (its latest
   // turn is not the loaded handoff), nothing is running: they read as a note.
   const pausedOnly = hydrated && unfinished.length === 0 && paused.length > 0;
@@ -422,7 +431,7 @@ export function projectSubagentStatus(
   // The line can lead to the Subagents panel only when that panel lists every
   // subagent it mentions.
   const listed =
-    (wait !== null || running > 0) &&
+    (wait !== null || working > 0) &&
     unfinished.every((row) => isDashboardSessionKey(row.key) || isSubagentsPanelSession(row));
   return {
     wait,
@@ -431,7 +440,7 @@ export function projectSubagentStatus(
       !searchFiltering && wait?.runId
         ? { startedAt: wait.startedAt, runId: wait.runId }
         : undefined,
-    running,
+    running: working,
     listed,
     links: handoffSessionLinks(input),
     // Key only the working line's facts so unrelated roster patches stay memoized.
@@ -447,7 +456,7 @@ export function projectSubagentStatus(
             wait.pausedOnly,
             wait.pausedNote,
           ]
-        : [running, listed],
+        : [working, listed],
     ),
     // Seeded rows can already match; rows that list children wait for the pane's own query.
     rowsKey: `${input.subagentSessionsHydrated && !input.subagentSessionsPending ? "complete" : "partial"}\n${spawnedSubagentsRenderKey(input.subagentSessions)}\n${handoffFactsKey(input.subagentSessions)}`,

@@ -5,7 +5,6 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import {
   buildAgentRunBlockedUserMessage,
@@ -20,7 +19,10 @@ import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
-import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
+import {
+  SAFETY_MARGIN,
+  createFixedRequestTokenEstimator,
+} from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -249,11 +251,23 @@ export async function runEmbeddedAttemptPromptPhase(
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
     setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
+    const imageResult = await prepareEmbeddedAttemptPromptExecution({
+      mediaOwnerAgentId: sessionAgentId,
+      effectiveFsWorkspaceOnly,
+      effectiveWorkspace,
+      sandbox,
+      attempt,
+      prompt: promptContext.promptSubmission.prompt,
+      skipPromptSubmission,
+    });
+    runAbortController.signal.throwIfAborted();
+    promptAssembly.assertHostActive?.();
     if (attempt.operation !== "settled-tool-finalization") {
       const block = await runBeforeAgentRunGate(
         hookRunner,
         {
           prompt: promptForModel,
+          images: imageResult.images,
           systemPrompt: systemPromptForHook,
           messages: hookMessagesForCurrentPrompt,
           channelId: hookCtx.channelId,
@@ -324,15 +338,6 @@ export async function runEmbeddedAttemptPromptPhase(
       }
     }
 
-    const imageResult = await prepareEmbeddedAttemptPromptExecution({
-      mediaOwnerAgentId: sessionAgentId,
-      effectiveFsWorkspaceOnly,
-      effectiveWorkspace,
-      sandbox,
-      attempt,
-      prompt: promptContext.promptSubmission.prompt,
-      skipPromptSubmission,
-    });
     const reserveTokens = settingsManager.getCompactionReserveTokens();
     const terminal = projectAgentRunAttemptTerminal(input.state.terminal);
     let state: PromptPreflightState = {

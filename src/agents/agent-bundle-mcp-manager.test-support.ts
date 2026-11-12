@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import {
   bindFixtureIdentity,
   fixtureCatalog,
@@ -22,7 +23,6 @@ import {
 } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   SessionMcpRuntime,
-  McpToolCatalog,
   SessionMcpRuntimeManager as RuntimeManager,
 } from "./agent-bundle-mcp-types.js";
 

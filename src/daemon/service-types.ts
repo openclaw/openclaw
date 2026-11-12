@@ -46,6 +46,13 @@ export type GatewayServiceInstallArgs = {
   /** Preserve the existing enable policy during an update-owned definition rebind. */
   preserveAutoStart?: boolean;
   beforeMutation?: () => Promise<void>;
+  /**
+   * Runs only when a failed install's native recovery has stopped the replacement and is about to
+   * restart the previous service, so state that service depends on is back in place first. Its
+   * running is the proof that recovery settled; it does not run when recovery refuses, fails or
+   * never starts. It reports its own failures instead of throwing.
+   */
+  beforeRecovery?: () => Promise<void>;
   /** Live caller authority, retained at every native write boundary. */
   assertCurrent?: () => void;
   env: GatewayServiceEnv;
@@ -339,6 +346,21 @@ export function hasGatewayServiceDefinitionOverrides(
   return command?.managedOverrides
     ? Object.keys(command.managedOverrides).length > 0
     : Boolean(command?.managedDefinition);
+}
+
+/** Rebinding and compensation rewrite the base, leaving inspected named overrides in place. */
+export function canPreserveGatewayServiceDefinitionOverrides(
+  command: GatewayServiceCommandConfig | null | undefined,
+): boolean {
+  return (
+    !hasGatewayServiceDefinitionOverrides(command) ||
+    Boolean(
+      command?.managedDefinition &&
+      command.managedOverrides &&
+      !hasGatewayServiceLauncherOverride(command) &&
+      resolveManagedGatewayServiceProcessEnv(command, {}) !== null,
+    )
+  );
 }
 
 /** Operator-owned launcher overrides cannot be repaired by rewriting the managed base. */

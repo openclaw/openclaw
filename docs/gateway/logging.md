@@ -61,6 +61,19 @@ of all workers. Startup logging never requests new worker samples.
 - Configure the log file path and level via `~/.openclaw/openclaw.json`: `logging.file`, `logging.level`.
 - The file format is one JSON object per line.
 
+Default-directory safety checks, file writes, and rotation run in a lazily started worker, preserving queued record
+order without blocking the Gateway main thread on filesystem checks. Normal
+shutdown drains queued writes; forced process exit retains a synchronous rescue
+for records that have not started writing.
+
+Silent logging does not prepare a file. Requests that report or tail the log path
+wait for its directory to pass the same ownership, permission, and ancestor checks
+used by writes; they never report an unqualified fallback path.
+
+By default, logging retains runtime call-site metadata without probing source-map
+files. The existing `TSLOG_SOURCE_MAPS=on` diagnostic override remains available;
+it enables tslog's synchronous source-map lookups.
+
 With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 `logging.maxFileBytes` apply to the next log record, including records from
 long-lived channel loggers. Queued records finish writing to their original file.
@@ -102,6 +115,11 @@ preparations, and model calls independently of log levels.
 Per-request GitHub API timing records also use `debug`, including fetches over
 500 ms. Transport failures and rate-limit errors retain their normal handling.
 
+Slow SQLite holds for `session.transcript.append-turn` include `context.messages`,
+the number of messages submitted to that write transaction. This count includes
+replays and messages later skipped by a predicate; it is not a transcript length
+or committed-message count. It contains no message content or identities.
+
 Plugin host cleanup failures during session reset or deletion emit one
 `plugins/cleanup` warning per failure, including the operation, plugin, hook, and
 error. Check the reported cleanup error before retrying. Successful cleanup
@@ -138,6 +156,25 @@ Failed SQLite session writes include a bounded, redacted `error` summary in
 their structured file-log record, with cause and error-code details when
 available. Long summaries are truncated. The record retains its write timing
 and store fields.
+
+### Slow SQLite transcript hydration
+
+Slow `sessions.transcript-hydration.*` read transactions and
+`session.lifecycle.delete` include native statement attribution on the existing
+slow-hold warning. `statementExecutionMs` sums native execution calls;
+`callbackOtherMs` is the remaining callback wall time, including JavaScript,
+statement preparation, GC, and scheduling. Neither is CPU time. Hydration also
+reports `callbackGcMs` from the current isolate's native GC sampler on Node;
+absence means unavailable, while zero means no observed collection. GC overlaps
+the statement/other wall times and must not be added to them or subtracted from
+both. It cannot locate a collection within a particular statement.
+
+The warning keeps thread identity before its bounded statement summary. The
+summary ranks five groups by total time from at most 32 retained SQL shapes plus
+an overflow group, reports omitted-group count, and identifies the globally
+slowest statement separately. Statement IDs hash normalized SQL; no SQL text or
+bindings are logged. `rows` counts returned rows (`get`/`all`) or consumed iterator
+rows, including early close; it is not the number of rows SQLite scanned.
 
 ### SQLite snapshot cleanup
 

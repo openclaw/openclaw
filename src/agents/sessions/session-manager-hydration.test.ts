@@ -109,10 +109,10 @@ it("shares physical text strings with active history across reloads without shar
       assert.notEqual(reloaded.message.content, before.message.content);
       assert.deepEqual(reloaded.message.content, active.content);
       retained.firstReload = reloaded.message.content[0].text;
-      active.content.push({ type: "text", text: "runtime-only mutation" });
+      assert.throws(() => active.content.push({ type: "text", text: "runtime-only mutation" }), TypeError);
       assert.equal(reloaded.message.content.length, 1);
       reloaded.message.content.push({ type: "text", text: "manager-only mutation" });
-      assert.equal(active.content.at(-1).text, "runtime-only mutation");
+      assert.equal(active.content.length, 1);
       await manager.reloadPersistedTranscriptAsync();
       assert.equal(manager.getEntry(ids[0]).message.content.length, 1);
       assert.equal(manager.getEntry(ids[0]).message.content[0].text, retained.active);

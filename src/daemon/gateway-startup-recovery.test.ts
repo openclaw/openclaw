@@ -86,7 +86,7 @@ it("names the overdue startup PID, phase, age, and stop command despite a fresh 
 });
 
 it("refuses a recycled PID before sending any stop signal", async () => {
-  const stalled = captureStalledGatewayStartup(env);
+  const stalled = await captureStalledGatewayStartup(env);
   vi.spyOn(processes, "getFileLockProcessStartTime").mockReturnValue(startTime + 1);
   const signals = vi.spyOn(process, "kill");
   await expect(stopStalledGatewayStartup(stalled!)).rejects.toThrow("changed; process preserved");
@@ -97,7 +97,7 @@ it("refuses a recycled PID before sending any stop signal", async () => {
 });
 
 it("terminates only the exact stuck holder and confirms exit and state lock release", async () => {
-  const stalled = captureStalledGatewayStartup(env);
+  const stalled = await captureStalledGatewayStartup(env);
   await stopStalledGatewayStartup(stalled!);
   expect(processes.isPidAlive(holder.pid!)).toBe(false);
   expect(processes.isPidAlive(unrelated.pid!)).toBe(true);
@@ -161,7 +161,7 @@ it("checks an overdue listening Gateway from another process without copying sha
       };
       syncBuiltinESMExports();
       const { captureStalledGatewayStartup } = await import(${JSON.stringify(new URL("../infra/gateway-startup-owner.ts", import.meta.url).href)});
-      console.log(JSON.stringify({ stalled: Boolean(captureStalledGatewayStartup()), ...observed }));
+      console.log(JSON.stringify({ stalled: Boolean(await captureStalledGatewayStartup()), ...observed }));
     `,
       ],
       {

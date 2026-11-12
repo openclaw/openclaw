@@ -7,6 +7,7 @@ import {
   isConfigReadFailure,
 } from "../config/io.invalid-config.js";
 import { readResolvedSessionEntryInWorker } from "../config/sessions/session-accessor.entry-read-runtime.js";
+import { restoreRetainedWorkerOwnerInDatabase } from "../gateway/worker-environments/retained-owner-recovery.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import {
   assertSkillLibraryRecoveryOwnerInDatabase,
@@ -27,6 +28,7 @@ import {
   publishSessionDependencyArtifacts,
 } from "./database-restore-session-dependencies.artifacts.js";
 import { readSessionDependencyInput } from "./database-restore-session-dependencies.input.js";
+import { assertRetainedRecoveryProfile } from "./database-restore-session-dependencies.retained.js";
 
 /** Restore only the dependencies an existing session selected, under exclusive offline custody. */
 export async function restoreSessionDependencies(options: { input: string; sha256: string }) {
@@ -73,6 +75,9 @@ export async function restoreSessionDependencies(options: { input: string; sha25
         }
       };
       await assertSession();
+      if (input.retained) {
+        assertRetainedRecoveryProfile(config, input.retained.source);
+      }
       const database = withEngineStoreAdmission(() => openOpenClawStateDatabase({ env }));
       try {
         withEngineStoreAdmission(() => {
@@ -107,7 +112,16 @@ export async function restoreSessionDependencies(options: { input: string; sha25
                 input.rows,
                 input.request.profileId,
               );
-              const workspace = restoreRepositoryWorkspaceInDatabase(db, input.rows.workspace);
+              const workspace = input.retained
+                ? {
+                    retainedOwner: restoreRetainedWorkerOwnerInDatabase(
+                      database,
+                      { ...input.retained, assertCurrent },
+                      Date.now(),
+                    ),
+                    executionReady: false,
+                  }
+                : restoreRepositoryWorkspaceInDatabase(db, input.rows.workspace);
               assertCurrent();
               return { ...skill, ...workspace };
             },

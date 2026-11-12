@@ -176,6 +176,38 @@ describe("placement recovery session admission with persisted placements", () =>
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
+  it("targeted recovery waits for an earlier healthy placement recovery", async () => {
+    const harness = await harnessFor();
+    await seedActive(harness);
+    harness.markEnvironmentNodeDeviceId("healthy-worker-node");
+    const hold = barrier();
+    const reconcile = harness.service.reconcile;
+    vi.spyOn(harness.service, "reconcile").mockImplementation((mode, admit) =>
+      reconcile(mode, (ids, run) => {
+        if (!admit) {
+          throw new Error("Recovery requires coordinator admission");
+        }
+        return admit(ids, async (recoveryMode) => {
+          await run(recoveryMode);
+          await hold.wait();
+        });
+      }),
+    );
+    const coordinated = coordinate(harness);
+    const previous = coordinated.reconcile();
+    await hold.entered;
+    const admitted = observeTargetedAdmission(harness).then(() => "admitted");
+    const targeted = coordinated.reconcileActive(harness.ready.environmentId);
+    try {
+      expect(await Promise.race([admitted, targeted.then(() => "finished")])).toBe("admitted");
+    } finally {
+      hold.release();
+      await Promise.all([previous, targeted]);
+    }
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
   it.each(["startup", "full", "targeted"] as const)(
     "%s recovery preserves a live dispatch through activation",
     async (mode) => {

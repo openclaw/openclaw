@@ -22,7 +22,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createGatewaySchedulerClock,

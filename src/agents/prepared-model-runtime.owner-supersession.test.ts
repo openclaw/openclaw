@@ -379,6 +379,27 @@ it("retires only the deleted agent's physical owners", async () => {
   await expect(loadDispatch({ agentId: "worker" })).resolves.toBe(separate);
 });
 
+it("keeps a retired agent withdrawn when its in-flight configured build finishes", async ({
+  signal,
+}) => {
+  mocks.configuredAgentIds = ["carlos", "hal"];
+  const config = {};
+  await refresh(config, { gatewayLifecycle: true });
+  const firstInput = fixture.agentInput("carlos", config);
+  const siblingInput = fixture.agentInput("hal", config);
+  const sibling = readSnapshot(siblingInput);
+  expect(sibling).toBeDefined();
+  const { started, release } = holdNextCatalogWrite();
+  await using work = pendingWork(release);
+  const refreshing = work.track(refresh(config, { agentIds: new Set(["carlos"]) }));
+  await withinTest(started.promise, signal);
+  const retiring = work.track(retireAgent({ agentId: "carlos", agentDirs: [firstInput.agentDir] }));
+  release.resolve();
+  await withinTest(Promise.all([refreshing, retiring]), signal);
+  expect(readSnapshot(firstInput)).toBeUndefined();
+  expect(readSnapshot(siblingInput)).toBe(sibling);
+});
+
 it.each([
   "lost claim",
   "invalidation",

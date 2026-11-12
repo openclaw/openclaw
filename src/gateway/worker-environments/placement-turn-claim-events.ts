@@ -35,28 +35,12 @@ import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import { signalTurnClaimRelease } from "./placement-turn-wait.js";
 import type { WorkerExecApprovalOwner } from "./worker-exec-approval-contract.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
-
-type TurnClaimReleaseWaiter = (error?: Error) => void;
-
-const turnClaimReleaseWaiters = resolveGlobalMap<string, Map<string, Set<TurnClaimReleaseWaiter>>>(
-  Symbol.for("openclaw.turnClaimReleaseWaiters"),
-  (waitersByPath) => {
-    const error = new Error("Gateway lifecycle ended while waiting for turn claim release");
-    for (const bySession of waitersByPath.values()) {
-      for (const waiters of bySession.values()) {
-        for (const reject of waiters) {
-          reject(error);
-        }
-      }
-    }
-    waitersByPath.clear();
-  },
-);
 
 const workerTurnClaimClosedHandlers = resolveGlobalMap<
   string,
@@ -636,54 +620,6 @@ export function attachWorkerTurnExecutionIdentityStore(store: object, path: stri
   Object.defineProperty(store, WORKER_TURN_EXECUTION_IDENTITY_PATH, { value: path });
 }
 
-export function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter> {
-  let bySession = turnClaimReleaseWaiters.get(path);
-  if (!bySession) {
-    bySession = new Map();
-    turnClaimReleaseWaiters.set(path, bySession);
-  }
-  let waiters = bySession.get(sessionId);
-  if (!waiters) {
-    waiters = new Set();
-    bySession.set(sessionId, waiters);
-  }
-  return waiters;
-}
-
-function signalTurnClaimRelease(path: string, sessionId: string): void {
-  const bySession = turnClaimReleaseWaiters.get(path);
-  const waiters = bySession?.get(sessionId);
-  if (!bySession || !waiters) {
-    return;
-  }
-  bySession.delete(sessionId);
-  if (bySession.size === 0) {
-    turnClaimReleaseWaiters.delete(path);
-  }
-  for (const resolve of waiters) {
-    resolve();
-  }
-}
-
-export function removeTurnClaimReleaseWaiter(
-  path: string,
-  sessionId: string,
-  waiter: TurnClaimReleaseWaiter,
-): void {
-  const bySession = turnClaimReleaseWaiters.get(path);
-  const waiters = bySession?.get(sessionId);
-  if (!bySession || !waiters) {
-    return;
-  }
-  waiters.delete(waiter);
-  if (waiters.size === 0) {
-    bySession.delete(sessionId);
-  }
-  if (bySession.size === 0) {
-    turnClaimReleaseWaiters.delete(path);
-  }
-}
-
 export function registerWorkerTurnClaimClosedHandler(
   path: string,
   handler: (claim: WorkerSessionTurnClaim) => void,
@@ -747,11 +683,5 @@ export function deferWorkerTurnClaimClosed(
 ): void {
   if (!deferSqlitePostCommitPublication(db, prepareWorkerTurnClaimClosed(path, claim))) {
     throw new Error("Worker turn closure requires its owning transaction");
-  }
-}
-
-export function deferTurnClaimRelease(db: EngineConnection, path: string, sessionId: string): void {
-  if (!deferSqlitePostCommitPublication(db, () => signalTurnClaimRelease(path, sessionId))) {
-    throw new Error("Worker turn release requires its owning transaction");
   }
 }

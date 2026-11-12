@@ -527,7 +527,7 @@ it.each([
     "waiting-model",
     "failed",
     "previous attempt failed",
-    "Chat settings update was interrupted. Review and retry when ready.",
+    "Couldn’t update session settings. The update was interrupted. Review the settings before trying again.",
   ],
 ] as const)(
   "normalizes %s before durable replay",

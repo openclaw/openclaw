@@ -3,6 +3,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
@@ -22,7 +23,7 @@ import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -33,6 +34,7 @@ import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  type OpenClawStateDatabase,
   type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
 import {
@@ -176,7 +178,7 @@ function borrowStateReadConnection(
     }
     reader = { connection: opening.value, identity, retiring: false, borrowed: false };
     retainedReaders.set(identity.key, reader);
-    unregisterExitClose ??= registerSqliteCacheExitClose(closeRetainedOpenClawStateReadConnections);
+    unregisterExitClose ??= registerProcessExitCleanup(closeRetainedOpenClawStateReadConnections);
   }
   const retained = reader;
   if (
@@ -590,4 +592,21 @@ function openStateReadConnectionResult(
     throw error;
   }
   return { status: "available", value: connection };
+}
+
+export function readOnlyStateDatabase(
+  database: Pick<OpenClawStateDatabase, "db" | "path">,
+  close: () => boolean,
+): OpenClawStateDatabase {
+  return {
+    ...database,
+    walMaintenance: {
+      checkpoint: () => false,
+      stop: async () => {},
+      reclaimFreePages: createSqliteWalReclamationResult,
+      // Cleanup can fail transiently after the database closes. Keep the
+      // close contract retryable until one call finishes both responsibilities.
+      close,
+    },
+  };
 }

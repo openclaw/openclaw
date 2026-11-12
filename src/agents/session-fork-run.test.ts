@@ -1,5 +1,6 @@
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -7,6 +8,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
 import { prepareSessionFork } from "./session-fork-run.js";
 
 let state: OpenClawTestState;
@@ -60,4 +62,37 @@ it("applies wildcard sender restrictions although a fork has no sender", async (
   await expect(
     prepareSessionFork({ config, source, tools, model, workspaceDir: state.workspaceDir }),
   ).resolves.toBeUndefined();
+});
+
+describe("assertSessionForkRunSucceeded", () => {
+  type Result = Parameters<typeof assertSessionForkRunSucceeded>[0];
+  const review = (meta: Omit<Result["meta"], "durationMs">, payloads?: Result["payloads"]) =>
+    expect(() => assertSessionForkRunSucceeded({ meta: { durationMs: 1, ...meta }, payloads }));
+  it("does not fail a fork whose tool calls were denied or errored", () => {
+    const warning = setReplyPayloadMetadata(
+      { isError: true, text: "⚠️ skill_workshop failed: View it first." },
+      { toolErrorWarning: { toolName: "skill_workshop" } },
+    );
+    review(
+      {
+        toolSummary: {
+          calls: 3,
+          tools: ["sessions_yield", "skill_workshop"],
+          failures: 1,
+          unresolvedError: { toolName: "skill_workshop" },
+        },
+      },
+      [warning],
+    ).not.toThrow();
+  });
+
+  it("fails on model or runtime errors", () => {
+    review({ error: { kind: "retry_limit", message: "model retries exhausted" } }).toThrow(
+      "model retries exhausted",
+    );
+    review({}, [{ isError: true, text: "LLM request failed: 529 overloaded" }]).toThrow(
+      "529 overloaded",
+    );
+    review({ aborted: true }).toThrow("aborted");
+  });
 });

@@ -4,10 +4,11 @@ import { stableStringify } from "../packages/normalization-core/src/stable-strin
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { ensureGitCommit, resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { isChangedTsgoCoreTestInput } from "./lib/tsgo-core-test-shards.mts";
+import { readWindowsTargets } from "./lib/windows-test-targets.mts";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
@@ -166,7 +167,7 @@ export function getChangedCoreTestPaths(result: ChangedLaneResult): string[] | u
 }
 
 type DetectChangedLanesOptions = {
-  packageJsonChangeKind?: "liveDockerTooling" | "tooling" | null;
+  packageJsonChangeKind?: "liveDockerTooling" | "windowsTestTooling" | "tooling" | null;
 };
 
 type PackageJsonGitParams = {
@@ -221,7 +222,9 @@ export function detectChangedLanes(
   const packageJsonIsLiveDockerTooling =
     paths.includes("package.json") && options.packageJsonChangeKind === "liveDockerTooling";
   const packageJsonIsTooling =
-    paths.includes("package.json") && options.packageJsonChangeKind === "tooling";
+    paths.includes("package.json") &&
+    (options.packageJsonChangeKind === "tooling" ||
+      options.packageJsonChangeKind === "windowsTestTooling");
 
   if (paths.length === 0) {
     reasons.push("no changed paths");
@@ -440,8 +443,11 @@ export function listChangedPathsFromGit(params: {
   cwd?: string;
   mergeHeadFirstParent?: boolean;
 }): string[] {
-  const head = params.head ?? "HEAD";
   const cwd = params.cwd ?? process.cwd();
+  if (!params.base) {
+    return [];
+  }
+  const head = ensureGitCommit(params.head ?? "HEAD", cwd);
   const resolvedBase = resolveMergeHeadDiffBase({
     base: params.base,
     head,
@@ -449,10 +455,7 @@ export function listChangedPathsFromGit(params: {
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
     preferFirstParent: params.mergeHeadFirstParent === true,
   });
-  const base = typeof resolvedBase === "string" ? resolvedBase : "";
-  if (!base) {
-    return [];
-  }
+  const base = ensureGitCommit(resolvedBase, cwd);
   let rangePaths: string[];
   let noMergeBase = false;
   try {
@@ -530,7 +533,7 @@ function runGitLsFiles(extraArgs: string[], cwd = process.cwd()): string[] {
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd(), base?: string) {
-  return runGitNameOnlyDiff(["--cached", ...(base ? [base] : [])], cwd);
+  return runGitNameOnlyDiff(["--cached", ...(base ? [ensureGitCommit(base, cwd)] : [])], cwd);
 }
 
 /**
@@ -545,10 +548,10 @@ function classifyPackageJsonChangeFromGit(params: PackageJsonGitParams) {
   }
 }
 
-function classifyPackageJsonScriptChange(
+export function classifyPackageJsonScriptChange(
   before: string,
   after: string,
-): "liveDockerTooling" | "tooling" | null {
+): "liveDockerTooling" | "windowsTestTooling" | "tooling" | null {
   const beforePackage = parsePackageJson(before);
   const afterPackage = parsePackageJson(after);
   if (!beforePackage || !afterPackage) {
@@ -562,6 +565,24 @@ function classifyPackageJsonScriptChange(
       stableStringify(isRecord(afterScripts) ? afterScripts : {})
   ) {
     return null;
+  }
+  if (isRecord(beforeScripts) && isRecord(afterScripts)) {
+    const withoutWindows = (scripts: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(scripts).filter(([name]) => !/^test:windows:ci:[12]$/u.test(name)),
+      );
+    if (
+      stableStringify(withoutWindows(beforeScripts)) ===
+      stableStringify(withoutWindows(afterScripts))
+    ) {
+      try {
+        readWindowsTargets(beforeScripts);
+        readWindowsTargets(afterScripts);
+        return "windowsTestTooling";
+      } catch {
+        // Invalid inventories retain ordinary package-script scope.
+      }
+    }
   }
   // Coercing missing/non-record scripts to {} must not grant the narrower live-Docker lane.
   return isRecord(beforeScripts) &&
@@ -597,7 +618,8 @@ function readGitText(ref: string, filePath: string) {
   if (ref === "WORKTREE") {
     return readFileSync(filePath, "utf8");
   }
-  const spec = ref === "INDEX" ? `:${filePath}` : `${ref}:${filePath}`;
+  const spec =
+    ref === "INDEX" || ref === "" ? `:${filePath}` : `${ensureGitCommit(ref)}:${filePath}`;
   return execFileSync("git", ["show", spec], {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",

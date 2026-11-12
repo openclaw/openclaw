@@ -406,11 +406,11 @@ describe("backupVerifyCommand", () => {
     });
     let staged = false;
     let released = false;
-    const mkdtemp = fs.mkdtemp.bind(fs);
-    vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
-      const result = await mkdtemp(...args);
-      staged = true;
-      return result;
+    const open = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      staged ||= path.basename(String(args[0])).startsWith("candidate-");
+      return handle;
     });
     const remove = fs.rm.bind(fs);
     vi.spyOn(fs, "rm").mockImplementation(async (file, ...args) => {

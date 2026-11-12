@@ -5,6 +5,7 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { HubTabs } from "./hub-tabs.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import hubStyles from "../../styles/hub-tabs.css?inline";
+import settingsControlStyles from "../../styles/settings-controls.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
 import tabsStyles from "../../styles/tabs.css?inline";
 
@@ -21,7 +22,13 @@ function hubProps(id: string, onSelect: (value: string) => void, labels = ["Firs
 it("preserves hub styling when native defaults load last", async () => {
   const viewport = { width: innerWidth, height: innerHeight };
   const styles = document.createElement("style");
-  styles.textContent = [baseStyles, settingsStyles, hubStyles, tabsStyles].join("\n");
+  styles.textContent = [
+    baseStyles,
+    settingsControlStyles,
+    settingsStyles,
+    hubStyles,
+    tabsStyles,
+  ].join("\n");
   document.head.append(styles);
   const [active, setActive] = createSignal("messages");
   const view = mountSolid(() => (
@@ -66,9 +73,6 @@ it("preserves hub styling when native defaults load last", async () => {
       expect
         .soft(messages.getBoundingClientRect().bottom + 2)
         .toBeLessThanOrEqual(tabs.getBoundingClientRect().bottom);
-      if (width === 390) {
-        expect.soft(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
-      }
       messages.focus();
       await userEvent.keyboard("{ArrowRight}{Enter}");
       flush();

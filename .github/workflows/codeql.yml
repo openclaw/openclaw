@@ -14,6 +14,8 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
+      - ".gitattributes"
+      - "**/.gitattributes"
       - ".github/actions/**"
       - ".github/codeql/**"
       - ".github/workflows/**"
@@ -82,66 +84,61 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: .github/actions/detect-scheduled-changes
+          sparse-checkout: |
+            .github/actions/detect-scheduled-changes
+            .github/codeql
           persist-credentials: false
 
-      - name: Detect scheduled Actions changes
-        id: actions_scope
+      - name: Detect scheduled security changes
+        id: scheduled_scope
         if: github.event_name == 'schedule'
         uses: ./.github/actions/detect-scheduled-changes
         with:
-          proof-jobs: Security High (actions)
-          paths: |
-            .github/actions/**
-            .github/workflows/**
-            .github/codeql/**
-
-      - name: Detect scheduled JavaScript changes
-        id: javascript_scope
-        if: github.event_name == 'schedule'
-        uses: ./.github/actions/detect-scheduled-changes
-        with:
-          # All six jobs must have passed on one SHA. Skipped rows are not proof.
-          proof-jobs: |
-            Security High (core-auth-secrets)
-            Security High (channel-runtime-boundary)
-            Security High (network-ssrf-boundary)
-            Security High (mcp-process-tool-boundary)
-            Security High (process-exec-boundary)
-            Security High (plugin-trust-boundary)
-          # Keep cross-file source and extraction inputs together, not per-category paths.
+          git-diff: "true"
+          proofs: |
+            {
+              "core-auth-secrets": {
+                "jobs": "Security High (core-auth-secrets)",
+                "codeqlConfig": ".github/codeql/codeql-core-auth-secrets-critical-security.yml"
+              },
+              "channel-runtime-boundary": {
+                "jobs": "Security High (channel-runtime-boundary)",
+                "codeqlConfig": ".github/codeql/codeql-channel-runtime-boundary-critical-security.yml"
+              },
+              "network-ssrf-boundary": {
+                "jobs": "Security High (network-ssrf-boundary)",
+                "codeqlConfig": ".github/codeql/codeql-network-ssrf-boundary-critical-security.yml"
+              },
+              "mcp-process-tool-boundary": {
+                "jobs": "Security High (mcp-process-tool-boundary)",
+                "codeqlConfig": ".github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml"
+              },
+              "process-exec-boundary": {
+                "jobs": "Security High (process-exec-boundary)",
+                "codeqlConfig": ".github/codeql/codeql-process-exec-boundary-critical-security.yml"
+              },
+              "plugin-trust-boundary": {
+                "jobs": "Security High (plugin-trust-boundary)",
+                "codeqlConfig": ".github/codeql/codeql-plugin-trust-boundary-critical-security.yml"
+              },
+              "actions": {
+                "jobs": "Security High (actions)",
+                "codeqlConfig": ".github/codeql/codeql-actions-critical-security.yml"
+              }
+            }
+          # Extraction inputs come from each profile. Shared query/tool changes refresh all.
           paths: |
             .github/workflows/codeql.yml
             .github/codeql/**
             .github/actions/detect-scheduled-changes/**
-            src/**
-            packages/**
-            extensions/**
-            scripts/**
-            ui/**
-            apps/**
-            config/**
-            patches/**
-            **/package.json
-            pnpm-lock.yaml
-            pnpm-workspace.yaml
-            .npmrc
-            .pnpmfile.*
-            *.js
-            *.mjs
-            *.cjs
-            *.ts
-            *.mts
-            *.cts
-            **/tsconfig*.json
-            **/jsconfig*.json
+            .gitattributes
+            **/.gitattributes
 
       - name: Select security languages
         id: scope
         env:
           CODEQL_CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
-          CODEQL_ACTIONS_CHANGED: ${{ steps.actions_scope.outputs.changed }}
-          CODEQL_JAVASCRIPT_CHANGED: ${{ steps.javascript_scope.outputs.changed }}
+          CODEQL_SCHEDULED_PROOFS: ${{ steps.scheduled_scope.outputs.proofs }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
@@ -156,10 +153,7 @@ jobs:
             ];
             let actions = true;
             let javascript = true;
-            if (context.eventName === "schedule") {
-              actions = process.env.CODEQL_ACTIONS_CHANGED !== "false";
-              javascript = process.env.CODEQL_JAVASCRIPT_CHANGED !== "false";
-            } else if (context.eventName === "pull_request") {
+            if (context.eventName === "pull_request") {
               try {
                 if (process.env.CODEQL_CHECKOUT_OUTCOME !== "success") {
                   throw new Error("event checkout unavailable");
@@ -171,8 +165,10 @@ jobs:
                 if (result.exitCode !== 0 || files.length === 0) {
                   throw new Error("changed paths unavailable");
                 }
+                // Attributes can transform checked-out sources for either language.
                 const policy = files.some((file) =>
-                  file === ".github/workflows/codeql.yml" || file.startsWith(".github/codeql/"));
+                  file === ".github/workflows/codeql.yml" || file.startsWith(".github/codeql/") ||
+                  file === ".gitattributes" || file.endsWith("/.gitattributes"));
                 const workflow = (file) =>
                   file.startsWith(".github/workflows/") || file.startsWith(".github/actions/");
                 actions = policy || files.some(workflow);
@@ -182,8 +178,16 @@ jobs:
                 core.warning("CodeQL path selection unavailable; retaining every category.");
               }
             }
+            let scheduled = {};
+            try {
+              scheduled = JSON.parse(process.env.CODEQL_SCHEDULED_PROOFS || '{}') ?? {};
+            } catch {
+              core.warning("CodeQL scheduled selection unavailable; retaining every category.");
+            }
             const include = categories
-              .filter((category) => category === "actions" ? actions : javascript)
+              .filter((category) => context.eventName === "schedule"
+                ? scheduled[category] !== false
+                : category === "actions" ? actions : javascript)
               .map((category) => ({
                 language: category === "actions" ? "actions" : "javascript-typescript",
                 category,

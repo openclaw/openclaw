@@ -1,8 +1,18 @@
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, latest, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createProjection,
+  latest,
+  onSettled,
+} from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -207,9 +217,10 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
 }
 
 function Library(props: TranscriptsViewProps) {
+  const sessions = createProjection(() => props.list?.sessions ?? [], [], { key: "selector" });
   const days = createMemo(() => {
     const result = new Map<string, TranscriptSessionSummary[]>();
-    for (const entry of props.list?.sessions ?? []) {
+    for (const entry of sessions) {
       const day = new Date(entry.startedAt).toLocaleDateString(undefined, {
         year: "numeric",
         month: "long",
@@ -572,6 +583,39 @@ export function TranscriptsView(props: TranscriptsViewProps) {
   const captureHref = () =>
     pathForRoute(captureTarget.routeId, props.basePath) + captureTarget.search + captureTarget.hash;
   const refreshDisabled = () => !props.connected || !props.allowed || props.listLoading;
+  const pageMenu = () => (
+    <Menu
+      id="meetings-page-menu"
+      pointerFocus="trigger"
+      label={t("meetings.moreActions")}
+      trigger={<Icon name="moreHorizontal" />}
+      triggerClass="btn transcripts-page-menu__trigger"
+      triggerAttributes={{ title: t("meetings.moreActions") }}
+      placement="bottom-end"
+      items={[
+        {
+          id: "capture",
+          label: t("meetingCapture.title"),
+          icon: <Icon name="settings" />,
+          href: captureHref(),
+          attributes: {
+            onClick: (event) => handleNavigationClick(event, () => props.onOpenCaptureSettings()),
+          },
+        },
+        {
+          id: "refresh",
+          label: t("common.refresh"),
+          icon: <Icon name="refresh" />,
+          disabled: refreshDisabled(),
+        },
+      ]}
+      onSelect={(item) => {
+        if (item.id === "refresh") {
+          props.onRefresh();
+        }
+      }}
+    />
+  );
   return (
     <section class="transcripts-workspace">
       <HubPageHeader
@@ -579,37 +623,7 @@ export function TranscriptsView(props: TranscriptsViewProps) {
         docsUrl="https://docs.openclaw.ai/cli/transcripts"
         actions={
           phone() ? (
-            <Menu
-              id="meetings-page-menu"
-              label={t("meetings.moreActions")}
-              trigger={<Icon name="moreHorizontal" />}
-              triggerClass="btn transcripts-page-menu__trigger"
-              triggerAttributes={{ title: t("meetings.moreActions") }}
-              placement="bottom-end"
-              items={[
-                {
-                  id: "capture",
-                  label: t("meetingCapture.title"),
-                  icon: <Icon name="settings" />,
-                  href: captureHref(),
-                  attributes: {
-                    onClick: (event) =>
-                      handleNavigationClick(event, () => props.onOpenCaptureSettings()),
-                  },
-                },
-                {
-                  id: "refresh",
-                  label: t("common.refresh"),
-                  icon: <Icon name="refresh" />,
-                  disabled: refreshDisabled(),
-                },
-              ]}
-              onSelect={(item) => {
-                if (item.id === "refresh") {
-                  props.onRefresh();
-                }
-              }}
-            />
+            <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
           ) : (
             <div class="transcripts-actions">
               <a

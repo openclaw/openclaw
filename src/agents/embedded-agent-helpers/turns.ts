@@ -1,5 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hasRuntimeContextMarker } from "../../llm/types.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
@@ -223,6 +226,7 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
     previous: Extract<AgentMessage, { role: TRole }>,
     current: Extract<AgentMessage, { role: TRole }>,
   ) => Extract<AgentMessage, { role: TRole }>;
+  canMerge?: (message: Extract<AgentMessage, { role: TRole }>) => boolean;
 }): AgentMessage[] {
   const { messages, role, merge } = params;
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -240,8 +244,10 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
         const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
         if (lastMsg && typeof lastMsg === "object") {
           const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
-          result[result.length - 1] = merge(lastTyped, currentMsg);
-          continue;
+          if (!params.canMerge || (params.canMerge(lastTyped) && params.canMerge(currentMsg))) {
+            result[result.length - 1] = merge(lastTyped, currentMsg);
+            continue;
+          }
         }
       }
       lastRole = msgRole;
@@ -281,18 +287,22 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
 }
 
 function mergeConsecutiveUserTurns(
-  previous: Extract<AgentMessage, { role: "user" }>,
-  current: Extract<AgentMessage, { role: "user" }>,
+  previous: PersistedUserTurnMessage,
+  current: PersistedUserTurnMessage,
 ): Extract<AgentMessage, { role: "user" }> {
+  // Materialize each row before merging so the newest projection cannot replace
+  // the first text block of the combined turn on later replay.
+  const previousMessage = projectRecordedModelPrompt(previous);
+  const currentMessage = projectRecordedModelPrompt(current);
   const mergedContent = [
-    ...normalizeUserContentForMerge(previous.content),
-    ...normalizeUserContentForMerge(current.content),
+    ...normalizeUserContentForMerge(previousMessage.content),
+    ...normalizeUserContentForMerge(currentMessage.content),
   ];
 
   return {
-    ...current,
+    ...currentMessage,
     content: mergedContent,
-    timestamp: current.timestamp ?? previous.timestamp,
+    timestamp: currentMessage.timestamp ?? previousMessage.timestamp,
   };
 }
 
@@ -306,8 +316,20 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
-export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMessage[] =>
-  validateTurnsWithConsecutiveMerge({ messages, role: "user", merge: mergeConsecutiveUserTurns });
+export const mergeConsecutiveUserMessages = (
+  messages: AgentMessage[],
+  options: { preserveContextBoundaries?: boolean } = {},
+): AgentMessage[] =>
+  validateTurnsWithConsecutiveMerge({
+    messages,
+    role: "user",
+    merge: mergeConsecutiveUserTurns,
+    // Carriers, operator updates and synthetic context own their authority, cache and media facts.
+    canMerge: options.preserveContextBoundaries
+      ? (message) =>
+          !hasRuntimeContextMarker(message) && !message.operatorMessage && !message.synthetic
+      : undefined,
+  });
 
 /**
  * Repair Anthropic tool-use/result pairing; turn merging stays optional
@@ -315,7 +337,7 @@ export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMes
  */
 export function validateAnthropicTurns(
   messages: AgentMessage[],
-  options: { mergeConsecutiveTurns?: boolean } = {},
+  options: { mergeConsecutiveTurns?: boolean; mergeConsecutiveUserTurns?: boolean } = {},
 ): AgentMessage[] {
   // Direct Messages accepts consecutive roles; merging rewrites signed prefix bytes.
   if (options.mergeConsecutiveTurns === false) {
@@ -326,5 +348,8 @@ export function validateAnthropicTurns(
     role: "assistant",
     merge: mergeConsecutiveAssistantTurns,
   });
-  return mergeConsecutiveUserMessages(stripDanglingAnthropicToolUses(mergedAssistant));
+  const paired = stripDanglingAnthropicToolUses(mergedAssistant);
+  return options.mergeConsecutiveUserTurns === false
+    ? paired
+    : mergeConsecutiveUserMessages(paired);
 }

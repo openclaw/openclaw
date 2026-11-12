@@ -138,10 +138,12 @@ Admin HTTP RPC (`POST /api/v1/admin/rpc`) is a separate, default-off plugin rout
 
 ### Port and bind precedence
 
-| Setting      | Resolution order                                                     |
-| ------------ | -------------------------------------------------------------------- |
-| Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789`        |
-| Bind mode    | CLI/override → `gateway.bind` → `loopback` (or `auto` in containers) |
+| Setting      | Resolution order                                                                      |
+| ------------ | ------------------------------------------------------------------------------------- |
+| Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → named-profile default → `18789` |
+| Bind mode    | CLI/override → `gateway.bind` → `loopback` (or `auto` in containers)                  |
+
+The named-profile default is `19001` for `dev` and a port derived from the profile name for other named profiles (`--profile <name>` or `OPENCLAW_PROFILE`). When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 
 Installed gateway services record the resolved `--port` in supervisor metadata. After changing `gateway.port`, run `openclaw doctor --fix` or `openclaw gateway install --force` so launchd/systemd/schtasks starts the process on the new port.
 
@@ -391,6 +393,8 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
 </Tabs>
 
 Invalid configuration errors exit with code `78`. Linux systemd units use `RestartPreventExitStatus=78` to stop relaunching until the config is fixed. launchd and Windows Task Scheduler do not have an equivalent per-exit-code stop rule, so the Gateway also persists rapid unclean boot history and suppresses channel/provider account auto-start after repeated startup failures. In that safe mode the control plane still starts for inspection and repair, config hot reloads and `secrets.reload` refuse automatic channel restarts, and an explicit operator `channels.start` request can override the suppression. Step-by-step recovery lives in [Restart recovery](/gateway/restart-recovery#safety-valves-and-observability).
+
+When a systemd service starts on state that needs migration while another OpenClaw process holds that state, the Gateway waits for it and then exits with code `1`, not `78`, so systemd retries instead of leaving the service down.
 
 ## Dev profile quick path
 

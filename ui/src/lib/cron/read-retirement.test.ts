@@ -9,6 +9,7 @@ import {
   createCronJob,
   cronJobsListResponse,
 } from "../../test-helpers/cron.ts";
+import * as gatewayErrors from "../gateway-errors.ts";
 import { createMethodRequest, createStateWithRequest } from "./cron.test-support.ts";
 import {
   addCronJob,
@@ -21,7 +22,7 @@ import {
   updateCronJobsFilter,
 } from "./index.ts";
 import { loadCronRuns, updateCronRunsFilter } from "./runs.ts";
-import { loadCronStatus } from "./state.ts";
+import { loadCronStatus, retireCronStatusFeedback } from "./state.ts";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
@@ -350,4 +351,39 @@ describe("selected automation runtime refresh", () => {
       expect(state.cronEditingJob).toBe(job);
     },
   );
+});
+
+it("keeps newer action feedback while a permission message is loading", async () => {
+  const formatting = createDeferred();
+  const message = createDeferred<string>();
+  const format = vi
+    .spyOn(gatewayErrors, "formatMissingOperatorReadScopeMessage")
+    .mockImplementationOnce(() => {
+      formatting.resolve();
+      return message.promise;
+    });
+  const denial = new GatewayProtocolRequestError({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.read",
+    details: {
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    },
+  });
+  const state = createStateWithRequest(vi.fn().mockRejectedValue(denial));
+  const status = { enabled: true, triggersEnabled: true, jobs: 2 };
+  state.cronStatus = status;
+  try {
+    const read = loadCronStatus(state);
+    await formatting.promise;
+    retireCronStatusFeedback(state);
+    state.cronError = "newer action feedback";
+    message.resolve("late permission message");
+    await expect(read).resolves.toBeUndefined();
+    expect(state.cronError).toBe("newer action feedback");
+    expect(state.cronStatus).toBe(status);
+  } finally {
+    format.mockRestore();
+  }
 });

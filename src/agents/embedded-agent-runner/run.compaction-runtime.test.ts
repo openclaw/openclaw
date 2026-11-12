@@ -1,16 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { prepareCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
   type RecoveryFixture,
@@ -19,6 +26,7 @@ import {
   waitForCompactionAbort,
   withRecoveryFixture,
 } from "./run.compaction-runtime.test-support.js";
+import { readCompactionAccountingRecorder as readRecoveryAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 
 type Snapshot = Awaited<ReturnType<RecoveryFixture["snapshot"]>>;
 
@@ -82,6 +90,119 @@ async function recoverAtSafetyDeadline(
 describe("embedded compaction recovery authority", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("keeps the admitted request identity after compaction rotates the session", async () => {
+    await withRecoveryFixture({ oversized: false }, async (fixture) => {
+      const writer = await fixture.openWriter();
+      const request = {
+        role: "user" as const,
+        content: "Review this patch; do not publish it.",
+        timestamp: 10,
+        idempotencyKey: `${fixture.runId}:user`,
+      };
+      const appended = await writer.appendMessageWithTranscriptAnchorAsync(request);
+      const admission = expectDefined(
+        appended.anchor,
+        "Fixture requires a durable input admission",
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        target: { ...fixture.target, sessionEntry: fixture.loadEntry() },
+        message: request,
+      });
+      recorder.markRuntimePersisted(request, admission, { appended: false });
+      await recorder.waitForRuntimePersistence();
+      fixture.runParams.userTurnTranscriptRecorder = recorder;
+
+      const successorId = randomUUID();
+      fixture.compact.mockResolvedValueOnce(recoveryCompaction({ sessionId: successorId }));
+      await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
+      const successorTarget = expectDefined(
+        fixture.getSessionTarget(),
+        "Compaction must install a successor session target",
+      );
+      expect(successorTarget.sessionId).toBe(successorId);
+
+      const observation: PersistedUserTurnMessage = {
+        role: "user",
+        content: "A child reports progress on the active request.",
+        timestamp: 12,
+        provenance: { kind: "inter_session" },
+      };
+      await appendTranscriptMessage(successorTarget, {
+        cwd: fixture.runParams.workspaceDir,
+        eventId: admission.entryId,
+        parentId: null,
+        message: request,
+        now: request.timestamp,
+      });
+      const observationAppend = await appendTranscriptMessage(successorTarget, {
+        cwd: fixture.runParams.workspaceDir,
+        message: observation,
+        now: observation.timestamp,
+      });
+      await appendTranscriptMessage(successorTarget, {
+        cwd: fixture.runParams.workspaceDir,
+        message: makeAgentAssistantMessage({
+          content: [{ type: "text", text: "The active review continues." }],
+          timestamp: 13,
+        }),
+        now: 13,
+      });
+
+      fixture.compact.mockImplementationOnce(async (params) => {
+        const accounting = readRecoveryAccountingRecorder(params.runtimeContext);
+        expect(accounting?.requestFromEntryId).toBe(admission.entryId);
+        const requestBoundary = accounting?.requestFromEntryId
+          ? {
+              requestBoundary: {
+                entryId: accounting.requestFromEntryId,
+                preserve: false,
+              },
+            }
+          : undefined;
+        const compactionTarget = expectDefined(
+          params.sessionTarget,
+          "Recovery compaction must receive the successor target",
+        );
+        const compactionSessionId = expectDefined(
+          compactionTarget.sessionId,
+          "Recovery compaction target must identify the successor session",
+        );
+        expect(compactionSessionId).toBe(successorId);
+        const { SessionManager } = await import("../sessions/session-manager.js");
+        const successor = await SessionManager.openAsync(
+          { ...fixture.target, sessionId: compactionSessionId },
+          fixture.runParams.workspaceDir,
+        );
+        expect(successor.getBranch().at(-2)?.id).toBe(observationAppend.messageId);
+        const missingRequest = prepareCompaction(
+          successor.getBranch().filter((entry) => entry.id !== admission.entryId),
+          { enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 },
+          "unresolved",
+          requestBoundary,
+        );
+        expect(missingRequest).toMatchObject({
+          ok: false,
+          error: { code: "invalid_session" },
+        });
+        const preparation = prepareCompaction(
+          successor.getBranch(),
+          { enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 },
+          "unresolved",
+          requestBoundary,
+        );
+        if (!preparation.ok) {
+          throw preparation.error;
+        }
+        if (!preparation.value) {
+          throw new Error("Expected compactable successor history");
+        }
+        expect(preparation.value.latestUnresolvedUserRequest).toBe(request.content);
+        return recoveryCompaction();
+      });
+      await expect(fixture.recover("overflow")).resolves.toEqual({ action: "retry" });
+    });
   });
 
   it.each(["truncate", "small", "beyond-reader-window"] as const)(
