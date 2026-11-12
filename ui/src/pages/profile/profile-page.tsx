@@ -54,6 +54,7 @@ import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { DiscordIdentity } from "./discord-identity.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
+import { OpenClawIdIdentity } from "./openclaw-id-identity.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { ProfileHero } from "./profile-hero.tsx";
@@ -447,6 +448,9 @@ export function ProfilePage() {
                     </span>
                   }
                 />
+                <Show when={!isOwnerProfile()}>
+                  <OpenClawIdIdentity />
+                </Show>
                 <Show when={view().identityError}>
                   <div class="settings-row identity-error" role="alert">
                     <span class="settings-row__desc">{view().identityError}</span>

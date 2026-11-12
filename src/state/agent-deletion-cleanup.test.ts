@@ -359,8 +359,9 @@ describe("agent deletion database cleanup authority", () => {
       expect(await f.purgeStore(deletion, {})).toBe(false);
       expect(() => fs.fstatSync(retainedAdmission.descriptor)).not.toThrow();
       try {
+        using close = vi.spyOn(fs, "closeSync");
         await closeDeletedAgentDatabases("worker", [f.target.path], deletion);
-        expect(() => fs.fstatSync(retainedAdmission.descriptor)).toThrow();
+        expect(close).toHaveBeenCalledWith(retainedAdmission.descriptor);
       } finally {
         await reviveAgentDatabases(["worker"]);
       }

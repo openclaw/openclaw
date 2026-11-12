@@ -24,8 +24,13 @@ export type OpenClawIdStatusResult = {
     hostname?: string;
     rootPub?: string;
   };
-  /** How this browser reaches the Gateway: only `local_operator` may link or sign in. */
+  /** How this browser reaches the Gateway: only `local_operator` may link. */
   channel: "local_operator" | "tunnel" | null;
+  /**
+   * How this connection signs in with OpenClaw ID: the loopback popup, the device grant
+   * (a verified personal sign-in such as Tailscale), or not at all.
+   */
+  accountSignIn: "popup" | "device" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
   /** Active owner devices, returned only to an owner. */

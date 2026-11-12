@@ -256,6 +256,42 @@ export function startWorktreeMaintenance(params: {
               async () => {
                 await previousDrain;
                 assertCurrent();
+                let scratchPressure = false;
+                try {
+                  scratchPressure = await hasIoPressure();
+                  const assertScratchCurrent = () => {
+                    assertCurrent();
+                    if (scratchPressure) {
+                      throw new Error("Scratch cleanup deferred: host IO pressure");
+                    }
+                  };
+                  assertScratchCurrent();
+                  const scratch = await prepareScratchMaintenanceTargets(config);
+                  try {
+                    current.scratch = await cleanScratch({
+                      targets: scratch.targets,
+                      now: scheduler.now(),
+                      assertCurrent: assertScratchCurrent,
+                      pause: async (milliseconds) => {
+                        await pause(milliseconds);
+                        scratchPressure = await hasIoPressure();
+                      },
+                      cursor: scratchCursor,
+                      onProgress: (progress) => {
+                        current.scratch = progress;
+                      },
+                    });
+                  } finally {
+                    scratch.release();
+                  }
+                } catch (error) {
+                  assertCurrent();
+                  params.onError(`Scratch cleanup failed: ${String(error)}`);
+                }
+                // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
+                if (scratchPressure) {
+                  nextRemovalAt = Math.max(nextRemovalAt, scheduler.now() + PRESSURE_BACKOFF_MS);
+                }
                 const result = await managedWorktrees.gc({
                   ...createManagedWorktreeOwnerPolicy(config),
                   retryDeferred,
@@ -281,22 +317,7 @@ export function startWorktreeMaintenance(params: {
                 assertCurrent();
                 await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
                 assertCurrent();
-                const scratch = await prepareScratchMaintenanceTargets(config);
-                try {
-                  result.scratch = await cleanScratch({
-                    targets: scratch.targets,
-                    now: scheduler.now(),
-                    assertCurrent,
-                    pause,
-                    cursor: scratchCursor,
-                    onProgress: (progress) => {
-                      current.scratch = progress;
-                    },
-                  });
-                } finally {
-                  scratch.release();
-                }
-                assertCurrent();
+                result.scratch = current.scratch;
                 Object.assign(current, result);
                 params.onComplete(result);
                 current.state = "completed";

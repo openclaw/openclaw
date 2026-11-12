@@ -5253,7 +5253,7 @@ jobs:
         run: |
           set -euo pipefail
           native_install_args=(install --frozen-lockfile --prefer-offline --optional)
-          # Real Gateway source imports cross root-manifest edges; settings needs the full workspace.
+          # Settings imports cross root-manifest edges and need the full workspace.
           if [[ "$MACOS_NATIVE_PHASE" != "mlx-settings" ]]; then
             native_install_args+=(--filter '@openclaw/mermaid-renderer...' --filter '@openclaw/gateway-protocol...')
             if [[ "$MACOS_NATIVE_PHASE" == "tests" && -f apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift ]]; then
@@ -5325,8 +5325,7 @@ jobs:
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
-            # Frozen release targets before the pinned installer used one of these
-            # reviewed formatter contracts. Fail closed for any unknown minimum.
+            # Match reviewed legacy formatter contracts; reject unknown minimums.
             brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
@@ -5392,7 +5391,6 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
-          # Cached SwiftPM traits and phase products need separate archives.
           key: ${{ runner.os }}-swift-build-${{ matrix.phase == 'tests' && 'v7' || 'v6' }}-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
           restore-keys: |
             ${{ runner.os }}-swift-build-${{ matrix.phase == 'tests' && 'v7' || 'v6' }}-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
@@ -5441,7 +5439,6 @@ jobs:
             run_check "macOS Swift lint" ./scripts/lint-swift.sh macos
             run_check "macOS Swift format" ./scripts/format-swift.sh macos
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
-            # Frozen release targets before the shared wrappers used these commands directly.
             run_check "macOS Swift lint" swiftlint lint --config config/swiftlint.yml
             run_check "macOS Swift format" swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift,**/BrowserInspectScript.generated.swift'
           else
@@ -5454,9 +5451,6 @@ jobs:
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'release' }}
         run: |
           set -euo pipefail
-          # The macOS lane validates the desktop app build; the CLI product is
-          # intentionally left to its own narrower surfaces instead of making
-          # this lane rebuild the whole package graph.
           if swift build --package-path apps/macos --product OpenClaw --configuration release; then
             exit 0
           fi
@@ -5471,13 +5465,8 @@ jobs:
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' }}
         run: |
           set -euo pipefail
-          # Start clean once; SwiftPM invalidates trait-dependent modules for the following suite.
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
           echo "OPENCLAWKIT_SCRATCH=$openclawkit_scratch" >> "$GITHUB_ENV"
-          # Guard: chat-only consumers build OpenClawKit with the Talk trait
-          # disabled and must NOT link ElevenLabsKit. Assert that future sources
-          # under OpenClawKit cannot silently reintroduce an unconditional
-          # ElevenLabsKit dependency while the manifest still looks correct.
           deps="$(swift package --package-path apps/shared/OpenClawKit --scratch-path "$openclawkit_scratch" show-dependencies --disable-default-traits)"
           echo "$deps"
           if grep -qi 'elevenlabs' <<<"$deps"; then
@@ -5567,9 +5556,7 @@ jobs:
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' }}
         run: |
           set -euo pipefail
-          # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
-          # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
-          # CI needs coverage and line backtraces, not IDE indexes or debugger type metadata.
+          # Keep native backend until swiftlang/swift-package-manager#10394 fixes Sparkle rpaths.
           swift build --package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --build-tests
           echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
 
@@ -5608,8 +5595,7 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            # Quick Chat keeps XCTest process isolation: parallel suites take key status and dismiss its
-            # panel. Frozen targets without the suite skip the lane.
+            # Isolate app activation and menu focus from parallel suites.
             if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
               run_check "macOS default profile" run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
               run_check "macOS default profile rendered chat" run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
@@ -5618,8 +5604,6 @@ jobs:
             fi
             run_check "macOS named profile" run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
-            # Frozen release targets predate the resource-owner script and its tests.
-            # Their original suite still runs only on this disposable macOS worker.
             swift_test_args+=(--no-parallel)
             run_check "macOS frozen target tests" run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" swift test "${swift_test_args[@]}"
           else
