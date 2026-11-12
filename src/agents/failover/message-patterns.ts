@@ -89,6 +89,16 @@ const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
 // Keep them in one matcher so every result/exception classifier agrees on auth failover.
 const INVALID_API_KEY_RE =
   /(?:invalid[_ ]?api[_ ]?key(?![a-z0-9])|api[_ ]?key(?:[_ ]?(?:is[_ ]?)?(?:invalid(?![a-z0-9])|not[_ ]?valid(?![a-z0-9]))))/i;
+// The Codex inference relay answers these refusals itself before any provider request, so
+// this copy identifies a run-scoped authority loss rather than a credential failure.
+const CODEX_LOCAL_AUTHORIZATION_REFUSAL_RE =
+  /codex cannot verify the owner of this model request|your operator role cannot use this model/i;
+
+/** True only for refusals the local Codex inference relay produces on behalf of the run. */
+export function isCodexLocalAuthorizationRefusalMessage(errorMessage?: string): boolean {
+  return errorMessage !== undefined && CODEX_LOCAL_AUTHORIZATION_REFUSAL_RE.test(errorMessage);
+}
+
 const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
   INVALID_API_KEY_RE,
   /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,

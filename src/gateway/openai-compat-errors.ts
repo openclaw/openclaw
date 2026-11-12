@@ -30,6 +30,7 @@ const ERROR_TYPE_BY_REASON = {
   context_overflow: "invalid_request_error",
   model_not_found: "invalid_request_error",
   session_expired: "invalid_request_error",
+  session_authority: "permission_error",
   empty_response: undefined,
   no_error_details: undefined,
   unclassified: undefined,

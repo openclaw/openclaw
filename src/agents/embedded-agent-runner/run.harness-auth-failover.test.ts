@@ -38,6 +38,15 @@ function permanentAuthFailure(): Error {
   });
 }
 
+function localOwnerRefusal(): Error {
+  // Codex's transport keeps only `error.message` from the relay body and renders it as
+  // `unexpected status {status}: {message}, url: {url}`, so the runner never sees the
+  // `model_permission_denied` code. The shared profile must not be judged by status alone.
+  return new Error(
+    "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
+  );
+}
+
 function prepareAuthFailoverRun(
   nativeModelOwned = false,
   options: {
@@ -203,6 +212,27 @@ describe("native harness auth failover", () => {
       });
     },
   );
+
+  it("keeps a healthy auth profile untouched when the local Codex owner refuses", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.6-luna" };
+    const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => modelRef });
+    const params = await createNativeHostRunParams();
+    const refusal = localOwnerRefusal();
+    mockedRunEmbeddedAttempt.mockRejectedValue(refusal);
+    await expect(runEmbeddedAgent(params)).rejects.toBe(refusal);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+
+    // The refusal consumed neither the refused profile nor the fallback chain, so the next
+    // run on the same credential still gets an answer instead of a cooled-out profile.
+    mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ assistantTexts: ["OK"] }));
+    await expect(runEmbeddedAgent(params)).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt.mock.calls.map(([attempt]) => attempt.authProfileId)).toEqual([
+      failedProfile,
+      failedProfile,
+    ]);
+  });
 
   it.each(["outer-model", "actual-model"] as const)(
     "enforces native host-auth request controls from %s without changing runtime ownership",

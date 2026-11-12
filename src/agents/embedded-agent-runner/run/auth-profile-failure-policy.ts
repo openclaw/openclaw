@@ -37,6 +37,9 @@ export function resolveAuthProfileFailureReason(params: {
     params.failoverReason === "empty_response" ||
     params.failoverReason === "context_overflow" ||
     params.failoverReason === "format" ||
+    // A local relay refusal is authority for its own run; the shared credential answered
+    // nothing, so it must not be cooled down for every agent that reuses it (#191473).
+    params.failoverReason === "session_authority" ||
     (params.failoverReason === "timeout" && params.providerStarted !== true)
   ) {
     return null;

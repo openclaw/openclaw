@@ -574,6 +574,16 @@ describe("OpenAI-compatible agent error envelopes", () => {
     });
   });
 
+  it("projects a local Codex authority refusal as a permission rejection", () => {
+    const refusal = new Error(
+      "unexpected status 403 Forbidden: Codex cannot verify the owner of this model request. Start a fresh request before retrying., url: http://127.0.0.1:20128/backend-api/codex/responses",
+    );
+    expect(resolveOpenAiCompatibleAgentError(refusal)).toEqual({
+      status: 403,
+      error: { message: refusal.message, type: "permission_error" },
+    });
+  });
+
   it.each([
     {
       name: "a Gateway-cancelled run",
