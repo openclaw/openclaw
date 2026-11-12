@@ -68,6 +68,8 @@ export type ProviderUsageSnapshot = {
   plan?: string;
   /** Account identity (email) the usage was fetched under, when known. */
   accountEmail?: string;
+  /** Auth-store profile used to fetch this quota snapshot, when known. */
+  authProfileId?: string;
   error?: string;
 };
 

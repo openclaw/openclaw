@@ -18,6 +18,7 @@ import {
   HUMAN_END_MARKER,
   parseWikiMarkdown,
   renderWikiMarkdown,
+  escapeWikiTitle,
   slugifyWikiPageStem,
   slugifyWikiSegment,
   normalizeWikiClaims,
@@ -163,7 +164,7 @@ function buildSynthesisBody(params: {
 }): string {
   const base = params.originalBody?.trim().length
     ? params.originalBody
-    : `# ${params.title}\n\n## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
+    : `# ${escapeWikiTitle(params.title)}\n\n## Notes\n${HUMAN_START_MARKER}\n${HUMAN_END_MARKER}\n`;
   const withGenerated = replaceManagedMarkdownBlock({
     original: base,
     heading: "## Summary",
@@ -181,15 +182,16 @@ async function writeWikiPage(params: {
   body: string;
 }): Promise<boolean> {
   const root = await fsRoot(params.rootDir);
+  const existing = await readExistingWikiPage(
+    () => root.readText(params.relativePath),
+    isMissingWikiPageError,
+  );
   const rendered = withTrailingNewline(
     renderWikiMarkdown({
       frontmatter: params.frontmatter,
       body: params.body,
+      original: existing,
     }),
-  );
-  const existing = await readExistingWikiPage(
-    () => root.readText(params.relativePath),
-    isMissingWikiPageError,
   );
   if (existing === rendered) {
     return false;

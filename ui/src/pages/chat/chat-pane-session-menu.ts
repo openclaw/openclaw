@@ -25,6 +25,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { readSystemInfo } from "../../lib/system-info.ts";
+import type { ChatCommandDispatchResult } from "./chat-commands.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { chatSessionPresentationTitle } from "./chat-pane-session-presentation.ts";
@@ -203,6 +204,46 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return null;
     }
     return result.command;
+  }
+
+  async forkConversation(title?: string): Promise<ChatCommandDispatchResult> {
+    const state = this.state;
+    const row = state && selectedChatSessionRow(state);
+    if (!state || !row || state.sessionsLoading || row.modelSelectionLocked === true) {
+      this.publishHeaderError(t("common.refresh"));
+      return "failed";
+    }
+    const scope = this.captureHeaderSessionActionScope();
+    if (!scope) {
+      this.publishHeaderError(t("sessionsView.actionRequiresConnection"));
+      return "failed";
+    }
+    const owner = this.headerOutcomeOwner;
+    const sessionId = state.currentSessionId;
+    const agentId = resolveChatAgentId(state);
+    const isCurrent = () =>
+      !scope.signal.aborted &&
+      this.state === state &&
+      this.isHeaderSessionActionCurrent(scope, owner) &&
+      state.currentSessionId === sessionId &&
+      areUiSessionKeysEquivalent(state.sessionKey, row.key) &&
+      resolveChatAgentId(state) === agentId;
+    const { runHeaderSessionMutation } = await import("./chat-pane-session-menu-actions.ts");
+    if (!isCurrent()) {
+      return "cancelled";
+    }
+    const result = await runHeaderSessionMutation(
+      this,
+      { kind: "fork", title },
+      { ...row },
+      {
+        scope,
+        owner,
+        draftSignal: this.headerSessionDraftAbortController.signal,
+        isCurrent,
+      },
+    );
+    return result === "completed" ? "completed" : result === "stale" ? "cancelled" : "failed";
   }
 
   captureHeaderSessionActionScope(

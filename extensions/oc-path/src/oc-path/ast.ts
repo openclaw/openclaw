@@ -8,7 +8,7 @@
  * @module @openclaw/oc-path/ast
  */
 
-/** Frontmatter entry. Values unquoted (`"`/`'` stripped) but otherwise verbatim. */
+/** Frontmatter entry. YAML string scalars decoded; non-string scalar spelling preserved. */
 export interface FrontmatterEntry {
   readonly key: string;
   readonly value: string;
@@ -23,6 +23,8 @@ export interface AstItem {
   readonly text: string;
   readonly slug: string;
   readonly line: number;
+  /** First inline paragraph's source line; null when its token has no source map. */
+  readonly textLine: number | null;
   readonly kv?: { readonly key: string; readonly value: string };
 }
 

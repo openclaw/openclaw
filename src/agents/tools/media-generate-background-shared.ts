@@ -28,6 +28,10 @@ import { captureGatewayContextResolver } from "../../plugins/runtime/gateway-con
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
@@ -307,14 +311,31 @@ async function createMediaGenerationTaskRun(
       task: params.prompt,
       progressSummary: params.queuedProgressSummary,
     });
+    const detach =
+      Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey, entry);
     const handle = {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin,
-      detach: Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey, entry),
+      detach,
       requesterTranscript,
+      // Snapshot only the work that owns the requester now: the originating turn
+      // may still own terminal persistence when the media is ready, but later
+      // turns must not hold its delivery. Nothing survives a restart, so a
+      // recovered completion is not held.
+      requesterSettlement:
+        detach && requesterTranscript
+          ? captureSessionControllerSettlement({
+              target: captureSessionTarget({
+                storeScope: requesterTranscript.storePath,
+                sessionKey: requesterTranscript.sessionKey,
+                incarnation: requesterTranscript.sessionId,
+                agentId: requesterTranscript.agentId,
+              }),
+            })
+          : undefined,
       resolveGatewayContext,
       taskLabel: params.prompt,
     };

@@ -1,20 +1,26 @@
 import { createMemo, For, Loading, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import "../../components/modal-dialog.tsx";
+import { Radio } from "../../components/solid/radio.tsx";
 import {
   DocsLink,
   SettingsEmpty,
   SettingsLoadingSkeleton,
   SettingsPage,
   SettingsSection,
+  SettingsStatus,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import type { SecretsStoreState } from "../../lib/secrets-store/index.ts";
-import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
+import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import type { SecretsPageState } from "./state.ts";
 
 type SecretsStoreViewProps = {
@@ -30,7 +36,6 @@ type SecretsStoreViewProps = {
 };
 
 const DOCS_URL = "https://docs.openclaw.ai/gateway/secrets#shared-secret-store";
-const SECRET_MASK = "••••••••";
 
 function TextAreaField(props: {
   view: SecretsStoreViewProps;
@@ -143,98 +148,86 @@ function SecretsTable(props: SecretsStoreViewProps) {
   return (
     <Show
       when={props.state.canCall("secrets.store.list")}
-      fallback={<SettingsEmpty message={t("secretsStore.unavail")} />}
+      fallback={<SettingsUnavailable message={props.state.unavailableMessage()} />}
     >
       <Loading on={props.scope} fallback={<SettingsLoadingSkeleton />}>
         <Show
           when={props.read().length > 0}
           fallback={
-            <div class="secrets-store__empty">
-              <SettingsEmpty message={t("tabs.secrets")} />
-              <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
-            </div>
+            <SettingsEmpty
+              message={
+                <>
+                  {t("secretsStore.empty")} <DocsLink url={DOCS_URL}>{t("common.docs")}</DocsLink>
+                </>
+              }
+            />
           }
         >
-          <div class="secrets-store__table-wrap">
-            <table class="secrets-store__table settings-table--stacked" role="table">
-              <thead>
-                <tr>
-                  <th scope="col">{t("secretsStore.name")}</th>
-                  <th scope="col">{t("secretsStore.access")}</th>
-                  <th scope="col">{t("secretsStore.value")}</th>
-                  <th scope="col">{t("secretsStore.allowedHosts")}</th>
-                  <th scope="col">{t("secretsStore.updated")}</th>
-                  <th scope="col" class="secrets-store__actions-heading">
-                    <span class="settings-control__sr-label">{t("secretsStore.actions")}</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={props.read()} keyed={(entry) => entry.name}>
-                  {(entry) => {
-                    const value = () => {
-                      const item = entry();
-                      return item.kind === "env" ? item.value : undefined;
-                    };
-                    const hosts = () => {
-                      const item = entry();
-                      return item.kind === "secret" && item.allowedHosts?.length
-                        ? item.allowedHosts.join(", ")
-                        : t("secretsStore.noAllowedHosts");
-                    };
-                    return (
-                      <tr tabindex="0" aria-label={entry().name}>
-                        <td data-label={t("secretsStore.name")}>
-                          <code class="secrets-store__name" title={entry().name}>
-                            {entry().name}
-                          </code>
-                        </td>
-                        <td data-label={t("secretsStore.access")}>
-                          <span
-                            class={["secrets-store__mode", `secrets-store__mode--${entry().kind}`]}
-                          >
-                            {t(
-                              entry().kind === "secret"
-                                ? "secretsStore.protectedSecret"
-                                : "secretsStore.agentReadable",
-                            )}
-                          </span>
-                        </td>
-                        <td data-label={t("secretsStore.value")}>
-                          <span
-                            class={[
-                              "secrets-store__value",
-                              { "secrets-store__value--secret": entry().kind === "secret" },
-                            ]}
-                            title={value()}
-                          >
-                            {value() ?? SECRET_MASK}
-                          </span>
-                        </td>
-                        <td data-label={t("secretsStore.allowedHosts")}>
-                          <span class="secrets-store__hosts">{hosts()}</span>
-                        </td>
-                        <td data-label={t("secretsStore.updated")}>
-                          <time
-                            class="secrets-store__updated"
-                            datetime={new Date(entry().updatedAtMs).toISOString()}
-                            title={timestamp().format(entry().updatedAtMs)}
-                          >
-                            {updatedLabel(entry())}
-                          </time>
-                        </td>
-                        <td
-                          class="secrets-store__actions-cell"
-                          data-label={t("secretsStore.actions")}
+          <div class="secrets-store__list" role="list">
+            <For each={props.read()} keyed={(entry) => entry.name}>
+              {(entry) => {
+                const secret = () => entry().kind === "secret";
+                const detail = () => {
+                  const item = entry();
+                  return item.kind === "env" ? item.value : item.allowedHosts?.join(", ");
+                };
+                return (
+                  <div
+                    class="settings-row secrets-store__row"
+                    role="listitem"
+                    aria-label={entry().name}
+                  >
+                    <div class="settings-row__text">
+                      <code class="settings-row__title secrets-store__name" title={entry().name}>
+                        {entry().name}
+                      </code>
+                      <span
+                        class={[
+                          "settings-row__desc",
+                          "secrets-store__meta",
+                          { "secrets-store__meta--flow": secret() },
+                        ]}
+                      >
+                        <Show when={detail()}>
+                          {(text) => (
+                            <>
+                              <span
+                                class={[
+                                  "secrets-store__value",
+                                  { "secrets-store__value--hosts": secret() },
+                                ]}
+                                title={text()}
+                              >
+                                {text()}
+                              </span>
+                              <span class="secrets-store__separator" aria-hidden="true">
+                                ·
+                              </span>
+                            </>
+                          )}
+                        </Show>
+                        <time
+                          class="secrets-store__updated"
+                          datetime={new Date(entry().updatedAtMs).toISOString()}
+                          title={timestamp().format(entry().updatedAtMs)}
                         >
-                          <EntryMenu view={props} entry={entry()} />
-                        </td>
-                      </tr>
-                    );
-                  }}
-                </For>
-              </tbody>
-            </table>
+                          {updatedLabel(entry())}
+                        </time>
+                      </span>
+                    </div>
+                    <div class="settings-row__control">
+                      <SettingsStatus
+                        kind={secret() ? "muted" : "warn"}
+                        label={t(
+                          secret() ? "secretsStore.protectedSecret" : "secretsStore.agentReadable",
+                        )}
+                      />
+                      <EntryMenu view={props} entry={entry()} />
+                    </div>
+                  </div>
+                );
+              }}
+            </For>
           </div>
         </Show>
       </Loading>
@@ -253,8 +246,8 @@ function SecretDialog(props: {
       props.bulk
         ? "secretsStore.bulk"
         : props.view.state.dialogMode === "edit"
-          ? "secretsStore.edit"
-          : "secretsStore.add",
+          ? "secretsStore.editDialogTitle"
+          : "secretsStore.addDialogTitle",
     );
   const close = () => {
     const bulk = props.bulk;
@@ -268,23 +261,23 @@ function SecretDialog(props: {
       onModal-cancel={close}
     >
       <form
-        class="secrets-store-dialog"
+        class="oc-dialog secrets-store-dialog"
         aria-busy={props.view.busy ? "true" : "false"}
         onSubmit={(event) => {
           event.preventDefault();
           props.view.onSubmit(Boolean(props.bulk));
         }}
       >
-        <div class="secrets-store-dialog__header">
-          <h2>{title()}</h2>
+        <DialogHeader title={title()} closeDisabled={props.view.busy} onClose={close} />
+        <div class="oc-dialog__body">
+          {props.children}
+          <Show when={props.view.state.formError}>
+            <InlineAlert tone="danger" role="alert">
+              {props.view.state.formError}
+            </InlineAlert>
+          </Show>
         </div>
-        {props.children}
-        <Show when={props.view.state.formError}>
-          <div class="callout danger" role="alert">
-            {props.view.state.formError}
-          </div>
-        </Show>
-        <openclaw-modal-actions class="secrets-store-dialog__actions">
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
             {t("common.cancel")}
           </button>
@@ -336,7 +329,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
           <legend>{t("secretsStore.accessMode")}</legend>
           <For each={["secret", "env"] as const} keyed={false}>
             {(kind) => (
-              <label
+              <Radio
                 class={[
                   "secrets-store-mode",
                   {
@@ -345,18 +338,15 @@ function EntryDialog(props: SecretsStoreViewProps) {
                       props.state.draft.kind === kind() && kind() === "env",
                   },
                 ]}
+                name="access-mode"
+                value={kind()}
+                checked={props.state.draft.kind === kind()}
+                disabled={props.busy}
+                onChange={() => {
+                  const selectedKind = kind();
+                  props.state.act((state) => state.patchDraft({ kind: selectedKind }));
+                }}
               >
-                <input
-                  type="radio"
-                  name="access-mode"
-                  value={kind()}
-                  checked={props.state.draft.kind === kind()}
-                  disabled={props.busy}
-                  onChange={() => {
-                    const selectedKind = kind();
-                    props.state.act((state) => state.patchDraft({ kind: selectedKind }));
-                  }}
-                />
                 <span>
                   <strong>
                     {t(
@@ -373,7 +363,7 @@ function EntryDialog(props: SecretsStoreViewProps) {
                     )}
                   </small>
                 </span>
-              </label>
+              </Radio>
             )}
           </For>
         </fieldset>
@@ -403,8 +393,7 @@ function BulkDialog(props: SecretsStoreViewProps) {
           })}
         </div>
         <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={props.state.bulkAutoDetect}
             disabled={props.busy}
             onChange={(event) =>
@@ -419,9 +408,9 @@ function BulkDialog(props: SecretsStoreViewProps) {
           </span>
         </label>
         <Show when={props.bulkInvalidNames.length > 0}>
-          <div class="callout danger" role="alert">
+          <InlineAlert tone="danger" role="alert">
             {t("secretsStore.badName")} {props.bulkInvalidNames.join(", ")}
-          </div>
+          </InlineAlert>
         </Show>
       </SecretDialog>
     </Show>
@@ -433,7 +422,7 @@ export function SecretsStore(props: SecretsStoreViewProps) {
     <>
       <SettingsPage wide>
         <Show when={props.state.store.error}>
-          <div class="callout danger secrets-store__message" role="alert">
+          <InlineAlert tone="danger" class="secrets-store__message" role="alert">
             <span>{props.state.store.error}</span>
             <Show when={props.state.canCall("secrets.store.list")}>
               <button
@@ -448,16 +437,19 @@ export function SecretsStore(props: SecretsStoreViewProps) {
                 {t("common.retry")}
               </button>
             </Show>
-          </div>
+          </InlineAlert>
         </Show>
         <Show when={props.state.notice}>
-          <div class="callout success secrets-store__message" role="status" aria-live="polite">
+          <InlineAlert
+            tone="success"
+            class="secrets-store__message"
+            role="status"
+            aria-live="polite"
+          >
             {props.state.notice}
-          </div>
+          </InlineAlert>
         </Show>
         <SettingsSection
-          title={t("tabs.secrets")}
-          count={props.state.store.entries.length}
           actions={
             <Show when={props.state.canCall("secrets.store.set")}>
               <>

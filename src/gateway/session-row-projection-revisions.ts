@@ -52,6 +52,7 @@ export function createSessionRowProjectionRevisions(
           id: identity(row),
           key: row.key,
           agentId: row.agentId,
+          storePath: row.storeTarget.storePath,
           row: removed ? undefined : selectionRow(row),
           ...(changeScope === undefined ? {} : { scope: changeScope }),
         }

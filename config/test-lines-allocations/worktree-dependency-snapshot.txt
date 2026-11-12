@@ -1,0 +1,2 @@
+# Removal/restore regression excludes dependency bytes while retaining user work and exact-state recovery.
+69

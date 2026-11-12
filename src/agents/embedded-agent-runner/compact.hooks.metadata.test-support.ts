@@ -13,9 +13,11 @@ import type {
 import type { AuthStorage } from "../sessions/auth-storage.js";
 
 export type CompactHooksQueuedCompaction = (
-  params: Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[0],
-  host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
-) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
+  params: Parameters<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>[0],
+  host?: Partial<
+    Parameters<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>[1]
+  >,
+) => ReturnType<typeof import("./compact.queued.js").compactQueuedEmbeddedAgentSession>;
 
 const emptyPluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
 

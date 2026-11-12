@@ -503,6 +503,7 @@ describe("gateway chat metadata auth deadlines", () => {
         setRuntimeAuthProfileStoreSnapshot({ ...original, profiles }, prepared.agentDir);
         await harness.runtime.refresh();
         expect(onChanged).toHaveBeenCalledExactlyOnceWith({
+          agentId: "main",
           modelCatalogChanged: true,
           authChanged: true,
           commandsChanged: false,

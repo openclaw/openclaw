@@ -380,7 +380,7 @@ it.each([
   expectPids(verified ? [] : [launcher]);
 });
 
-it.each(["missing self", "missing ancestor", "failed enumeration", "container", "win32"])(
+it.each(["missing self", "missing ancestor", "failed enumeration", "container"])(
   "does not authorize cleanup with %s",
   (failure) => {
     if (failure === "missing self") {
@@ -397,18 +397,10 @@ it.each(["missing self", "missing ancestor", "failed enumeration", "container", 
     if (failure === "container") {
       container.mockReturnValue(true);
     }
-    if (failure === "win32") {
-      mockProcessPlatform("win32");
-    }
     const result = inspectOtherOpenClawProcesses();
     if (failure === "container") {
       expect(result).toEqual({ error: expect.stringContaining("Host process visibility") });
       expect(directory).not.toHaveBeenCalled();
-    } else if (failure === "win32") {
-      expect(result).toEqual({
-        error: expect.stringContaining("Exact process command census is unavailable on win32"),
-      });
-      expect(census).not.toHaveBeenCalled();
     } else {
       expect(result).toHaveProperty("error");
     }
@@ -502,6 +494,31 @@ it.each([peer, launcher, self])(
     });
   },
 );
+
+it("classifies title-erased Darwin runtimes whose environment is unbounded", () => {
+  // Before macOS 27, process.title leaves a JS runtime's environment unterminated.
+  processRow(peer, ["openclaw-gateway", "", "", ""]);
+  processRow(peer + 1, ["node", "/standalone/server.mjs"]);
+  processRow(peer + 2, ["/bin/sleep", "60"]);
+  mockDarwinBatch({ status: 0, stdout: "" });
+  darwinCommand.mockImplementation((pid: number) => {
+    if (pid === peer + 2) {
+      throw new ProcSafeError("layout-mismatch", "invalid Darwin argument alignment");
+    }
+    return {
+      argv: rows.get(pid)!.argv,
+      executable: "/opt/homebrew/bin/node",
+      ...(pid === peer || pid === peer + 1 ? { serviceMarkerUnavailable: true } : {}),
+    };
+  });
+  expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual({
+    pids: [peer + 1, peer + 2],
+    warnings: [
+      `Could not verify runtime custody for PID ${peer + 1}: process environment is unreadable`,
+      `Could not verify runtime custody for PID ${peer + 2}: process command is unavailable`,
+    ],
+  });
+});
 
 it("retains Darwin cwd holders from one partial batch without trusting other PID records", () => {
   processRow(peer, ["node", "/vendor/worker.js"]);

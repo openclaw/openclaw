@@ -5,6 +5,7 @@ import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createScrollPosition } from "../../lib/reactive/scroll-state.ts";
 import type { SkillLibraryModel, LibraryView } from "./library-state.ts";
 
 type SkillLibraryNavigationProps = {
@@ -105,6 +106,22 @@ export function SkillLibraryToolbar(props: {
     }
     return entries;
   });
+  const inputs = new Map<string, HTMLInputElement>();
+  const activeTab = () => inputs.get(current().view ?? "workspace")?.parentElement;
+  // Resolve the owned radio refs after commit; only the horizontal strip moves.
+  createScrollPosition(
+    () => ({
+      reveal: {
+        identity: [current().view, options().length],
+        target: activeTab,
+      },
+    }),
+    {
+      region: () => activeTab()!.parentElement!,
+      revealTiming: "animation-frame",
+      revealAxis: "inline",
+    },
+  );
   return (
     <>
       <div class="plugins-toolbar skill-library-toolbar__actions">
@@ -129,12 +146,13 @@ export function SkillLibraryToolbar(props: {
         </Show>
       </div>
       <Show when={options().length > 0 || !props.library.showWorkspace()}>
-        <div class="plugins-toolbar">
+        <div class="plugins-toolbar skill-library-toolbar__views">
           <Show when={options().length > 0}>
             <SettingsSegmented
               value={current().view ?? "workspace"}
               ariaLabel={t("skillLibrary.library")}
               options={options()}
+              inputRef={(value, input) => inputs.set(value, input)}
               onChange={(view) =>
                 props.library.edit((state) => {
                   state.view = view;

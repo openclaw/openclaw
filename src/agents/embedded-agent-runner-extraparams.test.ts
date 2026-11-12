@@ -1018,7 +1018,7 @@ describe("applyExtraParamsToAgent", () => {
       provider: "openai",
       modelId: "gpt-5",
       extraParamsOverride: {
-        __proto__: { polluted: true },
+        ["__proto__"]: { polluted: true },
         constructor: "blocked",
         prototype: "blocked",
         temperature: 0.2,

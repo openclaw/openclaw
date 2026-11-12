@@ -7,8 +7,8 @@ import { formatAudioTranscriptForAgent } from "../plugin-sdk/media-understanding
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { applyMediaUnderstanding } from "./apply.js";
 import { transcribeAudioAttachments, transcribeFirstAudio } from "./audio-preflight.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 type AudioConfig = NonNullable<NonNullable<NonNullable<OpenClawConfig["tools"]>["media"]>["audio"]>;
 type SelectionOptions = {

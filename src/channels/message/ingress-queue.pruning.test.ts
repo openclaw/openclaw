@@ -9,11 +9,26 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
-import { pruneChannelIngressInDatabase } from "./ingress-queue.kernel.js";
+import { pruneChannelIngressInDatabase } from "./ingress-queue-prune.kernel.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
 describe("channel ingress pruning", () => {
+  it("bounds policy drops separately so floods preserve real dead letters", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      for (const [index, reason] of ["handler-error", "queue-cap-old", "queue-cap-new"].entries()) {
+        await queue.enqueue(String(index), { text: "terminal" }, { receivedAt: index });
+        await queue.fail(String(index), { reason, failedAt: index });
+      }
+      expect(await queue.prune({ failedMaxEntries: 1 })).toBe(1);
+      expect(await queue.listFailed?.()).toMatchObject([
+        { reason: "handler-error" },
+        { reason: "queue-cap-new" },
+      ]);
+    });
+  });
+
   it("preserves protected IDs and their retention slots", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 10 });

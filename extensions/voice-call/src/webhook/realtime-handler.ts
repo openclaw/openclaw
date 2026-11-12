@@ -540,7 +540,7 @@ export class RealtimeCallHandler {
       this.pendingStreamTokens.set(token, { expiry, ...meta });
       const host = this.publicOrigin || DEFAULT_HOST;
       const streamPathPattern = this.getStreamPathPattern();
-      const timer = setTimeout(() => {
+      setTimeout(() => {
         if (!this.pendingStreamTokens.delete(token)) {
           return;
         }
@@ -555,8 +555,7 @@ export class RealtimeCallHandler {
         console.warn(
           `[voice-call] Realtime stream WebSocket never connected within ${STREAM_TOKEN_TTL_MS / 1000}s${call}${participants} — the provider could not reach wss://${host}${streamPathPattern}/<token>. Verify the stream path is exposed (tailscale serve/funnel --set-path).`,
         );
-      }, STREAM_TOKEN_TTL_MS);
-      timer.unref?.();
+      }, STREAM_TOKEN_TTL_MS).unref();
     }
     const host = this.publicOrigin || DEFAULT_HOST;
     const streamUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
@@ -779,6 +778,7 @@ export class RealtimeCallHandler {
       });
     let sessionClosed = false;
     const userTranscriptOwner: UserTranscriptState = {};
+    let transcriptStartedAt: Partial<Record<"user" | "assistant", number>> = {};
     let transcriptPersistence = Promise.resolve();
     let transcriptFailure: { error: unknown } | undefined;
     const reportTranscriptFailure = (error: unknown) => {
@@ -904,13 +904,12 @@ export class RealtimeCallHandler {
             if (this.forcedConsultsByCallId.get(callId) !== state) {
               coordinator.remove(handle);
             } else {
-              const cleanupTimer = setTimeout(() => {
+              setTimeout(() => {
                 if (this.forcedConsultsByCallId.get(callId) === state) {
                   this.forcedConsultsByCallId.delete(callId);
                   coordinator.remove(handle);
                 }
-              }, FORCED_CONSULT_NATIVE_DEDUPE_MS);
-              cleanupTimer.unref?.();
+              }, FORCED_CONSULT_NATIVE_DEDUPE_MS).unref();
             }
           }
         }
@@ -997,6 +996,7 @@ export class RealtimeCallHandler {
         }
         if (role === "user" && !audioController.acceptUserTranscript(isFinal)) {
           if (isFinal) {
+            delete transcriptStartedAt.user;
             console.log(
               `[voice-call] Ignoring unconfirmed caller transcript during playback callId=${callId}`,
             );
@@ -1007,6 +1007,7 @@ export class RealtimeCallHandler {
           outboundGreeting.claim();
           activity.noteSpeech();
         }
+        const timestamp = (transcriptStartedAt[role] ??= Date.now());
         const turnId = harness.ensureTurn();
         const eventType =
           role === "assistant"
@@ -1041,6 +1042,7 @@ export class RealtimeCallHandler {
           }
           return;
         }
+        delete transcriptStartedAt[role];
         let transcript = text;
         let consultTranscript: TranscriptSnapshot | undefined;
         if (role === "user") {
@@ -1060,15 +1062,14 @@ export class RealtimeCallHandler {
           const timer = setTimeout(() => {
             state.recentFinal = undefined;
             state.recentFinalTimer = undefined;
-          }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS);
-          timer.unref?.();
+          }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS).unref();
           state.recentFinalTimer = timer;
         }
         const event: NormalizedEvent = {
           id: `realtime-${role === "user" ? "speech" : "bot"}-${callSid}-${randomUUID()}`,
           callId,
           providerCallId: callSid,
-          timestamp: Date.now(),
+          timestamp,
           transcript,
           ...(role === "user"
             ? { type: "call.speech", isFinal: true }
@@ -1128,10 +1129,12 @@ export class RealtimeCallHandler {
       },
       onEvent: (event) => {
         if (event.direction === "client" && event.type === "session.continuity.reset") {
+          audioController.finishGreeting();
           // Clear current playback and cancel consult work on a provider reset.
           const turnId = harness.talk.activeTurnId;
           const owner = nativeConsultOwner;
           if (owner && this.isActiveBridgeOwner(callId, owner)) {
+            transcriptStartedAt = {};
             userTranscriptOwner.partial = undefined;
             clearRecentFinalUserTranscript(userTranscriptOwner);
             this.cancelConsultSession(callId, owner, harness.forcedConsults, "continuity-reset");
@@ -1149,6 +1152,7 @@ export class RealtimeCallHandler {
           return;
         }
         if (event.type === "input_audio_buffer.speech_started" && !outboundGreeting.isBlocked()) {
+          transcriptStartedAt.user = Date.now();
           outboundGreeting.claim();
           activity.noteSpeech();
           harness.ensureTurn();
@@ -1176,6 +1180,7 @@ export class RealtimeCallHandler {
         }
       },
       onResponseDone: (outcome) => {
+        audioController.finishGreeting();
         if (outcome.status === "failed" || outcome.status === "incomplete") {
           console.warn(`[voice-call] realtime response ${outcome.status}: ${outcome.message}`);
         }
@@ -1266,7 +1271,12 @@ export class RealtimeCallHandler {
         return;
       }
       outboundGreeting.noteInputAudio(audio);
-      if (outboundGreeting.isBlocked() || hostSpeech.isActive()) {
+      // Withhold overlapping input so neither local nor provider VAD cuts off the opening.
+      if (
+        outboundGreeting.isBlocked() ||
+        hostSpeech.isActive() ||
+        audioController.isGreetingPlaying()
+      ) {
         return;
       }
       const inputRms = calculateMulawRms(audio);
@@ -1384,11 +1394,6 @@ export class RealtimeCallHandler {
     this.activeTelephonyBindingsByCallId.set(callId, telephonyBinding);
     telephonyBinding.noteMediaActivity();
     activity.start();
-    if (this.config.idleHangupMs) {
-      console.log(
-        `[voice-call] Realtime speech idle monitor armed callId=${callId} providerCallId=${callSid} timeoutMs=${this.config.idleHangupMs}`,
-      );
-    }
     if (previousTelephonyBinding && previousTelephonyBinding !== telephonyBinding) {
       previousTelephonyBinding.retire();
     }

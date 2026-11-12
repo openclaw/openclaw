@@ -178,8 +178,16 @@ Legacy allowlist entries may contain `null` for `lastUsedAt` or
 `lastUsedCommand`. Doctor treats those two usage fields as absent during
 import, including when the config still needs repair. This does not relax
 validation of the current policy: other malformed fields or conflicting legacy
-policies remain preserved for operator recovery, and exec approvals stay
-blocked until the legacy file is resolved. After repair, verify with
+policies remain preserved for operator recovery. The Gateway and node host start
+degraded with canonical SQLite approvals still authoritative; they never import
+conflicting policy or socket credentials. Without canonical policy, exec approvals
+remain unavailable until migration succeeds. Status and Doctor report the retained
+startup warning, including the possibility that an older node host or external
+writer is still changing the legacy file. Stop those writers and reconcile the
+retained file with the intended policy, preserving SQLite policy, then run
+`openclaw doctor --fix` against the same state directory. Legacy-only valid policy
+still imports automatically at startup, and byte-identical legacy copies are removed
+by the migration owner. After repair, verify with
 `openclaw approvals get` using the same state directory.
 
 Example shared policy (socket credentials are held by the local client owner):
@@ -708,7 +716,7 @@ native approval clients), see
 
 ## Control UI editing
 
-Use the **Control UI -> Nodes -> Exec approvals** card to edit defaults,
+Use the **Control UI → Devices → Command approvals** card to edit defaults,
 per-agent overrides, and allowlists. Pick a scope (Defaults or an agent),
 tweak the policy, add/remove allowlist patterns, then **Save**. The UI
 shows last-used metadata per pattern so you can keep the list tidy.

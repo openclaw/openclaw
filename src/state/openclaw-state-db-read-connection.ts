@@ -3,6 +3,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
@@ -23,7 +24,6 @@ import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging
 import { assertTransactionUsable, runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { SqliteSchemaErrorContext } from "../infra/sqlite-user-version.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -178,7 +178,7 @@ function borrowStateReadConnection(
     }
     reader = { connection: opening.value, identity, retiring: false, borrowed: false };
     retainedReaders.set(identity.key, reader);
-    unregisterExitClose ??= registerSqliteCacheExitClose(closeRetainedOpenClawStateReadConnections);
+    unregisterExitClose ??= registerProcessExitCleanup(closeRetainedOpenClawStateReadConnections);
   }
   const retained = reader;
   if (

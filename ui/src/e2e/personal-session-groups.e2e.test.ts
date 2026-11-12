@@ -236,10 +236,18 @@ suite.define(() => {
         await dialog.getByRole("button", { name: "Search sessions", exact: true }).click();
         const search = dialog.getByRole("searchbox", { name: "Search sessions", exact: true });
         await expect.poll(() => search.evaluate((element) => element.matches(":focus"))).toBe(true);
-        await search.fill("Release");
+        await search.fill("Relea");
+        const ime = await page.context().newCDPSession(page);
+        await ime.send("Input.imeSetComposition", {
+          text: "se",
+          selectionStart: 2,
+          selectionEnd: 2,
+        });
+        // Enter filters, even to confirm an IME word; it must not save and close the editor.
+        await search.press("Enter");
+        await ime.send("Input.insertText", { text: "se" });
         // Search runs on the Gateway, so it reaches sessions outside the loaded sidebar page.
         await gateway.waitForRequest("sessions.list", { match: { search: "Release" } });
-        // Enter filters; it must not save and close the editor.
         await search.press("Enter");
         expect(await dialog.isVisible()).toBe(true);
         await expect
@@ -640,10 +648,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
 
         // Ordinary navigation clears selection; Shift includes the intervening group.
-        await page
-          .locator("openclaw-app-sidebar")
-          .getByRole("link", { name: /Reliability Tracker/ })
-          .click();
+        await ordinary.click();
         await row("first").click({ modifiers: ["Alt"] });
         await row("last").click({ modifiers: ["Shift"] });
         await row("last").click({ button: "right" });
@@ -653,10 +658,7 @@ suite.define(() => {
         await page.keyboard.press("Escape");
 
         // A duplicate's clicked appearance, not its first occurrence, bounds the range.
-        await page
-          .locator("openclaw-app-sidebar")
-          .getByRole("link", { name: /Reliability Tracker/ })
-          .click();
+        await ordinary.click();
         await row("last").click({ modifiers: ["Alt"] });
         await group("last")
           .getByRole("link", { name: "first project", exact: true })
@@ -666,10 +668,7 @@ suite.define(() => {
           .poll(() => menu.getByRole("menuitem", { name: "Archive 2", exact: true }).count())
           .toBe(1);
         await page.keyboard.press("Escape");
-        await page
-          .locator("openclaw-app-sidebar")
-          .getByRole("link", { name: /Reliability Tracker/ })
-          .click();
+        await ordinary.click();
         await row("first").click({ modifiers: ["Alt"] });
 
         // Normal navigation must retain the clicked occurrence as the next Shift anchor.
@@ -691,10 +690,7 @@ suite.define(() => {
           )
           .toBe("Archive 2");
         await page.keyboard.press("Escape");
-        await page
-          .locator("openclaw-app-sidebar")
-          .getByRole("link", { name: /Reliability Tracker/ })
-          .click();
+        await ordinary.click();
         await row("first").click({ modifiers: ["Alt"] });
 
         // A canonical pin must not inherit the first active personal-group appearance.

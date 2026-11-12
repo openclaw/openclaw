@@ -1,4 +1,5 @@
 import path from "node:path";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   buildSkillSnapshot,
@@ -97,25 +98,27 @@ export async function prepareEmbeddedSkills(params: {
         preserveEntryOrder,
         assertCurrent: params.assertCurrent,
       }));
-    const skillsPrompt = await resolveSkillsPrompt({
-      assertCurrent: params.assertCurrent,
-      contextTokenBudget: params.attempt.contextTokenBudget,
-      skillsSnapshot,
-      entries: promptSkillEntries,
-      loadEntries: async () => mapEntries(await loadSkillEntries()) ?? [],
-      config: params.attempt.config,
-      workspaceDir: skillsPromptWorkspaceDir,
-      agentId: params.sessionAgentId,
-      eligibility: skillsEligibility,
-      preserveEntryOrder,
-    });
-    const libraryEntries = params.sandbox?.enabled
-      ? []
-      : await prepareSkillLibrarySelection(
-          skillsSnapshot.librarySelections ?? [],
-          {},
-          params.assertCurrent ?? (() => {}),
-        );
+    const [skillsPrompt, libraryEntries] = await settleCurrentReadPreparations([
+      resolveSkillsPrompt({
+        assertCurrent: params.assertCurrent,
+        contextTokenBudget: params.attempt.contextTokenBudget,
+        skillsSnapshot,
+        entries: promptSkillEntries,
+        loadEntries: async () => mapEntries(await loadSkillEntries()) ?? [],
+        config: params.attempt.config,
+        workspaceDir: skillsPromptWorkspaceDir,
+        agentId: params.sessionAgentId,
+        eligibility: skillsEligibility,
+        preserveEntryOrder,
+      }),
+      params.sandbox?.enabled
+        ? []
+        : prepareSkillLibrarySelection(
+            skillsSnapshot.librarySelections ?? [],
+            {},
+            params.assertCurrent ?? (() => {}),
+          ),
+    ] as const);
     params.assertCurrent?.();
     // Preparation may yield to abort/revocation. Apply process-wide overrides only
     // once all filesystem work has settled and this caller can take custody.

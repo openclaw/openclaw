@@ -69,10 +69,15 @@ it("rehashes recent files even when a same-size edit preserves the stat identity
 });
 
 const hashMetrics = () => ({ contentHashCount: 0, memoHitCount: 0 });
-function remoteCapture(workspace: string, home: string, script = remoteWorkspaceManifestScript) {
+function remoteCapture(
+  workspace: string,
+  home: string,
+  script = remoteWorkspaceManifestScript,
+  prior: string[] = [],
+) {
   return async (memo: [string, string][]): Promise<RemoteWorkspaceManifestEnvelope> => {
     const result = await runCommandWithTimeout(
-      [process.execPath, "-e", script, workspace, "", "memo-v1"],
+      [process.execPath, "-e", script, workspace, "", "all", ...prior, "memo-v1"],
       { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home }, input: JSON.stringify(memo) },
     );
     expect(result).toMatchObject({ code: 0, stderr: "" });
@@ -84,6 +89,7 @@ async function remoteFixture(script = remoteWorkspaceManifestScript) {
   const workspace = await fs.realpath(tempDirs.make("openclaw-remote-workspace-"));
   return {
     workspace,
+    home,
     capture: remoteCapture(workspace, home, `Date.now = () => ${Date.now() + 60_000};\n${script}`),
   };
 }
@@ -256,7 +262,7 @@ it("bounds the remote memo to the largest files and reports truncation", async (
     "const MAX_WORKSPACE_HASH_MEMO_ENTRIES = 2;",
   );
   expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
-  const { workspace, capture } = await remoteFixture(limitedScript);
+  const { workspace, home, capture } = await remoteFixture(limitedScript);
   await Promise.all([
     fs.writeFile(path.join(workspace, "small.txt"), "1"),
     fs.writeFile(path.join(workspace, "medium.txt"), "22"),
@@ -281,6 +287,18 @@ it("bounds the remote memo to the largest files and reports truncation", async (
   expect(unchanged.metrics).toMatchObject({
     contentHashCount: 1,
     memoHitCount: 2,
+    memoTruncatedCount: 1,
+  });
+  const restored = await remoteCapture(
+    workspace,
+    home,
+    `Date.now = () => ${Date.now() + 60_000};\n${limitedScript}`,
+    [first.manifestRef.slice(7)],
+  )([]);
+  expect(restored.manifestRef).toBe(first.manifestRef);
+  expect(restored.metrics).toMatchObject({
+    contentHashCount: 0,
+    memoHitCount: 3,
     memoTruncatedCount: 1,
   });
 });

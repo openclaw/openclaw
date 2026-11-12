@@ -6,13 +6,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { NodeMcpElicitationRegistry } from "../gateway/node-mcp-elicitation.js";
 import {
   listConnectedNodePluginTools,
   removeConnectedNodePluginTools,
-  replaceConnectedNodePluginTools,
+  publishNodeSessionPluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
+import { makeNodeSession } from "../gateway/node-registry.test-helpers.js";
+import type { NodeSession } from "../gateway/node-session.types.js";
+import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getAgentToolExecutionLocation } from "./agent-tool-metadata.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
@@ -26,6 +31,11 @@ import { isToolResultError } from "./tool-result-error.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -51,9 +61,10 @@ function materializeNodeTools(
     toolAllowlist?: string[];
     toolDenylist?: string[];
     agentSessionKey?: string;
+    mcpAppsEnabled?: boolean;
   } = {},
 ) {
-  const config = { plugins: { enabled: false } };
+  const config = { plugins: { enabled: false }, mcp: { apps: { enabled: params.mcpAppsEnabled } } };
   return resolveOpenClawPluginToolsForOptions({
     resolvedConfig: config,
     existingToolNames: params.existingToolNames,
@@ -72,16 +83,29 @@ function connectTool(
   descriptor: NodePluginToolDescriptor = remoteEcho,
   {
     registered = false,
-    ...node
-  }: Partial<Omit<Parameters<typeof replaceConnectedNodePluginTools>[0], "tools">> & {
+    nodeId = "node-1",
+    displayName,
+  }: Partial<Pick<NodeSession, "nodeId" | "displayName">> & {
     registered?: boolean;
   } = {},
 ) {
-  replaceConnectedNodePluginTools({
-    nodeId: "node-1",
-    ...node,
-    tools: [{ descriptor, registered }],
+  const node = makeNodeSession(nodeId, {
+    displayName,
+    commands: ["remote.echo", "mcp.tools.call.v1"],
+    declaredNodePluginTools: [descriptor],
   });
+  publishNodeSessionPluginTools(
+    node,
+    undefined,
+    registered
+      ? [
+          {
+            pluginId: descriptor.pluginId,
+            command: { command: descriptor.command, agentTool: descriptor },
+          },
+        ]
+      : [],
+  );
 }
 
 function docsTool(
@@ -323,6 +347,86 @@ describe("materializeNodeTools", () => {
     );
   });
 
+  it("binds node MCP questions only to the live originating session for the duration of the call", async () => {
+    connectTool(docsTool("read", "Read node-local reports"));
+    const sessionKey = "agent:main:source";
+    const tool = firstTool({ agentSessionKey: sessionKey, mcpAppsEnabled: true });
+    expect(getAgentToolExecutionLocation(tool)).toEqual({
+      kind: "gateway",
+      timeout: { minimumMs: 725_000 },
+    });
+    const node = { nodeId: "node-1", connId: "conn-1", client: {} } as NodeSession;
+    const registry = new NodeMcpElicitationRegistry();
+    const context = {
+      nodeRegistry: { get: () => node, mcpElicitation: registry },
+    } as unknown as GatewayRequestContext;
+    const caller = {
+      agentId: "main",
+      sessionKey,
+      operationalRunInstance: { runId: "run", instanceId: "instance" },
+      receiptAuthority: () => true,
+      gatewayContextResolver: () => context,
+    };
+    using ask = vi.spyOn(
+      await import("./harness/structured-input-execution.js"),
+      "runStructuredInput",
+    );
+    ask.mockImplementationOnce(async (question) => {
+      expect(question.sessionKey).toBe(sessionKey);
+      expect(getGatewayToolCallerIdentity()?.operationalRunInstance).toEqual(
+        caller.operationalRunInstance,
+      );
+      return { status: "answered", answers: { project: ["one"] }, content: { project: "one" } };
+    });
+    const args = { elicitationId: "model-supplied" };
+    const event = {
+      id: "",
+      requestId: "794d5a27-9b20-4baf-a4c4-bb13fc9ebf94",
+      params: {
+        message: "Choose a project",
+        requestedSchema: { type: "object", properties: { project: { type: "string" } } },
+      },
+    };
+    const receive = () => registry.receive(node, event, async () => true);
+    vi.mocked(callGatewayTool).mockImplementationOnce(async (_method, options, request) => {
+      const { params, timeoutMs } = request as {
+        params: { elicitationId: string; arguments: unknown };
+        timeoutMs: number;
+      };
+      expect(params.arguments).toEqual(args);
+      expect(params.elicitationId).not.toBe(args.elicitationId);
+      expect(timeoutMs).toBe(720_000);
+      expect(options.timeoutMs).toBe(725_000);
+      event.id = params.elicitationId;
+      expect(await withoutGatewayToolCallerIdentity(receive)).toEqual({
+        action: "accept",
+        content: { project: "one" },
+      });
+      throw new Error("node disconnected");
+    });
+    await expect(
+      withGatewayToolCallerIdentity(caller, () => tool.execute("read", args)),
+    ).rejects.toThrow("node disconnected");
+    await expect(receive()).rejects.toThrow("unavailable");
+
+    for (const [invokeTool, source] of [
+      [tool, { ...caller, sessionKey: "agent:main:other" }],
+      [firstTool({ agentSessionKey: sessionKey }), caller],
+    ] as const) {
+      vi.mocked(callGatewayTool).mockClear();
+      respond({ content: [] });
+      await withGatewayToolCallerIdentity(source, () => invokeTool.execute("read", args));
+      expectInvocation(
+        {
+          params: { server: "docs", tool: "read", arguments: args },
+          idempotencyKey: "read",
+          sessionKey,
+        },
+        { mcp: true },
+      );
+    }
+  });
+
   it("snapshots successful node MCP text once", async () => {
     const text = "ordinary report line\n".repeat(25_000);
     const payload = CallToolResultSchema.parse({
@@ -543,7 +647,12 @@ describe("materializeNodeTools", () => {
     connectTool(githubDescriptor, { nodeId: "node-1", registered: true });
     expect(toolNames({ toolAllowlist: ["github"] })).toEqual(["remote_repo_search"]);
 
-    connectTool({ ...githubDescriptor, pluginId: "node-mcp" });
+    connectTool({
+      ...githubDescriptor,
+      pluginId: "node-mcp",
+      command: "mcp.tools.call.v1",
+      mcp: { server: "github", tool: "search" },
+    });
     expect(toolNames({ toolAllowlist: ["node-mcp"] })).toEqual(["remote_repo_search"]);
 
     connectTool(githubDescriptor);

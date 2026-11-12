@@ -22,23 +22,6 @@ export function bindPendingInputMentionInvitation(
   }
 }
 
-export function finishPendingInputSources(
-  sources: readonly SessionPendingInputOwner[],
-  disposition: "cancelled" | "interrupted",
-): void {
-  const failures: unknown[] = [];
-  for (const source of sources) {
-    try {
-      source.finish(disposition);
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  if (failures.length) {
-    throw new AggregateError(failures, "Failed to finish collected input custody");
-  }
-}
-
 /** Worker facts delegate liveness to the host; only the host may finish custody. */
 export function hydratePendingInputWorkerOwner(
   facts: SessionPendingInputWorkerFacts,
@@ -136,4 +119,22 @@ export function collectForeignLiveSessionPendingInputEntries(params: {
     }
   }
   return entries;
+}
+
+export function finishPendingInputSources(
+  sources: readonly SessionPendingInputOwner[],
+  disposition: "cancelled" | "interrupted",
+  userInitiated?: true,
+): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.finish(disposition, userInitiated);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to finish collected input custody");
+  }
 }

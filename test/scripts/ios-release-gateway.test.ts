@@ -117,8 +117,10 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
     const child = new ChildProcess();
     expect(env).not.toHaveProperty("GH_TOKEN");
     expect(env).not.toHaveProperty("GITHUB_TOKEN");
-    child.stdout = stdout;
-    child.stderr = stderr;
+    Object.defineProperties(child, {
+      stdout: { value: stdout },
+      stderr: { value: stderr },
+    });
     onReady?.(child);
     try {
       expect(path.basename(bin)).toMatch(/^npm(?:\.cmd)?$/u);

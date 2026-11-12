@@ -75,5 +75,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan read-only Session Share access between my source and team Gateways.",
+    "Review Session Share settings for unintended exposure without opening transcripts."
+  ]
 }

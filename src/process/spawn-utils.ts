@@ -18,6 +18,7 @@ export function spawnProcess(
   options: SpawnOptions,
   initiateSpawn?: SpawnInitiation,
   executionIntent: ProcessExecutionIntent = "gateway-internal",
+  executionScopeKey?: string,
 ): ChildProcess {
   assertAppContainerSpawnSupported(options.stdio);
   const broker = getSpawnBroker();
@@ -29,7 +30,7 @@ export function spawnProcess(
           args,
           options,
           initiateSpawn,
-          executionIntent === "agent-tool" ? getAgentExecCgroup() : undefined,
+          executionIntent === "agent-tool" ? getAgentExecCgroup(executionScopeKey) : undefined,
         )
       : initiateSpawn
         ? initiateSpawn(() =>
@@ -48,6 +49,7 @@ export async function spawnAndWait(params: {
   assertCurrent?: () => void;
   initiateSpawn?: SpawnInitiation;
   executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   argv: string[];
   options: SpawnOptions;
   spawnImpl?: typeof spawnProcess;
@@ -62,6 +64,7 @@ export async function spawnAndWait(params: {
     params.options,
     params.initiateSpawn,
     params.executionIntent,
+    params.executionScopeKey,
   );
   await once(child, "spawn");
   return child;

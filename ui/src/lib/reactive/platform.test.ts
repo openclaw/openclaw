@@ -18,13 +18,6 @@ function owned<T>(create: () => T) {
   return root;
 }
 
-it.each([false, true])("uses fallback %s without matchMedia", (fallback) => {
-  vi.stubGlobal("matchMedia", undefined);
-  const { value: matches } = owned(() => createMediaQuery("(pointer: fine)", fallback));
-  flush();
-  expect(matches()).toBe(fallback);
-});
-
 it("shares exact media queries while preserving fallback and independent lifetimes", () => {
   const reduced = Object.assign(new EventTarget(), { matches: true });
   const pointer = Object.assign(new EventTarget(), { matches: false });

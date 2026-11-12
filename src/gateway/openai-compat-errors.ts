@@ -24,6 +24,7 @@ const ERROR_TYPE_BY_REASON = {
   overloaded: "api_error",
   billing: "insufficient_quota",
   server_error: "api_error",
+  route_unavailable: "api_error",
   timeout: "api_error",
   tls_certificate: "api_error",
   context_overflow: "invalid_request_error",

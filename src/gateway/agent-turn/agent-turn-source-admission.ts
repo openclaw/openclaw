@@ -86,10 +86,18 @@ export async function retainAgentTurnOperatorRun({
     if (!authorization) {
       throw new Error("Agent session execution authority is unavailable");
     }
-    invocationAuthority = {
-      assertCurrent: authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
-      release: authorization.release,
-    };
+    if (authorization.retainForRun) {
+      try {
+        invocationAuthority = authorization.retainForRun();
+      } finally {
+        authorization.release?.();
+      }
+    } else {
+      invocationAuthority = {
+        assertCurrent: authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent,
+        release: authorization.release,
+      };
+    }
   }
   let retained: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
   try {

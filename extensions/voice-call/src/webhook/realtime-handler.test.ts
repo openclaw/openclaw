@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -265,6 +266,7 @@ function parseWebSocketMessage(data: RawData): Record<string, unknown> {
 }
 
 async function bargeInHarness(params: {
+  initialGreeting?: string;
   bridgeHandlesInputAudioBargeIn?: boolean;
   handlesProviderBargeIn?: boolean;
   interruptResponseOnInputAudio?: boolean;
@@ -283,7 +285,9 @@ async function bargeInHarness(params: {
           }),
     },
     {
-      call: makeCallRecord(params.providerCallId),
+      call: makeCallRecord(params.providerCallId, {
+        metadata: { initialMessage: params.initialGreeting },
+      }),
       deps: {
         providerConfig: {
           apiKey: "test-key",
@@ -719,6 +723,62 @@ describe("RealtimeCallHandler path routing", () => {
       callbacks.onAudio(Buffer.alloc(160, 0x80));
       callbacks.onTranscript?.("user", words, true);
       expect(transcripts(processEvent)).toEqual(["A real question after playback", "Please stop"]);
+    },
+  );
+
+  it.each(["local", "provider"])(
+    "plays the entire opening greeting before allowing %s barge-in on later turns",
+    async (source) => {
+      const { callbacks, call, outboundMessages, handleBargeIn, sendAudio, ws } =
+        await bargeInHarness({
+          providerCallId: "CA-opening-greeting",
+          initialGreeting: "Hello, how can I help?",
+          handlesProviderBargeIn: source === "provider",
+        });
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const syncCarrier = async () => {
+        const pong = once(ws, "pong");
+        ws.ping();
+        await pong;
+      };
+      const interrupt = async () => {
+        for (let i = 0; i < 4; i++) {
+          sendMedia(ws, Buffer.alloc(160, 0x00));
+        }
+        await syncCarrier();
+        if (source === "provider") {
+          callbacks.onClearAudio("barge-in");
+          await syncCarrier();
+        }
+      };
+      const greeting = Buffer.alloc(160 * 20, 0x80);
+      callbacks.onAudio(greeting);
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toEqual([]);
+      expect(handleBargeIn).not.toHaveBeenCalled();
+      expect(sendAudio).not.toHaveBeenCalled();
+      expect(talkEvents(call, "turn.cancelled")).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(401);
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toEqual([]);
+      callbacks.onAudio(greeting);
+      callbacks.onResponseDone?.({ status: "completed" });
+      await vi.advanceTimersByTimeAsync(250);
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toEqual([]);
+      await vi.advanceTimersByTimeAsync(151);
+      await syncCarrier();
+      const media = outboundMessages.filter((frame) => frame.event === "media");
+      expect(media).toHaveLength(40);
+      expect(media.map((frame) => (frame.media as { payload: string }).payload)).toEqual(
+        Array.from({ length: 40 }, () => Buffer.alloc(160, 0x80).toString("base64")),
+      );
+      callbacks.onAudio(Buffer.alloc(160 * 20, 0x80));
+      await interrupt();
+      expect(outboundMessages.filter((frame) => frame.event === "clear")).toHaveLength(1);
+      expect(handleBargeIn).toHaveBeenCalledTimes(source === "local" ? 1 : 0);
+      expect(talkEvents(call, "turn.cancelled")).toHaveLength(1);
     },
   );
 
