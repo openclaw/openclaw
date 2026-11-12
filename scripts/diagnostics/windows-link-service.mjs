@@ -20,9 +20,7 @@ const now = () => process.hrtime.bigint();
 const ms = (ns) => Number(ns) / 1e6;
 const codeOf = (error) => {
   const code = error?.code;
-  return typeof code === "string" && /^[A-Z0-9_]{1,48}$/.test(code)
-    ? code
-    : "DIAGNOSTIC_FAILURE";
+  return typeof code === "string" && /^[A-Z0-9_]{1,48}$/.test(code) ? code : "DIAGNOSTIC_FAILURE";
 };
 const identity = (stat) => String(stat.dev) + ":" + String(stat.ino);
 
