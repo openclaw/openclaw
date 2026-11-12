@@ -494,10 +494,10 @@ describe("normalizeClaudeBackendConfig", () => {
     // Legacy imports stored subscription tokens as api_key profiles (#197169).
     ["sk-ant-oat01-synthetic-subscription-token", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"],
   ])("forwards api_key profile %s through %s", async (key, envName) => {
-    const prepared = await prepareSecret(
-      { type: "api_key", provider: "claude-cli", key },
-      "claude-cli:api",
-    );
+    const prepared = (await prepare(backend, {
+      authCredential: { type: "api_key", provider: "claude-cli", key },
+      authProfileId: "claude-cli:api",
+    })) as ClaudePreparedExecutionWithSecret;
 
     expectSecret(prepared, envName, key);
     expect(prepared.env).not.toHaveProperty("ANTHROPIC_API_KEY");
