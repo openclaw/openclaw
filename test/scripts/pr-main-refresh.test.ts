@@ -965,6 +965,24 @@ ${readFileSync(gitShim, "utf8")}
     },
   );
 
+  it("rejects unsupported local-only Git before acquiring a merge commit", () => {
+    const f = fixture();
+    f.configure({ unsupportedNoLazy: true });
+    const before = f.events().length;
+    const result = f.shell(
+      `cd .worktrees/pr-42\nMERGE_REPO_URL=https://github.com/fixture/repo merge_outcome_require_commit ${f.main} main`,
+    );
+    // Even a present commit must not admit a Git that could hydrate the next missing object.
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires Git with --no-lazy-fetch support");
+    expect(
+      f
+        .events()
+        .slice(before)
+        .filter((event) => event.args?.some((arg) => arg === "cat-file" || arg === "fetch")),
+    ).toEqual([]);
+  });
+
   it("fetches pinned authoritative commits as promisor packs without a promisor history walk", () => {
     const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-authoritative-filter-"), {
       partialCloneFilter: "blob:none",

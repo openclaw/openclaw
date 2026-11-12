@@ -385,6 +385,14 @@ export function requireCronJobId(id: unknown, accepted = "Pass it positionally."
   return jobId;
 }
 
+/** Ctrl-C cancels a pending read; mutations keep waiting for their receipt. */
+export async function callCronReadFromCli(method: string, opts: GatewayRpcOpts, params: unknown) {
+  const signal = getAsyncWorkSignal();
+  return signal
+    ? await callGatewayFromCli(method, opts, params, { signal })
+    : await callGatewayFromCli(method, opts, params);
+}
+
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.
   try {
