@@ -67,8 +67,8 @@ it.each([
         if (profiles) {
           delete provider.apiKey;
         }
-        if (privateRoute && route !== "private denied") {
-          request.allowPrivateNetwork = true;
+        if (privateRoute) {
+          request.allowPrivateNetwork = route !== "private denied";
         }
         if (route === "unresolved header") {
           request.headers!["X-Unresolved"] = {
@@ -261,10 +261,13 @@ it.each([
                   {
                     settled: { outcome: harness.unavailable("retiring") },
                     aborted: false,
-                    finalAdmission: false,
+                    finalAdmission: true,
                   },
                 );
-                expectNoEffects();
+                // A request admitted before DNS may finish; the host rejects its stale result.
+                expect(requests).toHaveLength(1);
+                expect(events).toEqual([]);
+                expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
               } finally {
                 release.resolve();
                 await settled;

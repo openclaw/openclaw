@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as pricing from "../../model-catalog/pricing.js";
 import { resolveRemoteCatalogUrl } from "../../model-catalog/remote-config.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
@@ -548,6 +549,9 @@ describe("resolveModel", () => {
       return expectResolvedModel(result).cost;
     };
 
+    using preparePricing = vi.spyOn(pricing, "prepareModelPricingContext");
+    expect(await resolve(bundled)).toMatchObject(bundled);
+    expect(preparePricing).not.toHaveBeenCalled();
     // The transport bills each call from this cost: hosted beats bundled, a placeholder never bills $0.
     expect(await resolve(undefined)).toMatchObject(hosted);
     expect(await resolve(bundled, free)).toMatchObject(bundled);

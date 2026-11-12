@@ -5,18 +5,24 @@ import { isMainThread, Worker, workerData } from "node:worker_threads";
 import { runWithWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { fileLogTransport } from "./logger-file-transport.js";
-import { getLogger, setLoggerOverride } from "./logger.js";
+import { applyLoggingConfig, getLogger, setLoggerOverride } from "./logger.js";
 
 const directory: string = isMainThread ? process.argv[2]! : workerData.directory;
 const starts: string[] = [];
 await runWithWorkerStartObserver(
   (script) => starts.push(script),
   async () => {
-    setLoggerOverride({
+    applyLoggingConfig({
       level: "info",
       file: path.join(directory, isMainThread ? "warm.log" : "nested.log"),
     });
+    const sourceMapPolicy = process.env.TSLOG_SOURCE_MAPS;
     getLogger().info("warm transport");
+    assert.equal(
+      process.env.TSLOG_SOURCE_MAPS,
+      sourceMapPolicy,
+      "Logger construction must preserve the environment captured by runtime workers",
+    );
     await fileLogTransport.flush();
     if (!isMainThread) {
       assert.deepEqual(starts, [], "Worker logging must not start another logging worker");

@@ -11,13 +11,13 @@ on:
         default: ""
         type: string
       runner_backend:
-        description: Runner qualification override; requires an exact-head canonical PR release_gate dispatch.
+        description: Qualify runners on an exact PR head or main revision.
         required: false
         default: default
         type: choice
         options: [default, hybrid, runson, boat]
       ci_shape:
-        description: Main-push coverage for an admitted exact-head qualification; default preserves ordinary dispatch behavior.
+        description: Use main coverage for an admitted qualification; otherwise keep default coverage.
         required: false
         default: default
         type: choice
@@ -1096,6 +1096,7 @@ jobs:
           WORKFLOW_REVISION: *workflow_sha
           RELEASE_SCOPE: ${{ inputs.release_scope }}
           CI_SHAPE: ${{ inputs.ci_shape }}
+          VALIDATION_TIER: ${{ inputs.validation_tier }}
           REQUESTED_RUNNER_PROFILE: ${{ inputs.runner_backend }}
           HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
           RELEASE_CANDIDATE_REF: ${{ inputs.release_candidate_ref }}
@@ -1103,17 +1104,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REPOSITORY" == "openclaw/openclaw" && "$RELEASE_GATE" == "true" && "$TARGET_REF" == "$WORKFLOW_REVISION" && "$TARGET_REF" == "$GITHUB_SHA" ]]
-          [[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ && "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ && "$RELEASE_SCOPE" == "full" ]]
+          [[ "$GITHUB_REPOSITORY" == "openclaw/openclaw" && "$TARGET_REF" == "$WORKFLOW_REVISION" && "$TARGET_REF" == "$GITHUB_SHA" ]]
+          [[ "$TARGET_REF" =~ ^[0-9a-f]{40}$ && "$RELEASE_SCOPE" == "full" ]]
           [[ -z "$HISTORICAL_TARGET_TAG$RELEASE_CANDIDATE_REF$TARGET_CONTEXT_REF" ]]
           case "$CI_SHAPE" in default | main) ;; *) exit 1 ;; esac
           case "$REQUESTED_RUNNER_PROFILE" in default | hybrid | runson | boat) ;; *) exit 1 ;; esac
           permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" --jq .permission)"
           case "$permission" in admin | maintain | write) ;; *) echo "CI qualification requires a repository maintainer" >&2; exit 1 ;; esac
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" \
-            --jq '{state,head:.head.sha,branch:.head.ref,repository:.head.repo.full_name,author:.user.login,base:.base.ref,baseRepository:.base.repo.full_name}' > "$RUNNER_TEMP/qualification-pr.json"
-          jq -e --arg sha "$TARGET_REF" --arg repo "$GITHUB_REPOSITORY" --arg branch "$GITHUB_REF_NAME" \
-            '.state == "open" and .head == $sha and .branch == $branch and .repository == $repo and .baseRepository == $repo and .base == "main"' "$RUNNER_TEMP/qualification-pr.json"
+          if [[ "$RELEASE_GATE" == "true" ]]; then
+            [[ "$PULL_REQUEST_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PULL_REQUEST_NUMBER" \
+              --jq '{state,head:.head.sha,branch:.head.ref,repository:.head.repo.full_name,author:.user.login,base:.base.ref,baseRepository:.base.repo.full_name}' > "$RUNNER_TEMP/qualification-pr.json"
+            jq -e --arg sha "$TARGET_REF" --arg repo "$GITHUB_REPOSITORY" --arg branch "$GITHUB_REF_NAME" \
+              '.state == "open" and .head == $sha and .branch == $branch and .repository == $repo and .baseRepository == $repo and .base == "main"' "$RUNNER_TEMP/qualification-pr.json"
+            source_author="$(jq -r .author "$RUNNER_TEMP/qualification-pr.json")"
+          else
+            [[ "$RELEASE_GATE" == "false" && -z "$PULL_REQUEST_NUMBER" && "$CI_SHAPE" == "main" && "$VALIDATION_TIER" == "main" ]]
+            [[ "$GITHUB_REF" == "refs/heads/main" && "$GITHUB_REF_NAME" == "main" ]]
+            source_author="$GITHUB_ACTOR"
+          fi
+          echo "source_author=$source_author" >> "$GITHUB_OUTPUT"
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Resolve logical runner profile
@@ -1121,7 +1131,7 @@ jobs:
         env:
           CONFIGURED_RUNNER_PROFILE: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || '' }}
-          SOURCE_AUTHOR: ${{ github.event.pull_request.user.login || github.event.head_commit.author.username || '' }}
+          SOURCE_AUTHOR: ${{ steps.qualification_dispatch.outputs.source_author || github.event.pull_request.user.login || github.event.head_commit.author.username || '' }}
           REQUESTED_RUNNER_PROFILE: ${{ inputs.runner_backend || 'default' }}
           QUALIFICATION_DISPATCH: ${{ steps.qualification_dispatch.outputs.eligible || 'false' }}
           CI_SHAPE: ${{ inputs.ci_shape || 'default' }}
@@ -1207,9 +1217,6 @@ jobs:
           fi
           if [[ "$boat_requested" == "true" ]]; then
             author="${SOURCE_AUTHOR:-}"
-            if [[ "$ci_qualification" == "true" ]]; then
-              author="$(jq -r .author "$RUNNER_TEMP/qualification-pr.json")"
-            fi
             if [[ "$GITHUB_REPOSITORY" == "openclaw/openclaw" && "$fork_pull_request" == "false" && "${GITHUB_RUN_ATTEMPT:-1}" == "1" && "$author" == "vincentkoc" && "${GITHUB_TRIGGERING_ACTOR:-$GITHUB_ACTOR}" == "vincentkoc" ]]; then
               runner_profile=hybrid
               node_runner_backend=boat

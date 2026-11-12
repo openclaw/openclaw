@@ -103,8 +103,9 @@ export function createLazyExecTool(
     {
       prepareBeforeNormalization: true,
       prepare: (_tool, callableTools, offeredTools) => {
-        processToolAvailabilityRef.value = callableTools.has("process");
+        // Declarations follow the session catalog; execution retains this turn's authority.
         processToolOffered = offeredTools.has("process");
+        processToolAvailabilityRef.value = callableTools.has("process");
       },
       executionSchema: presentation?.parameters ? undefined : () => execExecutionSchema,
     },
