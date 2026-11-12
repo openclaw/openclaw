@@ -332,7 +332,7 @@ try {
   };
   if (historyBlobs) {
     report(
-      "Rule: identical output and object counts; many promisor packs become one; lower wall/CPU without >20% regression. A/A controls use the baseline shim twice.",
+      "Rule: identical output and object counts; many promisor packs become bounded batches; lower wall/CPU without >20% regression. A/A controls use the baseline shim twice.",
     );
     for (const command of pickaxe ? ["pickaxe"] : ["log", "blame"]) {
       const args =

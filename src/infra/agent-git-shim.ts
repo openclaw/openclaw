@@ -408,7 +408,26 @@ EOF
   if [ "$count" -ge 2048 ]; then
     echo "OpenClaw: fetching $count missing Git objects for this content search." >&2
   fi
-  # Fetch via stdin, not argv: large content searches stay batched under the shared lock.
+  # Keep large searches under the shared lock, with bounded pack construction.
+  if [ "$count" -gt 2048 ]; then
+    printf '%s\\n' "$missing" | (
+      IFS= read -r missing || exit 0
+      count=1
+      while IFS= read -r oid; do
+        if [ "$count" = 2048 ]; then
+          query_repository fetch_blobs "$@" 2>/dev/null || exit 0
+          missing=$oid
+          count=1
+        else
+          missing="$missing
+$oid"
+          count=$((count + 1))
+        fi
+      done
+      query_repository fetch_blobs "$@" 2>/dev/null || :
+    )
+    return
+  fi
   query_repository fetch_blobs "$@" 2>/dev/null || :
 )
 append_revision_roots() {

@@ -208,7 +208,7 @@ it.skipIf(process.platform === "win32")(
       const searched = await search.invoke(pickaxe);
       expect(searched.code, searched.stderr).toBe(0);
       expect(searched.stdout).toBe(git(origin, pickaxe));
-      expect(await search.newPacks()).toHaveLength(1);
+      expect(await search.newPacks()).toHaveLength(2);
       expect(await search.requests()).toHaveLength(2049);
     }),
 );
