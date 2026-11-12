@@ -259,9 +259,20 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     });
     expect(committed.afterWrite.mode).toBe("auto");
     expect(application.claimed).toBe(true);
-    // Persistence schedules application; await its owner before probing the replacement.
-    await expect(application.result).resolves.toBe("applied");
-    expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
+    // The one-shot receipt may defer; the owner applies on idle, so poll the installed state.
+    const applicationResult = await application.result;
+    if (applicationResult !== "applied") {
+      expect(applicationResult).toEqual({
+        status: "deferred",
+        reason:
+          "Plugin cold-chat-owner reload is waiting for retained work, calls, or previous-generation cleanup; the previous plugin configuration remains active.",
+        appliesWhen:
+          "After the retained plugin work finishes, or after a Gateway restart. The previous plugin configuration remains active until then.",
+      });
+    }
+    await expect
+      .poll(async () => (await settledProbe("cold-chat")).captured?.label, { timeout: 10_000 })
+      .toBe("installed setup");
     expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
     expect(await settledProbe("sibling-chat")).toEqual(sibling);
     assert.ok(configWatcher);
