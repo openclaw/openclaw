@@ -44,8 +44,9 @@ it(
     const held = createDeferred<string>();
     const release = createDeferred();
     const prepareAuthority = systemTurnAuthority.prepareSessionSystemTurnAuthority;
-    using _heldResume = vi
-      .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
+    using spies = new DisposableStack();
+    spies
+      .use(vi.spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority"))
       .mockImplementation(async (params) => {
         held.resolve(params.sessionKey);
         await release.promise;
@@ -53,8 +54,8 @@ it(
       });
     const receipts: ReturnType<typeof sessionEvents.enqueueSessionEventForHost>[] = [];
     const enqueue = sessionEvents.enqueueSessionEventForHost;
-    using _events = vi
-      .spyOn(sessionEvents, "enqueueSessionEventForHost")
+    spies
+      .use(vi.spyOn(sessionEvents, "enqueueSessionEventForHost"))
       .mockImplementation((...args) => {
         const receipt = enqueue(...args);
         receipts.push(receipt);
@@ -62,13 +63,11 @@ it(
       });
     const resume = restartResume.resumeMarkedSessions;
     let recovery: Promise<void> | undefined;
-    using _observation = vi
-      .spyOn(restartResume, "resumeMarkedSessions")
-      .mockImplementation((params) => {
-        recovery = resume(params);
-        entered.resolve(params);
-        return recovery;
-      });
+    spies.use(vi.spyOn(restartResume, "resumeMarkedSessions")).mockImplementation((params) => {
+      recovery = resume(params);
+      entered.resolve(params);
+      return recovery;
+    });
     await using cleanup = new AsyncDisposableStack();
     cleanup.defer(() => state.cleanup());
     cleanup.defer(() => closeProvider(providerServer));
@@ -134,14 +133,12 @@ it(
     const waiting = createDeferred();
     const owner = params.context.agentDatabaseStartup!;
     const wait = owner.waitForAgentPreparation;
-    using _admission = vi
-      .spyOn(owner, "waitForAgentPreparation")
-      .mockImplementation((agentId, options) => {
-        if (options?.forInput && options.sessionKey === sessionKey) {
-          waiting.resolve();
-        }
-        return wait(agentId, options);
-      });
+    spies.use(vi.spyOn(owner, "waitForAgentPreparation")).mockImplementation((agentId, options) => {
+      if (options?.forInput && options.sessionKey === sessionKey) {
+        waiting.resolve();
+      }
+      return wait(agentId, options);
+    });
     withPluginRuntimeGatewayContextResolver(params.context.resolveGatewayContext, () => {
       sessionEvents.enqueueSessionEventForHost(
         "Synthetic event arriving during restart recovery.",
