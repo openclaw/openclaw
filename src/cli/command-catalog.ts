@@ -157,6 +157,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
   },
+  {
+    commandPath: ["templates", "add"],
+    exact: true,
+    policy: {
+      configGuard: ({ argv, options }) =>
+        options?.dryRun === true || hasFlag(argv, "--dry-run") ? "validate" : "run",
+      loadPlugins: "never",
+    },
+  },
   ...["create", "validate", "build", "dev"].map((subcommand): CliCommandCatalogEntry => ({
     commandPath: ["templates", subcommand],
     exact: true,
@@ -539,11 +548,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["update"],
     policy: { configGuard: "skip", hideBanner: true },
   },
-  {
-    commandPath: ["update", "admit"],
+  ...["admit", "preflight"].map((action): CliCommandCatalogEntry => ({
+    commandPath: ["update", action],
     // Malformed internal argv must keep protocol stdout and read-only startup policy too.
     policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true, ownsProtocolStdout: true },
-  },
+  })),
   {
     commandPath: ["config", "validate"],
     exact: true,

@@ -43,6 +43,7 @@ import {
 import {
   prepareNativeModelToolInput,
   drainNativeChildModelAdmissions,
+  RetiredNativeChildPaths,
 } from "./native-subagent-model-input.js";
 import {
   currentNativeModelExecution,
@@ -126,6 +127,7 @@ class Monitor {
   // Native threads survive completed assignments; task runs and delivery remain per assignment.
   private readonly knownChildren = new Map<string, KnownChild>();
   private readonly childThreadIdsByAgentPath = new Map<string, string>();
+  private readonly retiredChildren = new RetiredNativeChildPaths(this.childThreadIdsByAgentPath);
   private readonly interruptModelExecution?: MonitorOptions["interruptModelExecution"];
   private readonly interruptChildAndWait?: MonitorOptions["interruptChildAndWait"];
   private readonly cancellationReservations = new Map<
@@ -931,6 +933,7 @@ class Monitor {
         ),
       admissions: this.admissionCustody.entries,
       canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
+      retiredChildren: this.retiredChildren,
       prepareReceiver: (state, threadId, nativeParentThreadId) =>
         this.prepareReceiverChild(state, threadId, nativeParentThreadId),
       registerChildThread: (state, threadId, options) =>
@@ -2383,11 +2386,7 @@ class Monitor {
           this.childCloses.retireReceiver(known, () =>
             this.updateChildThreadOwnership("release", threadId, this.releaseChildThread),
           );
-          for (const path of known.agentPaths) {
-            this.childThreadIdsByAgentPath.delete(
-              buildParentAgentPathKey(state.parentThreadId, path),
-            );
-          }
+          this.retiredChildren.retire(state.parentThreadId, known, threadId);
           this.knownChildren.delete(threadId);
           known.pendingTurns.forEach(releaseCompletionCustody);
         }

@@ -1,6 +1,5 @@
 import { createHash, type Hash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { isProxy } from "node:util/types";
 import type { ModelRequestHeaders } from "@openclaw/llm-core";
 import { writeStableStringify } from "@openclaw/normalization-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
@@ -15,11 +14,13 @@ import {
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
+import { projectJsonObject, projectJsonValue } from "./openai-responses-json-projection.js";
 import {
   canReferenceResponsesReasoningHistory,
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
+import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
 import {
   normalizeOpenAIResponsesFunctionCallId,
   shouldNormalizeOpenAIResponsesToolCallId,
@@ -56,70 +57,6 @@ export type ResponsesContinuationStatus =
   | "history_shorter"
   | "no_previous_response"
   | "request_changed";
-
-// Keep text by reference instead of encoding/parsing it solely for comparison.
-// Hook-provided opaque values still use native JSON, including the property's key.
-function projectJsonValue(value: unknown, key: string, ancestors: Set<object>): unknown {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value + 0 : null;
-  }
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return value;
-  }
-  if (value === undefined || typeof value === "symbol") {
-    return undefined;
-  }
-  if (
-    typeof value !== "object" ||
-    isProxy(value) ||
-    Object.getPrototypeOf(value) !== (Array.isArray(value) ? Array.prototype : Object.prototype) ||
-    "toJSON" in value ||
-    ancestors.has(value)
-  ) {
-    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Preserve JSON/toJSON semantics, not object identity.
-    const projected: Record<string, unknown> = JSON.parse(
-      JSON.stringify({ __proto__: null, [key]: value }),
-    );
-    return Object.hasOwn(projected, key) ? projected[key] : undefined;
-  }
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const result: unknown[] = [];
-      const length = value.length;
-      for (let index = 0; index < length; index++) {
-        result.push(projectJsonValue(value[index], String(index), ancestors) ?? null);
-      }
-      return result;
-    }
-    const result: Record<string, unknown> = {};
-    for (const name of Object.keys(value)) {
-      const member = projectJsonValue(Reflect.get(value, name), name, ancestors);
-      if (member !== undefined) {
-        if (name in result) {
-          // Match JSON's own data properties, including __proto__ and inherited setters.
-          Object.defineProperty(result, name, {
-            value: member,
-            enumerable: true,
-            configurable: true,
-            writable: true,
-          });
-        } else {
-          result[name] = member;
-        }
-      }
-    }
-    return result;
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-function projectJsonObject(value: object): unknown {
-  const projected = projectJsonValue(value, "", new Set());
-  // A root toJSON returning undefined was not valid JSON either.
-  return projected === undefined ? JSON.parse("undefined") : projected;
-}
 
 function jsonValuesEqual(left: object, right: object): boolean {
   // Finish the left side before evaluating any right-side hook values.
@@ -170,14 +107,13 @@ function responseToolCalls(items: readonly unknown[]): ResponsesContinuationTool
   });
 }
 
-function toolCallReplayShapes(call: ResponsesContinuationToolCall): Set<string> {
-  return new Set(
-    [
-      call.callId,
-      canonicalizeToolCallId(call.callId, call.itemId),
-      canonicalizeToolCallId(call.callId, undefined),
-    ].filter((shape): shape is string => typeof shape === "string"),
-  );
+function toolCallReplayShapes(call: ResponsesContinuationToolCall): string[] {
+  // Membership checks and same-owner map writes already tolerate duplicate spellings.
+  return [
+    call.callId,
+    canonicalizeToolCallId(call.callId, call.itemId),
+    canonicalizeToolCallId(call.callId, undefined),
+  ].filter((shape): shape is string => typeof shape === "string");
 }
 
 function toolCallOwnerByReplayShape(
@@ -240,7 +176,7 @@ export function recordResponsesContinuationState(
   const pendingToolCalls = uniqueCalls.filter((_call, index) => {
     const callPosition = lastCallPosition.get(index);
     return (
-      [...toolCallReplayShapes(_call)].some((shape) => replayedCallIds.has(shape)) &&
+      toolCallReplayShapes(_call).some((shape) => replayedCallIds.has(shape)) &&
       (callPosition === undefined || (lastOutputPosition.get(index) ?? -1) < callPosition)
     );
   });
@@ -272,6 +208,29 @@ function normalizeAssistantReplayInput(
       item.type !== "function_call" &&
       item.type !== "function_call_output" &&
       !(item.type === "message" && item.role === "assistant")
+    ) {
+      return item;
+    }
+    // Unchanged frozen wire items can reuse their JSON projection. Mutable/opaque
+    // inputs still need rest-copy semantics (getters, prototypes and omitted fields).
+    if (
+      !fromResponse &&
+      getAiTransportHost().immutableData?.isDeeplyFrozenPlainData(item) &&
+      !("id" in item) &&
+      !("status" in item) &&
+      !("toJSON" in item) &&
+      (!("call_id" in item) ||
+        (Object.prototype.propertyIsEnumerable.call(item, "call_id") &&
+          canonicalizeToolCallId(item.call_id, undefined) === item.call_id)) &&
+      (item.type !== "message" ||
+        !Array.isArray(item.content) ||
+        (!("toJSON" in item.content) &&
+          item.content.every(
+            (part) =>
+              !isRecord(part) ||
+              part.type !== "output_text" ||
+              (!("annotations" in part) && !("logprobs" in part) && !("toJSON" in part)),
+          )))
     ) {
       return item;
     }
@@ -310,8 +269,16 @@ function normalizeAssistantReplayInput(
 }
 
 // Compare tool results by their uniquely identified call occurrence, not a lossy ID alias.
-function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | undefined {
+type NormalizedContinuationHistory = {
+  items: unknown[];
+  callOwners: Map<number, object>;
+};
+
+function normalizeContinuationHistory(
+  input: readonly unknown[],
+): NormalizedContinuationHistory | undefined {
   const normalized = normalizeAssistantReplayInput(input);
+  const callOwners = new Map<number, object>();
   const calls = responseToolCalls(input);
   const ownerByReplayShape = toolCallOwnerByReplayShape(calls);
   let callIndex = 0;
@@ -320,6 +287,7 @@ function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | un
     if (!isRecord(item) || !isRecord(normalizedItem)) {
       continue;
     }
+    let callId: object;
     if (item.type === "function_call") {
       if (typeof normalizedItem.call_id !== "string") {
         return undefined;
@@ -328,23 +296,44 @@ function normalizeContinuationHistory(input: readonly unknown[]): unknown[] | un
       if (callOwner !== callIndex) {
         return undefined;
       }
-      normalizedItem.call_id = { callOwner };
+      callId = { callOwner };
       callIndex += 1;
+    } else if (item.type === "function_call_output" && typeof item.call_id === "string") {
+      const owner = ownerByReplayShape.get(item.call_id);
+      if (owner === null) {
+        return undefined;
+      }
+      callId =
+        owner === undefined
+          ? { unknownCallId: canonicalizeToolCallId(item.call_id, undefined) }
+          : { callOwner: owner };
+    } else {
       continue;
     }
-    if (item.type !== "function_call_output" || typeof item.call_id !== "string") {
-      continue;
+    if (normalizedItem === item && !("toJSON" in normalized)) {
+      callOwners.set(index, callId);
+    } else {
+      const ownedItem = normalizedItem === item ? { ...normalizedItem } : normalizedItem;
+      ownedItem.call_id = callId;
+      normalized[index] = ownedItem;
     }
-    const owner = ownerByReplayShape.get(item.call_id);
-    if (owner === null) {
-      return undefined;
-    }
-    normalizedItem.call_id =
-      owner === undefined
-        ? { unknownCallId: canonicalizeToolCallId(item.call_id, undefined) }
-        : { callOwner: owner };
   }
-  return normalized;
+  return { items: normalized, callOwners };
+}
+
+function projectContinuationHistory(history: NormalizedContinuationHistory): unknown {
+  const projected = projectJsonObject(history.items);
+  // Immutable tool sources project before replacing their call IDs. Copy the cached
+  // projection so call ownership remains request-local and cannot poison later comparisons.
+  if (Array.isArray(projected)) {
+    for (const [index, callId] of history.callOwners) {
+      const item: unknown = projected[index];
+      if (isRecord(item)) {
+        projected[index] = { ...item, call_id: callId };
+      }
+    }
+  }
+  return projected;
 }
 
 export function responsesContinuationRequestFingerprint(
@@ -371,7 +360,7 @@ function appendPrefixValues(digest: Hash, values: readonly unknown[], offset: nu
     if (index > 0) {
       write(",");
     }
-    writeStableStringify(projectJsonValue(value, String(index++), new Set()) ?? null, write);
+    writeStableStringify(projectJsonValue(value, String(index++), new Map()) ?? null, write);
   }
   digest.update(text);
 }
@@ -493,46 +482,67 @@ export function resolveResponsesContinuationRequest(
       normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
     ),
   );
-  const historyCurrentInput = currentInput.slice(0, previousInput.length);
-  for (const [index, previousItem] of previousInput.entries()) {
-    const currentItem = historyCurrentInput[index];
-    if (!isRecord(previousItem) || !isRecord(currentItem)) {
-      continue;
+  if (!historyToolRoundUnchanged) {
+    return { request, continuationStatus: "history_changed" };
+  }
+  // Conversion already owns these immutable wire items. An identical sent prefix
+  // needs no replay-ID remapping; only the new response and delta need ownership checks.
+  const immutable = getAiTransportHost().immutableData;
+  let samePrefix = true;
+  for (let index = 0; index < previousInput.length; index++) {
+    const item = previousInput[index];
+    if (
+      item !== currentInput[index] ||
+      item === null ||
+      typeof item !== "object" ||
+      !(isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
+    ) {
+      samePrefix = false;
+      break;
     }
-    if (previousItem.type === "function_call" && currentItem.type === "function_call") {
+  }
+  if (!samePrefix) {
+    const historyCurrentInput = currentInput.slice(0, previousInput.length);
+    for (const [index, previousItem] of previousInput.entries()) {
+      const currentItem = historyCurrentInput[index];
+      if (!isRecord(previousItem) || !isRecord(currentItem)) {
+        continue;
+      }
+      if (previousItem.type === "function_call" && currentItem.type === "function_call") {
+        if (
+          typeof previousItem.call_id === "string" &&
+          typeof currentItem.call_id === "string" &&
+          !toolCallReplayShapes({
+            callId: previousItem.call_id,
+            ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
+          }).includes(currentItem.call_id)
+        ) {
+          return { request, continuationStatus: "history_changed" };
+        }
+      }
       if (
+        previousItem.type === "function_call_output" &&
+        currentItem.type === "function_call_output" &&
         typeof previousItem.call_id === "string" &&
         typeof currentItem.call_id === "string" &&
-        !toolCallReplayShapes({
-          callId: previousItem.call_id,
-          ...(typeof previousItem.id === "string" ? { itemId: previousItem.id } : {}),
-        }).has(currentItem.call_id)
+        currentItem.call_id !== previousItem.call_id &&
+        currentItem.call_id !== canonicalizeToolCallId(previousItem.call_id, undefined)
       ) {
         return { request, continuationStatus: "history_changed" };
       }
     }
+    const normalizedPrevious = normalizeContinuationHistory(previousInput);
+    const normalizedCurrent = normalizeContinuationHistory(historyCurrentInput);
     if (
-      previousItem.type === "function_call_output" &&
-      currentItem.type === "function_call_output" &&
-      typeof previousItem.call_id === "string" &&
-      typeof currentItem.call_id === "string" &&
-      currentItem.call_id !== previousItem.call_id &&
-      currentItem.call_id !== canonicalizeToolCallId(previousItem.call_id, undefined)
+      normalizedPrevious === undefined ||
+      normalizedCurrent === undefined ||
+      !isDeepStrictEqual(
+        projectContinuationHistory(normalizedCurrent),
+        projectContinuationHistory(normalizedPrevious),
+      )
     ) {
       return { request, continuationStatus: "history_changed" };
     }
-  }
-  const normalizedPrevious = normalizeContinuationHistory(previousInput);
-  const normalizedCurrent = normalizeContinuationHistory(historyCurrentInput);
-  if (
-    !(
-      normalizedPrevious !== undefined &&
-      normalizedCurrent !== undefined &&
-      jsonValuesEqual(normalizedCurrent, normalizedPrevious)
-    ) ||
-    !historyToolRoundUnchanged
-  ) {
-    return { request, continuationStatus: "history_changed" };
   }
   // Restore accepted replay IDs in the delta to match the provider's cached call.
   const delta = currentInput.slice(baselineLength);
@@ -605,7 +615,7 @@ type HttpContinuationEntry =
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
       retainedBytes: number;
-      strings: ReadonlyMap<string, number>;
+      jsonBytes: ReadonlyMap<string | object, number>;
     }
   | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
@@ -682,27 +692,6 @@ function connectionIdentity(params: HttpContinuationIdentity): string {
   );
 }
 
-// Strings are immutable: reuse their exact byte counts by value, never by mutable
-// item identity. Each ready entry retains only its current strings; eviction and
-// session cleanup drop the counts with the baseline.
-function retainedJsonBytes(value: unknown, previous?: ReadonlyMap<string, number>) {
-  const strings = new Map<string, number>();
-  let stringBytes = 0;
-  const skeleton = JSON.stringify(value, (_key, member: unknown) => {
-    if (typeof member !== "string") {
-      return member;
-    }
-    let bytes = strings.get(member) ?? previous?.get(member);
-    if (bytes === undefined) {
-      bytes = Buffer.byteLength(JSON.stringify(member), "utf8") - 2;
-    }
-    strings.set(member, bytes);
-    stringBytes += bytes;
-    return "";
-  });
-  return { retainedBytes: stringBytes + Buffer.byteLength(skeleton, "utf8"), strings };
-}
-
 export function claimOpenAIResponsesHttpContinuation(
   params: HttpContinuationIdentity & {
     sessionId: string;
@@ -744,7 +733,7 @@ export function claimOpenAIResponsesHttpContinuation(
         previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
       );
       // Serialized-content budget, not JavaScript heap overhead.
-      const { retainedBytes, strings } = retainedJsonBytes(state, previous?.strings);
+      const { retainedBytes, jsonBytes } = retainedJsonBytes(state, previous?.jsonBytes);
       if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
         // Keep other sessions when this baseline cannot fit alone. Its next
         // request sends full history; the completed response remains valid.
@@ -758,7 +747,7 @@ export function claimOpenAIResponsesHttpContinuation(
         state,
         idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
         retainedBytes,
-        strings,
+        jsonBytes,
       } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
       httpContinuationRetainedBytes += retainedBytes;
       httpContinuationEntries.set(key, ready);

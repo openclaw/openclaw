@@ -8,6 +8,7 @@ import { registerOpenClawStateDatabaseLifecycleListener } from "../state/opencla
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
+  ControlUiSessionTaskPullRequest,
 } from "./control-ui-contract.js";
 import {
   createGitHubReadGroup,
@@ -36,6 +37,57 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
   }
 });
 
+function metadataKey(
+  target: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
+  read: Pick<Read, "host" | "apiBaseUrl" | "cacheScope">,
+  bindingIdentity?: string,
+) {
+  return JSON.stringify([
+    read.host,
+    read.apiBaseUrl,
+    read.cacheScope,
+    target.owner.toLowerCase(),
+    target.repo.toLowerCase(),
+    target.number,
+    bindingIdentity,
+  ]);
+}
+
+/**
+ * Passive rows reuse state chips an active viewer already verified; they never start a lookup.
+ * One credential scope per host and state-chip fields only keep sidebar pushes small.
+ */
+export function withCachedPullRequestStates(
+  tasks: readonly ControlUiSessionTaskPullRequest[],
+  read: { target: { githubHost?: string }; assertCurrent: () => void },
+): ControlUiSessionTaskPullRequest[] {
+  const reads = new Map<string, Read | null>();
+  const readFor = (host: string) => {
+    if (!reads.has(host)) {
+      try {
+        const supported = host === "github.com" || host === read.target.githubHost;
+        reads.set(
+          host,
+          supported ? prepareSessionPullRequestGitHubRead(host, read.assertCurrent) : null,
+        );
+      } catch {
+        reads.set(host, null);
+      }
+    }
+    return reads.get(host);
+  };
+  return tasks.map((known) => {
+    const scope = readFor(new URL(known.url).hostname);
+    const entry = scope ? metadata.get(metadataKey(known, scope)) : undefined;
+    const cached = entry?.access.signal.aborted ? undefined : entry?.lastGood;
+    if (!cached) {
+      return known;
+    }
+    const { owner, repo, number, branch, title, url, state } = cached;
+    return { ...known, pullRequest: { owner, repo, number, branch, title, url, state } };
+  });
+}
+
 /** One GitHub metadata read per credential/repository/number, across task and branch views. */
 export async function readSessionPullRequestMetadata(
   target: Pick<ControlUiSessionPullRequest, "owner" | "repo" | "number">,
@@ -52,15 +104,7 @@ export async function readSessionPullRequestMetadata(
   } = {},
 ): Promise<ControlUiSessionPullRequest> {
   read.assertCurrent();
-  const key = JSON.stringify([
-    read.host,
-    read.apiBaseUrl,
-    read.cacheScope,
-    target.owner.toLowerCase(),
-    target.repo.toLowerCase(),
-    target.number,
-    options.bindingIdentity,
-  ]);
+  const key = metadataKey(target, read, options.bindingIdentity);
   let entry = metadata.get(key);
   const now = Date.now();
   const matches = !options.expected || entry?.signature === options.expected;

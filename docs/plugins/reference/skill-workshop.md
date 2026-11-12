@@ -19,4 +19,4 @@ Learned skills each agent saves from its own work.
 
 ## Surface
 
-This plugin declares no channels, providers, commands, or contracts.
+- Contracts: `tools`

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 
 export const fullGatewayExec = { host: "gateway", security: "full", ask: "off" } as const;

@@ -21,7 +21,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ImageGenerationProvider } from "../../image-generation/types.js";
+import type { ImageGenerationProvider } from "../../image-generation/provider-types.js";
 import { encodePngRgba } from "../../media/png-encode.js";
 import { formatMediaSize } from "../../media/store.shared.js";
 import { configWithDefaults } from "./media-config.test-support.js";
@@ -935,7 +935,6 @@ describe("createImageGenerateTool", () => {
     },
     requesterOrigin: { channel: "discord", to: "dm:123" },
     references: ["https://example.test/first.png", "https://example.test/second.png"],
-    referenceSignal: "caller",
     loadMedia: () => vi.spyOn(webMedia, "loadWebMedia"),
     setup: (phase) => {
       stubImageGenerationProviders();

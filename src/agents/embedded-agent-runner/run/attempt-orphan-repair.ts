@@ -1,3 +1,4 @@
+import { normalizeInputProvenance } from "../../../sessions/input-provenance.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import type {
   SessionEntry as SessionManagerEntry,
@@ -95,6 +96,8 @@ export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
   preserveLeaf: boolean;
+  currentTurnPersisted: boolean;
+  currentUserIdempotencyKey?: string;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
   if (
@@ -104,6 +107,19 @@ export function resolveOrphanRepairPlan(params: {
       candidate.messageEntry.id,
       candidate.messageEntry.parentId,
     )
+  ) {
+    return undefined;
+  }
+  const provenance = candidate.messageEntry.message.provenance;
+  // Keep unanswered chat input in ordinary history. Merging it into a new turn
+  // would repeat it when that turn's stored model prompt is replayed later.
+  if (
+    !params.preserveLeaf &&
+    !params.currentTurnPersisted &&
+    (!params.currentUserIdempotencyKey ||
+      candidate.messageEntry.message.idempotencyKey !== params.currentUserIdempotencyKey) &&
+    candidate.messageEntry.message.excludeFromContext !== true &&
+    (provenance == null || normalizeInputProvenance(provenance)?.kind === "external_user")
   ) {
     return undefined;
   }

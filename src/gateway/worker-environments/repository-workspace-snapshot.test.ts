@@ -12,7 +12,11 @@ import { openDiskCleanupTransport } from "./placement-disk-cleanup.test-support.
 import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
 import { captureRepositoryDiskCheckpoint } from "./repository-workspace-snapshot.js";
 import { openRepositoryCaptureTransport } from "./repository-workspace-snapshot.test-support.js";
-import { withSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
+import {
+  forkSessionRepositoryWorkspace,
+  readSessionRepositoryArtifacts,
+  withSessionRepositoryCheckpoint,
+} from "./session-repository-checkpoints.js";
 import { database, placements, sessionTarget } from "./worker-turn-launcher.test-support.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
@@ -223,6 +227,64 @@ describe("new capture through native private transport", () => {
       expect(f.events).toEqual(events);
       expect(f.workspace.quiescence.hasActiveWork()).toBe(false);
       expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("captures unchanged initialization files on the authoritative disk without reopening implicit reads", async () => {
+    const f = await openRepositoryCaptureTransport(wire);
+    const checkpointRef = workerWorkspaceResultRef("unchanged-disk-capture");
+    const aliasRef = workerWorkspaceResultRef("unchanged-disk-alias");
+    const source = { workspaceId: f.repository.workspaceId };
+    try {
+      const captured = await captureRepositoryDiskCheckpoint(
+        {
+          identity: sessionTarget,
+          repository: f.repository,
+          checkpointRef,
+          additionalRefs: [aliasRef],
+          purpose: "publication",
+          placements,
+          environments: f.environments,
+          assertCurrent() {},
+        },
+        async (snapshot, verifyCurrent) => {
+          await verifyCurrent();
+          for (const ref of [checkpointRef, aliasRef]) {
+            await withSessionRepositoryCheckpoint(
+              { ...source, checkpointRef: ref },
+              async (payload) => {
+                expect(payload.current.entries).toEqual([]);
+                expect(payload.publicationDigest).toMatch(/^sha256:/);
+                expect(payload.publicationStagingRoot).toBeDefined();
+              },
+            );
+          }
+          return snapshot;
+        },
+      );
+      expect(captured).toEqual({ checkpointRef, manifestHash: f.repository.manifestHash });
+      expect(await requireWorkspaceResultGit(f.remote, ["rev-parse", "HEAD"])).toBe(
+        f.repository.baseCommit,
+      );
+      await expect(withSessionRepositoryCheckpoint(source, async () => {})).rejects.toThrow(
+        "fresh disk export",
+      );
+      await expect(
+        readSessionRepositoryArtifacts({ ...source, assertCurrent() {} }),
+      ).rejects.toThrow("fresh disk export");
+      await expect(
+        forkSessionRepositoryWorkspace({
+          sourceWorkspaceId: f.repository.workspaceId,
+          agentId: sessionTarget.agentId,
+          sessionKey: "agent:main:unchanged-disk-fork",
+          assertCurrent() {},
+        }),
+      ).rejects.toThrow("Fork requires a fresh disk export");
+      expect(await f.store.get(f.repository.workspaceId)).toEqual(f.repository);
+      expect(wire.errors).toEqual([]);
+      expect(f.workspace.quiescence.hasActiveWork()).toBe(false);
     } finally {
       await f.close();
     }

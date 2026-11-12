@@ -47,6 +47,8 @@ type NativeRuntime = NativeWorkerRuntime & {
 
 export type RetainedNativeWorkerSource = {
   readonly hasActiveWorkers: boolean;
+  /** File paths of live workers; `undefined` when a worker's code has no path. */
+  activeWorkerPaths(): (string | undefined)[];
   create(
     filename: string | URL,
     options?: WorkerOptions,
@@ -297,6 +299,9 @@ export function captureRetainedNativeWorkerSource(options?: {
     closing: false,
     get hasActiveWorkers() {
       return Boolean(source.runtime?.handles.size);
+    },
+    activeWorkerPaths() {
+      return [...(source.runtime?.handles.values() ?? [])].map((worker) => worker.sourcePath);
     },
     async retireIdleBroker() {
       await source.brokerClose;

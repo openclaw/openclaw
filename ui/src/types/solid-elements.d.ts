@@ -200,7 +200,6 @@ declare module "@solidjs/web" {
           >
         >;
       "openclaw-chat-pdf-preview": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-pane-versions-menu": HTMLAttributes<HTMLElement>;
       "openclaw-chat-skill-learned-notice": HTMLAttributes<HTMLElement>;
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;

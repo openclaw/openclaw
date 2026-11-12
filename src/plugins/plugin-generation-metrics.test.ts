@@ -120,19 +120,32 @@ it("accounts for retained custody copies separately from original bytes", async 
     fs.writeFileSync(path.join(root, filename), content);
   }
   const bytes = files.reduce((total, [, content]) => total + Buffer.byteLength(content), 0);
+  const entry = path.join(root, "index.cjs");
   await withPluginSourceCaptureStorage({ stateDir: directory, placement: "temporary" }, () =>
     withPluginGenerationSourceCustody(async () => {
       const firstMetrics = createPluginGenerationMetrics();
-      const first = withPluginGenerationMetrics(firstMetrics, () =>
-        capturePluginGenerationArtifact(root, undefined, (run) => run()),
-      );
+      const first = (
+        await withPluginGenerationMetrics(firstMetrics, () =>
+          preparePluginGenerationArtifact({ rootDir: root, source: entry }),
+        )
+      ).artifact;
       try {
         const metrics = createPluginGenerationMetrics();
-        const second = withPluginGenerationMetrics(metrics, () =>
-          capturePluginGenerationArtifact(root, undefined, (run) => run()),
-        );
+        const second = (
+          await withPluginGenerationMetrics(metrics, () =>
+            preparePluginGenerationArtifact({ rootDir: root, source: entry }),
+          )
+        ).artifact;
         try {
-          expect(firstMetrics).toMatchObject({ originalBytes: bytes, copiedBytes: bytes * 3 });
+          expect(firstMetrics).toMatchObject({
+            captures: 2,
+            captureReuse: 1,
+            originalBytes: bytes,
+            copiedBytes: bytes * 2,
+            receiptPasses: 2,
+            receiptFileReads: files.length * 2,
+            receiptReadBytes: bytes * 2,
+          });
           expect(metrics).toMatchObject({
             captures: 1,
             captureReuse: 1,
@@ -142,7 +155,6 @@ it("accounts for retained custody copies separately from original bytes", async 
             receiptFileReads: 2,
             receiptReadBytes: bytes,
           });
-          const entry = path.join(root, "index.cjs");
           expect(second.resolve(entry)).not.toBe(first.resolve(entry));
           expect(fs.readFileSync(second.resolve(entry), "utf8")).toBe(files[1]![1]);
           expect(second.sourceDigest).toBe(first.sourceDigest);

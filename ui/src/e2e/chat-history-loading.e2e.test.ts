@@ -52,9 +52,7 @@ suite.define(() => {
             await draft.locator(".agent-chat__welcome-avatar").waitFor();
             await draft.locator(".agent-chat__recents").waitFor();
           } else {
-            await draft
-              .getByRole("button", { name: "Connect an AI provider", exact: true })
-              .waitFor();
+            await draft.getByRole("button", { name: "Set up a model", exact: true }).waitFor();
           }
 
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
@@ -88,7 +86,7 @@ suite.define(() => {
           ).toBe(0);
           expect(await composer.isVisible()).toBe(true);
           if (!agentModel) {
-            await pane.getByRole("button", { name: "Connect an AI provider", exact: true }).click();
+            await pane.getByRole("button", { name: "Set up a model", exact: true }).click();
             await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
           }
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);

@@ -32,6 +32,7 @@ afterEach(() => {
 
 function previousVersionState(hasLedger: boolean) {
   const root = dirs.make("update-admission-schema-");
+  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
   vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);

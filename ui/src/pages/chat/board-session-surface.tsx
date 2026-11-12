@@ -10,7 +10,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 
-const BoardView = lazy(() => import("../../components/board/board-view.tsx"), {
+export const BoardView = lazy(() => import("../../components/board/board-view.tsx"), {
   export: "BoardView",
 });
 

@@ -87,20 +87,20 @@ export function computedStyles(control: Locator, names: readonly string[]) {
   }, names);
 }
 
-export async function revealControl(control: Locator) {
-  const closedObjects = control
-    .page()
-    .locator("details.cfg-object:not([open])")
-    .filter({ visible: true });
-  while ((await control.count()) === 0) {
-    await expect
-      .poll(async () => (await control.count()) > 0 || (await closedObjects.count()) > 0)
-      .toBe(true);
-    if ((await control.count()) === 0) {
-      await closedObjects.first().locator(":scope > summary").click();
-    }
+// Callers name the closed sections holding a nested control: opening every section in
+// document order until it rendered made the complete-schema form outlast its test timeout.
+export async function revealControl(control: Locator, sections: readonly string[] = []) {
+  const page = control.page();
+  for (const title of sections) {
+    await page
+      .locator("details.cfg-object:not([open]) > summary")
+      .filter({ has: page.locator(".settings-row__title").getByText(title, { exact: true }) })
+      .first()
+      .click();
   }
-  await expect.poll(() => control.count()).toBe(1);
+  await expect
+    .poll(() => control.count(), { message: "Pass the closed sections that hold this control" })
+    .toBe(1);
   for (const details of await control.locator("xpath=ancestor::details").all()) {
     if ((await details.getAttribute("open")) === null) {
       await details.locator(":scope > summary").click();

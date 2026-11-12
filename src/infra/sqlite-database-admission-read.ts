@@ -66,6 +66,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     const current = state.registry.prepareLocation(location);
     return {
       location,
+      identity: { ...record.physicalIdentity, canonicalPath: record.location },
       isCurrent: () => !released && current() === record,
       release(this: void) {
         if (!released) {

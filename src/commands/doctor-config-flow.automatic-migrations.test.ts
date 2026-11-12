@@ -11,7 +11,10 @@ import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plug
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
+import {
+  prepareDoctorContext,
+  withDoctorConfigMaintenance,
+} from "./doctor-config-flow.test-support.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -41,6 +44,97 @@ async function writeFixture(home: string, config: unknown) {
   const configPath = await writeOpenClawConfig(home, config);
   return { configPath, original: await fs.readFile(configPath, "utf8") };
 }
+
+it.each([
+  { grant: true, repair: true },
+  { grant: false, repair: true },
+  { grant: true, repair: undefined },
+  { grant: false, repair: undefined },
+])("backs up the prompt grant $grant exactly once (repair=$repair)", ({ grant, repair }) =>
+  withMigrationHome(async (home) => {
+    const privateConfig = { allowPromptInjection: "plugin-owned; leave unchanged" };
+    const { configPath, original } = await writeFixture(home, {
+      gateway: { mode: "local" },
+      plugins: {
+        enabled: false,
+        entries: {
+          example: {
+            hooks: { allowPromptInjection: grant, allowConversationAccess: false },
+            config: privateConfig,
+          },
+          inherited: { hooks: { timeoutMs: 1234 } },
+        },
+      },
+    });
+    const before = await readConfigFileSnapshot();
+    expect(before.valid).toBe(false);
+    expect(before.legacyIssues).toContainEqual({
+      path: "plugins.entries",
+      message: expect.stringContaining("allowPromptModification"),
+    });
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    await withDoctorConfigMaintenance(() => runDoctor(configPath, repair));
+    const saved = await readConfigFileSnapshot();
+    expect(saved.valid).toBe(true);
+    expect(saved.sourceConfig.plugins?.entries).toEqual({
+      example: {
+        hooks: { allowPromptModification: grant, allowConversationAccess: false },
+        config: privateConfig,
+      },
+      inherited: { hooks: { timeoutMs: 1234 } },
+    });
+    expect(await fs.readFile(configPath + ".bak", "utf8")).toBe(original);
+    await withDoctorConfigMaintenance(() => runDoctor(configPath, repair));
+    expect((await readConfigFileSnapshot()).raw).toBe(saved.raw);
+    expect(await fs.readFile(configPath + ".bak", "utf8")).toBe(original);
+  }),
+);
+
+it.each([true, false])(
+  "does not write any prompt grant when old and new keys conflict (%s)",
+  (grant) =>
+    withMigrationHome(async (home) => {
+      const { configPath, original } = await writeFixture(home, {
+        gateway: { mode: "local" },
+        plugins: {
+          enabled: false,
+          entries: {
+            first: { hooks: { allowPromptInjection: false } },
+            conflict: { hooks: { allowPromptInjection: grant, allowPromptModification: !grant } },
+          },
+        },
+      });
+      await expect(runDoctor(configPath, true)).rejects.toThrow(
+        "Cannot migrate plugins.entries.conflict.hooks",
+      );
+      expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    }),
+);
+
+it("preserves included prompt policy bytes when the two permission keys conflict", () =>
+  withMigrationHome(async (home) => {
+    const { configPath, original } = await writeFixture(home, {
+      gateway: { mode: "local" },
+      plugins: { $include: "plugin-policy.json" },
+    });
+    const includePath = path.join(path.dirname(configPath), "plugin-policy.json");
+    const included = JSON.stringify(
+      {
+        enabled: false,
+        entries: {
+          example: { hooks: { allowPromptInjection: false, allowPromptModification: true } },
+        },
+      },
+      null,
+      2,
+    );
+    await fs.writeFile(includePath, included);
+    await expect(runDoctor(configPath, true)).rejects.toThrow(
+      "Cannot migrate plugins.entries.example.hooks",
+    );
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    expect(await fs.readFile(includePath, "utf8")).toBe(included);
+  }));
 
 it("backs up and persists inherited Talk SecretRefs for an unmarked published updater", () =>
   withMigrationHome(async (home) => {

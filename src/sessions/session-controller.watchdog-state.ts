@@ -1,16 +1,32 @@
+import type { AdmissionDiagnostics } from "../infra/diagnostics-timeline.js";
+
 export const SESSION_WATCHDOG_WARNING_MS = 120_000;
 export const SESSION_WATCHDOG_ABORT_FLOOR_MS = 5 * 60_000;
 export const SESSION_WATCHDOG_QUIET_TOOL_MS = 15 * 60_000;
 export const SESSION_WATCHDOG_CLEANUP_MS = 60_000;
 
-export type SessionWatchdogWaitKind =
-  | "global_capacity"
-  | "deferred_maintenance"
-  | "human_question"
-  | "approval"
-  | "runtime_owned"
-  | "retry"
-  | "backend";
+export type OwnedWait = {
+  admission?: AdmissionDiagnostics;
+  kind:
+    | "global_capacity"
+    | "deferred_maintenance"
+    | "human_question"
+    | "approval"
+    | "runtime_owned"
+    | "retry"
+    | "backend";
+  deadlineAtMs?: number;
+  rateLimitStopMessage?: string;
+  /** A runtime-owned wait whose release hands a finished turn back to its run. */
+  releaseStartsSemanticWindow?: boolean;
+  isCurrent: () => boolean;
+};
+export type OwnedExecution = {
+  deadlineAtMs?: number;
+  getDeadlineAtMs?: () => number | undefined;
+  recoverDeadline?: () => Promise<boolean>;
+};
+
 export type SessionWatchdogPhase = "active" | "finishing" | "terminal" | "settled";
 export type SessionWatchdogSnapshot = Readonly<{
   current: boolean;
@@ -22,7 +38,7 @@ export type SessionWatchdogSnapshot = Readonly<{
   semanticDeadlineAtMs: number;
   executionDeadlineAtMs?: number;
   cleanupDeadlineAtMs?: number;
-  waits: ReadonlyArray<{ kind: SessionWatchdogWaitKind; deadlineAtMs?: number }>;
+  waits: ReadonlyArray<Pick<OwnedWait, "kind" | "deadlineAtMs" | "admission">>;
   requests?: ReadonlyArray<{ requestTimeoutMs?: number; deadlineAtMs?: number }>;
   tools: ReadonlyArray<{
     toolName: string;

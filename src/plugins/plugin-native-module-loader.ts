@@ -16,7 +16,10 @@ import type { PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 import { getPluginBunConditions } from "./plugin-native-resolution.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginNativeAliasForParent } from "./plugin-sdk-native-resolver.js";
-import { resolvePluginPackageMapTarget } from "./plugin-source-references.js";
+import {
+  capturedPluginModuleUrl,
+  resolvePluginPackageMapTarget,
+} from "./plugin-source-references.js";
 import { isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
@@ -97,7 +100,8 @@ export function bindNativePluginInstanceModuleLoader(
         }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
-        const sdkTarget = hostSdkTarget(request, original);
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget === request ? undefined : sdkTarget;
         }
@@ -167,14 +171,25 @@ export function bindNativePluginInstanceModuleLoader(
               }
             }
           }
-          target ??=
-            source === parent && (path.isAbsolute(request) || request.startsWith("file:"))
-              ? artifact.captureResolvedModule(
-                  request.startsWith("file:") ? fileURLToPath(request) : request,
-                )
-              : source === request
-                ? request
-                : undefined;
+          if (
+            !target &&
+            source === parent &&
+            (path.isAbsolute(request) || request.startsWith("file:"))
+          ) {
+            // ESM suffixes select an instance, not a different captured file.
+            const requestedUrl =
+              requireMode && !request.startsWith("file:")
+                ? undefined
+                : new URL(request, pathToFileURL(parent));
+            const filename =
+              requestedUrl?.protocol === "file:" ? fileURLToPath(requestedUrl) : request;
+            const captured = artifact.captureResolvedModule(filename);
+            if (captured) {
+              const url = capturedPluginModuleUrl(captured, request, conditions);
+              target = url.search || url.hash ? url.href : captured;
+            }
+          }
+          target ??= source === request ? request : undefined;
           if (target) {
             artifact.prepareModule(target.startsWith("file:") ? fileURLToPath(target) : target);
           }
@@ -199,7 +214,8 @@ export function bindNativePluginInstanceModuleLoader(
           recordPluginSdkDeprecatedImport(params.instance.pluginId, request);
           return target;
         }
-        const sdkTarget = hostSdkTarget(request, original);
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget;
         }

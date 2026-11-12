@@ -1,0 +1,4 @@
+# Regression for the verified admitted reconcile-worker OOM: FTS payload reads must
+# stay behind consumer advancement rather than retaining the decoded transcript.
+# Includes materializing small fixtures only in the two existing planner consumers.
+45

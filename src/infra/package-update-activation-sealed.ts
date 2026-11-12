@@ -45,7 +45,7 @@ async function main() {
   const journal =
     action === "repair"
       ? openPackageActivationSettlementJournal(anchor)
-      : openPackageActivationJournal(anchor);
+      : openPackageActivationJournal(anchor, { readOnly: action === "status" });
   const record = action === "status" ? journal.read() : (await journal.readForRecovery()).record;
   assertPackageActivationOperation(record, operationId);
   const complete = isPackageActivationComplete(anchor, record);
@@ -53,6 +53,7 @@ async function main() {
     (entry) => entry.name === "helper",
   )?.source;
   if (
+    action !== "status" &&
     !complete &&
     ((helper !== resolvePackageActivationHelper(anchor) && helper !== stagedHelper) ||
       packageActivationIdentity(helper, false) !== record.descriptor.helperIdentity ||

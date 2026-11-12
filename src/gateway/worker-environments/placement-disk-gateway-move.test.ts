@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.js";
+import type { WorkerRetentionObservation } from "../../plugins/worker-retention.types.js";
 import * as cloneRuntime from "../../projects/project-clone-runtime.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -21,10 +22,15 @@ import { createRepositoryGatewayMovePreparation } from "../session-repository-ma
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { createProvider } from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
-import { SESSION_ID, sessionTarget } from "./worker-turn-launcher.test-support.js";
+import {
+  attachedEnvironment,
+  SESSION_ID,
+  sessionTarget,
+} from "./worker-turn-launcher.test-support.js";
 import { requireWorkspaceResultGit } from "./workspace-result-git.js";
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 
@@ -41,6 +47,10 @@ const url = "https://github.com/synthetic/disk-move-fixture.git";
 
 it.each([
   "complete",
+  "paused",
+  "paused-refresh",
+  "paused-recovery",
+  "paused-recovery-revoked",
   "intent",
   "imported",
   "before-export",
@@ -55,8 +65,14 @@ it.each([
   "incognito-revoked",
 ] as const)("sessions.move preserves disk custody through %s", async (scenario) => {
   const incognito = scenario.startsWith("incognito");
-  const boundary =
-    scenario === "incognito" ? "complete" : scenario === "incognito-revoked" ? "revoked" : scenario;
+  const paused = scenario.startsWith("paused");
+  const boundary = scenario.startsWith("paused-recovery")
+    ? "before-export"
+    : scenario === "incognito" || paused
+      ? "complete"
+      : scenario === "incognito-revoked"
+        ? "revoked"
+        : scenario;
   const f = await fixture("remote-exec", false, incognito, url);
   const repository = await f.bindDisk();
   assert(repository.diskAuthority);
@@ -77,11 +93,40 @@ it.each([
   await f.write("only-on-disk.txt", "fresh disk result\n");
   const records = await createWorkerEnvironmentStore({ database: openOpenClawStateDatabase() });
   const original = records.get(repository.diskAuthority.environmentId)!;
-  writePlacementEnvironmentFixture(openOpenClawStateDatabase(), {
-    ...original,
-    nodeDeviceId: "repository-node-fixture",
-    sharedHost: false,
-  });
+  let observation: WorkerRetentionObservation = {
+    claimRevision: "paused-move",
+    state: "suspended",
+    computeExpiresAtMs: Date.now() - 1,
+  };
+  const admittedBuild = attachedEnvironment().bootstrapReceipt!;
+  const currentBuild = {
+    ...admittedBuild,
+    ...(scenario === "paused-refresh" ? { bundleHash: "c".repeat(64) } : {}),
+  };
+  writePlacementEnvironmentFixture(
+    openOpenClawStateDatabase(),
+    {
+      ...original,
+      ...(paused
+        ? {
+            bootstrapReceipt: admittedBuild,
+            retention: {
+              policy: {
+                version: 1 as const,
+                ownerBinding: "a".repeat(64),
+                computeWindowSeconds: 600,
+              },
+              observation,
+              operation: null,
+              runtimeReady: false,
+            },
+          }
+        : {}),
+      nodeDeviceId: "repository-node-fixture",
+      sharedHost: false,
+    },
+    { replaceBootstrapReceipt: true },
+  );
   const destroy = vi.fn(
     async (lease: Parameters<ReturnType<typeof createProvider>["destroy"]>[0]) => {
       lease.assertCurrent?.();
@@ -101,7 +146,18 @@ it.each([
     inspect: async () => ({
       status: "active",
       resourceReceipt: repository.diskAuthority!.resourceReceipt,
+      ...(paused ? { retention: observation } : {}),
     }),
+    setRetainedState: async (lease) => {
+      lease.assertCurrent();
+      observation = {
+        claimRevision: lease.operation.id,
+        state: lease.operation.action === "pause" ? "suspended" : "running",
+        computeExpiresAtMs: Date.now() + 600_000,
+        operation: { ...lease.operation, phase: "observed" },
+      };
+      return observation;
+    },
     destroy,
   });
   const environments = createWorkerEnvironmentService({
@@ -109,15 +165,35 @@ it.each([
     store: records,
     getConfig: getRuntimeConfig,
     resolveProvider: (id) => (id === provider.id ? provider : undefined),
-    prepareInstallation: async () => {
-      throw new Error("unexpected installation");
+    // Synthetic provider/node admission, composed with the real retained lifecycle and Move owner.
+    placementStore: createWorkerSessionPlacementGate(f.placements),
+    waitForRetainedNode: async (node, request) => {
+      expect(node).toBe("repository-node-fixture");
+      request.assertCurrent();
     },
+    ensureNodeWorkerBundle: async (request) => {
+      if (scenario === "paused-recovery-revoked" && currentBuild.bundleHash === "d".repeat(64)) {
+        await sessionEntries.upsertSessionEntryCore(sessionTarget, {
+          lifecycleRevision: "successor",
+        });
+      }
+      request.assertCurrent?.();
+      return currentBuild;
+    },
+    prepareInstallation: async () => ({
+      ...currentBuild,
+      install: "bundle",
+      tarballBytes: 1,
+      tarballSha256: "b".repeat(64),
+      tarballPath: "unused-fixture-bundle",
+    }),
     bootstrapWorker: async () => {
       throw new Error("unexpected bootstrap");
     },
   });
   // Only the external node transport is supplied by the local real Git/HTTP fixture.
   vi.spyOn(environments, "startTunnel").mockImplementation(f.environments.startTunnel);
+  const wake = vi.spyOn(environments, "ensureRetainedRunning");
   const quiesce = vi.spyOn(f.tunnel, "quiesceWorkspace");
   const interruption = new Error("interrupted at " + boundary);
   if (boundary === "before-export") {
@@ -279,6 +355,16 @@ it.each([
       if (boundary === "revoked") {
         return;
       }
+      if (scenario.startsWith("paused-recovery")) {
+        currentBuild.bundleHash = "d".repeat(64);
+        observation = { ...observation, state: "suspended", computeExpiresAtMs: Date.now() - 1 };
+        const retained = records.get(original.environmentId)!;
+        assert(retained.retention);
+        writePlacementEnvironmentFixture(openOpenClawStateDatabase(), {
+          ...retained,
+          retention: { ...retained.retention, observation, runtimeReady: false },
+        });
+      }
       const previousCaptures = quiesce.mock.calls.length;
       const restartedStore = createWorkerSessionPlacementStore({
         database: openOpenClawStateDatabase(),
@@ -290,6 +376,19 @@ it.each([
         makeOptions(restartedStore),
       );
       await restarted.service.reconcileActive(repository.diskAuthority.environmentId);
+      if (scenario === "paused-recovery-revoked") {
+        expect(records.get(original.environmentId)?.bootstrapReceipt?.bundleHash).toBe(
+          admittedBuild.bundleHash,
+        );
+        expect(records.get(original.environmentId)?.retention?.runtimeReady).toBe(false);
+        expect(destroy).not.toHaveBeenCalled();
+        expect(quiesce).toHaveBeenCalledTimes(previousCaptures);
+        expect((await f.store.get(repository.workspaceId))?.diskAuthority).toEqual(
+          repository.diskAuthority,
+        );
+        expect(await restartedStore.getAsync(SESSION_ID)).toMatchObject({ state: "draining" });
+        return;
+      }
       if (
         ["bound", "before-cleanup", "after-cleanup", "released", "reconciling"].includes(boundary)
       ) {
@@ -313,6 +412,13 @@ it.each([
     expect(await requireWorkspaceResultGit(local.spawnedCwd!, ["rev-parse", "HEAD"])).toBe(head);
     expect((await f.store.get(repository.workspaceId))?.diskAuthority).toBeUndefined();
     expect(destroy).toHaveBeenCalledOnce();
+    expect(wake).toHaveBeenCalledTimes(scenario === "paused-recovery" ? 2 : paused ? 1 : 0);
+    if (paused) {
+      expect(wake.mock.invocationCallOrder[0]).toBeLessThan(quiesce.mock.invocationCallOrder[0]!);
+      expect(records.get(original.environmentId)?.bootstrapReceipt?.bundleHash).toBe(
+        currentBuild.bundleHash,
+      );
+    }
     expect(records.get(original.environmentId)?.state).toBe("destroyed");
   } finally {
     await environments.stop();

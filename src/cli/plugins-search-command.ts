@@ -6,8 +6,9 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
 import { isBareNpmPackageName } from "../plugins/install-source-spec.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
-import { ExpectedCliError } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { formatVersionLabel } from "./version-format.js";
 
 export type PluginsSearchOptions = {
@@ -42,8 +43,15 @@ export async function runPluginsSearchCommand(
     throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
   }
 
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted) {
+    return;
+  }
   try {
-    const results = await searchInstallablePluginPackages({ query, limit: opts.limit });
+    const results = await searchInstallablePluginPackages({ query, limit: opts.limit, signal });
+    if (signal?.aborted) {
+      return;
+    }
 
     if (opts.json) {
       writeRuntimeJson(runtime, { results });
@@ -56,6 +64,9 @@ export async function runPluginsSearchCommand(
     runtime.log(`${theme.heading("ClawHub plugins")} ${theme.muted(`(${results.length})`)}`);
     runtime.log(results.map(formatPackageSearchLine).join("\n"));
   } catch (error) {
+    if (signal?.aborted) {
+      return;
+    }
     if (opts.json) {
       throw error;
     }
