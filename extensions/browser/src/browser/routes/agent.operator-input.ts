@@ -73,9 +73,11 @@ export function registerBrowserOperatorInputRoutes(
     if (!profileCtx) {
       return;
     }
-    if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+    const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+    // Sessions drive Playwright mouse and keyboard on a rendered page.
+    if (capabilities.usesChromeMcp || !capabilities.supportsVisualActions) {
       res.status(501).json({
-        error: "Operator input sessions need a Playwright-managed browser profile.",
+        error: "Operator input sessions need a Playwright-managed Chromium profile.",
         code: "OPERATOR_INPUT_UNSUPPORTED",
       });
       return;
