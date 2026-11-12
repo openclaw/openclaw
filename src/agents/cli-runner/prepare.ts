@@ -128,9 +128,7 @@ import {
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
-import {
-  resolveCliPromptBuildHookResult,
-} from "./hook-prompt-build.js";
+import { resolveCliPromptBuildHookResult } from "./hook-prompt-build.js";
 import { cliBackendLog } from "./log.js";
 import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
 import { mintCliMcpClientGrant } from "./mcp-client-grant.js";

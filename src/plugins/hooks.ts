@@ -569,7 +569,7 @@ export function createHookRunner(
   const bindModifyingHook =
     <K extends PluginHookName>(hookName: K, policy: ModifyingHookPolicy<K> = {}) =>
     (event: HookEvent<K>, ctx: HookContext<K>) =>
-      runModifyingHook<K, HookResult<K>>(hookName, event, ctx, policy);
+      runModifyingHook<K>(hookName, event, ctx, policy);
 
   // Keep the optional handler scope in host arguments, never in the plugin context.
   const bindClaimingHook = <K extends ClaimingHookName>(
@@ -580,7 +580,7 @@ export function createHookRunner(
   /**
    * Handlers are executed sequentially in priority order, and results are merged.
    */
-  async function runModifyingHook<K extends PluginHookName, TResult>(
+  async function runModifyingHook<K extends PluginHookName, TResult = HookResult<K>>(
     hookName: K,
     event: HookEvent<K>,
     ctx: HookContext<K>,
@@ -873,24 +873,27 @@ export function createHookRunner(
       event,
       ctx,
       {
-      mergeResults: (_acc, next, reg) => {
-        const normalized: InputGateDecision = isHookDecision(next)
-          ? next
-          : {
-              outcome: "block",
-              reason: "before_agent_run returned an invalid decision",
-            };
-        const merged =
-          !_acc || (normalized.outcome === "block" && _acc.outcome !== "block") ? normalized : _acc;
-        if (merged === normalized) {
-          winningPluginId = reg.pluginId;
-        }
-        return merged;
+        mergeResults: (_acc, next, reg) => {
+          const normalized: InputGateDecision = isHookDecision(next)
+            ? next
+            : {
+                outcome: "block",
+                reason: "before_agent_run returned an invalid decision",
+              };
+          const merged =
+            !_acc || (normalized.outcome === "block" && _acc.outcome !== "block")
+              ? normalized
+              : _acc;
+          if (merged === normalized) {
+            winningPluginId = reg.pluginId;
+          }
+          return merged;
+        },
+        mergeNullResults: true,
+        shouldStop: (result) => result?.outcome === "block",
+        terminalLabel: "gate-decision",
       },
-      mergeNullResults: true,
-      shouldStop: (result) => result?.outcome === "block",
-      terminalLabel: "gate-decision",
-    });
+    );
     if (!decision) {
       return undefined;
     }
@@ -995,8 +998,9 @@ export function createHookRunner(
       event,
       ctx,
       {
-      mergeResults: (acc, next) => (acc ? { ...acc, ...next } : next),
-    });
+        mergeResults: (acc, next) => (acc ? { ...acc, ...next } : next),
+      },
+    );
     return result ?? {};
   }
 
@@ -1047,7 +1051,7 @@ export function createHookRunner(
     runBeforeChannelIngress: createChannelIngressHookRunner({
       getHooks: () => getHooksForName(registry, "before_channel_ingress"),
       run: (event, context, policy) =>
-        runModifyingHook<"before_channel_ingress", HookResult<"before_channel_ingress">>(
+        runModifyingHook<"before_channel_ingress">(
           "before_channel_ingress",
           event,
           context,
@@ -1083,11 +1087,7 @@ export function createHookRunner(
       event: HookEvent<"message_sending">,
       ctx: HookContext<"message_sending">,
     ) => {
-      const result = await runModifyingHook<"message_sending", HookResult<"message_sending">>(
-        "message_sending",
-        event,
-        ctx,
-        {
+      const result = await runModifyingHook<"message_sending">("message_sending", event, ctx, {
         mergeResults: (acc, next) => ({
           content: next.content ?? acc?.content,
           cancel: stickyTrue(acc?.cancel, next.cancel),

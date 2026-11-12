@@ -319,7 +319,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       ]),
     );
 
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
+    const result = await buildBase({
       prompt: "hello",
       developerInstructions: "base instructions",
       messages: [],
@@ -348,7 +348,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       ]),
     );
 
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
+    const result = await buildBase({
       prompt: "hello",
       developerInstructions: "base instructions",
       messages: [],
@@ -389,7 +389,7 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       ),
     );
 
-    const result = await resolveAgentHarnessBeforePromptBuildResult({
+    const result = await buildBase({
       prompt: "hello",
       developerInstructions: "base instructions",
       messages: [],

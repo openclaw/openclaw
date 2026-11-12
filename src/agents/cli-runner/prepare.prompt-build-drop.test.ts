@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
@@ -19,7 +23,8 @@ import {
 } from "./prepare.test-support.js";
 import * as sessionHistoryModule from "./session-history.js";
 
-vi.mock("../../plugins/hook-runner-global.js", () => ({
+vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/hook-runner-global.js")>()),
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
@@ -49,15 +54,21 @@ describe("CLI prompt-build drop reporting", () => {
       loadManifestModelCatalog: vi.fn(() => []),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
-    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
+    // The session-history read behind both prompt-build phases resolves config
+    // through the runtime snapshot; without one it throws before any dispatch.
+    fixture = createCliRunnerPrepareFixture((params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return prepareCliRunContext(params);
+    });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cliBackendsTesting.resetDepsForTest();
     resetCliRunnerPrepareTestDeps();
     mockGetGlobalHookRunner.mockReset();
     vi.restoreAllMocks();
-    fixture.cleanup();
+    await fixture.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   it("marks the drop when the authorized prompt-build dispatch rejects", async () => {
@@ -150,7 +161,7 @@ describe("CLI prompt-build drop reporting", () => {
       // The history load never reached the dispatcher, so nothing was dropped:
       // claiming otherwise would hand the model a false recovery instruction.
       expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
-      expect(context.params.prompt).toBe("latest ask");
+      expect(context.params.prompt.startsWith("latest ask")).toBe(true);
       expect(context.params.prompt).not.toContain("dropped_plugin_context");
       expect(context.params.prompt).not.toContain("dispatch-failed");
       expect(context.systemPrompt).not.toContain("dropped_plugin_context");
@@ -202,7 +213,7 @@ describe("CLI prompt-build drop reporting", () => {
       // that was never dispatched -- the same false recovery instruction the
       // ordinary phase deliberately avoids.
       expect(hookRunner.runAuthorizedPromptBuild).not.toHaveBeenCalled();
-      expect(context.params.prompt).toBe("latest ask");
+      expect(context.params.prompt.startsWith("latest ask")).toBe(true);
       expect(context.params.prompt).not.toContain("dropped_plugin_context");
       expect(context.params.prompt).not.toContain("dispatch-failed");
       expect(
@@ -232,9 +243,18 @@ describe("CLI prompt-build drop reporting", () => {
 
     const context = await fixture.prepare({});
 
-    const marker = context.params.prompt.slice(
-      context.params.prompt.indexOf('<dropped_plugin_context hook="before_prompt_build">'),
+    // The marker is one append-context item among the turn's runtime context, so
+    // measure the marker's own frame rather than everything that follows it.
+    const markerClose = "</dropped_plugin_context>";
+    const markerStart = context.params.prompt.indexOf(
+      '<dropped_plugin_context hook="before_prompt_build">',
     );
+    expect(markerStart).toBeGreaterThanOrEqual(0);
+    const marker = context.params.prompt.slice(
+      markerStart,
+      context.params.prompt.indexOf(markerClose, markerStart) + markerClose.length,
+    );
+    expect(marker.endsWith(markerClose)).toBe(true);
     expect(marker.match(/\(handler-failed\)/gu)).toHaveLength(5);
     expect(marker).toContain("+25 more");
     expect(new TextEncoder().encode(marker).length).toBeLessThanOrEqual(640);

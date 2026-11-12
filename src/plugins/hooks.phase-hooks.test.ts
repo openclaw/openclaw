@@ -343,24 +343,6 @@ describe("prompt phase hooks", () => {
     }
   });
 
-  it("marks a failed authorized enrichment as dropped model context", async () => {
-    const runner = promptRunner([
-      {
-        pluginId: "failing-enricher",
-        requiresToolAuthority: true,
-        handler: () => {
-          throw new Error("authorized enrichment failed");
-        },
-      },
-    ]);
-
-    const result = await runner.runAuthorizedPromptBuild(phaseEvent, {}, authority);
-
-    expect(result?.appendContext).toContain("failing-enricher (handler-failed)");
-    expect(result?.systemPrompt).toBeUndefined();
-    expect(result?.toolsAllow).toBeUndefined();
-  });
-
   it("rejects stale enrichment and never starts its successor after host authority closes", async () => {
     const started = createDeferred();
     const gate = createDeferred();
@@ -486,8 +468,12 @@ describe("prompt hook invocation", () => {
         ],
         logger,
       );
+      // A failed handler contributes nothing but the bounded drop marker, which
+      // names the plugin so its absence cannot read as "nothing to report".
       expect(await dispatch(runner, phase, context)).toEqual(
-        outcome === "returned" ? { prependContext: "timely context" } : undefined,
+        outcome === "returned"
+          ? { prependContext: "timely context" }
+          : { appendContext: expect.stringContaining("settling-handler (handler-failed)") },
       );
       expect(activeOnEntry).toBe(true);
       expect(handlerContext).not.toBe(context);
@@ -572,7 +558,12 @@ describe("prompt hook invocation", () => {
         expect(isActive(contexts[0]?.hookInvocation)).toBe(false);
         expect(isActive(contexts[1]?.hookInvocation)).toBe(true);
         secondGate.resolve();
-        await expect(run).resolves.toEqual({ prependContext: "live context" });
+        // The live sibling's contribution survives; the timed-out one is reported
+        // as dropped rather than merged late or silently lost.
+        await expect(run).resolves.toEqual({
+          prependContext: "live context",
+          appendContext: expect.stringContaining("timed-out-handler (handler-failed)"),
+        });
         expect(isActive(contexts[1]?.hookInvocation)).toBe(false);
         if (phase === "authorized") {
           expect(() => contexts[0]?.toolAuthority?.list?.()).toThrow("no longer active");

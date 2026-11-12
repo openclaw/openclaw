@@ -85,4 +85,34 @@ describe("before_prompt_build dropped-contribution marker", () => {
     );
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("AUTH_TOKEN=***"));
   });
+
+  it("marks a failed authorized enrichment as dropped model context", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          pluginId: "failing-enricher",
+          requiresToolAuthority: true,
+          handler: () => {
+            throw new Error("authorized enrichment failed");
+          },
+        },
+      ]),
+      { logger: createLogger() },
+    );
+
+    const result = await runner.runAuthorizedPromptBuild(
+      promptEvent,
+      {},
+      {
+        toolAuthorityFingerprint: "turn-authority",
+        activeToolNames: ["message"],
+        assertHostActive: () => undefined,
+      },
+    );
+
+    expect(result?.appendContext).toContain("failing-enricher (handler-failed)");
+    expect(result?.systemPrompt).toBeUndefined();
+    expect(result?.toolsAllow).toBeUndefined();
+  });
 });
