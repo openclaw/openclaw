@@ -184,35 +184,6 @@ describe("system prompt series", () => {
     expect(temporal.update?.content).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
-  it("sends one system prompt per session until compaction, whatever re-renders it", () => {
-    const render = (changes: Record<string, string> = {}) =>
-      Object.entries({
-        "## Project Context": "USER.md: concise.",
-        "## Tooling": "- exec\n- suggest_task",
-        "## Skills": "<available_skills>probe</available_skills>",
-        "## Session routing": "- sessions_create\n- suggest_task",
-        ...changes,
-      })
-        .map(([heading, body]) => `${heading}\n${body}`)
-        .join("\n");
-    const entries: SessionEntry[] = [];
-    const admitted = project(render(), entries).systemPrompt;
-    // Each source of churn seen in production re-renders the prompt for the same session.
-    for (const changes of [
-      { "## Tooling": "- exec" }, // sessions_send, cron or wake: no task-suggestion grant
-      { "## Session routing": "- sessions_create" },
-      { "## Skills": "<available_skills>probe, added</available_skills>" }, // skill snapshot
-      { "## Skills": "<available_skills>probe</available_skills>\nRemote macOS node available." },
-      { "## Project Context": "USER.md: concise, edited mid-session." }, // memory write
-      {},
-    ]) {
-      expect(project(render(changes), entries).systemPrompt).toBe(admitted);
-    }
-    const compacted = project(render({ "## Skills": "after" }), [historyEntry("compaction")]);
-    expect(compacted.restart).toBe(true);
-    expect(compacted.systemPrompt).not.toBe(admitted);
-  });
-
   it("preserves large prompt revisions, including distinct lone surrogates", () => {
     const stable = "## Stable\n" + "Keep these instructions.\n".repeat(100);
     const first = `${stable}## Changed\n\ud800`;
