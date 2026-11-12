@@ -475,6 +475,9 @@ describe("worktree Git maintenance", () => {
     expect(failed.result.gitMaintenance?.stage).toBe("suspended");
     expect(await packNames(repo)).toEqual(beforeFailure);
     commands.mockImplementation(execute);
+    // The retirement-budget case below separately covers elapsed-time limits.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     const trace = path.join(root, "pack-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const checkpoints: Array<NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>> = [];
