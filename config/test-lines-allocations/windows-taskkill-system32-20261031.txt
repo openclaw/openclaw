@@ -1,0 +1,2 @@
+67
+# Native owned-service shutdown without System32 in PATH, plus OS-root selection controls.
