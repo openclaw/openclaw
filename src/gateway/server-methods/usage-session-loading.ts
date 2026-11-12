@@ -311,6 +311,7 @@ export function withUsageRequestBudget(
     request: Parameters<GatewayRequestHandlers[string]>[0],
     budget: UsageRequestBudget,
   ) => Promise<void>,
+  options: { cancelOnReply?: boolean } = {},
 ): GatewayRequestHandlers[string] {
   return async (request) => {
     const parent = AbortSignal.any(
@@ -361,6 +362,10 @@ export function withUsageRequestBudget(
       await trackAsyncWork(() => caller.track(() => handler(request, budget)));
     } finally {
       clearTimeout(timer);
+      if (options.cancelOnReply) {
+        // Cost reports wait for refresh progress; overview backfills must survive their partial reply.
+        data.beginClose();
+      }
       void trackAsyncWork(() =>
         AsyncWorkScope.runWhenAllIdle(
           () => [data, caller],

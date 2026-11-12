@@ -166,9 +166,16 @@ Sessions with history can be forked after a restart without sending another norm
 message first. Routes without a persisted prompt pin rebuild their configured
 system prompt at fork time.
 Completed-session forks apply the configured channel history window and preserve
-compaction summaries. All built-in runtime forks omit the parent's prompt-cache
-identity, including forks of running sessions: they rebuild context independently
-and do not share the parent's complete request preparation.
+compaction summaries. Built-in runtime forks send the parent's prompt-cache
+identity: a running parent's exact `prompt_cache_key`, or the session's default
+key for a completed session. A run-only explicit key is not recorded after the run
+ends, so a completed-session fork falls back to the default key. Forks also apply
+the parent's configured tool policy to provider-hosted tools and derive request
+reasoning from the thinking level the way the parent's turn does; on Anthropic
+Messages and OpenAI Responses routes that level includes the agent and model
+thinking defaults.
+OpenAI serves a cached prefix only for the same key, hosted tools, and reasoning
+settings.
 
 The fork uses the same provider payload builders as a normal request. Unchanged
 prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is

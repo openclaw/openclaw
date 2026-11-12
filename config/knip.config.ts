@@ -31,8 +31,11 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
+  // The macOS packager verifies the staged app before signing.
+  "scripts/lib/mac-runtime-portability.mjs!",
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
@@ -42,6 +45,8 @@ const repositoryScriptEntries = [
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/clickclack-account-snapshot.ts!",
+  "scripts/perf/github-managed-profile-read.ts!",
   // Spawned directly by native-allocation-profile.test.ts.
   "test/scripts/fixtures/native-profile-census.mjs!",
   // Spawned directly by mantis-telegram-failure.test.ts.
@@ -277,6 +282,9 @@ const repositoryScriptEntries = [
   "scripts/build-mac-swift.mts!",
   // CI passes this native test launcher through the Apple command log wrapper.
   "scripts/test-macos-native.mts!",
+  // CI invokes the settings owner and its per-source producer by path.
+  "scripts/test-macos-mlx-settings.mts!",
+  "test/helpers/macos-mlx-settings-producer.ts!",
   "scripts/check-control-ui-performance.mts!",
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-package-dist-imports.mjs!",
@@ -1288,6 +1296,8 @@ const config = {
       ],
       // Platform tools, installed CLIs, and shell builtins used by scripts and boundary tests.
       ignoreBinaries: [
+        // Workspace benchmarks inspect and synchronize native btrfs fixtures.
+        "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
         "ffmpeg",
@@ -1302,13 +1312,19 @@ const config = {
         "ngrok",
         "open",
         "openclaw",
+        // Native checkpoint measurements run their synthetic guest through the host engine.
+        "podman",
         "sleep",
         // usage-refresh-stats-measure.ts inspects benchmark fixtures with the host SQLite CLI.
         "sqlite3",
         "swiftlint",
+        // The Windows session-source benchmark terminates its own child process tree.
+        "taskkill.exe",
         "uptime",
         "xcrun",
       ],
+      // napi generates these optional platform artifacts; pnpm build:iroh builds only the host.
+      ignoreUnresolved: [/^\.\/iroh-node\.[a-z0-9-]+\.node$/, "./iroh-node.wasi.cjs"],
       // The stylelint config lives under config/, not a root default path.
       stylelint: { config: ["config/stylelint.config.mjs"] },
       // Maintained commands select these opt-in Vitest configs outside

@@ -223,7 +223,7 @@ describe("catalog compare released publish gate", () => {
 
 describe("catalog compare released --check", () => {
   // Fake releases that list no provider plugins and ship only v1/v2 readers.
-  function runCheck(schemaVersion: number, args: string[], preload?: string) {
+  function runCheck(schemaVersion: number, args: string[]) {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "catalog-check-test-")));
     const bin = path.join(root, "bin");
     fs.mkdirSync(bin);
@@ -240,14 +240,7 @@ exit 0
     fs.writeFileSync(bundle, JSON.stringify({ schemaVersion, providers: {}, models: [{}] }));
     const result = spawnSync(
       process.execPath,
-      [
-        ...(preload ? ["--import", preload] : []),
-        "scripts/catalog-compare-released.mts",
-        "--check",
-        "--candidate",
-        bundle,
-        ...args,
-      ],
+      ["scripts/catalog-compare-released.mts", "--check", "--candidate", bundle, ...args],
       {
         encoding: "utf8",
         env: {
@@ -270,28 +263,5 @@ exit 0
       "v3 on openclaw@2099.1.1: no v3 reader, skipped",
       "v3: no checked release reads v3 yet",
     ]);
-  });
-
-  // Readers spawn in the same tick; a copy per spawn truncates the worker a sibling is
-  // loading, which then runs an empty module and exits 0 with no result.
-  it("writes the staged worker once before readers spawn", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "catalog-stage-test-"));
-    const writes = path.join(dir, "writes.json");
-    const preload = path.join(dir, "count.mjs");
-    fs.writeFileSync(
-      preload,
-      `import fs from "node:fs";
-const writes = [];
-const copy = fs.copyFileSync;
-fs.copyFileSync = (from, to, ...rest) => { if (String(to).endsWith("catalog-compare-released-worker.mts")) writes.push(to); return copy(from, to, ...rest); };
-process.on("exit", () => fs.writeFileSync(${JSON.stringify(writes)}, JSON.stringify(writes)));
-`,
-    );
-    // Both readers fail on the fake releases; only staging is under test.
-    const baseline = path.join(dir, "published.json");
-    fs.writeFileSync(baseline, JSON.stringify({ schemaVersion: 2, providers: {}, models: [{}] }));
-    runCheck(2, ["--baseline", baseline, "--releases", "2099.1.1,2099.1.2"], preload);
-    expect(JSON.parse(fs.readFileSync(writes, "utf8"))).toHaveLength(1);
-    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

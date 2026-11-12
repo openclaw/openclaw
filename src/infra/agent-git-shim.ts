@@ -96,7 +96,7 @@ is_probe() {
         shift
         for arg do case $arg in --is-ancestor) return 0 ;; esac; done
         return 1 ;;
-      show|diff|log|rev-list|restore|checkout|switch|reset|merge|rebase|cherry-pick|revert|blame|show-branch|archive|ls-tree|format-patch|diff-tree|diff-index|read-tree)
+      show|diff|log|grep|rev-list|restore|checkout|switch|reset|merge|rebase|cherry-pick|revert|blame|show-branch|archive|ls-tree|format-patch|diff-tree|diff-index|read-tree)
         prepare_history=1; return 1 ;;
       *) return 1 ;;
     esac
@@ -228,20 +228,30 @@ EOF
     history_blobs)
       # Raw changes include both sides of range/limit boundaries without opening blobs.
       [ "$blob_literal" != 1 ] || set -- "$@" --no-literal-pathspecs
-      set -- "$@" log
+      case $blob_verb in
+        grep) set -- "$@" rev-list --objects --no-walk --missing=print ;;
+        diff) set -- "$@" diff ;;
+        log) set -- "$@" log ;;
+        *) set -- "$@" log -m ;;
+      esac
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
 $blob_args
 EOF
-      set -- "$@" --format= -m --no-patch --raw --no-abbrev --no-renames --no-ext-diff --no-textconv --color=never --
+      if [ "$blob_verb" != grep ]; then
+        set -- "$@" --format= --no-patch --raw --no-abbrev --no-renames --no-ext-diff --no-textconv --color=never
+      fi
+      set -- "$@" --
       while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
 $blob_paths
 EOF
-      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk '
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk -v verb="$blob_verb" '
+        BEGIN { speculative = verb == "show" || verb == "blame" }
         function add(oid, mode) {
           if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
-          if (++count > 2048 || (bytes += length(oid) + 1) > 131072) exit
+          if (speculative && (++count > 2048 || (bytes += length(oid) + 1) > 131072)) exit
         }
-        { if ((scanned += length($0) + 1) > 8388608) exit }
+        { if (speculative && (scanned += length($0) + 1) > 8388608) exit }
+        /^\\?/ { add(substr($1, 2), "100644") }
         /^:[0-7]+ [0-7]+ [0-9a-f]+ [0-9a-f]+ / {
           add($3, substr($1, 2)); add($4, $2)
         }
@@ -257,6 +267,9 @@ blob_arguments() {
   blob_literal=
   blob_expression=
   blob_patch=
+  blob_pickaxe=
+  blob_limits=
+  blob_pattern=
   blob_separator=
   shift "$global_count"
   blob_verb=$1; shift
@@ -277,6 +290,7 @@ blob_arguments() {
       return 0 ;;
     blame) blob_patch=1 ;;
     log) ;;
+    diff|grep) blob_patch=1 ;;
     *) return 1 ;;
   esac
   while [ "$#" -gt 0 ]; do
@@ -289,12 +303,33 @@ blob_arguments() {
     if [ "$blob_verb" = blame ]; then
       case $arg in --porcelain|--line-porcelain|--incremental|--show-name|--show-number|--show-email|-p|-t|-l|-s|-n|-f|-e) continue ;; esac
     fi
+    if [ "$blob_verb" = grep ]; then
+      case $arg in
+        -e) [ "$#" -gt 0 ] || return 1; shift; blob_pattern=1; continue ;;
+        -e?*|--regexp=*) blob_pattern=1; continue ;;
+        -n|-i|-I|-v|-w|-l|-L|-q|-h|-H|-G|-E|-F|-P|--all-match|--and|--or|--not|'('|')') continue ;;
+        -*) ;;
+        *) if [ "$blob_pattern" != 1 ]; then blob_pattern=1; continue; fi ;;
+      esac
+    fi
     case $arg in
       --) blob_separator=1; continue ;;
       -p|--patch|--stat|--stat=*|--numstat|--patch-with-stat) blob_patch=1; continue ;;
       --no-patch|-s) blob_patch=; continue ;;
+      -S|-G)
+        [ "$#" -gt 0 ] || return 1
+        shift; blob_pickaxe=1; continue ;;
+      -S?*|-G?*) blob_pickaxe=1; continue ;;
+      --pickaxe-regex|--pickaxe-all) continue ;;
       --format=*|--pretty=*|--oneline|--color=*|--no-color) continue ;;
-      -n|--max-count|--skip|--since|--until|--after|--before)
+      -n|--max-count|--skip)
+        [ "$blob_verb" = log ] && [ "$#" -gt 0 ] || return 1
+        blob_limits="$blob_limits$arg
+$1
+"; shift; continue ;;
+      --max-count=*|--skip=*|-[0-9]*) blob_limits="$blob_limits$arg
+"; continue ;;
+      --since|--until|--after|--before)
         [ "$blob_verb" = log ] && [ "$#" -gt 0 ] || return 1
         blob_args="$blob_args$arg
 $1
@@ -302,7 +337,7 @@ $1
       -L)
         [ "$blob_verb" = blame ] && [ "$#" -gt 0 ] || return 1
         shift; continue ;;
-      --max-count=*|--skip=*|--since=*|--until=*|--after=*|--before=*|--first-parent|--all|--branches|--tags|--remotes|--not|--reverse|--no-merges|--merges|-[0-9]*)
+      --since=*|--until=*|--after=*|--before=*|--first-parent|--all|--branches|--tags|--remotes|--not|--reverse|--no-merges|--merges)
         [ "$blob_verb" = log ] || return 1 ;;
       -*) return 1 ;;
     esac
@@ -313,8 +348,12 @@ $1
 "
     fi
   done
-  [ "$blob_patch" = 1 ] || return 1
-  [ -n "$blob_paths" ]
+  # Pickaxe counts matching commits, so limits cannot bound the content scan.
+  [ "$blob_pickaxe" = 1 ] || blob_args="$blob_args$blob_limits"
+  [ "$blob_patch$blob_pickaxe" != "" ] || return 1
+  [ "$blob_verb" != blame ] || [ -n "$blob_paths" ] || return 1
+  [ "$blob_verb" != grep ] || [ -n "$blob_args" ] || return 1
+  return 0
 }
 prepare_blobs() (
   [ "$no_lazy_fetch" != 1 ] || return 0
@@ -346,11 +385,15 @@ EOF
   until mkdir "$lock" 2>/dev/null; do
     attempts=$((attempts + 1))
     [ "$attempts" -lt 300 ] || return 0
-    # Reclaim a lock left by a killed shell. An ownerless lock is left alone;
-    # the bounded wait still lets the requested Git command proceed normally.
-    if read -r owner 2>/dev/null < "$lock/pid" && ! kill -0 "$owner" 2>/dev/null; then
-      rm -f "$lock/pid"
-      rmdir "$lock" 2>/dev/null && continue
+    # A large live batch may exceed thirty seconds; do not start lazy fetches
+    # beside it. Only an ownerless lock retains the bounded fallback.
+    if read -r owner 2>/dev/null < "$lock/pid"; then
+      if kill -0 "$owner" 2>/dev/null; then
+        attempts=0
+      else
+        rm -f "$lock/pid"
+        rmdir "$lock" 2>/dev/null && continue
+      fi
     fi
     sleep 0.1
   done
@@ -362,7 +405,30 @@ $missing
 EOF
   )
   [ -n "$missing" ] || return 0
-  # Prefetch is best effort; unsupported shapes/oversized batches retain native hydration.
+  count=$(printf '%s\n' "$missing" | wc -l)
+  if [ "$count" -ge 2048 ]; then
+    echo "OpenClaw: fetching $count missing Git objects for this content search." >&2
+  fi
+  # Keep large searches under the shared lock, with bounded pack construction.
+  if [ "$count" -gt 2048 ]; then
+    printf '%s\\n' "$missing" | (
+      IFS= read -r missing || exit 0
+      count=1
+      while IFS= read -r oid; do
+        if [ "$count" = 2048 ]; then
+          query_repository fetch_blobs "$@" 2>/dev/null || exit 0
+          missing=$oid
+          count=1
+        else
+          missing="$missing
+$oid"
+          count=$((count + 1))
+        fi
+      done
+      query_repository fetch_blobs "$@" 2>/dev/null || :
+    )
+    return
+  fi
   query_repository fetch_blobs "$@" 2>/dev/null || :
 )
 append_revision_roots() {
@@ -391,6 +457,10 @@ revision_roots() {
   revision_separator=
   shift "$global_count"
   verb=$1; shift
+  if [ "$verb" = grep ]; then
+    # Its first positional argument is a pattern, not a revision.
+    return
+  fi
   while [ "$#" -gt 0 ]; do
     arg=$1; shift
     case $verb:$arg in
@@ -458,6 +528,11 @@ prepare_commits() {
   [ "$no_lazy_fetch" != 1 ] || return 0
   case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
   revision_roots "$@"
+  if [ "$verb" = grep ] && blob_arguments "$@"; then
+    while IFS= read -r arg; do append_revision_roots "$arg"; done <<EOF
+$blob_args
+EOF
+  fi
   [ "$verb" = rev-parse ] || { prepare_roots "$@"; return $?; }
   [ -n "$revisions" ] || return 0
   query_repository revisions "$@" && return 0
@@ -502,7 +577,7 @@ fetch_defaults() {
 if ! is_probe "$@"; then
   if [ "$prepare_history" = 1 ]; then
     prepare_commits "$@" || exit 2
-    case $verb in log|blame|show) prepare_blobs "$@" ;; esac
+    case $verb in log|blame|show|diff|grep) prepare_blobs "$@" ;; esac
   fi
   if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@" || exit 2; fi
   if [ "$shallow_change" = 1 ] || [ -n "$fetch_depth" ]; then
