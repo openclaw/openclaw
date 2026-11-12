@@ -1,10 +1,21 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+  type MockInstance,
+} from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
+import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import {
   installSessionPlacementAdmissionProvider,
   withSessionPlacementTurnAdmission,
@@ -22,6 +33,8 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -79,7 +92,44 @@ async function verifyIdentity(assignment: WorkerLaunchDescriptor["assignment"]) 
 
 describe("worker turn launcher remote handoff", () => {
   installLauncherTest();
-  afterEach(() => setActiveNodeContexts([]));
+  let acquireRuntime: MockInstance<typeof preparedRuntime.acquireAgentRunPreparedModelRuntime>;
+  const releaseRuntime = vi.fn(async () => {});
+  beforeEach(() => {
+    releaseRuntime.mockClear();
+    // The fake tunnel is downstream of preparation; keep runtime ownership in this fixture.
+    acquireRuntime = vi
+      .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
+      .mockImplementation(async (input) => {
+        const snapshot = {
+          ...createModelRuntimeChoiceOwnerFixture(
+            input.config,
+            () => true,
+            {
+              metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
+              pluginRegistry: createEmptyPluginRegistry(),
+              modelCatalog: { entries: [], routeVariants: [] },
+            },
+            { agentDir: input.agentDir, workspaceDir: input.workspaceDir },
+          ),
+          catalogOwner: undefined,
+          agentId: input.agentId,
+        };
+        return {
+          snapshot,
+          pluginGeneration: {
+            remoteCatalog: null,
+            pluginMetadataSnapshot: snapshot.metadataSnapshot,
+            inlineProviderModels: [],
+            configuredCatalogEntries: [],
+          },
+          [Symbol.asyncDispose]: releaseRuntime,
+        };
+      });
+  });
+  afterEach(() => {
+    acquireRuntime.mockRestore();
+    setActiveNodeContexts([]);
+  });
 
   it("settles a delegated worker reply and conflict without borrowing its parent transcript", async () => {
     setActiveNodeContexts([{ nodeId: "active-mac" }]);
@@ -146,7 +196,7 @@ describe("worker turn launcher remote handoff", () => {
           };
         },
       );
-    const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
+    const tunnel = createWorkerTurnTunnel({
       quiesceWorkspace: vi.fn(async () => ({
         assertActive: vi.fn(async () => {}),
         resume: vi.fn(async () => {
@@ -286,6 +336,12 @@ describe("worker turn launcher remote handoff", () => {
     }
     expect(result.payloads).toEqual([{ text: "Worker reply" }]);
     await waitForSessionRunEnd(SESSION_ID, null);
+    expect(tunnel.launchTurn).toHaveBeenCalledOnce();
+    expect(acquireRuntime).toHaveBeenCalledOnce();
+    expect(releaseRuntime).toHaveBeenCalledOnce();
+    expect(
+      preparedRuntime.getPreparedModelRuntimeSnapshot(acquireRuntime.mock.calls[0]![0]),
+    ).toBeUndefined();
     expect((await SessionManager.openAsync(parentTarget)).getPersistedEntries()).toEqual(
       parentEntries,
     );
