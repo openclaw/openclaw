@@ -15,9 +15,11 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Images pass through if the CLI accepts image paths.
 
 With Claude CLI, a successful `sessions_yield` closes the current subprocess after
-its tool result is consumed and suppresses later reply text. The next child-completion
-turn resumes the same saved Claude session in a new subprocess. This avoids recording
-the yield as a user interruption; it adds process startup time after a yield.
+its tool result is consumed and suppresses later reply text. A confirmed final
+`message` reply to the current conversation ends the turn the same way, so the chat
+shows that reply without a second native conclusion. The next turn resumes the same
+saved Claude session in a new subprocess. This avoids recording the yield or final
+reply as a user interruption; it adds process startup time to the next turn.
 An intentional yield is not a failed completion and does not trigger model fallback,
 even when it has no final answer. Genuine CLI failures remain eligible for fallback.
 

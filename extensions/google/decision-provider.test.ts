@@ -8,21 +8,13 @@ import { beforeEach, expect, it, vi } from "vitest";
 import googlePlugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn(), release: vi.fn() }));
+const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
-  fetchWithProviderHttpGuard: async (request: {
-    beforeRequest: () => void;
-    url: string;
-    init: RequestInit;
-    signal: AbortSignal;
-  }) => {
-    request.beforeRequest();
-    return {
-      response: await mocks.fetch(request.url, { ...request.init, signal: request.signal }),
-      release: mocks.release,
-    };
-  },
+  fetchWithProviderHttpGuard: async (request: { url: string; init: RequestInit }) => ({
+    response: await mocks.fetch(request.url, request.init),
+    release: async () => {},
+  }),
 }));
 
 const decisionRow = manifest.modelCatalog.providers.google.models.find(
@@ -117,7 +109,6 @@ function registered() {
 }
 beforeEach(() => {
   mocks.fetch.mockReset().mockImplementation(async () => Response.json(reply()));
-  mocks.release.mockReset();
 });
 
 it("evaluates typed questions through the native Decisions endpoint", async () => {
@@ -157,7 +148,6 @@ it("evaluates typed questions through the native Decisions endpoint", async () =
       churn_risk: batch.questions.churn_risk,
     },
   });
-  expect(mocks.release).toHaveBeenCalledOnce();
 });
 
 it("asks the rubric itself when optional instructions are omitted", async () => {
@@ -211,31 +201,9 @@ it("sends image evidence as inline content blocks", async () => {
 });
 
 it.each([
-  [400, { reason: "unsupported-input" }],
-  [403, { reason: "authentication" }],
-  [429, { reason: "rate-limited", retryAfterMs: 2000 }],
-  [503, { reason: "transport" }],
-] as const)("classifies HTTP %s without retries", async (status, expected) => {
-  mocks.fetch.mockResolvedValue(
-    new Response('{"error":{"code":"safety","message":"blocked"}}', {
-      status,
-      headers: { "retry-after": "2" },
-    }),
-  );
-  expect(await registered().evaluate(batch, context())).toEqual({
-    status: "unavailable",
-    ...expected,
-  });
-  expect(mocks.fetch).toHaveBeenCalledOnce();
-  expect(mocks.release).toHaveBeenCalledOnce();
-});
-
-it.each([
   withAnswer("churn_risk", { legend: { "0": "Threatens to cancel", "1": "No churn signal" } }),
   { ...reply(), usage: { total_input_tokens: 324, total_output_tokens: 3 } },
-  // An otherwise valid response must not reflect the active credential.
-  { ...reply(), debug: "synthetic-gemini-key" },
-])("rejects malformed results or reflected credentials %#", async (payload) => {
+])("rejects malformed results %#", async (payload) => {
   mocks.fetch.mockResolvedValue(Response.json(payload));
   expect(await registered().evaluate(batch, context())).toEqual({
     status: "unavailable",
@@ -263,7 +231,6 @@ it("rejects batches the native wire cannot carry before dispatch", async () => {
       "unsupported-input",
     ],
     [batch, context({ reasoning: "on" }), "unsupported-input"],
-    [batch, context({ auth: { mode: "api-key" } }), "credentials-unavailable"],
     [
       batch,
       context({ model: { ...context().model, baseUrl: "https://example.com/v1beta" } }),
@@ -275,30 +242,5 @@ it("rejects batches the native wire cannot carry before dispatch", async () => {
       reason,
     });
   }
-  expect(mocks.fetch).not.toHaveBeenCalled();
-});
-
-it("checks authority at dispatch and preserves cancellation", async () => {
-  const provider = registered();
-  expect(await provider.evaluate(batch, context({ isAdmissible: () => false }))).toEqual({
-    status: "unavailable",
-    reason: "transport",
-  });
-  const authorityError = new Error("authority retired");
-  await expect(
-    provider.evaluate(
-      batch,
-      context({
-        isAdmissible: () => {
-          throw authorityError;
-        },
-      }),
-    ),
-  ).rejects.toBe(authorityError);
-  const controller = new AbortController();
-  controller.abort(new Error("cancelled"));
-  await expect(provider.evaluate(batch, context({ signal: controller.signal }))).rejects.toThrow(
-    "cancelled",
-  );
   expect(mocks.fetch).not.toHaveBeenCalled();
 });

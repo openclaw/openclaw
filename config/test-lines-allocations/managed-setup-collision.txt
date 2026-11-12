@@ -1,2 +1,0 @@
-# Preserve authored collision diagnosis through route projection and verified binding.
-21

@@ -144,7 +144,9 @@ it("denies queued writes until postimage publication", async ({ state: { env } }
   expect(guard.read()).toBe("replacement");
 });
 
-it("keeps unknown publications denied after recovery attempts", async ({ state: { env } }) => {
+it("restores authority after unknown publications only from re-read committed state", async ({
+  state: { env },
+}) => {
   const store = openStore<string>(env);
   await store.register("session", "original");
   const guard = await prepareGuard(store, "session");
@@ -161,8 +163,12 @@ it("keeps unknown publications denied after recovery attempts", async ({ state: 
   expect(() => guard.read()).toThrow("unavailable");
   await store.register("session", "later");
   expect(await store.lookup("session")).toBe("later");
+  // A guard pinned before the indeterminate outcome never trusts its old row again.
   expect(() => guard.read()).toThrow("unavailable");
-  await expect(preparePluginStateRead(store, "session")).rejects.toThrow("unavailable");
+  // A fresh guard re-reads committed state through the worker before regaining authority.
+  const fresh = await prepareGuard(store, "session");
+  expect(fresh.read()).toBe("later");
+  expect(() => guard.read()).toThrow("unavailable");
 });
 
 it("preserves binding authority when a write is refused before dispatch", async ({

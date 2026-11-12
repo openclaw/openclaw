@@ -1,2 +1,0 @@
-# Let the existing composer geometry regression observe its font and scheduled native-layout boundary before recording the cap.
-8
