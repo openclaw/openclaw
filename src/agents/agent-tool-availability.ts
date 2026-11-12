@@ -46,7 +46,10 @@ export function getAgentToolAvailabilityBinding(
 }
 
 /** Listing preparation must not clear an already recorded execution denial. */
-export function bindAgentToolListingDefinition(tool: object, definition: ToolDefinition): void {
+export function bindAgentToolListingDefinition(
+  tool: object,
+  definition: ToolDefinition | undefined,
+): void {
   const metadata = availabilityBindings.get(tool);
   if (metadata) {
     availabilityBindings.set(tool, {

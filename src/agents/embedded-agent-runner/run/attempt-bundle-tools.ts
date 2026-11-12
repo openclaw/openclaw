@@ -258,6 +258,18 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           schemaProjection.tools,
           params.preparedToolBase.nodeToolAvailability,
         ),
+        {
+          normalize: (changed) => normalizeTools(changed, recordQuarantine),
+          onSchemaDiagnostics: (diagnostics, changed) =>
+            recordQuarantine({
+              diagnostics,
+              tools: changed,
+              runId: params.attempt.runId,
+              agentId: params.setup.sessionAgentId,
+              sessionKey: params.attempt.sessionKey,
+              sessionId: params.attempt.sessionId,
+            }),
+        },
       );
     };
     phases.mark("attempt.bundle-tools.project");

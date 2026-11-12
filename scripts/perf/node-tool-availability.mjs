@@ -27,6 +27,9 @@ const root = process.cwd(),
   out = path.resolve(process.argv[2]);
 const pluginMode = process.argv.includes("--plugins");
 const remoteMode = process.argv.includes("--configured-remote");
+const googleMode = process.argv.includes("--google");
+const modelProvider = googleMode ? "google" : "anthropic";
+const modelId = googleMode ? "gemini-2.5-flash" : "fixture-node-route";
 await fs.mkdir(out, { recursive: true });
 if ((await fs.readdir(out)).length) {
   throw new Error("Artifact directory must be empty");
@@ -153,7 +156,7 @@ function countImages(value) {
     return 0;
   }
   return (
-    (value.type === "image" ? 1 : 0) +
+    (value.type === "image" || value.inlineData ? 1 : 0) +
     Object.values(value).reduce((n, item) => n + countImages(item), 0)
   );
 }
@@ -167,30 +170,45 @@ async function handleProvider(req, res) {
       id = ++requestCount;
     await fs.writeFile(path.join(out, `${scenario}-${id}.http-body`), raw);
     const j = JSON.parse(raw.toString("utf8"));
-    const system = rawProperty(raw, "system"),
+    const system = rawProperty(raw, googleMode ? "systemInstruction" : "system"),
       tools = rawProperty(raw, "tools");
+    const declarations = googleMode
+      ? (j.tools ?? [])
+          .flatMap((group) => group.functionDeclarations ?? [])
+          .map((tool) => ({
+            name: tool.name,
+            input_schema: tool.parametersJsonSchema,
+          }))
+      : (j.tools ?? []);
     captures.push({
       scenario,
       id,
       rawBytes: raw.length,
-      tools: (j.tools ?? []).map((t) => t.name),
+      tools: declarations.map((t) => t.name),
       systemBytes: system.length,
       toolsBytes: tools.length,
       systemSha256: createHash("sha256").update(system).digest("hex"),
       toolsSha256: createHash("sha256").update(tools).digest("hex"),
       actionCounts: Object.fromEntries(
-        (j.tools ?? []).map((tool) => [
+        declarations.map((tool) => [
           tool.name,
           tool.input_schema?.properties?.action?.enum?.length ?? 0,
         ]),
       ),
-      inlineImages: countImages(j.messages),
-      toolErrors: (j.messages ?? [])
-        .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
-        .filter((part) => part.type === "tool_result" && part.is_error).length,
+      inlineImages: countImages(j.messages ?? j.contents),
+      toolErrors: googleMode
+        ? (j.contents ?? [])
+            .flatMap((message) => message.parts ?? [])
+            .filter((part) => part.functionResponse?.response?.error).length
+        : (j.messages ?? [])
+            .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+            .filter((part) => part.type === "tool_result" && part.is_error).length,
       presentationTargets:
-        (j.tools ?? []).find((tool) => tool.name === "show_widget")?.input_schema?.properties
+        declarations.find((tool) => tool.name === "show_widget")?.input_schema?.properties
           ?.presentation?.properties?.target?.enum ?? [],
+      widgetSchema: googleMode
+        ? declarations.find((tool) => tool.name === "show_widget")?.input_schema
+        : undefined,
     });
     const desired =
       scenario === "no-target"
@@ -235,13 +253,35 @@ async function handleProvider(req, res) {
                           }
                         : { name: "computer", input: { action: "screenshot" } };
     const call =
-      !issued.has(scenario) && (j.tools ?? []).some((t) => t.name === desired.name)
+      !issued.has(scenario) && declarations.some((t) => t.name === desired.name)
         ? desired
         : undefined;
     if (call) {
       issued.add(scenario);
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
+    if (googleMode) {
+      res.end(
+        "data: " +
+          JSON.stringify({
+            candidates: [
+              {
+                index: 0,
+                content: {
+                  role: "model",
+                  parts: call
+                    ? [{ functionCall: { id: "fixture_" + id, name: call.name, args: call.input } }]
+                    : [{ text: "SYNTHETIC_NODE_ROUTE_DONE" }],
+                },
+                finishReason: "STOP",
+              },
+            ],
+            usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+          }) +
+          "\n\n",
+      );
+      return;
+    }
     const event = (e, d) => res.write("event: " + e + "\ndata: " + JSON.stringify(d) + "\n\n");
     event("message_start", {
       type: "message_start",
@@ -294,13 +334,13 @@ await fs.writeFile(
   JSON.stringify({
     models: {
       providers: {
-        anthropic: {
+        [modelProvider]: {
           baseUrl: `http://127.0.0.1:${providerPort}`,
           apiKey: "synthetic-fixture-key",
-          api: "anthropic-messages",
+          api: googleMode ? "google-generative-ai" : "anthropic-messages",
           models: [
             {
-              id: "fixture-node-route",
+              id: modelId,
               name: "Synthetic route fixture",
               input: ["text", "image"],
               contextWindow: 200000,
@@ -313,7 +353,7 @@ await fs.writeFile(
     },
     agents: {
       defaults: {
-        model: { primary: "anthropic/fixture-node-route" },
+        model: { primary: `${modelProvider}/${modelId}` },
         workspace,
         skipBootstrap: true,
       },
@@ -373,7 +413,7 @@ await fs.writeFile(
       },
     },
     plugins: {
-      allow: ["anthropic", ...(pluginMode ? ["file-transfer", "ollama", "canvas"] : [])],
+      allow: [modelProvider, ...(pluginMode ? ["file-transfer", "ollama", "canvas"] : [])],
       ...(pluginMode
         ? {
             entries: {
@@ -471,7 +511,7 @@ try {
       const created = await control.request("sessions.create", {
         agentId: "main",
         label: "Synthetic " + key,
-        model: "anthropic/fixture-node-route",
+        model: `${modelProvider}/${modelId}`,
       });
       sessionKeys.set(key, created.key);
     }
@@ -675,6 +715,15 @@ try {
     path.join(out, "node-invocations.json"),
     JSON.stringify(nodeInvocations, null, 2),
   );
+  if (googleMode) {
+    const schemas = captures.flatMap((item) => (item.widgetSchema ? [item.widgetSchema] : []));
+    if (
+      !schemas.length ||
+      schemas.some((schema) => /"(?:pattern|patternProperties)"\s*:/.test(JSON.stringify(schema)))
+    ) {
+      throw new Error("Google wire widget schema regained unsupported pattern keywords");
+    }
+  }
   const noTarget = captures.filter((item) => item.scenario === "no-target" && item.tools.length);
   if (
     !remoteMode &&
