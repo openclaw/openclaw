@@ -181,7 +181,13 @@ suite.define(() => {
         agents: { entries: { main: { tools: { profile: "full" } } } },
       };
       const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "tools.catalog", "tools.effective"],
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "config.get",
+          "tools.catalog",
+          "tools.effective",
+        ],
         heldMethods: ["tools.catalog", "tools.effective"],
         operatorScopes: ["operator.read"],
         methodResponses: {
@@ -230,7 +236,6 @@ suite.define(() => {
       await historyToggle.click();
       await gateway.waitForRequest("openclaw.changes.list");
       await page.locator(".custodian__change-card").waitFor();
-
       const requestCount = (await gateway.getRequests("openclaw.changes.list")).length;
       await gateway.deferNext("openclaw.changes.list");
       await historyToggle.click();

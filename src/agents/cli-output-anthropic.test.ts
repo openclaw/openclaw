@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -51,7 +51,7 @@ it("publishes one start and one completion per Claude automatic compaction", asy
         boundary,
         boundary,
         // Claude Code 2.1.318 resends `compacting` every 30 s during one compaction,
-        // then closes it with both a success status and an automatic boundary.
+        // then closes it with a success status followed by its boundary.
         { ...status, status: "compacting" },
         { ...status, status: "compacting" },
         { ...status, status: "compacting" },
@@ -91,40 +91,71 @@ it("publishes one start and one completion per Claude automatic compaction", asy
     "end",
   ]);
   expect(handlers.hasActiveCompaction()).toBe(false);
+  // Each published completion is counted once; the failed compaction is not.
+  expect(handlers.getNativeCompaction()).toEqual({
+    compactionCount: 6,
+    compactionTokensBefore: 26_606,
+  });
 });
 
-it("reports automatic Claude compaction without a status record or duplicate manual completion", async () => {
+it("ends each Claude compaction at its boundary and counts it with the reported sizes", async () => {
   const backend = await loadClaudeBackend();
-  const onCompaction = vi.fn();
+  const runId = "claude-compaction-sizes";
+  const handlers = createCliEventHandlers({
+    context: buildContext(runId),
+    toolTracking: buildToolTracking(),
+    getRunState: () => ({ failed: false, error: undefined }),
+  });
   const parser = createCliJsonlStreamingParser({
     backend: backend.config,
     providerId: backend.id,
     parseJsonlLifecycleEvent: backend.parseJsonlLifecycleEvent,
     onAssistantDelta: () => {},
-    onCompaction,
+    onCompaction: handlers.emitCliCompaction,
   });
-  const boundary = { type: "system", subtype: "compact_boundary", session_id: "session" };
-  const frames = [
-    { ...boundary, compact_metadata: { trigger: "auto", pre_tokens: 180_000 } },
-    { type: "system", subtype: "status", status: "compacting" },
-    { ...boundary, compact_metadata: { trigger: "manual", pre_tokens: 180_000 } },
-    { compact_result: "success" },
-    boundary,
-    { ...boundary, compact_metadata: { trigger: "unknown" } },
-    { type: "assistant", compact_metadata: { trigger: "auto" } },
+  const ends: unknown[] = [];
+  const dispose = onAgentEvent((event) => {
+    if (event.runId === runId && event.stream === "compaction" && event.data.phase === "end") {
+      ends.push(event.data);
+    }
+  });
+  const status = { type: "system", subtype: "status", session_id: "session" };
+  const boundary = (trigger: string, pre_tokens: number, post_tokens: number) => ({
+    type: "system",
+    subtype: "compact_boundary",
+    session_id: "session",
+    compact_metadata: { trigger, pre_tokens, post_tokens, duration_ms: 8_725 },
+  });
+  // Claude Code 2.1.322 stream-json for one automatic and one manual compaction.
+  const stream = [
+    { ...status, status: "compacting" },
+    { ...status, status: null, compact_result: "success" },
+    boundary("auto", 64_743, 9_874),
+    { ...status, status: "compacting" },
+    { ...status, status: null, compact_result: "success" },
+    boundary("manual", 33_905, 6_173),
     { type: "result", subtype: "success", result: "continued after compaction" },
-  ];
-  const stream = frames.map((frame) => JSON.stringify(frame)).join("\n");
-  // Process output can split a native boundary across chunks and leave the final line unterminated.
-  parser.push(stream.slice(0, 40));
-  parser.push(stream.slice(40));
-  parser.finish();
+  ]
+    .map((frame) => JSON.stringify(frame))
+    .join("\n");
+  try {
+    // Process output can split a native boundary across chunks and leave the final line unterminated.
+    parser.push(stream.slice(0, 40));
+    parser.push(stream.slice(40));
+    parser.finish();
+  } finally {
+    dispose();
+  }
 
-  expect(onCompaction.mock.calls).toEqual([
-    [{ phase: "end", completed: true }],
-    [{ phase: "start" }],
-    [{ phase: "end", completed: true }],
+  expect(ends).toMatchObject([
+    { completed: true, trigger: "auto", tokensBefore: 64_743, tokensAfter: 9_874 },
+    { completed: true, trigger: "manual", tokensBefore: 33_905, tokensAfter: 6_173 },
   ]);
+  expect(handlers.getNativeCompaction()).toEqual({
+    compactionCount: 2,
+    compactionTokensBefore: 33_905,
+    compactionTokensAfter: 6_173,
+  });
   expect(parser.getOutput()).toMatchObject({
     text: "continued after compaction",
     sessionId: "session",

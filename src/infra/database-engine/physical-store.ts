@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
+import { resolvePathViaExistingAncestorSync } from "../boundary-path.js";
 import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -47,6 +48,13 @@ export function readBackupEngine(sourcePath: string): BackupEngine {
     isArtifactPreservingStateRead("shared", sourcePath)
       ? "backup-engine-preserving"
       : "backup-engine",
+  );
+}
+
+/** Keys use the canonical spelling a backup worker compares against its inventory. */
+export function readBackupEngines(sourcePaths: readonly string[]): Record<string, BackupEngine> {
+  return Object.fromEntries(
+    sourcePaths.map((file) => [resolvePathViaExistingAncestorSync(file), readBackupEngine(file)]),
   );
 }
 

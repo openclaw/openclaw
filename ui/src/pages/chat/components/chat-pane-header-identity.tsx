@@ -50,22 +50,30 @@ function CrumbSeparator(props: { merged: boolean }) {
 }
 
 export function IdentityCrumbs(props: ChatPaneHeaderProps) {
-  const hasProject = () => !props.catalog && Boolean(props.workspaceLabel);
+  const hasAgent = () => Boolean(props.agent) && !props.mergedChrome;
+  const hasProject = () => !hasAgent() && !props.catalog && Boolean(props.workspaceLabel);
   const status = () =>
     props.mergedChrome && props.gatewayStatus?.kind !== "connected" && props.gatewayStatus?.kind;
   return (
     <div class="chat-pane__crumbs">
-      <Show when={hasProject() || status()}>
+      <Show when={hasAgent() || hasProject() || status()}>
         <div class="chat-pane__project-row">
-          <Show when={status()} fallback={<ProjectCrumb {...props} />}>
-            <div class="mobile-connection-status">
-              <GatewayStatus {...props.gatewayStatus!} />
-            </div>
+          <Show
+            when={hasAgent()}
+            fallback={
+              <Show when={status()} fallback={<ProjectCrumb {...props} />}>
+                <div class="mobile-connection-status">
+                  <GatewayStatus {...props.gatewayStatus!} />
+                </div>
+              </Show>
+            }
+          >
+            <AgentCrumb {...props} agent={props.agent!} />
           </Show>
         </div>
       </Show>
       <div class="chat-pane__session-trail">
-        <Show when={hasProject()}>
+        <Show when={hasAgent() || hasProject()}>
           <CrumbSeparator merged={props.mergedChrome} />
         </Show>
         <Show when={props.parentSession}>
@@ -90,7 +98,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
   );
 }
 
-// Roster mode keeps the avatar and name together as one settings target.
+// Roster identity remains one settings target.
 export function AgentCrumb(
   props: ChatPaneHeaderProps & { agent: NonNullable<ChatPaneHeaderProps["agent"]> },
 ) {
@@ -104,7 +112,9 @@ export function AgentCrumb(
       <span class="chat-pane__agent-avatar" aria-hidden="true">
         <AgentIdentityAvatar agent={props.agent} />
       </span>
-      <span class="chat-pane__agent-name">{props.agent.name}</span>
+      <Show when={props.mergedChrome}>
+        <span class="chat-pane__agent-name">{props.agent.name}</span>
+      </Show>
     </button>
   );
 }
