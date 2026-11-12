@@ -10,6 +10,7 @@ import type { BrowserTabTarget } from "../../../components/browser/browser-targe
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-contract.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
@@ -18,8 +19,8 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
-import { ActivityGroup } from "./chat-message-group-view.tsx";
-import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
+import { ActivityGroup, MessageGroup as MessageGroupView } from "./chat-message-group-view.tsx";
+import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 const hosts: HTMLElement[] = [];
 type ActivityProps = Parameters<typeof ActivityGroup>[0];
@@ -55,7 +56,14 @@ async function drawGroup(host: HTMLElement, props: ActivityProps, context?: Appl
       ),
     );
   }
-  await waitForSolid(() => expect(host.querySelector("openclaw-browser-tab-card")).not.toBeNull());
+  await waitForSolid(() => {
+    const previews = host.querySelectorAll("openclaw-browser-tab-card");
+    if (props.options.isToolMessageExpanded?.("activity") === false) {
+      expect(previews).toHaveLength(0);
+    } else {
+      expect(previews.length).toBeGreaterThan(0);
+    }
+  });
 }
 
 function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
@@ -211,6 +219,7 @@ async function drawActivity(
         showReasoning: false,
         latestBrowserTabs: latestBrowserTabCards(messages, []),
         isToolMessageExpanded: () => expanded,
+        isToolExpanded: () => expanded,
       },
       presentation: "standalone",
     },
@@ -242,40 +251,81 @@ async function card(
 }
 
 describe("browser tab card", () => {
-  it("keeps completed-work text visible while media access gates its browser preview", async () => {
+  it.each([
+    ["activity", false],
+    ["activity", true],
+    ["message", false],
+    ["message", true],
+  ] as const)(
+    "keeps %s browser visits in their disclosures (bubbles: %s)",
+    async (route, bubbleMode) => {
+      const gateway = gatewayContext();
+      const messages = [
+        browserResult("verify-a", "tab-1", "https://example.com/pull/1"),
+        browserResult("verify-b", "tab-2", "https://example.com/pull/1"),
+      ];
+      const groups = [browserResultGroup(messages)];
+      const options = (expanded: boolean) => ({
+        showReasoning: false,
+        bubbleMode,
+        latestBrowserTabs: latestBrowserTabCards(messages, []),
+        isToolMessageExpanded: () => expanded,
+        isToolExpanded: () => expanded,
+      });
+      const view = mountSolid(
+        (props: { expanded: boolean }) => (
+          <ApplicationProvider value={gateway.context}>
+            {route === "activity" ? (
+              <ActivityGroup
+                groups={groups}
+                options={options(props.expanded)}
+                presentation="standalone"
+              />
+            ) : (
+              <MessageGroupView group={groups[0]!} options={options(props.expanded)} />
+            )}
+          </ApplicationProvider>
+        ),
+        { expanded: true },
+        container(),
+      );
+      await waitForSolid(() =>
+        expect(
+          view.container.querySelectorAll(".chat-tool-msg-body openclaw-browser-tab-card"),
+        ).toHaveLength(2),
+      );
+      view.update({ expanded: false });
+      await waitForSolid(() =>
+        expect(view.container.querySelector("openclaw-browser-tab-card")).toBeNull(),
+      );
+    },
+  );
+  it("gates the expanded browser preview without hiding tool text", async () => {
     const gateway = gatewayContext();
-    type Props = Parameters<typeof WorkGroupSummary>[0];
+    type Props = Parameters<typeof ChatToolCard>[0];
     const props: Props = {
-      item: { key: "completed-work", durationMs: 1000, groups: [] },
+      card: extractToolCardsCached(
+        browserResult("admission", "tab-1", "https://example.com/page"),
+      )[0]!,
       options: {
-        expanded: false,
-        onToggle: () => {},
+        messageKey: "admission",
+        expanded: true,
+        onToggleExpanded: () => {},
         mediaReadAllowed: false,
-        browserTabPreviews: [
-          {
-            preview: {
-              kind: "browser-tab",
-              target: "host",
-              profile: "managed",
-              targetId: "tab-1",
-              url: "https://example.com/page",
-            },
-            latest: true,
-          },
-        ],
       },
     };
     const view = mountSolid(
       (current: Props) => (
         <ApplicationProvider value={gateway.context}>
-          <WorkGroupSummary {...current} />
+          <ChatToolCard {...current} />
         </ApplicationProvider>
       ),
       props,
       container(),
     );
-    expect(view.container.textContent).toContain("Worked for");
+    await waitForSolid(() => expect(view.container.textContent).toContain("ok"));
     expect(view.container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    expect(gateway.request).not.toHaveBeenCalled();
     view.update({ ...props, options: { ...props.options, mediaReadAllowed: true } });
     await waitForSolid(() =>
       expect(view.container.querySelector("openclaw-browser-tab-card")).not.toBeNull(),
@@ -284,7 +334,7 @@ describe("browser tab card", () => {
     await waitForSolid(() =>
       expect(view.container.querySelector("openclaw-browser-tab-card")).toBeNull(),
     );
-    expect(view.container.textContent).toContain("Worked for");
+    expect(view.container.textContent).toContain("ok");
   });
 
   it("retains browser-title post text when metadata only supplies the author", async () => {
@@ -701,47 +751,26 @@ describe("browser tab card", () => {
     expect(gateway.request).toHaveBeenCalledOnce();
   });
 
-  it.each([false, true])(
-    "collapses repeated page results and refreshes the newest completion (separate tabs: %s)",
-    async (separateTabs) => {
-      const gateway = gatewayContext();
-      const message = (id: string, targetId = separateTabs ? id : "tab-1") =>
-        browserResult(id, targetId, "https://example.com");
-      const host = container();
-      const messages = [message("first"), message("second"), message("old"), message("new")];
-      const draw = (expanded: boolean) => drawActivity(host, gateway.context, messages, expanded);
-      // Reopening the same page must not expose verification tabs as duplicate cards.
-      const initial = await draw(false);
-      expect(initial).toHaveLength(1);
-      expect(initial[0]?.querySelector(".title")?.textContent).toBe("new");
-      expect(initial.every((element) => !element.closest(".chat-activity-group__body"))).toBe(true);
-      await vi.waitFor(() => expect(initial[0]?.querySelector("img")).not.toBeNull());
-      expect(await draw(true)).toHaveLength(1);
-      expect(gateway.request).toHaveBeenCalledOnce();
-      messages.push(message("newest", separateTabs ? "first" : "tab-1"));
-      const next = await draw(false);
-      expect(next).toHaveLength(1);
-      expect(next[0]?.querySelector(".title")?.textContent).toBe("newest");
-      const toggle = vi.fn<(event: Event) => void>();
-      next[0]?.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, toggle);
-      next[0]?.querySelector<HTMLButtonElement>(".actions button")?.click();
-      expect(toggle.mock.calls[0]?.[0]).toMatchObject({
-        detail: {
-          open: true,
-          browserTab: {
-            target: "host",
-            profile: "managed",
-            targetId: separateTabs ? "first" : "tab-1",
-          },
-        },
-      });
-      await vi.waitFor(() => expect(gateway.request).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => expect(next[0]?.querySelector("img")).not.toBeNull());
-    },
-  );
+  it("keeps repeated visits in their own disclosures and captures only the latest tab state", async () => {
+    const gateway = gatewayContext();
+    const messages = [
+      browserResult("first", "tab-1", "https://example.com"),
+      browserResult("second", "tab-1", "https://example.com"),
+    ];
+    const host = container();
+    const initial = await drawActivity(host, gateway.context, messages, true);
+    expect(initial).toHaveLength(2);
+    expect(initial.every((element) => element.closest(".chat-tool-msg-body"))).toBe(true);
+    await vi.waitFor(() => expect(initial[1]?.querySelector("img")).not.toBeNull());
+    expect(initial[0]?.querySelector("img")).toBeNull();
+    expect(gateway.request).toHaveBeenCalledOnce();
+    expect(await drawActivity(host, gateway.context, messages, false)).toHaveLength(0);
+    expect(await drawActivity(host, gateway.context, messages, true)).toHaveLength(2);
+    expect(gateway.request).toHaveBeenCalledOnce();
+  });
 
   it.each(["about:blank", undefined])(
-    "uses the latest successful result per tab before deciding to preview %s",
+    "does not capture an older visit after navigation to %s",
     async (latestUrl) => {
       const gateway = gatewayContext();
       const messages = [
@@ -749,11 +778,14 @@ describe("browser tab card", () => {
         browserResult("new", "tab-1", latestUrl),
         browserResult("other", "tab-2", "https://example.com/other"),
       ];
-      const host = container();
-      const elements = await drawActivity(host, gateway.context, messages, false);
+      const elements = await drawActivity(container(), gateway.context, messages, true);
       expect(elements.map((element) => element.querySelector(".title")?.textContent)).toEqual([
+        "old",
         "other",
       ]);
+      await vi.waitFor(() => expect(elements[1]?.querySelector("img")).not.toBeNull());
+      expect(elements[0]?.querySelector("img")).toBeNull();
+      expect(gateway.request).toHaveBeenCalledOnce();
     },
   );
 
@@ -785,7 +817,11 @@ describe("browser tab card", () => {
     const group: MessageGroup = browserResultGroup(messages);
     await drawGroup(host, {
       groups: [group],
-      options: { showReasoning: false },
+      options: {
+        showReasoning: false,
+        isToolMessageExpanded: () => true,
+        isToolExpanded: () => true,
+      },
       presentation: "standalone",
     });
     const elements = [...host.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")];
@@ -819,11 +855,15 @@ describe("browser tab card", () => {
       const host = container();
       await drawGroup(host, {
         groups: [group],
-        options: { showReasoning: false },
+        options: {
+          showReasoning: false,
+          isToolMessageExpanded: () => true,
+          isToolExpanded: () => true,
+        },
         presentation: "standalone",
       });
       const elements = [...host.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")];
-      expect(openedTargets(elements)).toEqual(length === 2_046 ? ["second"] : ["first", "second"]);
+      expect(openedTargets(elements)).toEqual(["first", "second"]);
       expect(
         elements.every((element) => element.querySelector(".url")?.textContent?.length === length),
       ).toBe(true);

@@ -64,7 +64,6 @@ import {
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
 import { createTranscriptStreamSource } from "./chat-transcript-stream-source.ts";
-import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const questionIndexes = createTranscriptMemo<NonNullable<StreamGroupOptions["questionPrompts"]>>();
@@ -195,12 +194,6 @@ export function projectChatTranscript(
     rows,
     liveItem,
   } = projectTranscriptIndex(transcriptChain, expandedToolCards, props);
-  const workPreviews = projectTranscriptWorkPreviews(transcriptChain.workGroups, {
-    sessionKey: props.sessionKey,
-    expanded: expandedToolCards,
-    latestBrowserTabs: props.latestBrowserTabs,
-    bubbleMode: props.chatBubbleMode,
-  });
   const questionPrompts = props.questionPrompts
     ? questionIndexes(
         props.questionPrompts,
@@ -521,11 +514,6 @@ export function projectChatTranscript(
       return [
         liveStatusSignature(item),
         item.kind === "stream" || item.key === liveItem?.key ? resolveLiveStream : undefined,
-        ...(workPreviews.get(item.key) ?? []).flatMap((preview) => [
-          preview.preview,
-          preview.revision,
-          preview.latest,
-        ]),
         ...transcriptContextDependencies(item, loadedReplySources, props, presented),
         ...(pendingSteerForMessage
           ? groups.flatMap((group) =>
@@ -560,9 +548,7 @@ export function projectChatTranscript(
         item,
         options: {
           expanded: workExpanded,
-          mediaReadAllowed: props.mediaReadAllowed,
           bubbleMode: props.chatBubbleMode === true && !searchFiltering,
-          browserTabPreviews: workPreviews.get(item.key),
           onToggle: () => toggleToolCardExpanded(item.key, workExpanded),
         },
       };
@@ -589,7 +575,6 @@ export function projectChatTranscript(
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
           streamOptions: streamGroupOptions,
-          workPreviews,
           renderGroupOptions,
           partDependencies: renderDependencies,
           isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
@@ -648,7 +633,7 @@ export function projectChatTranscript(
       overflow: props.typingOverflow,
     });
   }
-  const transcriptRows = projectTranscriptRows(rows, workPreviews, contentRows);
+  const transcriptRows = projectTranscriptRows(rows, contentRows);
   state.transcriptRenderContext.threadMediaMessages = snapshot.threadMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {

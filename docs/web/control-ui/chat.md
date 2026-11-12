@@ -1234,6 +1234,8 @@ view. References that change earlier Markdown can also reset the view.
 Completed lists also stay cached as later blocks arrive; loose or nested list
 continuations remain together until the list ends.
 
+Automatic browser previews appear inside expanded tool results, not beneath collapsed activity or completed work. Links and media deliberately included in the assistant’s reply remain visible in the reply.
+
 Browser results for X and Twitter posts use a wider card with the author, handle,
 available post text, and preview image. **Open post** and **More actions** stay
 visible on touch screens. Text and social images reuse the anonymous page preview;

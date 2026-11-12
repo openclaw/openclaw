@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
+import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import type { SubagentRowContext } from "../chat-spawned-subagent.ts";
@@ -42,6 +43,7 @@ export type ToolRenderOptions = {
   agentId?: string;
   presented?: boolean;
   mediaReadAllowed?: boolean;
+  latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;

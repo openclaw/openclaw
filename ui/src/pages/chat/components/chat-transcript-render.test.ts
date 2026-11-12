@@ -482,7 +482,7 @@ describe("chat transcript rendering", () => {
     expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
-  it("keeps browser cards visible with capture limited to the active pane", async () => {
+  it("captures browser previews only after opening completed work and its tool result", async () => {
     const messages = [
       message("user", "Open the example", 1_000),
       message("toolResult", "Opened", 2_000, {
@@ -514,8 +514,20 @@ describe("chat transcript rendering", () => {
     props.applicationContext = context;
     const { container } = await mountThread(props);
     expect(container.querySelector(".chat-work-group")).not.toBeNull();
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    expect(capture).not.toHaveBeenCalled();
+    requireElement<HTMLButtonElement>(container, ".chat-work-group button").click();
     await waitForSolid(() =>
-      expect(container.querySelectorAll<HTMLElement>("openclaw-browser-tab-card")).toHaveLength(1),
+      expect(requireElement<HTMLButtonElement>(container, ".chat-tool-msg-summary").disabled).toBe(
+        false,
+      ),
+    );
+    expect(container.querySelector("openclaw-browser-tab-card")).toBeNull();
+    requireElement<HTMLButtonElement>(container, ".chat-tool-msg-summary").click();
+    await waitForSolid(() =>
+      expect(
+        container.querySelectorAll<HTMLElement>(".chat-tool-msg-body openclaw-browser-tab-card"),
+      ).toHaveLength(1),
     );
     await vi.waitFor(() =>
       expect(capture).toHaveBeenCalledExactlyOnceWith(
