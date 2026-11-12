@@ -6,6 +6,7 @@ import type {
   WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { WorkerInferenceContext } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 
 export type WorkerGatewayToolSink = { send(frame: WorkerGatewayToolUpdateFrame): void };
@@ -17,6 +18,7 @@ export type WorkerGatewayToolRuntime = {
   getPromptProjection(identity: WorkerConnectionIdentity): Promise<{
     tools: NonNullable<WorkerInferenceContext["tools"]>;
     toolSchemaDirectoryPrompt?: string;
+    codeModeTurnFragments: RuntimeContextFragment[];
   }>;
   invoke(
     identity: WorkerConnectionIdentity,
