@@ -306,14 +306,15 @@ describe("Tool Search input schemas", () => {
   it("keeps canonical Gemini read arguments through deferred publication and wrappers", async () => {
     const readTool = fakeTool("read", readToolInputSchema);
     const cleanups: Array<(reason: string) => Promise<void>> = [];
-    const finalize = () => finalizeAgentTools({
-      tools: [readTool],
-      hookContext: { sessionId: "gemini-read" },
-      modelProvider: "google",
-      modelId: "gemini-2.5-pro",
-      wrapBeforeToolCallHook: false,
-      registerRunCleanup: (cleanup) => cleanups.push(cleanup),
-    });
+    const finalize = () =>
+      finalizeAgentTools({
+        tools: [readTool],
+        hookContext: { sessionId: "gemini-read" },
+        modelProvider: "google",
+        modelId: "gemini-2.5-pro",
+        wrapBeforeToolCallHook: false,
+        registerRunCleanup: (cleanup) => cleanups.push(cleanup),
+      });
     const wrapped = finalize().map((tool) => copyAgentToolMetadata(tool, { ...tool }));
     const { catalogRef, runtime } = createRuntime(wrapped);
     const advertised = catalogRef.current?.entries[0]?.parameters;
