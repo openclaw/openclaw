@@ -1,0 +1,2 @@
+# Regression: replace-mode CLI pins and fallbacks, scope isolation, and disabled/unavailable controls.
+76

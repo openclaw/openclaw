@@ -1,0 +1,2 @@
+5
+# Extend the existing symbol-query fixture to preserve shorthand escape rejection without discarded raw lookups.

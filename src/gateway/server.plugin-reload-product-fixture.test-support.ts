@@ -106,6 +106,9 @@ export async function definePluginReloadProductTest(
     );
     assert.equal(path.resolve(databasePath), databasePath);
     assert.equal(fsSync.realpathSync(path.dirname(databasePath)), path.dirname(databasePath));
+    // The prebound child owns its state files; select its fixture before scenarios allocate them.
+    const root = path.dirname(path.dirname(databasePath));
+    Object.assign(process.env, { TMPDIR: root, TMP: root, TEMP: root });
     const { resolveSecureTempRoot } = createRequire(import.meta.url)(
       "@openclaw/fs-safe/secure-temp-root",
     ) as typeof import("@openclaw/fs-safe/secure-temp-root");
