@@ -489,6 +489,13 @@ export function NewSessionComposer(props: {
             />
           </Show>
         </PetBoundary>
+        <Show when={frame().slashMenuVisible}>
+          <SlashMenu
+            menu={textarea.slashMenu}
+            host={frame().slashMenuHost}
+            draft={frame().visibleMessage}
+          />
+        </Show>
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
         <Show when={!options().nativeTerminal}>
@@ -505,13 +512,6 @@ export function NewSessionComposer(props: {
         <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
-            <Show when={frame().slashMenuVisible}>
-              <SlashMenu
-                menu={textarea.slashMenu}
-                host={frame().slashMenuHost}
-                draft={frame().visibleMessage}
-              />
-            </Show>
             <Show when={frame().skillMenuVisible}>
               <SkillMenu menu={textarea.skillMenu} host={frame().skillMenuHost} />
             </Show>

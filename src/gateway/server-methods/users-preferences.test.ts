@@ -421,6 +421,87 @@ test("users.prefs.get retains its original scope across the preference read", as
   }, true);
 });
 
+test.each(["removed", "changed", "auth-mode"] as const)(
+  "users.prefs.get hides organization credit when proxy configuration is %s during its read",
+  async (change) => {
+    await withPreferenceState(async () => {
+      const owner = ensureProfileForEmail("organization-default-reader@example.test");
+      const organization = {
+        name: "Organization Alice",
+        email: "work@example.test",
+        policy: JSON.stringify(["x-occ-identity", "x-name", "x-email", null]),
+      };
+      await preferences.setCanonicalUserPreferences(
+        owner.id,
+        {
+          "git.coauthor.organization": organization,
+          "ui.theme": "dark",
+        },
+        { trustedProxyGitCoauthor: true },
+      );
+      let configured = true;
+      const context = {
+        getRuntimeConfig: () =>
+          configured
+            ? {
+                gateway: {
+                  auth: {
+                    mode: "trusted-proxy",
+                    trustedProxy: {
+                      userHeader: "x-occ-identity",
+                      gitCoauthor: { nameHeader: "x-name", emailHeader: "x-email" },
+                    },
+                  },
+                },
+              }
+            : change === "changed"
+              ? {
+                  gateway: {
+                    auth: {
+                      mode: "trusted-proxy",
+                      trustedProxy: {
+                        userHeader: "x-occ-identity",
+                        gitCoauthor: { nameHeader: "x-new-name", emailHeader: "x-new-email" },
+                      },
+                    },
+                  },
+                }
+              : change === "auth-mode"
+                ? { gateway: { auth: { mode: "token" } } }
+                : {},
+      };
+      expect(await getPrefs(owner.id, {}, context)).toEqual({
+        ok: true,
+        payload: {
+          status: "ok",
+          entries: {
+            "git.coauthor.organization": organization,
+            "ui.theme": "dark",
+          },
+        },
+        error: undefined,
+      });
+      const original = preferences.getCanonicalUserPreferences;
+      using read = vi
+        .spyOn(preferences, "getCanonicalUserPreferences")
+        .mockImplementationOnce(async (...args) => {
+          const result = await original(...args);
+          configured = false;
+          return result;
+        });
+      expect(await getPrefs(owner.id, {}, context)).toEqual({
+        ok: true,
+        payload: { status: "ok", entries: { "ui.theme": "dark" } },
+        error: undefined,
+      });
+      expect(read).toHaveBeenCalledOnce();
+      expect((await original(owner.id))?.entries["git.coauthor.organization"]).toEqual(
+        organization,
+      );
+    }, true);
+  },
+);
+
 test("users.prefs dispatch saves guest choices only to the authenticated durable profile", async () => {
   return withPreferenceState(async (prepareProfiles) => {
     const ada = ensureProfileForEmail("ada@example.test");
@@ -619,7 +700,7 @@ test("users.prefs.set notifies only the current merged profile without main-thre
   });
 });
 
-test("users.prefs.set returns typed profile quota details", async () => {
+test("users.prefs.set returns typed profile quota details and recovery advice", async () => {
   return withPreferenceState(async () => {
     const profile = ensureProfileForEmail("quota@example.test");
     for (let start = 0; start < 128; start += 32) {
@@ -636,6 +717,7 @@ test("users.prefs.set returns typed profile quota details", async () => {
       ok: false,
       error: {
         code: "INVALID_REQUEST",
+        message: expect.stringContaining("Remove a saved preference and try again"),
         details: {
           code: GatewayErrorDetailCodes.USER_PREFS_LIMIT_EXCEEDED,
           limit: 128,
@@ -646,3 +728,89 @@ test("users.prefs.set returns typed profile quota details", async () => {
   });
 });
 import { Worker } from "node:worker_threads";
+
+test("rejects consent from a GitHub-only view after another request imports proxy details", async () => {
+  await withPreferenceState(async () => {
+    const owner = ensureProfileForEmail("stale-credit-view@example.test");
+    await preferences.setCanonicalUserPreferences(owner.id, { "git.coauthor.enabled": false });
+    const organization = {
+      name: "Alice",
+      email: "work@example.test",
+      policy: JSON.stringify(["x-auth-user", "x-name", "x-email", null]),
+    };
+    const context = {
+      getRuntimeConfig: () => ({
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-auth-user",
+              gitCoauthor: { nameHeader: "x-name", emailHeader: "x-email" },
+            },
+          },
+        },
+      }),
+    };
+    await preferences.setCanonicalUserPreferences(
+      owner.id,
+      {
+        "git.coauthor.organization": organization,
+      },
+      { trustedProxyGitCoauthor: true },
+    );
+    expect(
+      await setPrefs(
+        owner.id,
+        {
+          entries: { "git.coauthor.enabled": true },
+          expectedEntries: { "git.coauthor.organization": null },
+        },
+        context,
+      ),
+    ).toMatchObject({ ok: true, payload: { status: "conflict" } });
+    expect((await preferences.getCanonicalUserPreferences(owner.id))?.entries).toMatchObject({
+      "git.coauthor.enabled": false,
+      "git.coauthor.organization": organization,
+    });
+  }, true);
+});
+
+test("allows fallback consent after hiding inactive metadata without reviving its disclosure", async () => {
+  await withPreferenceState(async () => {
+    const owner = ensureProfileForEmail("inactive-credit@example.test");
+    const context = { getRuntimeConfig: () => ({}) };
+    const organization = { name: "Alice", email: "work@example.test", policy: "old-policy" };
+    await preferences.setCanonicalUserPreferences(
+      owner.id,
+      {
+        "git.coauthor.organization": organization,
+        "git.coauthor.enabled": false,
+      },
+      { trustedProxyGitCoauthor: true },
+    );
+    expect(await getPrefs(owner.id, {}, context)).toMatchObject({
+      payload: { status: "ok", entries: { "git.coauthor.enabled": false } },
+    });
+    expect(
+      await setPrefs(
+        owner.id,
+        {
+          entries: { "git.coauthor.enabled": true },
+          expectedEntries: { "git.coauthor.organization": null },
+        },
+        context,
+      ),
+    ).toMatchObject({ ok: true, payload: { status: "ok" } });
+    expect((await preferences.getCanonicalUserPreferences(owner.id))?.entries).toEqual({
+      "git.coauthor.enabled": true,
+    });
+    await preferences.setCanonicalUserPreferences(
+      owner.id,
+      { "git.coauthor.organization": organization },
+      { trustedProxyGitCoauthor: true },
+    );
+    expect(
+      (await preferences.getCanonicalUserPreferences(owner.id))?.entries["git.coauthor.enabled"],
+    ).toBe(false);
+  }, true);
+});

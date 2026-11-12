@@ -1,4 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
   publishUserProfileAuthorityChange,
@@ -109,5 +110,118 @@ export function ensureOpenClawIdUserProfile(
     },
     options,
     { operationLabel: "user-profiles.openclaw-id" },
+  );
+}
+
+/** Why a link was refused: the shared owner, a merged-away profile, or another profile's account. */
+export type OpenClawIdLinkResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code: "owner_profile" | "profile_changed" | "linked_elsewhere";
+    };
+
+/**
+ * Links an OpenClaw ID account to an existing personal profile, as a provider identity.
+ * An account belongs to at most one profile (a profile may hold several, as after a merge);
+ * the shared owner profile never holds one. The caller proves both sides on one connection; linking grants nothing.
+ */
+export function linkOpenClawIdUserProfile(
+  input: { profileId: string; accountId: string; email: string | null },
+  options: UserProfileMutationOptions,
+): OpenClawIdLinkResult {
+  ensureUserProfilesSchema(options);
+  return runUserProfileWriteTransaction(
+    ({ db }) => {
+      const kysely = userProfilesDb(db);
+      const target = requireResolvedUserProfileMetadataById(db, input.profileId);
+      if (target.id === GATEWAY_OWNER_PROFILE_ID) {
+        return { ok: false, code: "owner_profile" };
+      }
+      // The caller proved this exact profile; a merge since then must not redirect the link.
+      if (target.id !== input.profileId) {
+        return { ok: false, code: "profile_changed" };
+      }
+      const holder = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select("profile_id")
+          .where("provider", "=", openClawIdProfileProvider)
+          .where("subject", "=", input.accountId),
+      );
+      if (holder) {
+        return requireResolvedUserProfileMetadataById(db, holder.profile_id).id === target.id
+          ? { ok: true }
+          : { ok: false, code: "linked_elsewhere" };
+      }
+      options.mutation?.before(db, target.id);
+      executeSqliteQuerySync(
+        db,
+        kysely.insertInto("user_profile_identities").values({
+          provider: openClawIdProfileProvider,
+          subject: input.accountId,
+          profile_id: target.id,
+          canonical_login: null,
+          verified_email_json: displayMetadata(
+            input.email
+              ? truncateUtf16Safe(input.email, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH)
+              : null,
+          ),
+          created_at: Date.now(),
+        }),
+      );
+      options.mutation?.authority(target.id);
+      options.mutation?.identity(target.id);
+      publishUserProfileAuthorityChange(db, target.id);
+      publishUserProfileIdentityChange(db, target.id);
+      options.mutation?.publish(target.id);
+      publishUserProfilesChange(db, target.id);
+      return { ok: true };
+    },
+    options,
+    { operationLabel: "user-profiles.openclaw-id.link" },
+  );
+}
+
+/** Removes every OpenClaw ID linked to this profile; returns whether any existed. */
+export function unlinkOpenClawIdUserProfile(
+  input: { profileId: string },
+  options: UserProfileMutationOptions,
+): { unlinked: boolean } {
+  ensureUserProfilesSchema(options);
+  return runUserProfileWriteTransaction(
+    ({ db }) => {
+      const kysely = userProfilesDb(db);
+      const target = requireResolvedUserProfileMetadataById(db, input.profileId);
+      const linked = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select("subject")
+          .where("provider", "=", openClawIdProfileProvider)
+          .where("profile_id", "=", target.id),
+      );
+      if (!linked) {
+        return { unlinked: false };
+      }
+      options.mutation?.before(db, target.id);
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom("user_profile_identities")
+          .where("provider", "=", openClawIdProfileProvider)
+          .where("profile_id", "=", target.id),
+      );
+      options.mutation?.authority(target.id);
+      options.mutation?.identity(target.id);
+      publishUserProfileAuthorityChange(db, target.id);
+      publishUserProfileIdentityChange(db, target.id);
+      options.mutation?.publish(target.id);
+      publishUserProfilesChange(db, target.id);
+      return { unlinked: true };
+    },
+    options,
+    { operationLabel: "user-profiles.openclaw-id.unlink" },
   );
 }

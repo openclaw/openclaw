@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { CostUsageSummary } from "../infra/session-cost-usage.js";
+import { resetLogger } from "../logging/logger.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import { registerGatewayCli } from "./gateway-cli.js";
@@ -136,8 +137,10 @@ async function expectJsonValidationFailure(args: string[], message: unknown) {
 
 describe("gateway-cli coverage", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  afterEach(resetLogger);
 
   beforeEach(() => {
+    resetLogger();
     gatewayProgram = createGatewayProgram();
     work.signal = undefined;
     callGateway.mockReset();

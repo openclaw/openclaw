@@ -33,6 +33,37 @@ agent tools, but nothing listens on the loopback control port.
 - State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`, `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
+Cookie acquisition clients that cannot represent browser partition namespaces can
+request `GET /cookies?partition=unpartitioned` with their existing `profile` and
+`targetId`. The same query is available through `browser.request`, including the
+public `openclaw/plugin-sdk/gateway-runtime` client:
+
+```json
+{
+  "method": "GET",
+  "path": "/cookies",
+  "query": {
+    "profile": "openclaw",
+    "targetId": "<selected-target-id>",
+    "partition": "unpartitioned"
+  }
+}
+```
+
+Require `cookiePartition: "unpartitioned"` in the successful response before using
+the rows. Older hosts may ignore the query, so a successful response alone is not
+proof of this contract. The browser filters whole partitioned rows before
+Playwright's cookie normalization, including opaque and nonserializable partitions
+whose opaque marker is present with `false`. Any presence of partition metadata,
+including null or malformed values, excludes the row. Selected ordinary rows retain
+their protocol attributes, including the actual name, value, domain, path, expiry,
+and flags; omitted optional attributes are not synthesized. This opt-in uses a
+page-scoped Chromium protocol read in the selected context, keeps existing profile,
+target, permission, and cancellation checks, and fails rather than falling back to
+lossy acquisition if that read is unsupported. It never changes browser cookies.
+Omitting `partition` preserves the existing Playwright response. Other selector
+values are rejected.
+
 `POST /tabs/action` is the batched form the CLI uses internally for
 `browser tab` subcommands (`{"action":"new"|"label"|"select"|"close"|"list", ...}`).
 Prefer the single-purpose tab routes above when scripting directly.

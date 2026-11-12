@@ -65,7 +65,20 @@ export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
       detail: email ? `${email} · ${t("openclawId.ownerRole")}` : t("openclawId.ownerRole"),
     };
   }
-  if (openClawIdAccount()) {
+  const account = openClawIdAccount();
+  if (status.accountSignIn === "device") {
+    // A personal sign-in already names the person; this browser's OpenClaw ID (verified by
+    // the Gateway when it was issued) is shown beside it and grants nothing here.
+    return account
+      ? {
+          name: account.name || account.email || t("openclawId.accountFallback"),
+          detail: account.email
+            ? `${account.email} · ${t("openclawId.menuTitle")}`
+            : t("openclawId.menuTitle"),
+        }
+      : null;
+  }
+  if (account) {
     // Browser storage never supplies the displayed profile; only this RPC does.
     const email = identity?.kind === "local" ? identity.accountEmail : null;
     const name = identity?.kind === "local" ? identity.accountName : null;
@@ -178,12 +191,11 @@ export function openClawIdMenuEntries(
     return [];
   }
   if (status.channel !== "tunnel" && !openClawIdAccount()) {
-    const blocker =
-      status.channel !== "local_operator"
-        ? t("openclawId.signInLocalOnly")
-        : !status.services.clientId
-          ? t("openclawId.signInUnconfigured")
-          : undefined;
+    const blocker = !status.accountSignIn
+      ? t("openclawId.signInLocalOnly")
+      : !status.services.clientId
+        ? t("openclawId.signInUnconfigured")
+        : undefined;
     return [
       {
         id: SIGN_IN,
@@ -343,7 +355,7 @@ export function openClawIdSignOutEntries(status: OpenClawIdStatusResult | null):
   const available =
     status.channel === "tunnel"
       ? Boolean(navigator.serviceWorker?.controller)
-      : status.channel === "local_operator" && Boolean(openClawIdAccount());
+      : Boolean(status.accountSignIn && openClawIdAccount());
   return available
     ? [
         {
@@ -458,7 +470,16 @@ export function selectOpenClawIdMenuValue(
         }
       }, "signOut");
     }
-  } else if (value === SIGN_IN && client) {
+  } else if (value === SIGN_IN && client && status.accountSignIn === "device") {
+    openDialog(
+      async () =>
+        (await import("./device-sign-in-dialog.tsx")).showDeviceSignInDialog({
+          client,
+          basePath: context.basePath,
+        }),
+      "signIn",
+    );
+  } else if (value === SIGN_IN && client && status.accountSignIn === "popup") {
     signInWithOpenClawId({ client, basePath: context.basePath }).then(
       (signedIn) =>
         offerMakeReachable(client, status, signedIn.email ?? t("openclawId.accountFallback")),

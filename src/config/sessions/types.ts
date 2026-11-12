@@ -656,7 +656,24 @@ export type SessionProfileInvolvement = {
   lastMention?: { generation: string; sequence: number; timestamp: number };
 };
 
+/**
+ * The scheduled parent a cron `:run:` row's occurrence was admitted against: the
+ * parent's exact incarnation and the occurrence's owner bit.
+ */
+export type SessionScheduledMemoryParent = {
+  sessionKey: string;
+  sessionId: string;
+  /** Absent when the job's link recorded only the parent session id. */
+  lifecycleRevision?: string;
+  senderIsOwner: boolean;
+};
+
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /**
+   * Written only by cron run preparation on a child-placement `:run:` row, so a
+   * session the run spawns can resolve its memory audience through that parent.
+   */
+  scheduledMemoryParent?: SessionScheduledMemoryParent;
   /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
   localWorkspaceHandoff?: {
     worktreeId: string;

@@ -14,6 +14,7 @@ export const AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION = 41;
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
 export const OPENCLAW_AGENT_SCHEMA_VERSION = 41;
 
+// v40 retains the original provisioning source before worker allocation and recovery.
 // v39 retains worker policy and uncertain pause/resume operations across restart.
 // v38 retains repository disk authority and the original authority of pending results.
 // v37 retains immutable provider resource identity through environment teardown.
@@ -49,7 +50,7 @@ export const OPENCLAW_AGENT_SCHEMA_VERSION = 41;
 // v7 retires the inert shared commitments table.
 // v6 makes every committed shared-state table part of the canonical runtime schema.
 // v5 records durable cloud-worker result refs on pending workspace fences.
-export const OPENCLAW_STATE_SCHEMA_VERSION = 39;
+export const OPENCLAW_STATE_SCHEMA_VERSION = 40;
 
 export type OpenClawSchemaVersions = {
   state: number;

@@ -9,8 +9,11 @@ const ComposerMenuPointer = createContext<((event: PointerEvent) => boolean) | n
 export function ComposerMenuLoadingRows(props: {
   rows: readonly {
     id: string;
-    name: string;
+    name: JSX.Element;
     description?: string;
+    trailing?: JSX.Element;
+    current?: boolean;
+    icon?: JSX.Element;
     select: () => void;
     hover: () => void;
   }[];
@@ -29,8 +32,14 @@ export function ComposerMenuLoadingRows(props: {
             select={() => row().select()}
             hover={() => row().hover()}
             iconHidden={true}
+            current={row().current}
             icon={
-              <span class="skeleton" style={{ display: "block", width: "100%", height: "100%" }} />
+              row().icon ?? (
+                <span
+                  class="skeleton"
+                  style={{ display: "block", width: "100%", height: "100%" }}
+                />
+              )
             }
             name={
               <span class="skeleton" style={{ display: "block" }}>
@@ -42,6 +51,7 @@ export function ComposerMenuLoadingRows(props: {
                 <span style={{ opacity: 0 }}>{row().description}</span>
               </span>
             }
+            trailing={row().trailing}
           />
         )}
       </For>
@@ -97,19 +107,24 @@ export function ComposerMenu(options: {
 export function renderComposerMenuOption(options: {
   id: string;
   active: boolean;
+  current?: boolean;
   select: () => void;
   hover: () => void;
   preserveFocus?: boolean;
   icon: JSX.Element;
   iconHidden?: boolean;
   name: JSX.Element;
-  description: JSX.Element;
+  description?: JSX.Element;
+  trailing?: JSX.Element;
 }) {
   const pointerMoved = useContext(ComposerMenuPointer);
   return (
     <div
       id={options.id}
-      class={["slash-menu-item", { "slash-menu-item--active": options.active }]}
+      class={[
+        "slash-menu-item",
+        { "slash-menu-item--active": options.active, "slash-menu-item--current": options.current },
+      ]}
       role="option"
       aria-selected={options.active ? "true" : "false"}
       onMouseDown={(event: MouseEvent) => {
@@ -134,8 +149,9 @@ export function renderComposerMenuOption(options: {
       </span>
       <span class="slash-menu-copy">
         <span class="slash-menu-name">{options.name}</span>{" "}
-        <span class="slash-menu-desc">{options.description}</span>
+        {options.description ? <span class="slash-menu-desc">{options.description}</span> : null}
       </span>
+      {options.trailing}
     </div>
   );
 }
