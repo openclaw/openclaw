@@ -166,7 +166,10 @@ export function projectTranscriptChain(
     messages?: readonly unknown[];
     activeRunId?: string | null;
     activeRunIds?: readonly string[];
-    session?: Pick<GatewaySessionRow, "key" | "lastRunId" | "status" | "runtimeMs">;
+    session?: Pick<
+      GatewaySessionRow,
+      "key" | "lastRunId" | "status" | "runtimeMs" | "abortedLastRun"
+    >;
   },
 ): TranscriptChain {
   const { session } = options;
@@ -185,6 +188,7 @@ export function projectTranscriptChain(
     session?.key,
     session?.lastRunId,
     session?.status,
+    session?.abortedLastRun,
     session?.runtimeMs,
     readLiveTerminalRevision(),
   ];

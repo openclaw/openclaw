@@ -11,6 +11,7 @@ import {
   type SignedStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { registerIdCli } from "./id-cli.js";
 
@@ -131,18 +132,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function run(command: "status" | "rebind", json = true) {
+const validRebind = ["--kit-stdin", "--yes", "--code", "test-link-code"];
+async function run(command: "status" | "rebind", json = true, rebindArgs = validRebind) {
   const program = new Command().exitOverride();
   registerIdCli(program);
-  await program.parseAsync(
-    [
-      "id",
-      command,
-      ...(json ? ["--json"] : []),
-      ...(command === "rebind" ? ["--kit-stdin", "--yes", "--code", "test-link-code"] : []),
-    ],
-    { from: "user" },
-  );
+  const args = [command, ...(json ? ["--json"] : []), ...(command === "rebind" ? rebindArgs : [])];
+  await program.parseAsync(["id", ...args], { from: "user" });
 }
 
 describe("registered id commands", () => {
@@ -215,6 +210,10 @@ describe("registered id commands", () => {
     await expect(run("rebind")).rejects.toThrow("commit refused");
     expect(commits).toHaveLength(0);
     expect(output).toBe("");
+  });
+
+  it("shows a rebind option refusal as an expected CLI error", async () => {
+    await expect(run("rebind", false, ["--yes"])).rejects.toBeInstanceOf(ExpectedCliError);
   });
 
   it("treats a full command rerun as a new signed rotation, not a commit replay", async () => {

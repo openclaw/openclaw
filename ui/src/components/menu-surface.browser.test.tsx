@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { t } from "../lib/reactive/i18n.ts";
 import "../pages/chat/components/browser-tab-card.css";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
@@ -756,7 +757,9 @@ describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
       await userEvent.keyboard("{ArrowUp}");
       if (key === "disabled") {
         expect(button.disabled).toBe(true);
-        expect(button.title).not.toBe("");
+        await expect
+          .element(page.elementLocator(button))
+          .toHaveAccessibleDescription(t("openclawId.signInUnconfigured"));
         expect(document.activeElement).not.toBe(button);
         button.click();
         expect(selected).not.toHaveBeenCalled();

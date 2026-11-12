@@ -1,3 +1,0 @@
-# Funds inherited main debt, not this PR's tests.
-# Comparison base: 465c110e4975690406b48709d58a581756c85b82.
-92

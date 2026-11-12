@@ -29,6 +29,13 @@ the `anthropic/*` one.
   An Anthropic Default row also uses this label when it will clear a pinned session runtime:
   the current session route does not describe the configured route being restored.
 
+For native login, the web picker's Claude CLI group reads the billing label from
+Claude Code's `claude auth status --json`: a Claude account shows its recognized
+plan or **Subscription**, API authentication shows **API**, and an unrecognized
+login type shows **Native login**. An explicitly selected saved account takes
+precedence. This does not import a saved account or change who manages login
+and token refresh.
+
 The web picker shows route details on hover or keyboard focus. Telegram `/models`
 shows route guidance before selection and labels models when their runtime is
 known. Model IDs and explicit runtime choices remain unchanged.
@@ -1108,13 +1115,23 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="Claude Code native subagents and web search on managed turns">
-    `plugins.entries.anthropic.config.managedNativeTools` keeps selected Claude
-    Code orchestration tools and native web search on `claude-cli` turns that
-    OpenClaw manages. It is off by default. `default` applies to every agent;
-    `agents.<id>` replaces it for one agent, and `[]` opts that agent out.
-    Accepted values: `Agent`, `Workflow`, `WebSearch`. `WebSearch` uses Claude Code's
-    server-side search, billed to the Claude login, so no OpenClaw search provider is needed; it
-    is kept only while the agent's tool policy allows `web_search`.
+    `plugins.entries.anthropic.config.managedNativeTools` chooses the Claude Code
+    tools kept on `claude-cli` turns that OpenClaw manages. Without a `default`
+    list, agents keep only `WebSearch`: Claude Code's server-side search, billed to
+    the Claude login, so no OpenClaw search provider is needed. It is kept only
+    while the agent's tool policy allows `web_search`, web search is enabled, and
+    no OpenClaw search provider is configured; a configured provider keeps search
+    on OpenClaw's `web_search`. `default` applies to every agent and replaces the
+    built-in list; `agents.<id>` replaces it for one agent. Set `default: []` to
+    turn native web search off, or `[]` for one agent.
+    Accepted values: `Agent`, `Workflow`, `WebSearch`.
+
+    Upgrading from a release before `WebSearch` became the default changes the
+    launch tool list. Each existing `claude-cli` conversation starts one fresh
+    Claude Code session on its next turn (logged as `reason=prompt-tools`).
+    OpenClaw keeps the chat history; earlier turns reach the new session as a
+    history notice rather than being replayed, and that first turn rebuilds the
+    cached prompt prefix once.
 
     ```json5
     {
@@ -1154,8 +1171,11 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     ```bash
     claude auth status --text
     claude auth login
-    openclaw gateway restart
     ```
+
+    Retry the turn after signing in. The running Gateway rechecks expired login
+    captures when you open a model picker or use `/model`. A picker may show
+    the previous sign-in state on its first read while the check runs.
 
     Claude Code owns its login and refresh lifecycle; do not copy an OAuth token into OpenClaw.
 

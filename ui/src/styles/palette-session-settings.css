@@ -187,8 +187,15 @@
   justify-self: center;
 }
 
+/* Back takes the rows' icon column, so the field starts on their labels without a second leading icon. */
 .palette-session-settings__heading {
-  padding-inline: 7px 2px;
+  --header-search-gap: 11px;
+
+  padding-inline: 10px 2px;
+}
+
+.palette-session-settings__heading > .header-search__icon {
+  display: none;
 }
 
 .palette-session-settings__back {

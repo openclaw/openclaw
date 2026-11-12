@@ -4,6 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import * as terminalNote from "../../../packages/terminal-core/src/note.js";
 import * as databaseEngine from "../../commands/doctor-database-engine.js";
+import { completeDoctorMigrationBackups } from "../../commands/doctor-migration-backup-artifacts.js";
+import { backupDoctorSqliteDatabases } from "../../commands/doctor-migration-backup.js";
+import { withDoctorSqliteMaintenanceLock } from "../../commands/doctor-sqlite-maintenance-lock.js";
 import * as doctorUi from "../../commands/doctor-ui.js";
 import * as doctor from "../../flows/doctor-health.js";
 import * as jsonFiles from "../../infra/json-files.js";
@@ -31,6 +34,59 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 const readText = (file: string) => fs.readFile(file, "utf8");
+
+it("retires verified migration originals only after a later native update is accepted", async () => {
+  await withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    async (state) => {
+      vi.spyOn(doctorUi, "maybeRepairUiProtocolFreshness").mockResolvedValue();
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.spyOn(readiness, "waitForGatewayHttpReadiness").mockResolvedValue({
+        healthz: null,
+        readyz: null,
+        coreReady: false,
+      });
+      const first = state.path("first-update", "native");
+      await updateMigrateCommand(first);
+      await closeOpenClawStateDatabaseAsync();
+      const source = state.statePath("state", "openclaw.sqlite");
+      const backup = await withDoctorSqliteMaintenanceLock({
+        env: state.env,
+        operation: "migration backup retention proof",
+        run: async (authority) => {
+          const result = await backupDoctorSqliteDatabases({
+            env: state.env,
+            pendingDatabasePaths: [source],
+            databasePaths: [source],
+            authority,
+          });
+          completeDoctorMigrationBackups(state.env, [source]);
+          return result.snapshots![0]!.path;
+        },
+      });
+      await updateFinishCommand(first);
+      expect((await fs.stat(backup)).size).toBeGreaterThan(0);
+      const second = state.path("second-update", "native");
+      await updateMigrateCommand(second);
+      // Migration alone must not release originals while the supervisor can roll back.
+      expect((await fs.stat(backup)).size).toBeGreaterThan(0);
+      await updateFinishCommand(second);
+      await expect(fs.stat(backup)).rejects.toMatchObject({ code: "ENOENT" });
+      const latest = listUpdateRuns({}, { env: state.env })[0]!;
+      expect(latest.steps).toContainEqual(
+        expect.objectContaining({
+          step: "diagnostic:recovery-artifact-cleanup",
+          detail: expect.stringContaining("Recovery cleanup removed"),
+        }),
+      );
+      await updateFinishCommand(second);
+      expect(listUpdateRuns({}, { env: state.env })).toHaveLength(2);
+    },
+  );
+});
 
 it("preserves a recoverable cold-navigation deadline in native update receipts", async () => {
   await withOpenClawTestState(

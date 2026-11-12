@@ -12,7 +12,6 @@ import { safeParseJson, truncateCodePoints } from "openclaw/plugin-sdk/text-util
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { startWebSocketKeepalive } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveClickClackInboundAccess } from "./access.js";
-import { resolveClickClackAccount } from "./accounts.js";
 import {
   ClickClackHttpError,
   createClickClackClient,
@@ -111,10 +110,7 @@ async function resolveEventMessage(params: {
 export async function startClickClackGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedClickClackAccount>,
 ) {
-  const configuredAccount = resolveClickClackAccount({
-    cfg: ctx.cfg,
-    accountId: ctx.account.accountId,
-  });
+  const configuredAccount = ctx.account;
   if (!configuredAccount.configured) {
     throw new Error(`ClickClack is not configured for account "${configuredAccount.accountId}"`);
   }

@@ -42,6 +42,7 @@ vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
   managedWorktrees: {
     gc: () => forbiddenDefaultAdapter("worktree GC"),
+    maintainGit: () => forbiddenDefaultAdapter("worktree Git maintenance"),
     onWarmPoolNeeded: () => () => {},
     prewarm: () => forbiddenDefaultAdapter("worktree warm pool"),
   },

@@ -51,11 +51,6 @@ checks. Correct the source and submit a new `exec`; OpenClaw does not repair
 or replay it automatically. Exceptions thrown by valid guest code, including
 `SyntaxError`, remain runtime failures.
 
-The current parser has a known limitation with division immediately after an
-optional keyword-named property, such as `value?.return / 2 / 3`. This is valid
-JavaScript, but source preparation rejects it before tool dispatch. Parenthesize
-the property access: `(value?.return) / 2 / 3`.
-
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects and prototypes are not passed through the JSON result bridge. This
 bridge contract does not make the Node executor a security boundary; see
@@ -73,6 +68,13 @@ or forge bridge provenance.
 When `bridgeDispatchStarted` is `true`, check the destination before repeating a
 send or another action that changes state, even for a guest error. A failed `exec`
 does not by itself prove that a message was not delivered.
+
+If a new observer fails with `too many suspended code mode runs`, the observed
+workload has not necessarily failed. Resume an existing Code Mode `runId` with
+`wait`. To collect an already-dispatched process, submit a new `exec` with outer
+`awaitResults: true` and poll the original process `sessionId`; required-completion
+cells do not need a suspended-run slot. Do not relaunch the workload to recover
+its output. Process retention and expiry still apply.
 
 ## Telemetry
 

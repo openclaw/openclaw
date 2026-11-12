@@ -245,28 +245,28 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 85973,
-    "roughTokens": 21494
+    "chars": 86800,
+    "roughTokens": 21700
   },
   "openClawBaseInstructions": {
     "chars": 8015,
     "roughTokens": 2004
   },
   "openClawDeveloperInstructions": {
-    "chars": 3045,
-    "roughTokens": 762
+    "chars": 3431,
+    "roughTokens": 858
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 13736,
-    "roughTokens": 3434
+    "chars": 14122,
+    "roughTokens": 3531
   },
   "totalWithDynamicToolsJson": {
-    "chars": 99711,
-    "roughTokens": 24928
+    "chars": 100924,
+    "roughTokens": 25231
   },
   "userInputText": {
     "chars": 879,
@@ -416,7 +416,8 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 ```
 
 
-You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
+### Conversation Behavior
+You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation. If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Do not use silence to abandon an outstanding request or hide a failure.
 </thread_policy>
 ````
 

@@ -2,7 +2,7 @@ import { listAgentIds, tryResolveAmbientOwnerAgentId } from "../agents/agent-sco
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { getChildLogger, getResolvedLoggerSettings, toPinoLikeLogger } from "../logging/logger.js";
+import { getChildLogger, getFileLogLevel, toPinoLikeLogger } from "../logging/logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { CronService } from "./service.js";
 import { resolveCronJobsStorePathAsync } from "./store.js";
@@ -22,7 +22,7 @@ export async function withLocalCronService<T>(
     cronConfig: cfg.cron,
     log: toPinoLikeLogger(
       getChildLogger({ module: "cron", storeKey: storePath }),
-      getResolvedLoggerSettings().level,
+      getFileLogLevel(),
     ),
     defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
