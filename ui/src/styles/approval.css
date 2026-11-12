@@ -571,6 +571,11 @@
 
   .question-page .chat-question-panel__footer {
     flex-wrap: wrap;
+  }
+
+  .question-page
+    .chat-question-panel:not(.chat-question-panel--credential)
+    .chat-question-panel__footer {
     justify-content: flex-start;
   }
 
@@ -582,7 +587,10 @@
   }
 
   /* Answer first; taking the free width holds Skip still while the label changes. */
-  .question-page .chat-question-panel__footer .chat-question-panel__advance {
+  .question-page
+    .chat-question-panel:not(.chat-question-panel--credential)
+    .chat-question-panel__footer
+    .chat-question-panel__advance {
     flex: 1 1 auto;
     order: -1;
   }

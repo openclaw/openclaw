@@ -1,9 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import type { QuestionRecord } from "@openclaw/gateway-protocol";
-import { expect, it } from "vitest";
+import { webkit, type BrowserContextOptions } from "playwright";
+import { expect, it, onTestFinished } from "vitest";
 import { normalizeSecretsRequestParams } from "../../../src/agents/tools/secrets-tool.ts";
 import {
   closeProvider,
@@ -34,6 +37,12 @@ const proof: Record<string, unknown> = {
   toolArguments: args,
   websocketInterception: false,
   complete: false,
+  source: {
+    head: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    workingDiffSha256: createHash("sha256")
+      .update(execFileSync("git", ["diff", "HEAD"]))
+      .digest("hex"),
+  },
 };
 let instance: OpenClawTestInstance;
 let client: Awaited<ReturnType<typeof connectChatGateway>>;
@@ -138,15 +147,38 @@ suite.define(() => {
       agentId: "main",
       label: "Connect order emails",
     });
-    const context = await suite.newBrowserContext({
+    const browser =
+      process.env.OPENCLAW_UI_E2E_SECRETS_BROWSER === "webkit" ? await webkit.launch() : undefined;
+    const contextOptions: BrowserContextOptions = {
       viewport: { width: 1280, height: 900 },
       locale: "en-US",
       colorScheme: "light",
-      permissions: ["local-network-access"],
+      ...(browser ? {} : { permissions: ["local-network-access"] }),
       serviceWorkers: "block",
-    });
+    };
+    const context = browser
+      ? await browser.newContext(contextOptions)
+      : await suite.newBrowserContext(contextOptions);
+    if (browser) {
+      onTestFinished(async () => {
+        await context.close();
+        await browser.close();
+      });
+    }
     const page = await context.newPage();
-    await pairFixture(page, instance);
+    try {
+      await pairFixture(page, instance);
+    } catch (error) {
+      await writeFile(
+        path.join(suite.artifactDir, "pairing-failure.private.png"),
+        await page.screenshot(),
+      );
+      await writeFile(
+        path.join(suite.artifactDir, "pairing-failure.private.txt"),
+        (await page.locator("body").textContent()) ?? "",
+      );
+      throw error;
+    }
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
     await waitForControlUiGatewayReady(page);
     await assertServedUi(page, suite.server.baseUrl);
@@ -214,8 +246,17 @@ suite.define(() => {
       }
       presentations.push({
         title: await panel.locator(".chat-question-panel__title").textContent(),
-        text: await panel.textContent(),
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Hidden metadata is not part of the visible request hierarchy.
+        text: await panel.innerText(),
       });
+      const details = panel.getByRole("button", { name: "Credential details", exact: true });
+      await details.click();
+      await page
+        .getByRole("dialog", { name: "Credential details", exact: true })
+        .getByText("Saved outside chat. The agent cannot read the value.")
+        .waitFor();
+      await page.keyboard.press("Escape");
+      expect(await details.evaluate((element) => document.activeElement === element)).toBe(true);
       const input = panel.locator('input[type="password"]');
       await input.fill(syntheticSecret);
       await input.press("Tab");
@@ -254,9 +295,9 @@ suite.define(() => {
       expect(presentation.title).toBe(name);
       expect(presentation.text).not.toContain(key);
       expect(presentation.text).not.toContain("Provide the secret for");
-      expect(presentation.text?.indexOf(reason)).toBeLessThan(
-        presentation.text?.indexOf("Saved outside chat") ?? -1,
-      );
+      expect(presentation.text).toContain(reason);
+      expect(presentation.text).toContain("needs a credential");
+      expect(presentation.text).not.toContain("Saved outside chat");
     }
     expect(providerError).toBeUndefined();
     proof.questions = questions;

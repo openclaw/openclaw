@@ -576,7 +576,11 @@ suite.define(() => {
       status: "answered",
       answers,
     } satisfies QuestionResolveResult);
-    await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
+    const selected = panel.getByRole("radio", { name: /Staging \(Recommended\)/ });
+    await selected.click();
+    await selected.hover();
+    await expectCount(selected.locator(".oc-radio[data-checked]"), 1);
+    expect(await selected.getAttribute("aria-checked")).toBe("true");
     await button(panel, "Submit").click();
     await expectResolution(gateway, { id: request.id, answers });
 
@@ -634,7 +638,7 @@ suite.define(() => {
       __mockError: { code: "INVALID_REQUEST", message: validationMessage },
     });
     const panel = await showQuestion(page, gateway, request);
-    await expectCount(panel.getByText("Requested by main", { exact: false }), 1);
+    await expectCount(panel.locator('.agent-row-chip[data-agent-id="main"]'), 1);
     await expectCount(panel.getByText("Publish the release artifacts."), 1);
     await expectCount(panel.getByText("Replaces the saved value", { exact: false }), 1);
     const secretInput = panel.getByLabel("API key", { exact: true });
@@ -643,7 +647,14 @@ suite.define(() => {
     expect(await secretInput.getAttribute("autocomplete")).toBe("off");
     expect(await secretInput.getAttribute("autocapitalize")).toBe("none");
     expect(await secretInput.getAttribute("autocorrect")).toBe("off");
-    await expectCount(panel.getByText("The agent cannot read the value", { exact: false }), 1);
+    const details = button(panel, "Credential details");
+    await details.focus();
+    await details.press("Enter");
+    const metadata = page.getByRole("dialog", { name: "Credential details", exact: true });
+    await metadata.getByText("Saved outside chat. The agent cannot read the value.").waitFor();
+    await page.keyboard.press("Escape");
+    await expectFocused(details);
+    expect(await gateway.getRequests("question.resolve")).toHaveLength(0);
     expect(await secretInput.getAttribute("placeholder")).toBe("API key");
     await expectCount(panel.locator('[role="radiogroup"]'), 0);
     const hostsInput = panel.locator(".chat-question-panel__hosts");
