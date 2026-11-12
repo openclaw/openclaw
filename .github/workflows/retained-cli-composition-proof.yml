@@ -1,4 +1,4 @@
-name: Diagnostic retained memory reload failure
+name: Diagnostic retained memory original shard
 'on':
   workflow_dispatch:
     inputs:
@@ -10,7 +10,7 @@ name: Diagnostic retained memory reload failure
 permissions:
   contents: read
 concurrency:
-  group: release-114-memory-failure-162e
+  group: release-114-memory-original-shard-162e
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -156,8 +156,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - lane: memory-reload-diagnostic
-          tests_json: '["src/gateway/server-plugin-reload.recovery.test.ts"]'
+        - lane: memory-original-shard-diagnostic
+          tests_json: '["src/gateway/server-plugin-reload-cleanup.test.ts","src/gateway/server-plugin-reload-recovery.test.ts","src/gateway/server-plugin-reload.installed-package.test.ts","src/gateway/server-plugin-reload.meeting-transcripts.test.ts","src/gateway/server-plugin-reload.prepared-borrow.test.ts","src/gateway/server-plugin-reload.recovery.test.ts","src/gateway/server-request-entry.test.ts","src/gateway/server-run-shutdown.recovery.test.ts","src/gateway/server.operator-observer-lifetime.test.ts","src/gateway/session-automation-index.maintenance.test.ts","src/gateway/session-automation-index.test.ts","src/gateway/session-row-projection.automation.test.ts","src/gateway/session-row-projection.selection-progress.test.ts","src/gateway/session-utils.test.ts","src/gateway/worker-environments/worker-turn-context-engine.test.ts"]'
     env:
       TESTS_JSON: ${{ matrix.tests_json }}
       OPENCLAW_SESSION_EXPORT_STRESS: '1'
