@@ -172,6 +172,11 @@ export function scheduleGatewayHandlerPrewarm(params: {
 export function scheduleGatewayPrewarm(
   params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
 ): GatewayIdleTaskHandle[] {
+  const memoryLimit = process.constrainedMemory();
+  // Leave scarce cgroup memory to requests; every warmup has a request-time loader.
+  if (memoryLimit > 0 && process.availableMemory() <= memoryLimit * 0.2) {
+    return [];
+  }
   return [
     scheduleGatewayHandlerPrewarm(params),
     scheduleGatewayIdleTask({
