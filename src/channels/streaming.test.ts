@@ -501,6 +501,12 @@ it("updates keyed progress lines in place", () => {
 it.each([
   ["read", { path: "/tmp/report.txt" }, "Read", "from /tmp/report.txt"],
   [
+    "knowledge_record",
+    { id: "00000000-0000-4000-8000-000000000002" },
+    "Read knowledge record",
+    undefined,
+  ],
+  [
     "knowledge_remember",
     { requestId: "00000000-0000-4000-8000-000000000001", items: [{ text: "Private claim" }] },
     "Remember knowledge",
