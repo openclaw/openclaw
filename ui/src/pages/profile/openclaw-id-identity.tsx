@@ -1,11 +1,12 @@
-// Settings → Profile → Identity: link this profile to an OpenClaw ID (OCF-510). Offered only
-// on a connection with a verified personal sign-in while the OpenClaw ID Labs switch is on:
-// signing in there proves both sides on one connection, so the Gateway links that account to
-// this profile with no picker. Owner devices of a linked account then arrive as this person.
-// Linking grants nothing; owner authority still comes from each device's certificate.
-import { createSignal, For, onSettled, Show } from "solid-js";
+// Settings → Profile → Identity: link this profile to an OpenClaw ID (OCF-510). Shown while the
+// OpenClaw ID Labs switch is on; linking is offered only on a connection with a verified
+// personal sign-in. Signing in there proves both sides on one connection, so the Gateway links
+// that account to this profile with no picker. Owner devices of a linked account then arrive
+// as this person. Linking grants nothing; owner authority still comes from each device's
+// certificate.
+import { createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { clawNameFromHostname } from "../../components/openclaw-id/claw-name.ts";
-import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { RetryAction, SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { openClawIdFeatureSignal } from "../../lib/openclaw-id/feature-lifetime.ts";
@@ -17,32 +18,50 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 registerEnglishCatalog(registerProfileEnglish);
 
 type Link = { email: string | null; owner: boolean };
+// The row keeps its place from first paint while Labs is on: it loads, then offers linking,
+// says where linking works, or reports a failed load with a retry.
+type RowState =
+  | { kind: "loading" }
+  | { kind: "off" }
+  | { kind: "unavailable" }
+  | { kind: "failed" }
+  | { kind: "ready"; links: Link[]; claw: string | null };
 
 export function OpenClawIdIdentity() {
   const context = useApplication();
-  // undefined while loading or unavailable: the row is absent until it can act.
-  const [state, setState] = createSignal<{ links: Link[]; claw: string | null }>();
+  const [state, setState] = createSignal<RowState>(
+    openClawIdFeatureSignal().aborted ? { kind: "off" } : { kind: "loading" },
+  );
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const client = () => context.gateway.snapshot.client;
   const load = async () => {
     const current = client();
     if (!current || openClawIdFeatureSignal().aborted) {
-      setState(undefined);
+      setState({ kind: "off" });
       return;
     }
     const status = await current.request<OpenClawIdStatusResult>("openclawId.status", {});
-    if (status.status.state === "off" || status.accountSignIn !== "device") {
-      setState(undefined);
+    if (status.status.state === "off") {
+      setState({ kind: "off" });
+      return;
+    }
+    if (status.accountSignIn !== "device") {
+      setState({ kind: "unavailable" });
       return;
     }
     const { linked } = await current.request<{ linked: Link[] }>("openclawId.account", {
       action: "link_status",
     });
     setState({
+      kind: "ready",
       links: linked,
       claw: status.link.hostname ? clawNameFromHostname(status.link.hostname) : null,
     });
+  };
+  const reload = () => {
+    setState({ kind: "loading" });
+    void load().catch(() => setState({ kind: "failed" }));
   };
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
@@ -79,58 +98,79 @@ export function OpenClawIdIdentity() {
     const email = linked.email ?? t("profilePage.openclawId.title");
     return linked.owner && claw ? t("profilePage.openclawId.ownerOf", { email, claw }) : email;
   };
-  onSettled(() => {
-    void load().catch(() => setState(undefined));
-  });
+  const ready = () => {
+    const current = state();
+    return current.kind === "ready" ? current : undefined;
+  };
+  onSettled(reload);
+  const linkButton = (disabled: boolean) => (
+    <button
+      class="btn btn--sm"
+      disabled={disabled}
+      aria-label={t("profilePage.openclawId.link")}
+      onClick={() => void link()}
+    >
+      {t("profilePage.openclawId.linkShort")}
+    </button>
+  );
   return (
-    <Show when={state()}>
-      {(current) => (
-        <>
-          <SettingsRow
-            title={t("profilePage.openclawId.title")}
-            description={
-              <Show
-                when={current().links.length > 0}
-                fallback={
-                  <SettingsStatus kind="muted" label={t("profilePage.openclawId.notLinked")} />
-                }
-              >
-                <span class="identity-emails">
-                  <For each={current().links}>
-                    {(linked) => (
-                      <span class="identity-account">{label(linked, current().claw)}</span>
-                    )}
-                  </For>
-                </span>
-              </Show>
-            }
-            control={
-              <Show
-                when={current().links.length > 0}
-                fallback={
-                  <button
-                    class="btn btn--sm"
-                    disabled={busy()}
-                    aria-label={t("profilePage.openclawId.link")}
-                    onClick={() => void link()}
-                  >
-                    {t("profilePage.openclawId.linkShort")}
+    <Show when={state().kind !== "off"}>
+      <SettingsRow
+        title={t("profilePage.openclawId.title")}
+        description={
+          <Switch>
+            <Match when={state().kind === "loading"}>
+              <SettingsStatus kind="muted" label={t("common.loading")} />
+            </Match>
+            <Match when={state().kind === "unavailable"}>
+              <SettingsStatus kind="muted" label={t("profilePage.openclawId.unavailable")} />
+            </Match>
+            <Match when={state().kind === "failed"}>
+              <SettingsStatus kind="danger" label={t("profilePage.openclawId.loadFailed")} />
+            </Match>
+            <Match when={ready()}>
+              {(current) => (
+                <Show
+                  when={current().links.length > 0}
+                  fallback={
+                    <SettingsStatus kind="muted" label={t("profilePage.openclawId.notLinked")} />
+                  }
+                >
+                  <span class="identity-emails">
+                    <For each={current().links}>
+                      {(linked) => (
+                        <span class="identity-account">{label(linked, current().claw)}</span>
+                      )}
+                    </For>
+                  </span>
+                </Show>
+              )}
+            </Match>
+          </Switch>
+        }
+        control={
+          <Switch fallback={linkButton(true)}>
+            <Match when={state().kind === "failed"}>
+              <RetryAction onRetry={reload} />
+            </Match>
+            <Match when={state().kind === "unavailable"}>{null}</Match>
+            <Match when={ready()}>
+              {(current) => (
+                <Show when={current().links.length > 0} fallback={linkButton(busy())}>
+                  <button class="btn btn--sm" disabled={busy()} onClick={() => void unlink()}>
+                    {t("profilePage.openclawId.unlink")}
                   </button>
-                }
-              >
-                <button class="btn btn--sm" disabled={busy()} onClick={() => void unlink()}>
-                  {t("profilePage.openclawId.unlink")}
-                </button>
-              </Show>
-            }
-          />
-          <Show when={error()}>
-            <div class="settings-row identity-error" role="alert">
-              <span class="settings-row__desc">{error()}</span>
-            </div>
-          </Show>
-        </>
-      )}
+                </Show>
+              )}
+            </Match>
+          </Switch>
+        }
+      />
+      <Show when={error()}>
+        <div class="settings-row identity-error" role="alert">
+          <span class="settings-row__desc">{error()}</span>
+        </div>
+      </Show>
     </Show>
   );
 }

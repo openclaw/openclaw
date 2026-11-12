@@ -381,7 +381,15 @@ export async function prepareCronStreamSandboxAuthority(params: {
   subscriptions.push(
     onUserProfilesChanged(recheck),
     onOperatorRolePolicyChanged((change) => {
-      if (change.kind === "assignment" && change.profileId === operator?.profileId) {
+      if (
+        change.kind === "assignment" &&
+        change.profileId === operator?.profileId &&
+        change.roleOnly &&
+        principal?.kind === "owner"
+      ) {
+        // A linked owner device's authority is its certificate; its person's role is not.
+        recheck();
+      } else if (change.kind === "assignment" && change.profileId === operator?.profileId) {
         revoke(unavailable());
       } else if (change.kind === "config") {
         recheck();

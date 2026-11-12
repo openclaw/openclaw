@@ -148,6 +148,15 @@ test("a linked owner device keeps owner authority under its person's restricted 
     });
     expect(await closed).toBe(false);
     expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
+    // Assigning the person another role changes neither the owner device nor its grants.
+    const roleClosed = new Promise<boolean>((resolve) => {
+      ws.once("close", () => resolve(true));
+      setTimeout(() => resolve(false), 1_500);
+    });
+    const assigned = await rpcReq(ws, "users.setRole", { profileId: person.id, role: "reader" });
+    expect(assigned.ok, JSON.stringify(assigned.error)).toBe(true);
+    expect(await roleClosed).toBe(false);
+    expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(true);
   } finally {
     ws.close();
   }

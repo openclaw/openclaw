@@ -1,27 +1,31 @@
 // A linked owner device (OCF-510) is the Gateway owner attributed to a person. Retained work,
 // resumed access grants and personal skill-library permissions derive from its owner
 // certificate, not the person's named role, and only while that certificate is current.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Session skill seeding is covered in server-methods/skills-library-linked-owner.test.ts.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSkillLibraryActorFromProfile } from "../../skills/library/store.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resumeGatewayOperatorAccessGrant } from "../operator-access-policy.js";
-import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
+import {
+  invalidateOperatorRolePolicy,
+  resolveOperatorRolePolicy,
+} from "../operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { currentPersonalProfileClient } from "../server-methods/personal-profile-authorization.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
 import {
   currentOwnerDevicePrincipal,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./tunnel-principal.js";
-
-const seed = vi.hoisted(() => vi.fn(async () => []));
-vi.mock("../../skills/library/selection.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../skills/library/selection.js")>()),
-  seedSkillLibrarySelection: seed,
-}));
 
 const OWNER: OpenClawIdTunnelPrincipal = { kind: "owner", peerKey: `iroh:${"2b".repeat(32)}` };
 const cfg: OpenClawConfig = {
@@ -119,23 +123,6 @@ describe("linked owner device authority", () => {
     expect(currentOwnerDevicePrincipal(socket)).toBeUndefined();
   });
 
-  it("seeds a new session's library skills with the owner device's permissions", async () => {
-    const socket = {
-      connId: "c1",
-      connect: { role: "operator", scopes: ["operator.admin"] },
-      authenticatedUserProfile: { profileId: "person" },
-      internal: { openclawIdPrincipal: OWNER },
-    } as unknown as Parameters<typeof prepareSkillLibrarySessionCreation>[0];
-    await prepareSkillLibrarySessionCreation(socket, cfg, { via: "create" } as never);
-    const [authority] = seed.mock.calls.at(-1) as unknown as [
-      { ownerDevice?: boolean; assertCurrent: () => void },
-    ];
-    expect(authority.ownerDevice).toBe(true);
-    expect(() => authority.assertCurrent()).not.toThrow();
-    ownerCurrent = false;
-    expect(() => authority.assertCurrent()).toThrow("OpenClaw ID owner authority changed");
-  });
-
   it("lifts the person's role in personal APIs only while the owner certificate is current", () => {
     const socket = {
       connId: "c1",
@@ -158,4 +145,56 @@ describe("linked owner device authority", () => {
       "Personal profile requires current operator.read permission.",
     );
   });
+
+  it("keeps a linked owner's accepted work when only the person's role changes", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = ensureProfileForEmail("linked-owner-run@example.test");
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => ({}),
+        getCommittedRuntimeConfig: () => ({}),
+      });
+      const capture = async (principal?: OpenClawIdTunnelPrincipal) =>
+        expectDefined(
+          await captureGatewayOperatorRunAuthority({
+            client: {
+              connId: `run-${principal?.kind ?? "person"}`,
+              connectionSignal: new AbortController().signal,
+              connect: {
+                minProtocol: 1,
+                maxProtocol: 1,
+                client: {
+                  id: "openclaw-control-ui",
+                  version: "dev",
+                  platform: "test",
+                  mode: "webchat",
+                },
+                role: "operator",
+                scopes: ["operator.admin"],
+              },
+              authenticatedUserProfile: dispatchProfile(person.id),
+              internal: {
+                authenticatedOperator: true,
+                operatorRoleActor: principal
+                  ? { kind: "system" }
+                  : { kind: "operator", profileId: person.id },
+                ...(principal ? { openclawIdPrincipal: principal } : {}),
+              },
+            } as unknown as GatewayWsClient,
+            context,
+          }),
+          "captured run authority",
+        );
+      const owner = await capture(OWNER);
+      const personal = await capture();
+      invalidateOperatorRolePolicy(person.id, { roleOnly: true });
+      expect(owner.authority.signal?.aborted).toBe(false);
+      expect(() => owner.authority.assertCurrent()).not.toThrow();
+      // The person's own work follows their role.
+      expect(personal.authority.signal?.aborted).toBe(true);
+      // An identity change, such as a merge, still ends the owner's attributed work.
+      invalidateOperatorRolePolicy(person.id);
+      expect(owner.authority.signal?.aborted).toBe(true);
+      owner.release();
+      personal.release();
+    }));
 });

@@ -59,14 +59,61 @@ it("shows the linked account with its claw role and unlinks it", async () => {
 it.each([
   ["the claw's own computer (popup sign-in)", status("popup")],
   ["a connection without a personal sign-in", status(null)],
-  ["the Labs switch off", status("device", "off")],
-])("is absent on %s", async (_name, current) => {
+])("says where linking works on %s, without a Link action", async (_name, current) => {
   const request = vi.fn(async (method: string) =>
     method === "openclawId.status" ? current : { linked: [] },
   ) as unknown as GatewayBrowserClient["request"];
   const view = mount(request);
-  await waitForSolid(() => expect(request).toHaveBeenCalledWith("openclawId.status", {}));
-  await Promise.resolve();
-  expect(view.container.textContent).not.toContain("OpenClaw ID");
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain("Link over a personal sign-in"),
+  );
+  expect(view.queryByText("Link")).toBeNull();
   expect(request).not.toHaveBeenCalledWith("openclawId.account", expect.anything());
+});
+
+it("is absent while the Labs switch is off", async () => {
+  const request = vi.fn(async (method: string) =>
+    method === "openclawId.status" ? status("device", "off") : { linked: [] },
+  ) as unknown as GatewayBrowserClient["request"];
+  const view = mount(request);
+  await waitForSolid(() => expect(request).toHaveBeenCalledWith("openclawId.status", {}));
+  await waitForSolid(() => expect(view.container.textContent).not.toContain("OpenClaw ID"));
+  expect(request).not.toHaveBeenCalledWith("openclawId.account", expect.anything());
+
+  stopFeature();
+  const offline = vi.fn() as unknown as GatewayBrowserClient["request"];
+  const hidden = mount(offline);
+  await Promise.resolve();
+  expect(hidden.container.textContent).not.toContain("OpenClaw ID");
+  expect(offline).not.toHaveBeenCalled();
+});
+
+it("holds the row's place while loading and retries a failed load", async () => {
+  let failStatus = true;
+  let releaseStatus: () => void = () => {};
+  const statusGate = new Promise<void>((resolve) => {
+    releaseStatus = resolve;
+  });
+  const request = vi.fn(async (method: string) => {
+    if (method === "openclawId.status") {
+      await statusGate;
+      if (failStatus) {
+        throw new Error("gateway unavailable");
+      }
+      return status("device");
+    }
+    return { linked: [] };
+  }) as unknown as GatewayBrowserClient["request"];
+  const view = mount(request);
+  // The row is present from first paint, before the Gateway answers.
+  expect(view.container.textContent).toContain("OpenClaw ID");
+  expect(view.container.textContent).toContain("Loading");
+  releaseStatus();
+  await waitForSolid(() =>
+    expect(view.container.textContent).toContain("Couldn’t load your OpenClaw ID link."),
+  );
+  failStatus = false;
+  view.getByText("Retry").click();
+  await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
+  expect(view.getByText("Link")).toBeDefined();
 });

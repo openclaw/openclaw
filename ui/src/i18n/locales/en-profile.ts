@@ -25,6 +25,8 @@ const enProfile = {
     openclawId: {
       title: "OpenClaw ID",
       notLinked: "Not linked",
+      unavailable: "Link over a personal sign-in, such as Tailscale",
+      loadFailed: "Couldn’t load your OpenClaw ID link.",
       link: "Link OpenClaw ID",
       linkShort: "Link",
       unlink: "Unlink",

@@ -572,7 +572,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
         ? onOpenClawIdTunnelPrincipalsChanged(() => recheck(assertSourceCurrent))
         : undefined,
       onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "assignment" && change.profileId === profileId) {
+        if (
+          change.kind === "assignment" &&
+          change.profileId === profileId &&
+          change.roleOnly &&
+          openclawIdPrincipal?.kind === "owner"
+        ) {
+          // A linked owner device's authority is its certificate; its person's role is not.
+          recheck(assertCapturedRoleCurrent);
+        } else if (change.kind === "assignment" && change.profileId === profileId) {
           revoke(new Error("Your operator role changed; reconnect before continuing."));
         } else if (
           change.kind === "config" &&

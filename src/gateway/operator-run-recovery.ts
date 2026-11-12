@@ -259,7 +259,15 @@ async function restoreGatewayOperatorSnapshot(params: {
     // even if another update restores the same role or authentication policy.
     subscriptions.push(
       onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "assignment" && change.profileId === snapshot.profileId) {
+        if (
+          change.kind === "assignment" &&
+          change.profileId === snapshot.profileId &&
+          change.roleOnly &&
+          principal?.kind === "owner"
+        ) {
+          // A linked owner device's authority is its certificate; its person's role is not.
+          recheck();
+        } else if (change.kind === "assignment" && change.profileId === snapshot.profileId) {
           revoke(new GatewayOperatorRecoveryAuthorizationError());
         } else if (change.kind === "config" && change.context === gatewayOwner) {
           recheck();
