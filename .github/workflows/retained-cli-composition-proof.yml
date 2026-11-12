@@ -1,4 +1,4 @@
-name: Release memory retirement formatted candidate proof
+name: Final release ports exact-candidate proof
 'on':
   workflow_dispatch:
     inputs:
@@ -6,11 +6,10 @@ name: Release memory retirement formatted candidate proof
         required: true
         type: string
         description: Exact frozen candidate SHA; prerequisite diagnostic, not final FRV
-        default: a233af0b84e093845c62e88c2702cbd9b297f22c
 permissions:
   contents: read
 concurrency:
-  group: release-memory-retirement-a233af0b84e093845c62e88c2702cbd9b297f22c
+  group: release-ports-${{ inputs.target_ref }}
   cancel-in-progress: false
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
@@ -26,6 +25,326 @@ env:
   PATHS_SHA256: 56a1d5118580b0ea7c50e12d42dac3d95dfabcee58ecf5561b6797c92ae0ef93
   TRUSTED_P: 68aff7f864148760c3800c95435cc36ddaa91654
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Required real UI and locale preflight
+      run: 'set -euo pipefail
+
+        pnpm ui:build
+
+        node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts --json | tee .artifacts/final-ci/ui-performance.json
+
+        node --input-type=module -e ''import fs from "node:fs"; import assert from "node:assert/strict"; const report=JSON.parse(fs.readFileSync(".artifacts/final-ci/ui-performance.json","utf8"));
+        assert.deepEqual(report.violations, [], "Blocking UI asset budget violations");''
+
+        pnpm ui:i18n:check
+
+        pnpm native:i18n:check
+
+        pnpm ui:i18n:verify
+
+        pnpm native:i18n:verify
+
+        git diff --exit-code'
+    - id: plan
+      name: Materialize native changed-check graph plan
+      run: 'node --input-type=module <<''NODE''
+
+        import fs from ''node:fs'';
+
+        const paths=fs.readFileSync(''.artifacts/final-ci/source-paths.txt'',''utf8'').trim().split(''\n'');
+
+        const input={changedBaseRef:process.env.BASE_SHA,changedPaths:paths,changedCoreTestPaths:null,typeGraphBoundaryOwner:''changed-check'',runnerProfile:''github'',preserveFullChecks:false,checkMatrix:{include:[{task:''prod-types'',check_name:''production
+        types'',runner:''ubuntu-24.04''},{task:''test-types'',check_name:''test types'',runner:''ubuntu-24.04''}]},coreTypeMatrix:{include:[1,2,3,4,5].map(stripe=>({stripe}))},lintCoreMatrix:{include:[]},lintExtensionMatrix:{include:[]}};
+
+        fs.writeFileSync(''.artifacts/final-ci/plan-input.json'',JSON.stringify(input));
+
+        NODE
+
+        OPENCLAW_CI_CHECK_PLAN_INPUT_JSON="$(cat .artifacts/final-ci/plan-input.json)" node scripts/ci-check-plan.mts'
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: plan-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+    outputs:
+      check_matrix: ${{ steps.plan.outputs.check_matrix }}
+      core_type_matrix: ${{ steps.plan.outputs.core_type_matrix }}
+  noncompiler:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Run all unchanged noncompiler checks
+      run: 'set -euo pipefail
+
+        mapfile -t paths < .artifacts/final-ci/source-paths.txt
+
+        pnpm check:changed --base "$BASE_SHA" --head HEAD --delegate-compilers --paths-from-git -- "${paths[@]}" 2>&1 | tee
+        .artifacts/final-ci/checks.log'
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: noncompiler-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+    needs:
+    - plan
+  compiler-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Execute both returned graph lists
+      env:
+        TYPE: ${{ matrix.type_graph_names_json }}
+        CORE: ${{ matrix.core_type_graph_names_json }}
+        CORE_CONCURRENCY: ${{ matrix.core_type_concurrency }}
+        OPENCLAW_CI_STATIC_EVIDENCE: '1'
+      run: "set -euo pipefail\nsource scripts/ci-static-step.sh tsgo\nif [ -n \"$CORE\" ] && [ \"$CORE\" != '[]' ]; then\n\
+        \ run_static_check node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json \"$CORE\" --concurrency \"${CORE_CONCURRENCY:-1}\"\
+        \nfi\nif [ -n \"$TYPE\" ] && [ \"$TYPE\" != '[]' ]; then\n run_static_check node scripts/run-tsgo-core-test-shards.mjs\
+        \ --ci-graphs-json \"$TYPE\"\nfi\nfinish_static_checks"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: graphs-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+    needs:
+    - plan
+    if: ${{ needs.plan.result == 'success' && needs.plan.outputs.check_matrix != '' && toJSON(fromJSON(needs.plan.outputs.check_matrix).include)
+      != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.check_matrix) }}
+  compiler-core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Execute native core graph and root stripe
+      env:
+        TYPE: ${{ matrix.type_graph_names_json }}
+        ROOT: ${{ matrix.root_type_stripe }}
+        OPENCLAW_CI_STATIC_EVIDENCE: '1'
+      run: "set -euo pipefail\nsource scripts/ci-static-step.sh tsgo\nif [ -n \"$TYPE\" ] && [ \"$TYPE\" != '[]' ]; then\n\
+        \ run_static_check node scripts/run-tsgo-core-test-shards.mjs --ci-graphs-json \"$TYPE\" --concurrency 2\nfi\nif [\
+        \ -n \"$ROOT\" ]; then\n run_static_check env OPENCLAW_LOCAL_CHECK=0 node scripts/run-tsgo-core-test-shards.mjs --root-stripe\
+        \ \"$ROOT\"\nfi\nfinish_static_checks"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: core-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+    needs:
+    - plan
+    if: ${{ needs.plan.result == 'success' && needs.plan.outputs.core_type_matrix != '' && toJSON(fromJSON(needs.plan.outputs.core_type_matrix).include)
+      != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.core_type_matrix) }}
   tests:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -78,6 +397,14 @@ jobs:
         cache-mode: restore
     - uses: ./.github/actions/setup-test-bun
     - uses: ./.github/actions/setup-ripgrep
+    - name: Build private-QA runtime through canonical prebuild owner
+      id: node-test-runtime
+      if: matrix.prebuilt_runtime
+      env:
+        NODE_OPTIONS: --max-old-space-size=8192
+        OPENCLAW_BUILD_PRIVATE_QA: '1'
+        VITEST: '1'
+      run: pnpm build qaRuntime
     - name: Canonical test project router
       shell: bash
       run: 'set -euo pipefail
@@ -86,6 +413,9 @@ jobs:
 
         node scripts/test-projects.mts "${suites[@]}" -- --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/final-ci/tests.json"
         2>&1 | tee .artifacts/final-ci/tests.log'
+      env:
+        OPENCLAW_E2E_USE_PREBUILT_DIST: ${{ steps.node-test-runtime.outcome == 'success' && matrix.prebuilt_runtime && '1'
+          || '' }}
     - name: Require executed suite coverage
       shell: bash
       run: "node --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\nconst selected=JSON.parse(process.env.TESTS_JSON);\n\
@@ -101,34 +431,7 @@ jobs:
         \ must execute, never skip');\n}\nif (process.platform==='win32') {\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\
         \\','/').endsWith('/src/infra/update-retained-runtime-imports.process.test.ts'));\n for (const runtime of ['node-short-path','node-junction'])\
         \ assert(suite?.assertionResults.some(x=>x.title.includes(runtime)&&x.status==='passed'),'Missing real '+runtime+'\
-        \ pass');\n}\nNODE\nnode --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\n\
-        const expected={ 'queued-inputs':3, permissions:4 }[process.env.PROOF_LANE];\nif (expected) {\n const report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\n\
-        \ assert.equal(report.numPassedTests,expected);\n assert.equal(report.numPendingTests,0);\n}\nNODE\n\nif [ \"$PROOF_LANE\"\
-        \ = consumed-contract ]; then node -e 'const r=require(\"./.artifacts/final-ci/tests.json\"); require(\"node:assert/strict\"\
-        ).equal(r.numPendingTests,0)'; fi\n"
-    - name: Require all selected cases
-      run: 'node -e ''const r=require("./.artifacts/final-ci/tests.json");require("node:assert/strict").equal(r.numPendingTests,0)'' '
-    - name: Require registry regression execution
-      shell: bash
-      run: 'set -euo pipefail
-
-        if [ "$PROOF_LANE" = memory-registry ]; then
-
-        python3 <<''PY''
-
-        import json
-
-        r=json.load(open(''.artifacts/final-ci/tests.json''));assert r[''numPassedTests'']==5 and r[''numFailedTests'']==0
-        and r[''numPendingTests'']==0
-
-        cases=[a for s in r[''testResults''] for a in s[''assertionResults'']];hit=[a for a in cases if a[''title'']==''drains
-        unresolved managers only when adapters retire and fences their late provider work''];assert len(hit)==1 and hit[0][''status'']==''passed''
-
-        PY
-
-        fi
-
-        '
+        \ pass');\n}\nNODE"
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
@@ -137,22 +440,313 @@ jobs:
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 14
+    needs:
+    - plan
     strategy:
       fail-fast: false
       matrix:
         include:
-        - lane: memory-original-shard
+        - lane: capacity-27-unit-fast
+          tests_json: '["src/agents/code-mode-shell-source.test.ts","src/agents/code-mode.catalog-index.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-gateway
+          tests_json: '["src/gateway/dashboard-session-title.test.ts","src/gateway/server-methods/system-agent-approval-authority.test.ts","src/gateway/server-methods/system-agent-approval.test.ts","src/gateway/server-methods/system-agent.host-lifecycle.test.ts","src/gateway/server.delegated-administration.product.test.ts","src/gateway/session-utils.permissions.test.ts","src/gateway/tool-resolution.exclude.test.ts","src/gateway/worker-environments/worker-turn-execution.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-infra
+          tests_json: '["src/agents/cli-runner.reliability.test.ts","src/agents/code-mode.agent-loop.test.ts","src/agents/code-mode.catalog-lifetime.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-runtime-config
+          tests_json: '["src/config/runtime-snapshot.test.ts","src/config/zod-schema.agents.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-commands
+          tests_json: '["src/commands/doctor-session-title-repair.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-agents-core
+          tests_json: '["src/agents/cli-runner.before-agent-reply-cron.test.ts","src/agents/code-mode.bridge.test.ts","src/agents/code-mode.failure-phase.test.ts","src/agents/code-mode.wait.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-agents-embedded-agent-run
+          tests_json: '["src/agents/embedded-agent-runner/run/attempt-before-agent-run.test.ts","src/agents/embedded-agent-runner/run/attempt-prompt-phase.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-agents-tools
+          tests_json: '["src/agents/tools/gateway-caller-context.test.ts","src/agents/tools/openclaw-delegate-tool.exec-preparation.test.ts","src/agents/tools/openclaw-delegate-tool.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-ui-e2e
+          tests_json: '["ui/src/e2e/session-management.trailing-state.e2e.test.ts"]'
+          prebuilt_runtime: false
+        - lane: capacity-27-e2e
+          tests_json: '["test/system-agent-delegation-authority.e2e.test.ts","test/scripts/ci-prepared-runtime.e2e.test.ts"]'
+          prebuilt_runtime: true
+        - lane: initial-policy-skills
+          tests_json: '["extensions/agentsapi/agentsapi-harness.persistence.test.ts","extensions/agentsapi/agentsapi-harness.startup.test.ts","extensions/anthropic/cli-auth-seam.test.ts","extensions/irc/src/monitor.test.ts","extensions/openshell/src/backend.e2e.test.ts","extensions/openshell/src/backend.exec-workdir.test.ts","extensions/openshell/src/mirror.test.ts","packages/agent-core/src/harness/compaction/compaction-request-scope.test.ts","packages/agent-core/src/harness/compaction/compaction.test.ts","packages/ai/src/providers/clean-for-gemini.test.ts","src/agents/agent-hooks/compaction-safeguard.test.ts","src/agents/conversation-capability-profile.test.ts","src/agents/embedded-agent-runner/run/llm-idle-timeout.test.ts","src/agents/subagents/announce/subagent-announce.format.e2e.test.ts","src/agents/subagents/registry/subagent-announcement-delivery.worker.test.ts","src/agents/subagents/registry/subagent-registry-read.prepared.test.ts","src/agents/subagents/registry/subagent-registry.completion-authority.test.ts","src/agents/tool-search-runtime.test.ts","src/agents/workspace-state-dirs.test.ts","src/auto-reply/reply/session-event-config-readmission.test.ts","src/auto-reply/tool-meta.test.ts","src/cli/update-cli/update-command-original-service.test.ts","src/commands/doctor-maintenance.agent-schema.test.ts","src/commands/doctor-maintenance.settlement.test.ts","src/commands/doctor-original-capture-admission.test.ts","src/commands/doctor-session-entry-state.test.ts","src/flows/doctor-health-startup.test.ts","src/flows/doctor-health.managed-approvals.test.ts","src/gateway/agent-turn/agent-session-persist.rollover.test.ts","src/gateway/server-startup-workspace-readiness.test.ts","src/gateway/tool-resolution.cron-capture.test.ts","src/gateway/tool-resolution.swarm-collector.test.ts","src/gateway/tool-resolution.terminal.test.ts","src/gateway/tool-resolution.test.ts","src/infra/database-engine/port-command.integration.test.ts","src/infra/exec-approvals-authorization.worker.test.ts","src/infra/exec-approvals-store.read-worker.test.ts","src/infra/exec-approvals-store.test.ts","src/infra/sqlite-snapshot-source.identity.test.ts","src/infra/state-migrations.audit-logs.test.ts","src/infra/state-migrations.audit-skips.test.ts","src/infra/state-migrations.exec-approvals-canonical.test.ts","src/infra/state-migrations.exec-approvals.test.ts","src/infra/state-migrations.workspace-setup-sandbox.test.ts","src/node-host/startup-state-readiness.test.ts","src/state/openclaw-state-db-permissions.test.ts","ui/src/lib/config/config-patch-recovery.test.ts","ui/src/lib/config/config-state-model.test.ts","ui/src/lib/config/runtime-config-capability.test.ts","ui/src/lib/config/stored-secret-source.node.test.ts","ui/src/lib/skills/api-key-source.test.ts","ui/src/lib/skills/index.test.ts","ui/src/pages/gateway-source-replacement.test.ts","ui/src/pages/skills/skills-page.test.tsx","ui/src/pages/skills/view.test.ts"]'
+          prebuilt_runtime: true
+        - lane: memory-replay
+          tests_json: '["extensions/memory-core/src/memory-forget-curated-writes.test.ts","extensions/memory-core/src/memory-forget.sources.test.ts","extensions/memory-core/src/memory-forget.worker-settlement.test.ts","extensions/memory-core/src/memory/manager-captured-session-preparation.test.ts","extensions/memory-core/src/memory/manager-session-export-equivalence.test.ts","extensions/memory-core/src/memory/manager-session-index-preparation.test.ts","extensions/memory-core/src/memory/manager-session-single-compute.test.ts","extensions/memory-core/src/memory/manager-session-update-race.test.ts","extensions/memory-core/src/memory/manager-sync-ops.startup-catchup.test.ts","extensions/memory-core/src/memory/manager-sync-yield.test.ts","extensions/memory-core/src/session-ingestion.test.ts","packages/agent-core/src/harness/session/session-context.test.ts","packages/memory-host-sdk/src/host/session-files-large-export.test.ts","packages/memory-host-sdk/src/host/session-files-reset-revision.test.ts","packages/memory-host-sdk/src/host/session-files-yield.test.ts","packages/memory-host-sdk/src/host/session-files.provenance.test.ts","packages/memory-host-sdk/src/host/session-files.test.ts","packages/memory-host-sdk/src/host/types.test.ts","src/agents/embedded-agent-runner.sanitize-session-history.test.ts","src/agents/embedded-agent-runner/replay-history.test.ts","src/agents/embedded-agent-runner/run/attempt-session-replay.test.ts","src/agents/embedded-agent-runner/run/attempt.llm-boundary.test.ts","src/agents/sessions/session-manager-model-context-prefix.test.ts","src/agents/system-prompt.cache-prefix.test.ts","src/config/sessions/session-accessor.sqlite-cold-read.test.ts","src/config/sessions/session-accessor.sqlite-read-hold.test.ts","src/config/sessions/session-actor-memory-corpus.test.ts","src/config/sessions/session-actor-memory-search.test.ts","src/config/sessions/session-history-worker-errors.test.ts","src/config/sessions/session-memory-entry.worker.test.ts","src/config/sessions/session-memory-working-set.test.ts","src/config/sessions/session-transcript-context-read.worker.test.ts","src/config/sessions/session-transcript-memory-read.test.ts","src/config/sessions/session-transcript-worker-readers.test.ts","src/gateway/server-methods/sessions-files-touched.test.ts","src/gateway/server-methods/sessions-files.host-read.test.ts","src/gateway/server-methods/sessions-files.repository.test.ts","src/gateway/server-methods/sessions-files.test.ts","src/plugin-sdk/memory-core-host-engine-sessions.contract.test.ts","src/plugin-sdk/session-transcript-runtime-replay.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-unit-fast
+          tests_json: '["src/agents/prepared-model-runtime.catalog-scope.test.ts","src/agents/runtime-plugin-work.test.ts","src/plugins/registry-inspection-resources.invocation.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-unit-fast-isolated
+          tests_json: '["src/agents/prepared-model-runtime.plugin-drain.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-unit
+          tests_json: '["src/context-engine/registry.resources.test.ts","src/system-agent/setup-inference-transition.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-gateway-1
+          tests_json: '["src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts","src/gateway/config-reload.plugin-drain.test.ts","src/gateway/mention-inbox.sharing-target.test.ts","src/gateway/remote-control-ui-ingress.integration.test.ts","src/gateway/remote-control-ui-ingress.test.ts","src/gateway/remote-control-ui-transport.test.ts","src/gateway/server-active-work.test.ts","src/gateway/server-close.acp-diagnostics.test.ts","src/gateway/server-close.acp-restart.test.ts","src/gateway/server-close.agent-databases.test.ts","src/gateway/server-close.auth-usage.test.ts","src/gateway/server-close.board.test.ts","src/gateway/server-close.channel-pairing.test.ts","src/gateway/server-close.cleanup-scope.test.ts","src/gateway/server-close.cron.test.ts","src/gateway/server-close.incognito-compute.test.ts","src/gateway/server-close.incognito-manager.test.ts","src/gateway/server-close.lifecycle-read.test.ts","src/gateway/server-close.media-provenance.test.ts","src/gateway/server-close.memory.test.ts","src/gateway/server-close.mentions.test.ts","src/gateway/server-close.metadata.test.ts","src/gateway/server-close.model-accounts.test.ts","src/gateway/server-close.model-acquisition.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-gateway-2
+          tests_json: '["src/gateway/server-close.model-cache.test.ts","src/gateway/server-close.placement.test.ts","src/gateway/server-close.plugin-failure.test.ts","src/gateway/server-close.plugin-state.test.ts","src/gateway/server-close.port-reservation.test.ts","src/gateway/server-close.process-exit.test.ts","src/gateway/server-close.progress-card.test.ts","src/gateway/server-close.question-publication.test.ts","src/gateway/server-close.queued-heartbeat.test.ts","src/gateway/server-close.queued-inputs.test.ts","src/gateway/server-close.restart-safe-chat.test.ts","src/gateway/server-close.sandbox-registry.test.ts","src/gateway/server-close.session-observer.test.ts","src/gateway/server-close.session-rewind.test.ts","src/gateway/server-close.session-signals.test.ts","src/gateway/server-close.system-agent.test.ts","src/gateway/server-close.test.ts","src/gateway/server-close.voice-session.test.ts","src/gateway/server-close.worktree-run-end.test.ts","src/gateway/server-cron-lazy.test.ts","src/gateway/server-methods.suspension-admission.test.ts","src/gateway/server-methods/config-write-flow.test.ts","src/gateway/server-methods/config.shared-auth.test.ts","src/gateway/server-methods/config.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-gateway-3
           tests_json: '["src/gateway/server-plugin-reload-cleanup.test.ts","src/gateway/server-plugin-reload-recovery.test.ts","src/gateway/server-plugin-reload.installed-package.test.ts","src/gateway/server-plugin-reload.meeting-transcripts.test.ts","src/gateway/server-plugin-reload.prepared-borrow.test.ts","src/gateway/server-plugin-reload.recovery.test.ts","src/gateway/server-request-entry.test.ts","src/gateway/server-run-shutdown.recovery.test.ts","src/gateway/server.operator-observer-lifetime.test.ts","src/gateway/session-automation-index.maintenance.test.ts","src/gateway/session-automation-index.test.ts","src/gateway/session-row-projection.automation.test.ts","src/gateway/session-row-projection.selection-progress.test.ts","src/gateway/session-utils.test.ts","src/gateway/worker-environments/worker-turn-context-engine.test.ts"]'
-        - lane: memory-registry
-          tests_json: '["extensions/memory-core/src/memory/manager-registry.reload.test.ts"]'
-        - lane: memory-runtime-owners
-          tests_json: '["src/plugins/memory-runtime.owners.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-infra
+          tests_json: '["src/agents/embedded-agent-runner/compact.delegate-resources.test.ts","src/agents/embedded-agent-runner/compact.hooks.test.ts","src/agents/embedded-agent-runner/compact.queued-successor.test.ts","src/agents/embedded-agent-runner/compaction-runtime-admission.test.ts","src/agents/prepared-model-runtime.reload-auth.test.ts","src/agents/tools-effective-inventory.cold-provider.test.ts","src/agents/tools-effective-inventory.gateway-borrow.test.ts","src/agents/tools/media-generate-tool.donor-resources.test.ts","src/agents/tools/pdf-tool.resources.test.ts","src/agents/tools/pdf-tool.static-runtime.test.ts","src/auto-reply/reply/dispatch-from-config.pending-restart.test.ts","src/auto-reply/reply/queue.pending-inputs.test.ts","src/gateway/server-close.conversation-bindings.test.ts","src/infra/gateway-scheduler.test.ts","src/infra/gateway-suspend-coordinator.handoff.test.ts","src/infra/gateway-suspend-coordinator.test.ts","src/infra/update-retained-runtime-exit.test.ts","src/infra/update-retained-runtime-imports.process.test.ts","src/infra/update-retained-runtime-tree.test.ts","src/infra/update-retained-runtime.backups.test.ts","src/infra/update-retained-runtime.test.ts","src/media-understanding/image.resources.test.ts","src/plugins/services.control-ui-ingress.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-runtime-config-1
+          tests_json: '["src/config/sessions/cleanup-service.agent-purge.test.ts","src/config/sessions/cleanup-service.applied-summary.test.ts","src/config/sessions/cleanup-service.cap-archive.test.ts","src/config/sessions/cleanup-service.fix-missing.test.ts","src/config/sessions/cleanup-service.model-run-retention.test.ts","src/config/sessions/cleanup-service.readonly.test.ts","src/config/sessions/session-accessor.pending-inputs-consumed.test.ts","src/config/sessions/session-accessor.pending-inputs-worker-custody.test.ts","src/config/sessions/session-accessor.pending-inputs.test.ts","src/config/sessions/session-accessor.sqlite-cleanup-generation-race.test.ts","src/config/sessions/session-accessor.sqlite-cleanup-race.test.ts","src/config/sessions/session-accessor.sqlite-cleanup-reclamation.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-admission.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-age.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-cadence.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-close.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-kick.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-read.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-worker.test.ts","src/config/sessions/session-accessor.sqlite-maintenance-writer.test.ts","src/config/sessions/session-accessor.sqlite-reclamation-maintenance.test.ts","src/config/sessions/session-actor-memory-storage.test.ts","src/config/sessions/session-pending-input-authority.test.ts","src/config/sessions/session-pending-input-foreign-rewrite.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-runtime-config-2
+          tests_json: '["src/config/sessions/session-pending-input-history.test.ts","src/config/sessions/session-pending-input-operations.test.ts","src/config/sessions/session-pending-input-source.test.ts","src/config/sessions/session-pending-input-withdrawal.test.ts","src/config/sessions/session-registry-maintenance.test.ts","src/config/sessions/store-maintenance-recent-preservation.test.ts","src/config/sessions/store-maintenance-warning-parity.test.ts","src/config/sessions/store-maintenance.dashboard-archive.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-cron
+          tests_json: '["src/cron/job-session-bindings.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-media-understanding
+          tests_json: '["src/media-understanding/image.runtime-profile.test.ts","src/media-understanding/image.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-cli
+          tests_json: '["src/cli/update-cli/update-command-service-drain.native.test.ts","src/cli/update-cli/update-command-service-drain.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-agents-core
+          tests_json: '["src/agents/runtime-plugins.channel-borrowing.test.ts","src/agents/runtime-plugins.channel-ownership.test.ts","src/agents/runtime-plugins.hooks.integration.test.ts","src/agents/tools-effective-inventory.runtime-model.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-plugins
+          tests_json: '["src/plugins/capability-provider-acquisition.test.ts","src/plugins/registry-inspection-resources.test.ts","src/plugins/tool-registry-adoption.test.ts"]'
+          prebuilt_runtime: false
+        - lane: lifetime-reload-e2e
+          tests_json: '["src/gateway/worker-environments/inference-authority.e2e.test.ts"]'
+          prebuilt_runtime: true
+        - lane: remaining-touched
+          tests_json: '["src/agents/agent-tool-availability.test.ts","src/agents/agent-tools.finalize.test.ts","src/agents/agent-tools.schema.test.ts","src/agents/embedded-agent-runner/run/attempt-prompt-observability.test.ts","src/agents/embedded-agent-runner/run/attempt-prompt-preflight.test.ts","src/cli/daemon-cli/install.integration.test.ts","src/cli/daemon-cli/status.print.test.ts","src/cli/update-cli/update-command-runtime-preview.test.ts","src/cli/update-cli/update-command-target.n1-prefix.test.ts","src/cli/update-finalization-output.process.test.ts","src/commands/doctor-maintenance.finish-revalidation.test.ts","src/commands/doctor-maintenance.installation.test.ts","src/commands/doctor-maintenance.migration-refusal.test.ts","src/commands/doctor-maintenance.native-identity.test.ts","src/commands/doctor-maintenance.readiness.test.ts","src/commands/status.service-summary.test.ts","src/daemon/systemd-definition-mutation.test.ts","src/flows/doctor-health.legacy-update.test.ts","src/gateway/server-reload-managed-secrets.test.ts","test/scripts/changed-lanes.test.ts","test/scripts/check-changed-compiler-delegation.test.ts","test/scripts/vitest-report-owner.test.ts","test/vitest-projects-config.test.ts","test/vitest-scoped-config.test.ts"]'
+          prebuilt_runtime: false
+        - lane: repair-worker-context
+          tests_json: '["src/gateway/worker-environments/worker-turn-detached-context.test.ts"]'
+          prebuilt_runtime: false
+        - lane: repair-service-context
+          tests_json: '["src/plugins/plugin-instance-registry.test.ts","src/plugins/services.nodes.test.ts","src/plugins/services.scheduler-context.test.ts","src/plugins/services.test.ts"]'
+          prebuilt_runtime: false
+        - lane: repair-memory-retirement
+          tests_json: '["extensions/memory-core/src/memory/manager-registry.reload.test.ts","src/plugins/memory-runtime.owners.test.ts"]'
+          prebuilt_runtime: false
+      max-parallel: 5
     env:
       TESTS_JSON: ${{ matrix.tests_json }}
       OPENCLAW_SESSION_EXPORT_STRESS: '1'
       REQUIRE_STRESS: ${{ matrix.lane == 'memory-replay' && '1' || '0' }}
-      PROOF_LANE: ${{ matrix.lane }}
-  static:
+  before-capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: f38131f934b45447558cf6f431353a49656198d5
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind BEFORE source and identical prerequisite plus regression inputs
+      env:
+        TARGET_SHA: ${{ inputs.target_ref }}
+        WORKFLOW_SHA: ${{ github.workflow_sha }}
+      run: "set -euo pipefail\ntest \"$TARGET_SHA\" = \"$CANDIDATE_SHA\"\ntest \"$(git rev-parse HEAD)\" = \"$BEFORE_SHA\"\
+        \ntest \"$(git rev-parse HEAD^{tree})\" = a2b41999e8f0ac728cec97457e0500a76a7fd71e\ntest -z \"$(git status --porcelain)\"\
+        \ntest \"$(git rev-parse \"$CANDIDATE_SHA^{tree}\")\" = \"$SOURCE_TREE\"\n\ntest \"$(git rev-parse \"$PREREQUISITE_PARENT^\"\
+        )\" = \"$BEFORE_SHA\"\nmkdir -p .artifacts/before-capacity\nprintf 'candidate=%s\\nbefore=%s\\nworkflow=%s\\nrun=%s\\\
+        nattempt=%s\\n' \"$CANDIDATE_SHA\" \"$BEFORE_SHA\" \"$WORKFLOW_SHA\" \"$GITHUB_RUN_ID\" \"$GITHUB_RUN_ATTEMPT\" >\
+        \ .artifacts/before-capacity/identity.txt\n# Apply only the reviewed build prerequisites, identically to the AFTER\
+        \ tree.\ngit diff --binary --full-index \"$PREREQUISITE_PARENT\" \"$CAPACITY_PROOF_SHA\" > .artifacts/before-capacity/prerequisite.patch\n\
+        echo \"$PREREQUISITE_PATCH_SHA256  .artifacts/before-capacity/prerequisite.patch\" | sha256sum -c -\ngit apply --check\
+        \ .artifacts/before-capacity/prerequisite.patch\ngit apply .artifacts/before-capacity/prerequisite.patch\nfor path\
+        \ in src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts src/system-agent/delegated-change-policy.ts;\
+        \ do\n  test \"$(git hash-object \"$path\")\" = \"$(git rev-parse \"$CAPACITY_PROOF_SHA:$path\")\"\ndone\nfor path\
+        \ in src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs; do\n  git show\
+        \ \"$CAPACITY_PROOF_SHA:$path\" > \"$path\"\n  test \"$(git hash-object \"$path\")\" = \"$(git rev-parse \"$CAPACITY_PROOF_SHA:$path\"\
+        )\"\ndone\nprintf '%s\\n' src/agents/code-mode.catalog-lifetime.test.ts src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts\
+        \ src/system-agent/delegated-change-policy.ts test/vitest/vitest.database-worker-core-paths.mjs > .artifacts/before-capacity/expected-overlay.txt\n\
+        git diff --name-only | LC_ALL=C sort > .artifacts/before-capacity/actual-overlay.txt\ndiff -u .artifacts/before-capacity/expected-overlay.txt\
+        \ .artifacts/before-capacity/actual-overlay.txt\ngit diff --exit-code -- src/agents/code-mode-execution.ts src/agents/code-mode-state.ts\n\
+        git diff --binary > .artifacts/before-capacity/overlay.patch\nsha256sum src/agents/openclaw-tools.types.ts src/config/runtime-snapshot.ts\
+        \ src/system-agent/delegated-change-policy.ts src/agents/code-mode.catalog-lifetime.test.ts test/vitest/vitest.database-worker-core-paths.mjs\
+        \ src/agents/code-mode-execution.ts src/agents/code-mode-state.ts > .artifacts/before-capacity/source-sha256.txt\n"
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - name: Execute unchanged native capacity regression on BEFORE owners
+      id: regression
+      env:
+        OPENCLAW_TEST_FILE_LOG: '1'
+        OPENCLAW_LOG_LEVEL: error
+      run: 'set -uo pipefail
+
+        set +e
+
+        node scripts/test-projects.mts src/agents/code-mode.catalog-lifetime.test.ts -- --maxWorkers=1 --reporter=default
+        --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/before-capacity/tests.json" 2>&1 | tee .artifacts/before-capacity/tests.log
+
+        pipeline_status=("${PIPESTATUS[@]}")
+
+        set -e
+
+        test "${pipeline_status[1]}" -eq 0
+
+        status=${pipeline_status[0]}
+
+        printf ''%s\n'' "$status" > .artifacts/before-capacity/exit-code.txt
+
+        # The classifier below alone admits the specific expected assertion failure.
+
+        exit 0
+
+        '
+    - name: Require named native capacity failure, never generic failure
+      if: always()
+      env:
+        REGRESSION_OUTCOME: ${{ steps.regression.outcome }}
+      run: "node --input-type=module <<'NODE'\nimport fs from 'node:fs';\nimport assert from 'node:assert/strict';\nconst\
+        \ root = '.artifacts/before-capacity/';\nfs.mkdirSync(root, { recursive: true });\nconst result = { classification:\
+        \ 'failed', before: process.env.BEFORE_SHA, candidate: process.env.CANDIDATE_SHA };\ntry {\n  assert.equal(process.env.REGRESSION_OUTCOME,\
+        \ 'success', 'Regression command did not complete');\n  const exitCode = Number(fs.readFileSync(root + 'exit-code.txt',\
+        \ 'utf8').trim());\n  assert.equal(exitCode, 1, 'Expected ordinary assertion exit 1, not pass or infrastructure failure');\n\
+        \  const report = JSON.parse(fs.readFileSync(root + 'tests.json', 'utf8'));\n  assert.equal(report.numFailedTests,\
+        \ 1);\n  assert.equal(report.numTotalTests, 1);\n  assert.equal(report.testResults.length, 1);\n  const suite = report.testResults[0];\n\
+        \  assert(suite.name.replaceAll('\\\\', '/').endsWith('/src/agents/code-mode.catalog-lifetime.test.ts'));\n  assert.equal(suite.assertionResults.length,\
+        \ 1);\n  const test = suite.assertionResults[0];\n  assert.equal(test.title, 'keeps the suspension limit while required\
+        \ observers collect existing process results');\n  assert.equal(test.status, 'failed');\n  const failure = test.failureMessages.join('\\\
+        n');\n  // Native toMatchObject output may omit received fields outside the expected subset.\n  // Read the frozen\
+        \ product's existing structured diagnostic, not a generic log match.\n  const diagnostics = [];\n  for (const name\
+        \ of fs.readdirSync('.artifacts/test-logs')) {\n    if (!name.endsWith('.log')) continue;\n    for (const line of\
+        \ fs.readFileSync('.artifacts/test-logs/' + name, 'utf8').split('\\n').filter(Boolean)) {\n      const record = JSON.parse(line);\n\
+        \      const fields = Object.values(record).find((value) => value && typeof value === 'object' && value.toolCallId\
+        \ === 'required-observer');\n      if (record.message === 'Code Mode execution failed' && fields && fields.error ===\
+        \ 'too many suspended code mode runs.' && fields.bridgeDispatchStarted === false) {\n        diagnostics.push({ toolCallId:\
+        \ fields.toolCallId, error: fields.error, failurePhase: fields.failurePhase, bridgeDispatchStarted: fields.bridgeDispatchStarted\
+        \ });\n      }\n    }\n  }\n  assert(diagnostics.length > 0, 'Missing producer diagnostic: required-observer rejected\
+        \ at capacity before dispatch');\n  result.diagnostics = diagnostics;\n  assert(failure.includes('AssertionError')\
+        \ && failure.includes('failed') && failure.includes('to match object'), 'Expected native completion-versus-rejection\
+        \ assertion');\n  const { stripVTControlCharacters } = await import('node:util');\n  const nativeLog = stripVTControlCharacters(fs.readFileSync(root\
+        \ + 'tests.log', 'utf8'));\n  assert(/src\\/agents\\/code-mode\\.catalog-lifetime\\.test\\.ts:141:7/.test(nativeLog),\
+        \ 'Wrong native-result collection assertion site');\n  assert(nativeLog.includes('benchmark-result') && /status[\\\
+        \"':\\s]+completed/.test(nativeLog), 'Missing required native-result expectation in the native assertion diff');\n\
+        \  result.classification = 'expected-capacity-failure';\n  result.exitCode = exitCode;\n  result.suite = suite.name;\n\
+        \  result.test = test.title;\n  result.failureMessages = test.failureMessages;\n} catch (error) {\n  result.reason\
+        \ = String(error);\n  process.exitCode = 1;\n}\nfs.writeFileSync(root + 'classification.json', JSON.stringify(result,\
+        \ null, 2) + '\\n');\nconsole.log(JSON.stringify(result));\nNODE\n"
+    - name: Record BEFORE artifact hashes
+      if: always()
+      run: "if test -d .artifacts/before-capacity; then\n  (cd .artifacts/before-capacity && find . -type f ! -name SHA256SUMS\
+        \ -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)\nfi\n"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: required-backports-before-capacity-${{ inputs.target_ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/before-capacity/
+        if-no-files-found: error
+        retention-days: 14
+    needs:
+    - plan
+  windows-retained:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - name: Canonical test project router
+      shell: bash
+      run: 'set -euo pipefail
+
+        mapfile -t suites < <(node -e ''for(const p of JSON.parse(process.env.TESTS_JSON)) console.log(p)'')
+
+        node scripts/test-projects.mts "${suites[@]}" -- --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/final-ci/tests.json"
+        2>&1 | tee .artifacts/final-ci/tests.log'
+    - name: Require actual Windows alias cases
+      shell: bash
+      run: "node --input-type=module <<'NODE'\nimport fs from 'node:fs'; import assert from 'node:assert/strict';\nconst selected=JSON.parse(process.env.TESTS_JSON);\n\
+        const report=JSON.parse(fs.readFileSync('.artifacts/final-ci/tests.json','utf8'));\nassert.equal(report.numFailedTests,0);\
+        \ assert.equal(report.numFailedTestSuites,0);\nfor (const path of selected) {\n const matches=report.testResults.filter(x=>x.name.replaceAll('\\\
+        \\','/').endsWith('/'+path));\n assert.equal(matches.length,1,'Missing/duplicate suite '+path);\n assert(matches[0].assertionResults.some(x=>x.status==='passed'),'No\
+        \ executed case '+path);\n assert(matches[0].assertionResults.every(x=>['passed','pending','skipped','todo','disabled'].includes(x.status)),'Failed\
+        \ case '+path);\n}\nfor (const path of ['src/agents/code-mode.catalog-lifetime.test.ts','src/gateway/server.delegated-administration.product.test.ts','test/system-agent-delegation-authority.e2e.test.ts','ui/src/e2e/session-management.trailing-state.e2e.test.ts'])\
+        \ {\n if (!selected.includes(path)) continue;\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\\','/').endsWith('/'+path));\n\
+        \ assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Critical\
+        \ cases must all pass '+path);\n}\nif (process.env.REQUIRE_STRESS==='1') {\n const suite=report.testResults.find(x=>x.name.endsWith('/packages/memory-host-sdk/src/host/session-files-large-export.test.ts'));\n\
+        \ assert(suite && suite.assertionResults.length>0 && suite.assertionResults.every(x=>x.status==='passed'),'Stress\
+        \ must execute, never skip');\n}\nif (process.platform==='win32') {\n const suite=report.testResults.find(x=>x.name.replaceAll('\\\
+        \\','/').endsWith('/src/infra/update-retained-runtime-imports.process.test.ts'));\n for (const runtime of ['node-short-path','node-junction'])\
+        \ assert(suite?.assertionResults.some(x=>x.title.includes(runtime)&&x.status==='passed'),'Missing real '+runtime+'\
+        \ pass');\n}\nNODE"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: windows-retained-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+    needs:
+    - plan
+    defaults:
+      run:
+        shell: bash
+    env:
+      TESTS_JSON: '["src/infra/update-retained-runtime-imports.process.test.ts"]'
+      OPENCLAW_RETAINED_ALIAS_DIAGNOSTICS: '1'
+  controller:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -204,31 +798,225 @@ jobs:
         cache-mode: restore
     - uses: ./.github/actions/setup-test-bun
     - uses: ./.github/actions/setup-ripgrep
-    - name: Verify static
-      run: 'set -euo pipefail
-
-        ( node scripts/run-oxlint.mjs --tsconfig tsconfig.json extensions/memory-core/src/memory/manager-registry.reload.test.ts
-        extensions/memory-core/src/memory/manager-registry.ts src/gateway/server-plugin-reload.memory.test-support.ts src/gateway/config-reload-plugin-drain.ts
-        src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts src/gateway/server-methods/config.shared-auth.test.ts
-        src/gateway/server-plugin-reload.prepared-borrow.test.ts src/gateway/server-plugin-reload.recovery.test-support.ts
-        src/gateway/worker-environments/worker-turn-context-engine.test.ts src/plugins/services.ts src/plugins/services.scheduler-context.test.ts
-        && pnpm exec oxfmt --check --no-error-on-unmatched-pattern -- extensions/memory-core/src/memory/manager-registry.reload.test.ts
-        extensions/memory-core/src/memory/manager-registry.ts src/gateway/server-plugin-reload.memory.test-support.ts src/gateway/config-reload-plugin-drain.ts
-        src/gateway/agent-turn/agent-run-execution-phase.owner.test.ts src/gateway/server-methods/config.shared-auth.test.ts
-        src/gateway/server-plugin-reload.prepared-borrow.test.ts src/gateway/server-plugin-reload.recovery.test-support.ts
-        src/gateway/worker-environments/worker-turn-context-engine.test.ts src/plugins/services.ts src/plugins/services.scheduler-context.test.ts
-        && pnpm exec oxfmt --check --no-error-on-unmatched-pattern -- docs/plugins/sdk-runtime.md && node scripts/run-tsgo-core-test-shards.mjs
-        --ci-graphs-json ''["core","core-test-gateway-other","core-test-gateway-root","core-test-gateway-server","core-test-plugins-platform","extensions","extensions-test"]''
-        ) 2>&1 | tee .artifacts/final-ci/static.log
-
-        git diff --exit-code
-
-        '
+    - name: Controller custody boundary
+      run: node --test .agents/skills/update-team-server/controller/suspension-custody.test.mjs
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
-        name: drain-recovery-static-${{ github.run_id }}-${{ github.run_attempt }}
+        name: controller-${{ github.run_id }}-${{ github.run_attempt }}
         path: .artifacts/
         include-hidden-files: true
         if-no-files-found: error
         retention-days: 14
+    needs:
+    - plan
+  visual:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.target_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind exact candidate
+      shell: bash
+      run: 'set -euo pipefail
+
+        test "${{ inputs.target_ref }}" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+        test "$(git rev-parse HEAD^{tree})" = "$SOURCE_TREE"
+
+        test -z "$(git status --porcelain)"
+
+        git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+        mkdir -p .artifacts/final-ci
+
+        git diff --name-only "$BASE_SHA" HEAD | LC_ALL=C sort > .artifacts/final-ci/source-paths.txt
+
+        echo "$PATHS_SHA256  .artifacts/final-ci/source-paths.txt" | sha256sum -c -
+
+        printf ''C=%s
+
+        Q=%s
+
+        P=%s
+
+        workflow=%s
+
+        run=%s
+
+        attempt=%s
+
+        '' "$CANDIDATE_SHA" "$CANDIDATE_SHA" "$TRUSTED_P" "${{ github.workflow_sha }}" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+        > .artifacts/final-ci/identity.txt
+
+        '
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Materialize reviewed test-only capture overlay
+      run: "python3 - <<'PY'\nimport base64, pathlib\nroot=pathlib.Path('.artifacts/final-ci/proposal')\nfiles={'final-ci-visual-capture.sh':\
+        \ 'IyEvdXNyL2Jpbi9lbnYgYmFzaAojIFByb3Bvc2FsIG9ubHkuIFJ1biBvbmx5IGluIHRoZSBib3VuZCBkaXNwb3NhYmxlIGRpYWdub3N0aWMgam9iLCBuZXZlciBhIGxpdmUgY2hlY2tvdXQuCnNldCAtZXVvIHBpcGVmYWlsCnByb3Bvc2FsPSIkR0lUSFVCX1dPUktTUEFDRS8uYXJ0aWZhY3RzL2ZpbmFsLWNpL3Byb3Bvc2FsIgpyb290PSIkR0lUSFVCX1dPUktTUEFDRS8uYXJ0aWZhY3RzL2ZpbmFsLWNpL3Zpc3VhbCIKbWtkaXIgLXAgIiRyb290IgppbnZvY2F0aW9uPSQobWt0ZW1wIC1kICIkcm9vdC9jb21wYXJpc29uLlhYWFhYWCIpCnByaW50ZiAnJXMKJyAiJGludm9jYXRpb24iID4gIiRyb290L2xhdGVzdC1pbnZvY2F0aW9uLnR4dCIKdGVzdCAiJChnaXQgcmV2LXBhcnNlIEhFQUQpIiA9ICIkQ0FORElEQVRFX1NIQSIKdGVzdCAiJENBTkRJREFURV9TSEEiICE9IFVOQk9VTkRfU09VUkNFX05PVF9GUk9aRU4KYmVmb3JlX3NraWxscz01MDY1YTE4N2UxM2FjNzIzY2M2ZjUxMmIyMzFkOThmZWVkN2JiODkyCmJlZm9yZV9zZXR0aW5ncz1kMzc2ZjI4ZDJkMDM4YmE5Y2Q2ZGI3OWNjNDA2ODVhYTA3YmQ2OWU1CmZvciByZWYgaW4gIiRiZWZvcmVfc2tpbGxzIiAiJGJlZm9yZV9zZXR0aW5ncyI7IGRvIGdpdCBjYXQtZmlsZSAtZSAiJHJlZl57Y29tbWl0fSI7IGRvbmUKIyBBbGwgZml4dHVyZXMgc3RheSBvbiB0aGUgZXhpc3Rpbmcgc3VpdGUvc2VydmVyL21vY2svc2NyZWVuc2hvdCBvd25lci4gQSBjaGFuZ2VkCiMgb3duZXIgaXMgYSBuZXcgY29tcGFyaXNvbiBjb250cmFjdCwgbm90IHBlcm1pc3Npb24gdG8gY29weSBuZXcgcHJvZHVjdCBpbnRvIEJFRk9SRS4KZm9yIGZpbGUgaW4gdWkvc3JjL3Rlc3QtaGVscGVycy9jb250cm9sLXVpLWUyZS1hcnRpZmFjdHMudHMgdWkvc3JjL3Rlc3QtaGVscGVycy9jb250cm9sLXVpLWUyZS1zY3JlZW5zaG90LnRzIHVpL3NyYy9lMmUvY29udHJvbC11aS1lMmUtc3VpdGUudGVzdC1zdXBwb3J0LnRzOyBkbwogIGZvciByZWYgaW4gIiRiZWZvcmVfc2tpbGxzIiAiJGJlZm9yZV9zZXR0aW5ncyI7IGRvCiAgICB0ZXN0ICIkKGdpdCByZXYtcGFyc2UgIiRyZWY6JGZpbGUiKSIgPSAiJChnaXQgcmV2LXBhcnNlICIkQ0FORElEQVRFX1NIQTokZmlsZSIpIgogIGRvbmUKZG9uZQpydW5fY2FwdHVyZSgpIHsKICBsb2NhbCByb2xlPSQxIHNoYT0kMiBwYXR0ZXJuPSQzCiAgbG9jYWwgY2hlY2tvdXQ9IiRSVU5ORVJfVEVNUC9yZWxlYXNlLXZpc3VhbC0kR0lUSFVCX1JVTl9JRC0kR0lUSFVCX1JVTl9BVFRFTVBULSRyb2xlIgogIHRlc3QgISAtZSAiJGNoZWNrb3V0IgogIGdpdCB3b3JrdHJlZSBhZGQgLS1kZXRhY2ggIiRjaGVja291dCIgIiRzaGEiCiAgIyBXb3JrdHJlZXMgYXJlIHJldGFpbmVkIHVudGlsIGRpYWdub3N0aWNzIGFyZSB1cGxvYWRlZDsgbmV2ZXIgY2xlYW4gYSBzaGFyZWQgcGFyZW50LgogIG1rZGlyIC1wICIkaW52b2NhdGlvbi8kcm9sZSIKICAoCiAgICBjZCAiJGNoZWNrb3V0IgogICAgdGVzdCAteiAiJChnaXQgc3RhdHVzIC0tcG9yY2VsYWluKSIKICAgIHBucG0gaW5zdGFsbCAtLWZyb3plbi1sb2NrZmlsZQogICAgdGVzdCAteiAiJChnaXQgc3RhdHVzIC0tcG9yY2VsYWluKSIKICAgIGNwICIkcHJvcG9zYWwvdmlzdWFsLW92ZXJsYXkvdWkvc3JjL2UyZS9yZWxlYXNlLXNldHRpbmdzLXNraWxscy5jYXB0dXJlLmUyZS50ZXN0LnRzIiB1aS9zcmMvZTJlLwogICAgY21wIHVpL3NyYy9lMmUvcmVsZWFzZS1zZXR0aW5ncy1za2lsbHMuY2FwdHVyZS5lMmUudGVzdC50cyAiJHByb3Bvc2FsL3Zpc3VhbC1vdmVybGF5L3VpL3NyYy9lMmUvcmVsZWFzZS1zZXR0aW5ncy1za2lsbHMuY2FwdHVyZS5lMmUudGVzdC50cyIKICAgICMgVGhlIGV4aXN0aW5nIHByb2R1Y3Rpb24tYnVuZGxlIHNldHVwIG93bnMgdGhlIGFwcCBidWlsZCwgc2VydmluZyBhbmQgYnJvd3Nlci4KICAgICMgUGFyZW50IGRpcmVjdG9yeSBvbmx5OiBlYWNoIHRlc3QgYXRvbWljYWxseSBhbGxvY2F0ZXMgYSBmcmVzaCByZXRhaW5lZCBjaGlsZC4KICAgIE9QRU5DTEFXX1VJX0UyRV9BUlRJRkFDVF9ESVI9IiRpbnZvY2F0aW9uLyRyb2xlIiBwbnBtIHRlc3Q6dWk6ZTJlIFwKICAgICAgdWkvc3JjL2UyZS9yZWxlYXNlLXNldHRpbmdzLXNraWxscy5jYXB0dXJlLmUyZS50ZXN0LnRzIC10ICIkcGF0dGVybiIgXAogICAgICAtLXJlcG9ydGVyPWRlZmF1bHQgLS1yZXBvcnRlcj1qc29uIC0tb3V0cHV0RmlsZT0iJGludm9jYXRpb24vJHJvbGUvdGVzdHMuanNvbiIKICAgIGdpdCBkaWZmIC0tZXhpdC1jb2RlCiAgKQp9CnJ1bl9jYXB0dXJlIGJlZm9yZS1za2lsbHMgIiRiZWZvcmVfc2tpbGxzIiAnY2FwdHVyZXMgU2tpbGxzJwpydW5fY2FwdHVyZSBiZWZvcmUtc2V0dGluZ3MgIiRiZWZvcmVfc2V0dGluZ3MiICdjYXB0dXJlcyBTZXR0aW5ncycKcnVuX2NhcHR1cmUgYWZ0ZXIgIiRDQU5ESURBVEVfU0hBIiAnY2FwdHVyZXMgKFNraWxsc3xTZXR0aW5ncyknCnB5dGhvbjMgIiRwcm9wb3NhbC9maW5hbC1jaS12aXN1YWwtdmVyaWZ5LnB5IiAiJGludm9jYXRpb24iICIkQ0FORElEQVRFX1NIQSIKIyBNYWNoaW5lIHZlcmlmaWNhdGlvbiBpcyBub3QgaHVtYW4gdmlzdWFsIGluc3BlY3Rpb24uIFJldmlldyBhbmQgYXR0YWNoIHRoZXNlIGV4YWN0CiMgaGFzaGVzIGluIHRoZSBQUi9jaGF0IGJlZm9yZSBjb21wbGV0aW5nIHJlbGVhc2UgcXVhbGlmaWNhdGlvbi4K',\
+        \ 'final-ci-visual-verify.py': 'IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoiIiJWZXJpZnkgY2FwdHVyZWQgYnl0ZXMgYW5kIG1lYXN1cmVkIFVJIGZhY3RzOyBuZXZlciBzdWJzdGl0dXRlcyBmb3IgaW1hZ2UgaW5zcGVjdGlvbi4iIiIKaW1wb3J0IGhhc2hsaWIsIGpzb24sIHJlLCBzdHJ1Y3QsIHN5cwpmcm9tIHBhdGhsaWIgaW1wb3J0IFBhdGgKcm9vdCA9IFBhdGgoc3lzLmFyZ3ZbMV0pLnJlc29sdmUoKQpjYW5kaWRhdGUgPSBzeXMuYXJndlsyXQphc3NlcnQgcmUuZnVsbG1hdGNoKHInWzAtOWEtZl17NDB9JywgY2FuZGlkYXRlKSwgJ0JpbmQgYSBmdWxsIGNhbmRpZGF0ZSBTSEEnCnNraWxscyA9IFsnc2tpbGxzLWxpdGVyYWwnLCAnc2tpbGxzLXVuc2V0JywgJ3NraWxscy1lbnZpcm9ubWVudCcsICdza2lsbHMtcmVmZXJlbmNlJywKICAgICAgICAgICdza2lsbHMtZGVuaWVkJywgJ3NraWxscy1yZXRyeScsICdza2lsbHMtcmV0YWluZWQtZHJhZnQnXQpzZXR0aW5ncyA9IFsnc2V0dGluZ3MtaW5pdGlhbCcsICdzZXR0aW5ncy1kZWZlcnJlZCcsICdzZXR0aW5ncy1yZWNvbm5lY3RlZCcsICdzZXR0aW5ncy1hcHBsaWVkJ10Kcm9sZXMgPSB7J2JlZm9yZS1za2lsbHMnOiAoJzUwNjVhMTg3ZTEzYWM3MjNjYzZmNTEyYjIzMWQ5OGZlZWQ3YmI4OTInLCBza2lsbHMsIDUpLAogICAgICAgICAnYmVmb3JlLXNldHRpbmdzJzogKCdkMzc2ZjI4ZDJkMDM4YmE5Y2Q2ZGI3OWNjNDA2ODVhYTA3YmQ2OWU1Jywgc2V0dGluZ3MsIDEpLAogICAgICAgICAnYWZ0ZXInOiAoY2FuZGlkYXRlLCBza2lsbHMgKyBzZXR0aW5ncywgNil9CnJlY29yZHMgPSB7fQppbWFnZXMgPSBbXQpmb3Igcm9sZSwgKGhlYWQsIHN0YWdlcywgY2FzZXMpIGluIHJvbGVzLml0ZW1zKCk6CiAgICByZXBvcnQgPSBqc29uLmxvYWRzKChyb290IC8gcm9sZSAvICd0ZXN0cy5qc29uJykucmVhZF90ZXh0KCkpCiAgICBhc3NlcnQgcmVwb3J0WydudW1GYWlsZWRUZXN0cyddID09IDAgYW5kIHJlcG9ydFsnbnVtUGFzc2VkVGVzdHMnXSA9PSBjYXNlcywgKHJvbGUsICdtaXNzaW5nIGNhc2VzJykKICAgIGZvdW5kID0ge30KICAgIGZvciBmaWxlIGluIChyb290IC8gcm9sZSkucmdsb2IoJyouanNvbicpOgogICAgICAgIGlmIGZpbGUubmFtZSA9PSAndGVzdHMuanNvbic6IGNvbnRpbnVlCiAgICAgICAgcmVjb3JkID0ganNvbi5sb2FkcyhmaWxlLnJlYWRfdGV4dCgpKQogICAgICAgIGlmICdzdGFnZScgbm90IGluIHJlY29yZDogY29udGludWUKICAgICAgICBzdGFnZSA9IHJlY29yZFsnc3RhZ2UnXQogICAgICAgIGFzc2VydCBzdGFnZSBpbiBzdGFnZXMgYW5kIHN0YWdlIG5vdCBpbiBmb3VuZCwgKHJvbGUsICd1bmV4cGVjdGVkL2R1cGxpY2F0ZSBzdGFnZScsIHN0YWdlKQogICAgICAgIGFzc2VydCByZWNvcmRbJ3NvdXJjZUhlYWQnXSA9PSBoZWFkIGFuZCByZWNvcmRbJ2ZpeHR1cmVPbmx5J10gaXMgVHJ1ZQogICAgICAgIGFzc2VydCByZWNvcmRbJ3ZpZXdwb3J0J10gPT0geyd3aWR0aCc6IDEyODAsICdoZWlnaHQnOiA5MDB9CiAgICAgICAgYXNzZXJ0IHJlY29yZFsnZGV2aWNlU2NhbGVGYWN0b3InXSA9PSAxIGFuZCByZWNvcmRbJ2NhcHR1cmUnXSA9PSAndmlld3BvcnQtZnJhbWUtbm8tY3JvcCcKICAgICAgICBwbmcgPSBmaWxlLndpdGhfbmFtZShyZWNvcmRbJ3BuZyddKQogICAgICAgIGFzc2VydCBwbmcucGFyZW50ID09IGZpbGUucGFyZW50IGFuZCBwbmcubmFtZSA9PSBzdGFnZSArICcucG5nJwogICAgICAgIGRhdGEgPSBwbmcucmVhZF9ieXRlcygpCiAgICAgICAgYXNzZXJ0IGRhdGFbOjhdID09IGInXHg4OVBOR1xyXG5ceDFhXG4nCiAgICAgICAgYXNzZXJ0IHN0cnVjdC51bnBhY2soJz5JSScsIGRhdGFbMTY6MjRdKSA9PSAoMTI4MCwgOTAwKSwgKHJvbGUsIHN0YWdlLCAnd3JvbmcgUE5HIGRpbWVuc2lvbnMnKQogICAgICAgIGFzc2VydCBoYXNobGliLnNoYTI1NihkYXRhKS5oZXhkaWdlc3QoKSA9PSByZWNvcmRbJ3BuZ1NoYTI1NiddCiAgICAgICAgZm91bmRbc3RhZ2VdID0gcmVjb3JkWydmYWN0cyddCiAgICAgICAgaW1hZ2VzLmFwcGVuZCh7J3JvbGUnOiByb2xlLCAnc3RhZ2UnOiBzdGFnZSwgJ3BhdGgnOiBzdHIocG5nLnJlbGF0aXZlX3RvKHJvb3QpKSwKICAgICAgICAgICAgICAgICAgICAgICAnc2hhMjU2JzogcmVjb3JkWydwbmdTaGEyNTYnXX0pCiAgICBhc3NlcnQgc29ydGVkKGZvdW5kKSA9PSBzb3J0ZWQoc3RhZ2VzKSwgKHJvbGUsICdtaXNzaW5nIGNhcHR1cmUnLCBzb3J0ZWQoc2V0KHN0YWdlcyktc2V0KGZvdW5kKSkpCiAgICByZWNvcmRzW3JvbGVdID0gZm91bmQKcG9zdCA9IHJlY29yZHNbJ2FmdGVyJ10KZm9yIGtpbmQgaW4gKCdsaXRlcmFsJywgJ3Vuc2V0JywgJ2Vudmlyb25tZW50JywgJ3JlZmVyZW5jZScpOgogICAgZiA9IHBvc3RbJ3NraWxscy0nICsga2luZF0KICAgIGFzc2VydCBmWydrZXlEaXNhYmxlZCddID09IChraW5kIGluICgnZW52aXJvbm1lbnQnLCAncmVmZXJlbmNlJykpLCBraW5kCiAgICBhc3NlcnQgZlsnY29uZmlnUmVhZHMnXSA+IDAgYW5kIGZbJ3VwZGF0ZXMnXSA9PSAwCmFzc2VydCBwb3N0Wydza2lsbHMtZGVuaWVkJ11bJ2tleURpc2FibGVkJ10gaXMgVHJ1ZQphc3NlcnQgJ0ZpeHR1cmUgY29uZmlnIHJlYWQgZGVuaWVkJyBpbiBwb3N0Wydza2lsbHMtZGVuaWVkJ11bJ3RleHQnXQphc3NlcnQgcG9zdFsnc2tpbGxzLXJldHJ5J11bJ3JldHJ5QXZhaWxhYmxlJ10gYW5kIG5vdCBwb3N0Wydza2lsbHMtcmV0cnknXVsna2V5RGlzYWJsZWQnXQphc3NlcnQgcG9zdFsnc2tpbGxzLXJldGFpbmVkLWRyYWZ0J10gPT0geydkcmFmdFJldGFpbmVkJzogVHJ1ZSwgJ3dyaXRlcyc6IDAsICd1cGRhdGVzJzogMH0KZm9yIHN0YWdlIGluICgnc2V0dGluZ3MtZGVmZXJyZWQnLCAnc2V0dGluZ3MtcmVjb25uZWN0ZWQnKToKICAgIGFzc2VydCAnU2F2ZWQ7IHdhaXRpbmcgdG8gYXBwbHknIGluIHBvc3Rbc3RhZ2VdWydpbmRpY2F0b3InXSwgc3RhZ2UKICAgIGFzc2VydCBwb3N0W3N0YWdlXVsncHJlZml4J10gPT0gJ3NhdmVkIGRlZmVycmVkJyBhbmQgcG9zdFtzdGFnZV1bJ3dyaXRlcyddID09IDEKYXNzZXJ0ICdTYXZlZDsgd2FpdGluZyB0byBhcHBseScgbm90IGluIHBvc3RbJ3NldHRpbmdzLWFwcGxpZWQnXVsnaW5kaWNhdG9yJ10KYXNzZXJ0IHBvc3RbJ3NldHRpbmdzLWFwcGxpZWQnXVsnd3JpdGVzJ10gPT0gMSBhbmQgcG9zdFsnc2V0dGluZ3MtYXBwbGllZCddWydwcmVmaXgnXSA9PSAnc2F2ZWQgZGVmZXJyZWQnCnNraWxsX2RlbHRhID0gYW55KHJlY29yZHNbJ2JlZm9yZS1za2lsbHMnXVsnc2tpbGxzLScgKyBraW5kXVsna2V5RGlzYWJsZWQnXSBpcyBGYWxzZQogICAgICAgICAgICAgICAgICBmb3Iga2luZCBpbiAoJ2Vudmlyb25tZW50JywgJ3JlZmVyZW5jZScpKQpzZXR0aW5nc19kZWx0YSA9ICdTYXZlZDsgd2FpdGluZyB0byBhcHBseScgbm90IGluIHJlY29yZHNbJ2JlZm9yZS1zZXR0aW5ncyddWydzZXR0aW5ncy1kZWZlcnJlZCddWydpbmRpY2F0b3InXQpyZXN1bHQgPSB7J2NhbmRpZGF0ZSc6IGNhbmRpZGF0ZSwgJ2ltYWdlcyc6IGltYWdlcywgJ21hY2hpbmVWZXJpZmllZCc6IFRydWUsCiAgICAgICAgICAnYmFzZWxpbmVSZXByb2R1Y2VkJzogeydza2lsbHMnOiBza2lsbF9kZWx0YSwgJ3NldHRpbmdzJzogc2V0dGluZ3NfZGVsdGF9LAogICAgICAgICAgJ2h1bWFuSW5zcGVjdGVkJzogRmFsc2UsICdxdWFsaWZpY2F0aW9uQ29tcGxldGUnOiBGYWxzZX0KKHJvb3QgLyAnY29tcGFyaXNvbi5qc29uJykud3JpdGVfdGV4dChqc29uLmR1bXBzKHJlc3VsdCwgaW5kZW50PTIpICsgJ1xuJykKcHJpbnQoanNvbi5kdW1wcyhyZXN1bHQsIGluZGVudD0yKSkKYXNzZXJ0IHNraWxsX2RlbHRhIGFuZCBzZXR0aW5nc19kZWx0YSwgJ0JFRk9SRSBkaWQgbm90IHJlcHJvZHVjZSB0aGUgc2NvcGVkIHZpc2libGUgZGVmZWN0OyBpbnNwZWN0L3JlcG9ydCwgbmV2ZXIgcmVsYWJlbCBhcyBwcm9vZicK',\
+        \ 'visual-overlay/ui/src/e2e/release-settings-skills.capture.e2e.test.ts': 'Ly8gRGlhZ25vc3RpYy1vbmx5IG92ZXJsYXkuIElkZW50aWNhbCBieXRlcyBydW4gb24gZWFjaCBwaW5uZWQgY29tcGFyaXNvbiBjaGVja291dC4KLy8gVGhlc2Ugb2JzZXJ2YXRpb25zIGRvIG5vdCByZXBsYWNlIHRoZSBjYW5kaWRhdGUncyB1bmNoYW5nZWQgYmVoYXZpb3JhbCBzdWl0ZXMuCmltcG9ydCB7IGV4ZWNGaWxlU3luYyB9IGZyb20gIm5vZGU6Y2hpbGRfcHJvY2VzcyI7CmltcG9ydCB7IGNyZWF0ZUhhc2ggfSBmcm9tICJub2RlOmNyeXB0byI7CmltcG9ydCB7IHdyaXRlRmlsZSB9IGZyb20gIm5vZGU6ZnMvcHJvbWlzZXMiOwppbXBvcnQgcGF0aCBmcm9tICJub2RlOnBhdGgiOwppbXBvcnQgdHlwZSB7IExvY2F0b3IsIFBhZ2UgfSBmcm9tICJwbGF5d3JpZ2h0IjsKaW1wb3J0IHsgZXhwZWN0LCBpdCB9IGZyb20gInZpdGVzdCI7CmltcG9ydCB7IGNyZWF0ZUNvbnRyb2xVaUUyZUFydGlmYWN0RGlyIH0gZnJvbSAiLi4vdGVzdC1oZWxwZXJzL2NvbnRyb2wtdWktZTJlLWFydGlmYWN0cy50cyI7CmltcG9ydCB7IHRha2VDb250cm9sVWlTY3JlZW5zaG90RnJhbWUgfSBmcm9tICIuLi90ZXN0LWhlbHBlcnMvY29udHJvbC11aS1lMmUtc2NyZWVuc2hvdC50cyI7CmltcG9ydCB7IGRlZmF1bHRDb250cm9sVWlGZWF0dXJlTWV0aG9kcywgaW5zdGFsbE1vY2tHYXRld2F5IH0gZnJvbSAiLi4vdGVzdC1oZWxwZXJzL2NvbnRyb2wtdWktZTJlLnRzIjsKaW1wb3J0IHsgY3JlYXRlQ29udHJvbFVpRTJlU3VpdGUgfSBmcm9tICIuL2NvbnRyb2wtdWktZTJlLXN1aXRlLnRlc3Qtc3VwcG9ydC50cyI7Cgpjb25zdCBzdWl0ZSA9IGNyZWF0ZUNvbnRyb2xVaUUyZVN1aXRlKHsgbmFtZTogIlJlbGVhc2UgU2V0dGluZ3MgYW5kIFNraWxscyB2aXN1YWwgY29tcGFyaXNvbiIgfSk7CmNvbnN0IHNvdXJjZUhlYWQgPSBleGVjRmlsZVN5bmMoImdpdCIsIFsicmV2LXBhcnNlIiwgIkhFQUQiXSwgeyBlbmNvZGluZzogInV0ZjgiIH0pLnRyaW0oKTsKY29uc3Qgc2tpbGxzQmVmb3JlID0gIjUwNjVhMTg3ZTEzYWM3MjNjYzZmNTEyYjIzMWQ5OGZlZWQ3YmI4OTIiOwpjb25zdCBsZWdhY3lTa2lsbHMgPSBzb3VyY2VIZWFkID09PSBza2lsbHNCZWZvcmU7CmNvbnN0IHZpZXdwb3J0ID0geyB3aWR0aDogMTI4MCwgaGVpZ2h0OiA5MDAgfTsKY29uc3QgY29uZmlnID0gewogIGdhdGV3YXk6IHsgbW9kZTogImxvY2FsIiwgYXV0aDogeyBtb2RlOiAidG9rZW4iLCB0b2tlbjogIl9fT1BFTkNMQVdfUkVEQUNURURfXyIgfSB9LAogIGFnZW50czogeyBkZWZhdWx0czogeyB3b3Jrc3BhY2U6ICIvZml4dHVyZS93b3Jrc3BhY2UiIH0gfSwKICBwbHVnaW5zOiB7IGVuYWJsZWQ6IGZhbHNlIH0sCiAgbWVzc2FnZXM6IHsgcmVzcG9uc2VQcmVmaXg6ICJpbml0aWFsIiB9LAp9OwpmdW5jdGlvbiBzbmFwc2hvdCh2YWx1ZTogUmVjb3JkPHN0cmluZywgdW5rbm93bj4sIGhhc2ggPSAiaW5pdGlhbCIpIHsKICAvLyBPbmx5IHN5bnRoZXRpYyBkYXRhIHJlYWNoZXMgdGhlIGJyb3dzZXIuIEF1dGhvcmVkIHByb3ZlbmFuY2UgYW5kIHJlZGFjdGVkCiAgLy8gZWZmZWN0aXZlIGNvbmZpZyBhcmUgc3VwcGxpZWQgc2VwYXJhdGVseSwgYXMgaW4gdGhlIEdhdGV3YXkgc25hcHNob3QgY29udHJhY3QuCiAgcmV0dXJuIHsgZXhpc3RzOiB0cnVlLCB2YWxpZDogdHJ1ZSwgY29uZmlnOiB2YWx1ZSwgcGFyc2VkOiB2YWx1ZSwKICAgIHNvdXJjZUNvbmZpZzogdmFsdWUsIHJhdzogSlNPTi5zdHJpbmdpZnkodmFsdWUpLCBoYXNoLAogICAgY29uZmlnUmV2aXNpb25IYXNoOiBoYXNoLCBhcHBsaWVkQ29uZmlnSGFzaDogaGFzaCwgaXNzdWVzOiBbXSB9Owp9CmNvbnN0IHNraWxsID0gewogIG5hbWU6ICJGaXh0dXJlIFNraWxsIiwgZGVzY3JpcHRpb246ICJTeW50aGV0aWMgcmVsZWFzZSB2aXN1YWwgcHJvb2Y7IG5vIGV4dGVybmFsIGFjY291bnQuIiwKICBzb3VyY2U6ICJvcGVuY2xhdy1idW5kbGVkIiwgYnVuZGxlZDogdHJ1ZSwgZmlsZVBhdGg6ICIvZml4dHVyZS9za2lsbHMvZXhhbXBsZS9TS0lMTC5tZCIsCiAgYmFzZURpcjogIi9maXh0dXJlL3NraWxscy9leGFtcGxlIiwgc2tpbGxLZXk6ICJleGFtcGxlIiwgcHJpbWFyeUVudjogIkZJWFRVUkVfVE9LRU4iLAogIGFsd2F5czogZmFsc2UsIGRpc2FibGVkOiBmYWxzZSwgYmxvY2tlZEJ5QWxsb3dsaXN0OiBmYWxzZSwgYmxvY2tlZEJ5QWdlbnRGaWx0ZXI6IGZhbHNlLAogIGVsaWdpYmxlOiB0cnVlLCBwbGF0Zm9ybUluY29tcGF0aWJsZTogZmFsc2UsIG1vZGVsVmlzaWJsZTogdHJ1ZSwKICB1c2VySW52b2NhYmxlOiB0cnVlLCBjb21tYW5kVmlzaWJsZTogdHJ1ZSwKICByZXF1aXJlbWVudHM6IHsgYmluczogW10sIGFueUJpbnM6IFtdLCBlbnY6IFtdLCBjb25maWc6IFtdLCBvczogW10gfSwKICBtaXNzaW5nOiB7IGJpbnM6IFtdLCBhbnlCaW5zOiBbXSwgZW52OiBbXSwgY29uZmlnOiBbXSwgb3M6IFtdIH0sCiAgY29uZmlnQ2hlY2tzOiBbXSwgaW5zdGFsbDogW10sCn07CmNvbnN0IHN0YXR1cyA9IHsgd29ya3NwYWNlRGlyOiAiL2ZpeHR1cmUvd29ya3NwYWNlIiwgbWFuYWdlZFNraWxsc0RpcjogIi9maXh0dXJlL3NraWxscyIsIHNraWxsczogW3NraWxsXSB9Owpjb25zdCBzY2hlbWEgPSB7IHNjaGVtYTogeyB0eXBlOiAib2JqZWN0IiwgcHJvcGVydGllczogeyBtZXNzYWdlczogeyB0eXBlOiAib2JqZWN0IiwgcHJvcGVydGllczogewogIHJlc3BvbnNlUHJlZml4OiB7IHR5cGU6ICJzdHJpbmciLCB0aXRsZTogIk91dGJvdW5kIFJlc3BvbnNlIFByZWZpeCIgfSwKfSB9IH0gfSwgdWlIaW50czogeyAibWVzc2FnZXMucmVzcG9uc2VQcmVmaXgiOiB7IGFkdmFuY2VkOiBmYWxzZSB9IH0sIHZlcnNpb246ICJmaXh0dXJlIiB9OwoKYXN5bmMgZnVuY3Rpb24gY2FwdHVyZShkaXJlY3Rvcnk6IHN0cmluZywgc3RhZ2U6IHN0cmluZywgcGFnZTogUGFnZSwgc3VyZmFjZTogTG9jYXRvciwKICBjb250ZW50OiBMb2NhdG9yW10sIGZhY3RzOiBSZWNvcmQ8c3RyaW5nLCB1bmtub3duPikgewogIC8vIFRoaXMgZml4dHVyZSBuZXZlciByZWNlaXZlcyByZWFsIGtleXMuIFJlZnVzZSBhIG5vbi1sb29wYmFjayBjYXB0dXJlIG9yaWdpbi4KICBleHBlY3QobmV3IFVSTChwYWdlLnVybCgpKS5ob3N0bmFtZSkudG9NYXRjaCgvXihsb2NhbGhvc3R8MTI3XC4wXC4wXC4xKSQvKTsKICBleHBlY3QoYXdhaXQgcGFnZS5sb2NhdG9yKCdpbnB1dFt0eXBlPSJwYXNzd29yZCJdJykuZXZhbHVhdGVBbGwoaW5wdXRzID0+CiAgICBpbnB1dHMuZXZlcnkoaW5wdXQgPT4gaW5wdXQuZ2V0QXR0cmlidXRlKCJ0eXBlIikgPT09ICJwYXNzd29yZCIpKSkudG9CZSh0cnVlKTsKICBjb25zdCBmcmFtZSA9IGF3YWl0IHRha2VDb250cm9sVWlTY3JlZW5zaG90RnJhbWUocGFnZSwgc3VyZmFjZSwgY29udGVudCwKICAgIHsgYW5pbWF0aW9uczogImRpc2FibGVkIiB9KTsKICBjb25zdCBwbmcgPSBzdGFnZSArICIucG5nIjsKICBhd2FpdCB3cml0ZUZpbGUocGF0aC5qb2luKGRpcmVjdG9yeSwgcG5nKSwgZnJhbWUucG5nLCB7IGZsYWc6ICJ3eCIgfSk7CiAgYXdhaXQgd3JpdGVGaWxlKHBhdGguam9pbihkaXJlY3RvcnksIHN0YWdlICsgIi5qc29uIiksIEpTT04uc3RyaW5naWZ5KHsKICAgIHN0YWdlLCBzb3VyY2VIZWFkLCB2aWV3cG9ydCwgZGV2aWNlU2NhbGVGYWN0b3I6IDEsIGNhcHR1cmU6ICJ2aWV3cG9ydC1mcmFtZS1uby1jcm9wIiwgcG5nLCBwbmdTaGEyNTY6IGNyZWF0ZUhhc2goInNoYTI1NiIpLnVwZGF0ZShmcmFtZS5wbmcpLmRpZ2VzdCgiaGV4IiksCiAgICBmaXh0dXJlT25seTogdHJ1ZSwgZmFjdHMsCiAgfSwgbnVsbCwgMikgKyAiXG4iLCB7IGZsYWc6ICJ3eCIgfSk7Cn0KCnN1aXRlLmRlZmluZSgoKSA9PiB7CiAgaXQuZWFjaChbImxpdGVyYWwiLCAidW5zZXQiLCAiZW52aXJvbm1lbnQiLCAicmVmZXJlbmNlIl0gYXMgY29uc3QpKAogICAgImNhcHR1cmVzIFNraWxscyBhdXRob3JlZCBzb3VyY2U6ICVzIiwgYXN5bmMgKGtpbmQpID0+IHsKICAgICAgY29uc3QgZGlyZWN0b3J5ID0gY3JlYXRlQ29udHJvbFVpRTJlQXJ0aWZhY3REaXIoInJlbGVhc2Utc2tpbGxzLSIgKyBraW5kKTsKICAgICAgYXdhaXQgc3VpdGUud2l0aFBhZ2UoeyB2aWV3cG9ydCwgZGV2aWNlU2NhbGVGYWN0b3I6IDEsIGxvY2FsZTogImVuLVVTIiwgcmVkdWNlZE1vdGlvbjogInJlZHVjZSIsIHNlcnZpY2VXb3JrZXJzOiAiYmxvY2siIH0sCiAgICAgICAgYXN5bmMgKHsgcGFnZSB9KSA9PiB7CiAgICAgICAgICBjb25zdCBhdXRob3JlZCA9IGtpbmQgPT09ICJ1bnNldCIgPyB7fSA6IHsgYXBpS2V5OiBraW5kID09PSAiZW52aXJvbm1lbnQiID8gIiR7RklYVFVSRV9UT0tFTn0iCiAgICAgICAgICAgIDoga2luZCA9PT0gInJlZmVyZW5jZSIgPyB7IHNvdXJjZTogImVudiIsIHByb3ZpZGVyOiAiZGVmYXVsdCIsIGlkOiAiRklYVFVSRV9UT0tFTiIgfQogICAgICAgICAgICA6ICJfX09QRU5DTEFXX1JFREFDVEVEX18iIH07CiAgICAgICAgICBjb25zdCBnYXRld2F5ID0gYXdhaXQgaW5zdGFsbE1vY2tHYXRld2F5KHBhZ2UsIHsKICAgICAgICAgIC8vIEV4ZXJjaXNlIGF1dGhvcml6ZWQga2V5IGVkaXRpbmc7IHRoZSBnZW5lcmljIG1vY2sgb21pdHMgdGhpcyBtZXRob2QuCiAgICAgICAgICBmZWF0dXJlTWV0aG9kczogWy4uLmRlZmF1bHRDb250cm9sVWlGZWF0dXJlTWV0aG9kcywgInNraWxscy51cGRhdGUiXSwKICAgICAgICAgIG1ldGhvZFJlc3BvbnNlczogewogICAgICAgICAgICAic2tpbGxzLnN0YXR1cyI6IHN0YXR1cywKICAgICAgICAgICAgImNvbmZpZy5nZXQiOiBzbmFwc2hvdCh7IC4uLmNvbmZpZywgc2tpbGxzOiB7IGVudHJpZXM6IHsgZXhhbXBsZTogYXV0aG9yZWQgfSB9IH0pLAogICAgICAgICAgfSB9KTsKICAgICAgICAgIGF3YWl0IHBhZ2UuZ290byhzdWl0ZS5zZXJ2ZXIuYmFzZVVybCArICJza2lsbHMiKTsKICAgICAgICAgIGF3YWl0IHBhZ2UuZ2V0QnlSb2xlKCJidXR0b24iLCB7IG5hbWU6ICJPcGVuIEZpeHR1cmUgU2tpbGwgZGV0YWlscyIgfSkuY2xpY2soKTsKICAgICAgICAgIGNvbnN0IGRpYWxvZyA9IHBhZ2UubG9jYXRvcigib3BlbmNsYXctbW9kYWwtZGlhbG9nIiwgeyBoYXNUZXh0OiAiRml4dHVyZSBTa2lsbCIgfSk7CiAgICAgICAgICBjb25zdCBrZXkgPSBkaWFsb2cubG9jYXRvcignaW5wdXRbdHlwZT0icGFzc3dvcmQiXScpOwogICAgICAgICAgYXdhaXQga2V5LndhaXRGb3IoKTsKICAgICAgICAgIGlmICghbGVnYWN5U2tpbGxzKSB7CiAgICAgICAgICAgIGNvbnN0IGxhYmVsID0ga2luZCA9PT0gImxpdGVyYWwiID8gIlN0b3JlZCBpbiBvcGVuY2xhdy5qc29uLiIKICAgICAgICAgICAgICA6IGtpbmQgPT09ICJ1bnNldCIgPyAiTm8gQVBJIGtleSBzdG9yZWQuIgogICAgICAgICAgICAgIDoga2luZCA9PT0gImVudmlyb25tZW50IiA/ICJGcm9tIGVudmlyb25tZW50IiA6ICJTZXQgYnkgYSByZWZlcmVuY2UiOwogICAgICAgICAgICBhd2FpdCBleHBlY3QucG9sbCgoKSA9PiBkaWFsb2cudGV4dENvbnRlbnQoKSkudG9Db250YWluKGxhYmVsKTsKICAgICAgICAgIH0KICAgICAgICAgIC8vIEJFRk9SRSBtYXkgbm90IHJlYWQgcHJvdmVuYW5jZSBhdCBhbGw7IGNhcHR1cmUgdGhhdCBkaWZmZXJlbmNlIHJhdGhlcgogICAgICAgICAgLy8gdGhhbiBwcmV0ZW5kaW5nIGEgbWlzc2luZyByZXF1ZXN0IGlzIGEgc3VjY2Vzc2Z1bCByZWdyZXNzaW9uIGFzc2VydGlvbi4KICAgICAgICAgIGF3YWl0IGNhcHR1cmUoZGlyZWN0b3J5LCAic2tpbGxzLSIgKyBraW5kLCBwYWdlLCBkaWFsb2cubG9jYXRvcigiZGlhbG9nIiksIFtrZXldLCB7CiAgICAgICAgICAgIGtpbmQsIGtleURpc2FibGVkOiBhd2FpdCBrZXkuaXNEaXNhYmxlZCgpLCB0ZXh0OiBhd2FpdCBkaWFsb2cuaW5uZXJUZXh0KCksCiAgICAgICAgICAgIGNvbmZpZ1JlYWRzOiAoYXdhaXQgZ2F0ZXdheS5nZXRSZXF1ZXN0cygiY29uZmlnLmdldCIpKS5sZW5ndGgsCiAgICAgICAgICAgIHVwZGF0ZXM6IChhd2FpdCBnYXRld2F5LmdldFJlcXVlc3RzKCJza2lsbHMudXBkYXRlIikpLmxlbmd0aCwKICAgICAgICAgIH0pOwogICAgICAgIH0pOwogICAgfSk7CgogIGl0KCJjYXB0dXJlcyBTa2lsbHMgZGVuaWVkIHJlYWQsIHJldHJ5LCBhbmQgYW4gdW5yZWxhdGVkIHJldGFpbmVkIFNldHRpbmdzIGRyYWZ0IiwgYXN5bmMgKCkgPT4gewogICAgY29uc3QgZGlyZWN0b3J5ID0gY3JlYXRlQ29udHJvbFVpRTJlQXJ0aWZhY3REaXIoInJlbGVhc2Utc2tpbGxzLXJldHJ5Iik7CiAgICBhd2FpdCBzdWl0ZS53aXRoUGFnZSh7IHZpZXdwb3J0LCBkZXZpY2VTY2FsZUZhY3RvcjogMSwgbG9jYWxlOiAiZW4tVVMiLCByZWR1Y2VkTW90aW9uOiAicmVkdWNlIiwgc2VydmljZVdvcmtlcnM6ICJibG9jayIgfSwKICAgICAgYXN5bmMgKHsgcGFnZSB9KSA9PiB7CiAgICAgICAgY29uc3QgZ2F0ZXdheSA9IGF3YWl0IGluc3RhbGxNb2NrR2F0ZXdheShwYWdlLCB7CiAgICAgICAgICAvLyBFeGVyY2lzZSBhdXRob3JpemVkIGtleSBlZGl0aW5nOyB0aGUgZ2VuZXJpYyBtb2NrIG9taXRzIHRoaXMgbWV0aG9kLgogICAgICAgICAgZmVhdHVyZU1ldGhvZHM6IFsuLi5kZWZhdWx0Q29udHJvbFVpRmVhdHVyZU1ldGhvZHMsICJza2lsbHMudXBkYXRlIl0sCiAgICAgICAgICBtZXRob2RSZXNwb25zZXM6IHsKICAgICAgICAgICJza2lsbHMuc3RhdHVzIjogc3RhdHVzLCAiY29uZmlnLmdldCI6IHNuYXBzaG90KGNvbmZpZyksICJjb25maWcuc2NoZW1hIjogc2NoZW1hLAogICAgICAgIH0gfSk7CiAgICAgICAgYXdhaXQgcGFnZS5nb3RvKHN1aXRlLnNlcnZlci5iYXNlVXJsICsgInNldHRpbmdzL2FkdmFuY2VkIik7CiAgICAgICAgYXdhaXQgcGFnZS5nZXRCeVJvbGUoImJ1dHRvbiIsIHsgbmFtZTogIlJhdyIsIGV4YWN0OiB0cnVlIH0pLmNsaWNrKCk7CiAgICAgICAgY29uc3QgcmF3ID0gcGFnZS5sb2NhdG9yKCIuY29uZmlnLXJhdy1maWVsZCB0ZXh0YXJlYSIpOwogICAgICAgIC8vIFJldmVhbCB0aGUgc3ludGhldGljIHNlbnRpbmVsIHRocm91Z2ggdGhlIHJlYWwgcmVkYWN0aW9uIGNvbnRyb2wuCiAgICAgICAgYXdhaXQgcGFnZS5nZXRCeVJvbGUoImJ1dHRvbiIsIHsgbmFtZTogIlRvZ2dsZSByYXcgY29uZmlnIHJlZGFjdGlvbiIsIGV4YWN0OiB0cnVlIH0pLmNsaWNrKCk7CiAgICAgICAgY29uc3QgZHJhZnQgPSBKU09OLnN0cmluZ2lmeSh7IC4uLmNvbmZpZywgbWVzc2FnZXM6IHsgcmVzcG9uc2VQcmVmaXg6ICJyZXRhaW5lZCBmaXh0dXJlIGRyYWZ0IiB9IH0pOwogICAgICAgIGF3YWl0IHJhdy5maWxsKGRyYWZ0KTsKICAgICAgICAvLyBSYXcgbW9kZSBzYXZlcyBleHBsaWNpdGx5LiBOYXZpZ2F0aW9uIG11c3Qgbm90IHNlbmQgdGhpcyB1bnJlbGF0ZWQgZHJhZnQuCiAgICAgICAgYXdhaXQgcGFnZS5sb2NhdG9yKCcuc2V0dGluZ3Mtc2lkZWJhcl9faXRlbVtocmVmPSIvc2V0dGluZ3Mvc2tpbGxzIl0nKS5jbGljaygpOwogICAgICAgIGF3YWl0IHBhZ2UuZ2V0QnlSb2xlKCJidXR0b24iLCB7IG5hbWU6ICJPcGVuIEZpeHR1cmUgU2tpbGwgZGV0YWlscyIgfSkuY2xpY2soKTsKICAgICAgICBjb25zdCBkaWFsb2cgPSBwYWdlLmxvY2F0b3IoIm9wZW5jbGF3LW1vZGFsLWRpYWxvZyIsIHsgaGFzVGV4dDogIkZpeHR1cmUgU2tpbGwiIH0pOwogICAgICAgIGNvbnN0IGtleSA9IGRpYWxvZy5sb2NhdG9yKCdpbnB1dFt0eXBlPSJwYXNzd29yZCJdJyk7CiAgICAgICAgYXdhaXQga2V5LndhaXRGb3IoKTsKICAgICAgICBhd2FpdCBnYXRld2F5LnNldE1ldGhvZFJlc3BvbnNlKCJjb25maWcuZ2V0IiwgeyBfX21vY2tFcnJvcjogeyBjb2RlOiAiRk9SQklEREVOIiwgbWVzc2FnZTogIkZpeHR1cmUgY29uZmlnIHJlYWQgZGVuaWVkIiB9IH0pOwogICAgICAgIGNvbnN0IGJlZm9yZVJlYWRzID0gKGF3YWl0IGdhdGV3YXkuZ2V0UmVxdWVzdHMoImNvbmZpZy5nZXQiKSkubGVuZ3RoOwogICAgICAgIGF3YWl0IGdhdGV3YXkuc2V0T25saW5lKGZhbHNlKTsKICAgICAgICBhd2FpdCBnYXRld2F5LnNldE9ubGluZSh0cnVlKTsKICAgICAgICBhd2FpdCBnYXRld2F5LndhaXRGb3JSZXF1ZXN0KCJjb25maWcuZ2V0IiwgeyBhZnRlcjogYmVmb3JlUmVhZHMgfSk7CiAgICAgICAgYXdhaXQgcGFnZS53YWl0Rm9yRnVuY3Rpb24oCiAgICAgICAgICAoKSA9PiB3aW5kb3cub3BlbmNsYXdDb250cm9sVWk/LnNuYXBzaG90KCkuZ2F0ZXdheVBoYXNlID09PSAiY29ubmVjdGVkIiwKICAgICAgICApOwogICAgICAgIC8vIFRoZSBwYWdlIG93bmVyIGNsZWFycyBza2lsbHNEZXRhaWxLZXkgb24gYSBjb25uZWN0aW9uIGVwb2NoIGNoYW5nZS4KICAgICAgICAvLyBSZW9wZW4gdGhyb3VnaCB0aGUgYWN0dWFsIFVJOyBhIHByZS1yZWNvbm5lY3QgZGlhbG9nIGRvZXMgbm90IHN1cnZpdmUuCiAgICAgICAgYXdhaXQgcGFnZS5nZXRCeVJvbGUoImJ1dHRvbiIsIHsgbmFtZTogIk9wZW4gRml4dHVyZSBTa2lsbCBkZXRhaWxzIiB9KS5jbGljaygpOwogICAgICAgIGF3YWl0IGtleS53YWl0Rm9yKCk7CiAgICAgICAgaWYgKCFsZWdhY3lTa2lsbHMpIHsKICAgICAgICAgIGF3YWl0IGV4cGVjdC5wb2xsKCgpID0+IGRpYWxvZy50ZXh0Q29udGVudCgpKS50b0NvbnRhaW4oIkZpeHR1cmUgY29uZmlnIHJlYWQgZGVuaWVkIik7CiAgICAgICAgfQogICAgICAgIGF3YWl0IGNhcHR1cmUoZGlyZWN0b3J5LCAic2tpbGxzLWRlbmllZCIsIHBhZ2UsIGRpYWxvZy5sb2NhdG9yKCJkaWFsb2ciKSwgW2tleV0sIHsKICAgICAgICAgIGtleURpc2FibGVkOiBhd2FpdCBrZXkuaXNEaXNhYmxlZCgpLCB0ZXh0OiBhd2FpdCBkaWFsb2cuaW5uZXJUZXh0KCksCiAgICAgICAgICB1cGRhdGVzOiAoYXdhaXQgZ2F0ZXdheS5nZXRSZXF1ZXN0cygic2tpbGxzLnVwZGF0ZSIpKS5sZW5ndGgsCiAgICAgICAgfSk7CiAgICAgICAgYXdhaXQgZ2F0ZXdheS5zZXRNZXRob2RSZXNwb25zZSgiY29uZmlnLmdldCIsIHNuYXBzaG90KGNvbmZpZywgInJldHJ5IikpOwogICAgICAgIGNvbnN0IHJldHJ5ID0gZGlhbG9nLmdldEJ5Um9sZSgiYnV0dG9uIiwgeyBuYW1lOiAiUmV0cnkiLCBleGFjdDogdHJ1ZSB9KTsKICAgICAgICBjb25zdCByZXRyeUF2YWlsYWJsZSA9IGF3YWl0IHJldHJ5LmNvdW50KCkgPT09IDE7CiAgICAgICAgaWYgKHJldHJ5QXZhaWxhYmxlKSB7CiAgICAgICAgICBjb25zdCBjb3VudCA9IChhd2FpdCBnYXRld2F5LmdldFJlcXVlc3RzKCJjb25maWcuZ2V0IikpLmxlbmd0aDsKICAgICAgICAgIGF3YWl0IHJldHJ5LmNsaWNrKCk7CiAgICAgICAgICBhd2FpdCBnYXRld2F5LndhaXRGb3JSZXF1ZXN0KCJjb25maWcuZ2V0IiwgeyBhZnRlcjogY291bnQgfSk7CiAgICAgICAgICB0cnkgewogICAgICAgICAgICBhd2FpdCBleHBlY3QucG9sbCgoKSA9PiBrZXkuaXNFbmFibGVkKCkpLnRvQmUodHJ1ZSk7CiAgICAgICAgICB9IGNhdGNoIChlcnJvcikgewogICAgICAgICAgICAvLyBSZXRhaW4gdGhlIGZhaWxlZCBuYXRpdmUgVUkgc3RhdGUgd2l0aG91dCBieXBhc3NpbmcgdGhlIGFzc2VydGlvbi4KICAgICAgICAgICAgYXdhaXQgd3JpdGVGaWxlKHBhdGguam9pbihkaXJlY3RvcnksICJyZXRyeS1mYWlsdXJlLmpzb24iKSwgSlNPTi5zdHJpbmdpZnkoewogICAgICAgICAgICAgIHNvdXJjZUhlYWQsIGRpYWxvZzogYXdhaXQgZGlhbG9nLmlubmVyVGV4dCgpLAogICAgICAgICAgICAgIGtleURpc2FibGVkOiBhd2FpdCBrZXkuaXNEaXNhYmxlZCgpLAogICAgICAgICAgICAgIHJlcXVlc3RzOiBhd2FpdCBnYXRld2F5LmdldFJlcXVlc3RzKCksCiAgICAgICAgICAgICAgcmVhZGluZXNzOiBhd2FpdCBwYWdlLmV2YWx1YXRlKCgpID0+IHdpbmRvdy5vcGVuY2xhd0NvbnRyb2xVaT8uc25hcHNob3QoKSksCiAgICAgICAgICAgICAgZGlhZ25vc3RpY3M6IGF3YWl0IHBhZ2UuZXZhbHVhdGUoKCkgPT4gd2luZG93Lm9wZW5jbGF3Q29udHJvbFVpPy5kaWFnbm9zdGljcygpKSwKICAgICAgICAgICAgfSwgbnVsbCwgMiksIHsgZmxhZzogInd4IiB9KTsKICAgICAgICAgICAgdGhyb3cgZXJyb3I7CiAgICAgICAgICB9CiAgICAgICAgfQogICAgICAgIGF3YWl0IGNhcHR1cmUoZGlyZWN0b3J5LCAic2tpbGxzLXJldHJ5IiwgcGFnZSwgZGlhbG9nLmxvY2F0b3IoImRpYWxvZyIpLCBba2V5XSwgewogICAgICAgICAgcmV0cnlBdmFpbGFibGUsIGtleURpc2FibGVkOiBhd2FpdCBrZXkuaXNEaXNhYmxlZCgpLCB0ZXh0OiBhd2FpdCBkaWFsb2cuaW5uZXJUZXh0KCksCiAgICAgICAgICB1cGRhdGVzOiAoYXdhaXQgZ2F0ZXdheS5nZXRSZXF1ZXN0cygic2tpbGxzLnVwZGF0ZSIpKS5sZW5ndGgsCiAgICAgICAgfSk7CiAgICAgICAgYXdhaXQgZGlhbG9nLmdldEJ5Um9sZSgiYnV0dG9uIiwgeyBuYW1lOiAiQ2xvc2UiLCBleGFjdDogdHJ1ZSB9KS5jbGljaygpOwogICAgICAgIGF3YWl0IHBhZ2UubG9jYXRvcignLnNldHRpbmdzLXNpZGViYXJfX2l0ZW1baHJlZj0iL3NldHRpbmdzL2FkdmFuY2VkIl0nKS5jbGljaygpOwogICAgICAgIGlmICghYXdhaXQgcmF3LmlzVmlzaWJsZSgpKSB7CiAgICAgICAgICBhd2FpdCBwYWdlLmdldEJ5Um9sZSgiYnV0dG9uIiwgeyBuYW1lOiAiUmF3IiwgZXhhY3Q6IHRydWUgfSkuY2xpY2soKTsKICAgICAgICB9CiAgICAgICAgaWYgKCFhd2FpdCByYXcuaXNWaXNpYmxlKCkpIHsKICAgICAgICAgIGF3YWl0IHBhZ2UuZ2V0QnlSb2xlKCJidXR0b24iLCB7IG5hbWU6ICJUb2dnbGUgcmF3IGNvbmZpZyByZWRhY3Rpb24iLCBleGFjdDogdHJ1ZSB9KS5jbGljaygpOwogICAgICAgIH0KICAgICAgICBhd2FpdCByYXcud2FpdEZvcigpOwogICAgICAgIGF3YWl0IGNhcHR1cmUoZGlyZWN0b3J5LCAic2tpbGxzLXJldGFpbmVkLWRyYWZ0IiwgcGFnZSwgcGFnZS5sb2NhdG9yKCIuY29udGVudCIpLCBbcmF3XSwgewogICAgICAgICAgZHJhZnRSZXRhaW5lZDogYXdhaXQgcmF3LmlucHV0VmFsdWUoKSA9PT0gZHJhZnQsCiAgICAgICAgICB3cml0ZXM6IChhd2FpdCBnYXRld2F5LmdldFJlcXVlc3RzKCJjb25maWcuc2V0IikpLmxlbmd0aCwKICAgICAgICAgIHVwZGF0ZXM6IChhd2FpdCBnYXRld2F5LmdldFJlcXVlc3RzKCJza2lsbHMudXBkYXRlIikpLmxlbmd0aCwKICAgICAgICB9KTsKICAgICAgfSk7CiAgfSk7CgogIGl0KCJjYXB0dXJlcyBTZXR0aW5ncyBpbml0aWFsLCBkZWZlcnJlZCwgcmVjb25uZWN0IGFuZCBhcHBsaWVkIHJlY2VpcHRzIiwgYXN5bmMgKCkgPT4gewogICAgY29uc3QgZGlyZWN0b3J5ID0gY3JlYXRlQ29udHJvbFVpRTJlQXJ0aWZhY3REaXIoInJlbGVhc2Utc2V0dGluZ3MtcmVjZWlwdHMiKTsKICAgIGF3YWl0IHN1aXRlLndpdGhQYWdlKHsgdmlld3BvcnQsIGRldmljZVNjYWxlRmFjdG9yOiAxLCBsb2NhbGU6ICJlbi1VUyIsIHJlZHVjZWRNb3Rpb246ICJyZWR1Y2UiLCBzZXJ2aWNlV29ya2VyczogImJsb2NrIiB9LAogICAgICBhc3luYyAoeyBwYWdlIH0pID0+IHsKICAgICAgICBjb25zdCBnYXRld2F5ID0gYXdhaXQgaW5zdGFsbE1vY2tHYXRld2F5KHBhZ2UsIHsKICAgICAgICAgIC8vIEV4ZXJjaXNlIGF1dGhvcml6ZWQga2V5IGVkaXRpbmc7IHRoZSBnZW5lcmljIG1vY2sgb21pdHMgdGhpcyBtZXRob2QuCiAgICAgICAgICBmZWF0dXJlTWV0aG9kczogWy4uLmRlZmF1bHRDb250cm9sVWlGZWF0dXJlTWV0aG9kcywgInNraWxscy51cGRhdGUiXSwKICAgICAgICAgIG1ldGhvZFJlc3BvbnNlczogewogICAgICAgICAgImNvbmZpZy5nZXQiOiBzbmFwc2hvdChjb25maWcpLCAiY29uZmlnLnNjaGVtYSI6IHNjaGVtYSwKICAgICAgICB9IH0pOwogICAgICAgIGF3YWl0IHBhZ2UuZ290byhzdWl0ZS5zZXJ2ZXIuYmFzZVVybCArICJzZXR0aW5ncy9jb21tdW5pY2F0aW9ucyIpOwogICAgICAgIGNvbnN0IHByZWZpeCA9IHBhZ2UuZ2V0QnlSb2xlKCJ0ZXh0Ym94IiwgeyBuYW1lOiAiT3V0Ym91bmQgUmVzcG9uc2UgUHJlZml4IiB9KTsKICAgICAgICBhd2FpdCBwcmVmaXgud2FpdEZvcigpOwogICAgICAgIGNvbnN0IHN1cmZhY2UgPSBwYWdlLmxvY2F0b3IoIi5jb250ZW50Iik7CiAgICAgICAgY29uc3QgaW5kaWNhdG9yID0gcGFnZS5sb2NhdG9yKCJvcGVuY2xhdy1zZXR0aW5ncy1zYXZlLWluZGljYXRvciIpOwogICAgICAgIGFzeW5jIGZ1bmN0aW9uIHNob3Qoc3RhZ2U6IHN0cmluZykgewogICAgICAgICAgYXdhaXQgY2FwdHVyZShkaXJlY3RvcnksIHN0YWdlLCBwYWdlLCBzdXJmYWNlLCBbcHJlZml4XSwgewogICAgICAgICAgICBwcmVmaXg6IGF3YWl0IHByZWZpeC5pbnB1dFZhbHVlKCksIGluZGljYXRvcjogYXdhaXQgaW5kaWNhdG9yLnRleHRDb250ZW50KCksCiAgICAgICAgICAgIHdyaXRlczogKGF3YWl0IGdhdGV3YXkuZ2V0UmVxdWVzdHMoImNvbmZpZy5zZXQiKSkubGVuZ3RoLAogICAgICAgICAgfSk7CiAgICAgICAgfQogICAgICAgIGF3YWl0IHNob3QoInNldHRpbmdzLWluaXRpYWwiKTsKICAgICAgICBhd2FpdCBnYXRld2F5LmRlZmVyTmV4dCgiY29uZmlnLnNldCIpOwogICAgICAgIGF3YWl0IHByZWZpeC5maWxsKCJzYXZlZCBkZWZlcnJlZCIpOwogICAgICAgIGF3YWl0IHByZWZpeC5wcmVzcygiVGFiIik7CiAgICAgICAgYXdhaXQgZ2F0ZXdheS53YWl0Rm9yUmVxdWVzdCgiY29uZmlnLnNldCIpOwogICAgICAgIGNvbnN0IHNhdmVkQ29uZmlnID0geyAuLi5jb25maWcsIG1lc3NhZ2VzOiB7IHJlc3BvbnNlUHJlZml4OiAic2F2ZWQgZGVmZXJyZWQiIH0gfTsKICAgICAgICBjb25zdCBzYXZlZCA9IHsgLi4uc25hcHNob3Qoc2F2ZWRDb25maWcsICJzYXZlZC1kZWZlcnJlZCIpLCBhcHBsaWVkQ29uZmlnSGFzaDogImluaXRpYWwiIH07CiAgICAgICAgYXdhaXQgZ2F0ZXdheS5zZXRNZXRob2RSZXNwb25zZSgiY29uZmlnLmdldCIsIHNhdmVkKTsKICAgICAgICBhd2FpdCBnYXRld2F5LnJlamVjdERlZmVycmVkKCJjb25maWcuc2V0IiwgeyBjb2RlOiAiVU5BVkFJTEFCTEUiLAogICAgICAgICAgbWVzc2FnZTogIlBsdWdpbiBmaXh0dXJlIHN0aWxsIGhhcyByZXRhaW5lZCB3b3JrLiIsIGRldGFpbHM6IHsKICAgICAgICAgICAgcGVyc2lzdGVkQ29uZmlnOiB7IGhhc2g6IHNhdmVkLmhhc2gsIGNvbmZpZzogc2F2ZWRDb25maWcgfSwKICAgICAgICAgICAgYXBwbGljYXRpb246IHsgc3RhdHVzOiAiZGVmZXJyZWQiLCByZWFzb246ICJQbHVnaW4gZml4dHVyZSBzdGlsbCBoYXMgcmV0YWluZWQgd29yay4iLAogICAgICAgICAgICAgIGFwcGxpZXNXaGVuOiAiQXBwbGllcyBhZnRlciB0aGUgd29yayBzZXR0bGVzLiIgfSwKICAgICAgICAgIH0gfSk7CiAgICAgICAgYXdhaXQgZXhwZWN0LnBvbGwoKCkgPT4gaW5kaWNhdG9yLnRleHRDb250ZW50KCkpLm5vdC50b01hdGNoKC9TYXZpbmcvKTsKICAgICAgICBhd2FpdCBzaG90KCJzZXR0aW5ncy1kZWZlcnJlZCIpOwogICAgICAgIGxldCBjb3VudCA9IChhd2FpdCBnYXRld2F5LmdldFJlcXVlc3RzKCJjb25maWcuZ2V0IikpLmxlbmd0aDsKICAgICAgICBhd2FpdCBnYXRld2F5LnNldE9ubGluZShmYWxzZSk7IGF3YWl0IGdhdGV3YXkuc2V0T25saW5lKHRydWUpOwogICAgICAgIGF3YWl0IGdhdGV3YXkud2FpdEZvclJlcXVlc3QoImNvbmZpZy5nZXQiLCB7IGFmdGVyOiBjb3VudCB9KTsKICAgICAgICBhd2FpdCBzaG90KCJzZXR0aW5ncy1yZWNvbm5lY3RlZCIpOwogICAgICAgIGF3YWl0IGdhdGV3YXkuc2V0TWV0aG9kUmVzcG9uc2UoImNvbmZpZy5nZXQiLCBzbmFwc2hvdChzYXZlZENvbmZpZywgImFwcGxpZWQtZGVmZXJyZWQiKSk7CiAgICAgICAgY291bnQgPSAoYXdhaXQgZ2F0ZXdheS5nZXRSZXF1ZXN0cygiY29uZmlnLmdldCIpKS5sZW5ndGg7CiAgICAgICAgYXdhaXQgZ2F0ZXdheS5zZXRPbmxpbmUoZmFsc2UpOyBhd2FpdCBnYXRld2F5LnNldE9ubGluZSh0cnVlKTsKICAgICAgICBhd2FpdCBnYXRld2F5LndhaXRGb3JSZXF1ZXN0KCJjb25maWcuZ2V0IiwgeyBhZnRlcjogY291bnQgfSk7CiAgICAgICAgYXdhaXQgZXhwZWN0LnBvbGwoKCkgPT4gaW5kaWNhdG9yLnRleHRDb250ZW50KCkpLm5vdC50b0NvbnRhaW4oIlNhdmVkOyB3YWl0aW5nIHRvIGFwcGx5Iik7CiAgICAgICAgYXdhaXQgc2hvdCgic2V0dGluZ3MtYXBwbGllZCIpOwogICAgICB9KTsKICB9KTsKfSk7Cg=='}\n\
+        for name, data in files.items():\n p=root/name; p.parent.mkdir(parents=True,exist_ok=True); p.write_bytes(base64.b64decode(data))\n\
+        PY"
+    - name: Native Settings browser behavioral gate
+      run: pnpm test:ui:e2e ui/src/e2e/settings-config-recovery.e2e.test.ts
+    - name: Capture pinned Settings and Skills comparisons
+      run: bash .artifacts/final-ci/proposal/final-ci-visual-capture.sh
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: visual-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+    needs:
+    - plan
+  reload-comparison:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ matrix.product_ref }}
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Bind focused reload comparison source and identical tests
+      shell: bash
+      run: "set -euo pipefail\nmkdir -p .artifacts/final-ci\nexec > >(tee .artifacts/final-ci/reload-binding.log) 2>&1\nset\
+        \ -x\ntest \"${{ inputs.target_ref }}\" = \"$CANDIDATE_SHA\"\ntest -z \"$(git status --porcelain)\"\ntest \"$(git\
+        \ rev-parse HEAD)\" = \"$RELOAD_PRODUCT_SHA\"\ntest \"$(git rev-parse \"$RELOAD_BEFORE_SHA^{tree}\")\" = \"$RELOAD_BEFORE_TREE\"\
+        \ntest \"$(git rev-parse \"$RELOAD_BEFORE_SHA^\")\" = \"$RELOAD_TEST_SOURCE\"\ntest \"$(git diff --name-only \"$RELOAD_TEST_SOURCE\"\
+        \ \"$RELOAD_BEFORE_SHA\")\" = src/gateway/server-plugin-reload.ts\ntest \"$(git diff --no-ext-diff --no-textconv --binary\
+        \ --full-index \"$RELOAD_TEST_SOURCE\" \"$RELOAD_BEFORE_SHA\" -- src/gateway/server-plugin-reload.ts | sha256sum |\
+        \ cut -d' ' -f1)\" = \"$RELOAD_PATCH_SHA256\"\nif [ \"$RELOAD_ROLE\" = after ]; then\n test \"$(git rev-parse HEAD^{tree})\"\
+        \ = \"$SOURCE_TREE\"\nfi\nmkdir -p .artifacts/final-ci\nprintf '%s\\n' \"$RELOAD_TEST_HASHES\" | sha256sum -c -\n\
+        printf 'role=%s\\nproduct=%s\\ncandidate=%s\\nbefore=%s\\nworkflow=%s\\nrun=%s\\nattempt=%s\\n' \"$RELOAD_ROLE\" \"\
+        $RELOAD_PRODUCT_SHA\" \"$CANDIDATE_SHA\" \"$RELOAD_BEFORE_SHA\" \"${{ github.workflow_sha }}\" \"$GITHUB_RUN_ID\"\
+        \ \"$GITHUB_RUN_ATTEMPT\" > .artifacts/final-ci/reload-identity.txt\n"
+    - uses: ./.github/actions/setup-node-env
+      with:
+        semantic-checks: 'true'
+        install-bun: 'false'
+        cache-mode: restore
+    - uses: ./.github/actions/setup-test-bun
+    - uses: ./.github/actions/setup-ripgrep
+    - name: Run the two named reload cases through the canonical owner
+      shell: bash
+      run: 'set -euo pipefail
+
+        set +e
+
+        node scripts/test-projects.mts src/gateway/server-plugin-reload.prepared-borrow.test.ts -- -t "automatic (busy|superseded)"
+        --reporter=default --reporter=json --outputFile="$GITHUB_WORKSPACE/.artifacts/final-ci/reload-tests.json" 2>&1 | tee
+        .artifacts/final-ci/reload-tests.log
+
+        statuses=("${PIPESTATUS[@]}")
+
+        set -e
+
+        printf ''%s\n'' "${statuses[0]}" > .artifacts/final-ci/reload-exit.txt
+
+        test "${statuses[1]}" -eq 0
+
+        '
+    - name: Require exact AFTER passes or BEFORE barrier-identity assertions
+      shell: bash
+      run: "node --input-type=module <<'NODE'\n// Diagnostic-only result classification; product execution remains in test-projects.mts.\n\
+        import assert from \"node:assert/strict\";\nimport fs from \"node:fs\";\nconst root = \".artifacts/final-ci\";\nconst\
+        \ role = process.env.RELOAD_ROLE;\nassert([\"before\", \"after\"].includes(role), \"Unknown comparison role\");\n\
+        const report = JSON.parse(fs.readFileSync(root + \"/reload-tests.json\", \"utf8\"));\nconst exit = Number(fs.readFileSync(root\
+        \ + \"/reload-exit.txt\", \"utf8\").trim());\nconst log = fs.readFileSync(root + \"/reload-tests.log\", \"utf8\").replace(/\\\
+        u001b\\[[0-9;]*m/g, \"\");\nconst names = JSON.parse(process.env.RELOAD_EXPECTED_CASES);\nassert.equal(names.length,\
+        \ 2);\nassert.equal(new Set(names).size, 2);\nconst label = \"Automatic reload refusal must preserve the in-flight\
+        \ publication barrier\";\nassert.equal(exit, role === \"before\" ? 1 : 0, \"Wrong process exit (signal, timeout or\
+        \ infrastructure failure is not proof)\");\nassert(Array.isArray(report.testResults));\nassert.equal(report.testResults.length,\
+        \ 1, \"Expected exactly the focused source suite\");\nconst suite = report.testResults[0];\nassert(suite.name.replaceAll(String.fromCharCode(92),\
+        \ \"/\").endsWith(\"/src/gateway/server-plugin-reload.prepared-borrow.test.ts\"));\nassert(!suite.testExecError, \"\
+        Suite setup/import failure is not proof\");\nassert.equal(report.numRuntimeErrorTestSuites ?? 0, 0, \"Runtime suite\
+        \ errors are not proof\");\nassert.equal(report.numPassedTests, role === \"after\" ? 2 : 0);\nassert.equal(report.numFailedTests,\
+        \ role === \"before\" ? 2 : 0);\nassert.equal(report.success, role === \"after\");\nif (role === \"after\") assert.equal(report.numFailedTestSuites,\
+        \ 0);\nelse assert(report.numFailedTestSuites > 0);\nassert(Array.isArray(suite.assertionResults));\nconst forbidden\
+        \ = /test timed out|hook timed out|timeout of|timed out after|unhandled (?:error|rejection)|uncaught exception|failed\
+        \ to (?:load|resolve)|cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|SyntaxError:|ReferenceError:|TypeError:|RangeError:/i;\n\
+        assert(!forbidden.test(log), \"Timeout, setup/import or unhandled failure is not causal proof\");\nfor (const name\
+        \ of names) {\n  const matches = suite.assertionResults.filter(x => x.fullName?.trim() === name);\n  assert.equal(matches.length,\
+        \ 1, \"Missing/duplicate exact case: \" + name);\n  const test = matches[0];\n  assert.equal(test.status, role ===\
+        \ \"before\" ? \"failed\" : \"passed\", name);\n  const messages = test.failureMessages ?? [];\n  if (role === \"\
+        after\") assert.equal(messages.length, 0, name);\n  else {\n    assert.equal(messages.length, 1, \"Multiple failures\
+        \ including cleanup are not causal proof: \" + name);\n    const message = messages[0].replace(/\\u001b\\[[0-9;]*m/g,\
+        \ \"\");\n    assert(message.includes(label), \"Wrong assertion: \" + name);\n    assert(/AssertionError/.test(message),\
+        \ \"Expected ordinary assertion failure: \" + name);\n    assert(/Object\\.is equality|expected[\\s\\S]*to be/.test(message),\
+        \ \"Expected identity assertion: \" + name);\n    assert(!forbidden.test(message), \"Non-assertion failure: \" + name);\n\
+        \  }\n}\nfor (const test of suite.assertionResults) {\n  if (names.includes(test.fullName?.trim())) continue;\n  assert([\"\
+        pending\", \"skipped\", \"todo\", \"disabled\"].includes(test.status), \"Unexpected executed case: \" + test.fullName);\n\
+        \  assert.equal((test.failureMessages ?? []).length, 0);\n}\nfs.writeFileSync(root + \"/reload-classification.json\"\
+        , JSON.stringify({\n  role, product: process.env.RELOAD_PRODUCT_SHA, candidate: process.env.CANDIDATE_SHA,\n  before:\
+        \ process.env.RELOAD_BEFORE_SHA, exit, cases: names,\n  outcome: role === \"before\" ? \"expected-barrier-identity-assertions\"\
+        \ : \"both-focused-cases-passed\",\n  workflow: process.env.GITHUB_WORKFLOW_SHA, run: process.env.GITHUB_RUN_ID, attempt:\
+        \ process.env.GITHUB_RUN_ATTEMPT,\n}, null, 2) + \"\\n\");\n\nNODE"
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      if: always()
+      with:
+        name: reload-${{ matrix.role }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .artifacts/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+    needs:
+    - plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - role: before
+          product_ref: 7eb29a9e0f6815bab47f269d29810d93fabbc725
+        - role: after
+          product_ref: ${{ inputs.target_ref }}
+    env:
+      RELOAD_ROLE: ${{ matrix.role }}
+      RELOAD_PRODUCT_SHA: ${{ matrix.product_ref }}
+      RELOAD_BEFORE_SHA: 7eb29a9e0f6815bab47f269d29810d93fabbc725
+      RELOAD_BEFORE_TREE: 9bbb3dea223ce7455cfb6af3d156ac5e75e77d90
+      RELOAD_TEST_SOURCE: a233af0b84e093845c62e88c2702cbd9b297f22c
+      RELOAD_PATCH_SHA256: 38b29885045114487b2258bc5f635be21836d4872b4e1a9cb9f6325e18912da3
+      RELOAD_TEST_HASHES: 'c9ae6728057041be0c812296590364299a474b13b4e3e31c5384bd10273a0a79  src/gateway/server-plugin-reload.prepared-borrow.test.ts
+
+        aa6c38fef0efb27c65f879a8e4210173bed3d4610a8c0a0701128fee48d3e711  src/gateway/server-plugin-reload.recovery.test.ts'
+      RELOAD_EXPECTED_CASES: '["prepared Gateway plugin borrowing borrows unchanged Gateway instances into prepared turns
+        across automatic busy","prepared Gateway plugin borrowing borrows unchanged Gateway instances into prepared turns
+        across automatic superseded"]'
+  required-complete:
+    runs-on: ubuntu-24.04
+    if: always()
+    needs:
+    - plan
+    - noncompiler
+    - compiler-check
+    - compiler-core
+    - tests
+    - before-capacity
+    - windows-retained
+    - controller
+    - visual
+    - reload-comparison
+    steps:
+    - name: Fail closed on absent, failed, cancelled or unexpected skipped work
+      env:
+        NEEDS_JSON: ${{ toJSON(needs) }}
+      run: "node --input-type=module <<'NODE'\nimport assert from 'node:assert/strict';\nconst n=JSON.parse(process.env.NEEDS_JSON);\n\
+        assert.equal(n.plan.result,'success');\nfor (const [name,job] of Object.entries(n)) {\n if (name==='compiler-check'||name==='compiler-core')\
+        \ {\n  const key=name==='compiler-check'?'check_matrix':'core_type_matrix';\n  assert(n.plan.outputs[key], 'Missing\
+        \ planner output '+key);\n  const rows=JSON.parse(n.plan.outputs[key]).include;\n  assert.equal(job.result,rows.length?'success':'skipped',name);\n\
+        \ } else assert.equal(job.result,'success',name);\n}\nNODE"
