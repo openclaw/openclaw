@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -18,10 +19,12 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { registerProjectRegistry } from "../projects/project-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   createOpenClawTestState,
+  withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
@@ -453,6 +456,7 @@ describe("handleWorkspaceIconHttpRequest", () => {
 });
 
 describe("handleProjectIconHttpRequest", () => {
+  let operatorScopes: string[];
   let origin: string;
   let server: ReturnType<typeof createServer>;
   let cfg: OpenClawConfig;
@@ -479,14 +483,11 @@ describe("handleProjectIconHttpRequest", () => {
   });
 
   beforeEach(() => {
+    operatorScopes = ["operator.read"];
     mocks.authorizeRead
       .mockReset()
       .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority(
-          { authMethod: "token", operatorScopes: ["operator.read"] },
-          res,
-          () => true,
-        ),
+        bindHttpResponseAuthority({ authMethod: "token", operatorScopes }, res, () => true),
       );
   });
 
@@ -506,6 +507,46 @@ describe("handleProjectIconHttpRequest", () => {
     expect(mocks.authorizeRead).toHaveBeenCalledWith(
       expect.objectContaining({ requiredOperatorMethod: "projects.list" }),
     );
+  });
+
+  it("hides a private registered project's icon from readers, including after a writer loads it", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const root = await makeWorkspace({ "favicon.png": PNG_BYTES });
+      execFileSync("git", ["init", root], { stdio: "ignore" });
+      execFileSync(
+        "git",
+        [
+          "-C",
+          root,
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "init",
+        ],
+        { stdio: "ignore" },
+      );
+      cfg = { agents: { entries: { main: {} } } };
+      const project = await registerProjectRegistry({ path: root });
+      const reads = vi.spyOn(boundaryFileRead, "openRootFile");
+      const hidden = await fetch(projectRoute(project.id));
+      expect(hidden.status).toBe(404);
+      expectHeaders(hidden, { "cache-control": "no-store" });
+      expect(reads).not.toHaveBeenCalled();
+
+      operatorScopes = ["operator.read", "operator.write"];
+      const visible = await fetch(projectRoute(project.id));
+      expect(visible.status).toBe(200);
+      expect(Buffer.from(await visible.arrayBuffer())).toEqual(PNG_BYTES);
+
+      operatorScopes = ["operator.read"];
+      expect((await fetch(projectRoute(project.id))).status).toBe(404);
+    });
   });
 
   it("answers an unknown project without reading files", async () => {

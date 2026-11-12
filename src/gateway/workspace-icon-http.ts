@@ -11,7 +11,6 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFile, readFileDescriptorBounded } from "../infra/boundary-file-read.js";
 import { LruCache } from "../infra/lru-cache.js";
-import { resolveProjectRegistry } from "../projects/project-registry.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed, sendSessionReadForbidden } from "./http-common.js";
@@ -27,6 +26,7 @@ import {
   authorizeControlUiReadRequestOrReply,
   authorizeControlUiSessionOwnerReadRequestOrReply,
 } from "./http-utils.js";
+import { resolveRequesterProject } from "./project-access.js";
 import { withReadySessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
@@ -273,7 +273,10 @@ export async function handleProjectIconHttpRequest(
   }
   auth.assertCurrent();
   const project = parsed.value
-    ? await resolveProjectRegistry(opts.config, parsed.value)
+    ? await resolveRequesterProject(opts.config, parsed.value, {
+        kind: "operator",
+        scopes: auth.operatorScopes,
+      })
     : undefined;
   const root = localWorkspaceRoot(project?.repoRoot);
   const icon = root ? await resolveWorkspaceIcon(root) : null;

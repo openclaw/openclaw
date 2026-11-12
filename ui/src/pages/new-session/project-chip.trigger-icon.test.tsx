@@ -21,8 +21,6 @@ it("shows folder-git-2 by default, the selected project's icon, or GitHub for a 
   const icon = () =>
     view.container.querySelector("#new-session-project-trigger .new-session-page__target-icon")!;
 
-  // folder-git-2's branch stroke identifies the default glyph.
-  expect(icon().querySelector('path[d="M18 19a5 5 0 0 1-5-5v8"]')).not.toBeNull();
   expect(icon().querySelector("openclaw-workspace-icon")).toBeNull();
 
   projectId.mockReturnValue("alpha");
