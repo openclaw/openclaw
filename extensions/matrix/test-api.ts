@@ -29,8 +29,3 @@ export type {
   MatrixVerificationSummary,
 } from "./src/matrix/sdk/verification-manager.js";
 export { setMatrixRuntime } from "./src/runtime.js";
-export {
-  createMatrixHandlerTestHarness,
-  createMatrixTextMessageEvent,
-} from "./src/matrix/monitor/handler.test-helpers.js";
-export { installMatrixMonitorTestRuntime } from "./src/test-runtime.js";

@@ -4,7 +4,7 @@ import {
   createMatrixHandlerTestHarness,
   createMatrixTextMessageEvent,
   installMatrixMonitorTestRuntime,
-} from "../extensions/matrix/test-api.js";
+} from "../extensions/matrix/monitor.test-support.js";
 import { finalizeInboundContext } from "../src/auto-reply/reply/inbound-context.js";
 import { initSessionState } from "../src/auto-reply/reply/session.js";
 import { resolveReplyStoredModelSelection } from "../src/auto-reply/reply/stored-model-override.js";
