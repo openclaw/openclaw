@@ -75,6 +75,15 @@ function createExecution(
     pendingInputSettlement?: () => Promise<void>;
   } = {},
 ) {
+  const pluginGeneration: PreparedModelRuntimePluginGeneration = {
+    remoteCatalog: null,
+    pluginMetadataSnapshot: createPluginMetadataSnapshot({
+      config: {},
+      manifestRegistry: makeRegistry([]),
+    }),
+    inlineProviderModels: [],
+    configuredCatalogEntries: [],
+  };
   const abortCleanup = vi.fn();
   const gatewayRelease = vi.fn();
   const callerRelease = vi.fn();
@@ -106,10 +115,14 @@ function createExecution(
         effectiveAllowModelOverride: false,
         lifecycleStorePath: "",
         operationalRunInstance: {},
-        preparedModelRuntimeLease: { [Symbol.asyncDispose]: runtimeRelease, snapshot: {} },
+        preparedModelRuntimeLease: {
+          [Symbol.asyncDispose]: runtimeRelease,
+          snapshot: {},
+          pluginGeneration,
+        },
         replyDispatchRuntime: {
           config: { runtime: "A" },
-          pluginGeneration: "generation-A",
+          pluginGeneration,
         },
         unpersistedOffloadedRefs: [],
         userTurn: {
@@ -777,7 +790,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
     expect(dispatch?.commandRuntimeContext).toEqual({
       config: { runtime: "A" },
-      pluginGeneration: "generation-A",
+      pluginGeneration: execution.params.prepared.replyDispatchRuntime.pluginGeneration,
     });
     expect(dispatch?.ingressOpts.workspaceDir).toBe("/workspace/A");
     expect(execution.runtimeRelease).not.toHaveBeenCalled();

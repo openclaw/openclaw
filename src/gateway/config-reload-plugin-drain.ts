@@ -91,6 +91,10 @@ export function createConfigPluginDrainTracker(params: {
       }
     },
     recordFailure(plan: GatewayReloadPlan, error: unknown) {
+      // Rejected retries retain the original failed paths and idle observation.
+      if (failure?.error === error) {
+        return;
+      }
       if (
         !plan.pluginLifecycle &&
         error instanceof PluginRuntimeApplicationError &&
