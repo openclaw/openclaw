@@ -997,19 +997,15 @@ describe("runDaemonRestart health checks", () => {
     });
 
     it.each([
-      ["start", "start", () => runDaemonStart({ json: true })],
-      ["stop", "stop", () => runDaemonStop({ json: true })],
-      ["uninstall", "uninstall", () => runDaemonUninstall({ json: true })],
-      [
-        "preserved restart",
-        "restart",
-        () => runDaemonRestart({ json: true, preserveDefinition: true }),
-      ],
-    ])("blocks native %s lifecycle access", async (_action, label, run) => {
+      ["start", () => runDaemonStart({ json: true })],
+      ["stop", () => runDaemonStop({ json: true })],
+      ["uninstall", () => runDaemonUninstall({ json: true })],
+      ["restart", () => runDaemonRestart({ json: true, preserveDefinition: true })],
+    ])("blocks native %s lifecycle access", async (action, run) => {
       const refusal = run();
       await expect(refusal).rejects.toThrow("managed by an external supervisor");
       await expect(refusal).rejects.toMatchObject({
-        humanOutput: expect.stringMatching(`^Gateway ${label} blocked: OpenClaw gateway`),
+        humanOutput: expect.stringMatching(`^Gateway ${action} blocked: OpenClaw gateway`),
       });
 
       expectNoCalls(
