@@ -392,6 +392,8 @@ extension OpenClawChatViewModel {
             self.flushComposerDraftText()
         }
         self.applyDeferredExternalStateIfReady()
+        // A page may have proved a rejected row before this draft bound.
+        self.restoreRejectedOutboxMessageIfProven()
     }
 
     private static func pendingAttachment(_ stored: OpenClawChatOutboxAttachment) -> OpenClawPendingAttachment {

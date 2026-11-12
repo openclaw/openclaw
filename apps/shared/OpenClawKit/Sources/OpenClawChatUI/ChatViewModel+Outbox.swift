@@ -469,7 +469,8 @@ extension OpenClawChatViewModel {
             let commands = await outbox.loadCommandsIfAvailable()
             guard let self else { return .unavailable }
             guard let commands else {
-                if failure == nil {
+                // An Edit abandoned by a session switch says nothing in the new chat.
+                if failure == nil, self.composerDraftKey == key {
                     self.errorText = String(localized: "Could not edit the queued message. Try again.")
                 }
                 return .unavailable
@@ -501,7 +502,7 @@ extension OpenClawChatViewModel {
                 }
                 return .unavailable
             case .unavailable:
-                if failure == nil {
+                if failure == nil, self.composerDraftKey == key {
                     self.errorText = String(localized: "Could not edit the queued message. Try again.")
                 }
                 return .unavailable

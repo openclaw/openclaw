@@ -103,6 +103,12 @@ private func outboxMessageID(_ vm: OpenClawChatViewModel, text: String) throws -
 @MainActor
 private func presentOutbox(_ vm: OpenClawChatViewModel) async {
     await vm.restoreOutboxMessages(session: vm.currentSessionSnapshot())?.value
+    await settleOutboxMoves(vm)
+}
+
+/// Waits for an Edit or restore already under way, and the draft writes it started.
+@MainActor
+private func settleOutboxMoves(_ vm: OpenClawChatViewModel) async {
     while !vm.cancelingOutboxCommandIDs.isEmpty {
         try? await Task.sleep(for: .milliseconds(5))
     }
@@ -240,23 +246,79 @@ extension ChatViewModelOutboxTests {
     }
 
     @Test @MainActor func `a session switch before the edit lands leaves both chats alone`() async throws {
-        let (store, _, databaseDirectory) = try makeOutboxStore()
+        let (store, databases, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
-        #expect(await store.enqueueCommand(queuedCommand(id: "queued", text: "chat A text")))
-        let vm = try await loadedModel(store)
+        #expect(await store.enqueueCommand(queuedCommand(
+            id: "failed", text: "chat A text", status: .failed, lastError: rejectedError)))
+        let vm = try await loadedModel(store, transport: OutboxTestTransport(healthy: true))
         defer { vm.detachTransport() }
         let messageID = try outboxMessageID(vm, text: "chat A text")
+        // The move lands only after the other chat has opened.
+        let earlierWrite = OutboxTestGate()
+        databases.composerDraftWrites.append { await earlierWrite.wait() }
 
         vm.editOutboxMessage(messageID)
         vm.switchSession(to: "other")
         await vm.bootstrapTask?.value
+        vm.errorText = nil
+        await earlierWrite.release()
         try await waitForOutboxState { vm.composerDraftKey == "agent:main:other" }
-        await settleComposerDraft(vm)
+        await settleOutboxMoves(vm)
 
         #expect(vm.input.isEmpty)
+        // The abandoned Edit says nothing in the chat it never reached.
+        #expect(vm.errorText == nil)
         #expect(await store.loadComposerDraft(key: "agent:main:other") == .empty)
         #expect(await store.loadComposerDraft(key: draftKey) == .empty)
-        #expect(await store.loadCommands().map(\.id) == ["queued"])
+        #expect(await store.loadCommands().map(\.id) == ["failed"])
+    }
+
+    @Test @MainActor func `typing while a restore is on its way keeps the message out of the composer`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: true)
+        await transport.state.update { $0.staleHistoryRows = [canonicalRow("earlier answer")] }
+        let vm = try await loadedModel(store, transport: transport)
+        defer { vm.detachTransport() }
+        #expect(await store.enqueueCommand(rejectedCommand(id: "rejected", text: "rejected text")))
+        await presentOutbox(vm)
+        await reloadHistory(vm)
+        #expect(vm.input.isEmpty)
+
+        // Proof is in; coming on screen starts the restore, and the user types first.
+        vm.setComposerPresentationActive(true)
+        vm.input = "typed"
+        await presentOutbox(vm)
+
+        #expect(vm.input == "typed")
+        #expect(vm.composerNotice == nil)
+        #expect(await store.loadCommands().map(\.id) == ["rejected"])
+    }
+
+    @Test @MainActor func `a restore proved before the draft binds lands when it binds`() async throws {
+        let (store, databases, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        #expect(await store.enqueueCommand(rejectedCommand(id: "rejected", text: "rejected text")))
+        let transport = OutboxTestTransport(healthy: true)
+        await transport.state.update { $0.staleHistoryRows = [canonicalRow("earlier answer")] }
+        // An earlier draft write holds the draft load, as a slow cold open would.
+        let draftWrite = OutboxTestGate()
+        databases.composerDraftWrites.append { await draftWrite.wait() }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        defer { vm.detachTransport() }
+        vm.load()
+        await vm.bootstrapTask?.value
+        try await waitForOutboxState { vm.hasRestoredOutboxMessages }
+        vm.setComposerPresentationActive(true)
+        await vm.refreshHistoryAfterRun(historyRequest: vm.beginHistoryRequest())
+        await vm.restoreOutboxMessages(session: vm.currentSessionSnapshot())?.value
+        #expect(vm.composerDraftKey == nil && vm.input.isEmpty)
+
+        await draftWrite.release()
+        await vm.composerDraftSync.load?.value
+        await settleOutboxMoves(vm)
+
+        #expect(vm.input == "rejected text")
     }
 
     @Test @MainActor func `unconfirmed and branch-parked rows offer no edit`() async throws {
