@@ -213,9 +213,7 @@ suite.define(() => {
         await page.getByRole("option", { name: /^guest/ }).click();
         await expect
           .poll(() => invite.textContent())
-          .toContain(
-            "Members with this role cannot run anything until a sandbox backend is set up",
-          );
+          .toContain("A sandbox backend is unavailable.");
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(page, invite, [invite], {
             animations: "disabled",
