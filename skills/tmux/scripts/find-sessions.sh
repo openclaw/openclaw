@@ -24,10 +24,25 @@ socket_dir="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -L|--socket)      socket_name="${2-}"; shift 2 ;;
-    -S|--socket-path) socket_path="${2-}"; shift 2 ;;
+    -L|--socket)
+      if [[ $# -lt 2 || "$2" =~ ^-(L|S|A|q|h|-socket|-socket-path|-all|-query|-help)$ ]]; then
+        echo "$1 requires a value" >&2
+        exit 2
+      fi
+      socket_name="$2"; shift 2 ;;
+    -S|--socket-path)
+      if [[ $# -lt 2 || "$2" =~ ^-(L|S|A|q|h|-socket|-socket-path|-all|-query|-help)$ ]]; then
+        echo "$1 requires a value" >&2
+        exit 2
+      fi
+      socket_path="$2"; shift 2 ;;
     -A|--all)         scan_all=true; shift ;;
-    -q|--query)       query="${2-}"; shift 2 ;;
+    -q|--query)
+      if [[ $# -lt 2 || "$2" =~ ^-(L|S|A|q|h|-socket|-socket-path|-all|-query|-help)$ ]]; then
+        echo "$1 requires a value" >&2
+        exit 2
+      fi
+      query="$2"; shift 2 ;;
     -h|--help)        usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
