@@ -1,2 +1,2 @@
-# Usage summary scan and native cancellation regressions, request lifetimes, and adapted snapshot proof.
-220
+# Usage summary scan/cancellation, request lifetimes, snapshots, and bounded refresh continuations.
+244

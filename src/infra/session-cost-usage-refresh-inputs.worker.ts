@@ -195,10 +195,9 @@ export function createUsageCostCollectionAccess(params: {
                   .select(["session_id", "session_key", "transcript_updated_at"])
                   .where("transcript_updated_at", "is not", null)
                   .$narrowType<{ transcript_updated_at: number }>()
-                  // Refresh orders its stale work by size; reporting preserves addition order.
-                  .$if(operation.kind !== "refresh", (query) =>
-                    query.orderBy("transcript_updated_at", "desc").orderBy("session_id", "asc"),
-                  ),
+                  // Admit recent transcripts before reading sizes; reports preserve this order.
+                  .orderBy("transcript_updated_at", "desc")
+                  .orderBy("session_id", "asc"),
               )
                 .rows.filter((row) => !isInternalSessionEffectsKey(row.session_key))
                 .map((row) => ({
