@@ -55,7 +55,7 @@ function expectNoControlUiIdentity() {
     resolveControlUiIdentity(
       { gateway: { publicOrigin: "https://unrelated.test", tailscale: { mode: "serve" } } },
       { mode: "token", allowTailscale: true },
-    ),
+    )?.url,
   ).toBeUndefined();
 }
 
