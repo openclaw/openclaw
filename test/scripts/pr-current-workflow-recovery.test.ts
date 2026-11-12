@@ -42,12 +42,12 @@ function sourceCommit(
     writeFileSync(
       outcome,
       readFileSync(outcome, "utf8")
-        .replace(
-          ",.workflowAdmission.binding,.workflowAdmission.from,.workflowAdmission.to",
-          "",
-        )
+        .replace(",.workflowAdmission.binding,.workflowAdmission.from,.workflowAdmission.to", "")
         .replaceAll("workflowRetirement", "unknownFutureWorkflowRetirement")
-        .replace("for workflow_kind in Admission Retirement; do", "for workflow_kind in Admission; do"),
+        .replace(
+          "for workflow_kind in Admission Retirement; do",
+          "for workflow_kind in Admission; do",
+        ),
     );
   }
   if (current) {
