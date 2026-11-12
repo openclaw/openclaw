@@ -1,6 +1,5 @@
 import { ChildProcess } from "node:child_process";
 import { writeSync } from "node:fs";
-import { TLSSocket } from "node:tls";
 import { drainProcessOutput } from "../process/output-drain.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError, restoreRuntimeTerminalState } from "../runtime.js";
@@ -134,6 +133,7 @@ function armSettledExitWatchdog(params: { delayMs: number; terminateFailedExit: 
   const { delayMs, terminateFailedExit } = params;
   // Unref'd: a natural exit is never delayed.
   setTimeout(() => {
+    const { TLSSocket } = process.getBuiltinModule("node:tls");
     const summarize = (names: string[]) => {
       const counts = new Map<string, number>();
       for (const name of names) {
