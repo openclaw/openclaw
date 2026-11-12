@@ -137,15 +137,24 @@ function holdRecoveryCapture(
 // Read the closed database before a history API can reconcile an orphaned
 // 'queued' row to 'interrupted'. Otherwise the read itself could hide a broken
 // close settlement. The real server.close() has joined its database owners.
-function readClosedInput(storePath: string) {
+function readClosedInputState(storePath: string) {
   const db = new DatabaseSync(storePath, { readOnly: true });
   try {
-    return db
-      .prepare(
-        `SELECT state, message_json, consumed_event_id FROM session_pending_inputs
-         WHERE session_key = ? AND session_id = ? AND run_id = ?`,
-      )
-      .all(sessionKey, sessionId, runId);
+    return {
+      pending: db
+        .prepare(
+          `SELECT state, message_json, consumed_event_id FROM session_pending_inputs
+           WHERE session_key = ? AND session_id = ? AND run_id = ?`,
+        )
+        .all(sessionKey, sessionId, runId),
+      transcript: db
+        .prepare(
+          `SELECT identity.event_id, event.message_role FROM transcript_event_identities AS identity
+           JOIN transcript_events AS event USING (session_id, seq)
+           WHERE identity.session_id = ? AND identity.message_idempotency_key = ?`,
+        )
+        .all(sessionId, `${runId}:user`),
+    };
   } finally {
     db.close();
   }
@@ -236,7 +245,7 @@ it.for(["restart", "stop"] as const)(
       releaseDispatch.resolve();
       fixture.active.complete();
       await withinTest(closing, signal);
-      expect(readClosedInput(fixture.scope.storePath)).toEqual([
+      expect(readClosedInputState(fixture.scope.storePath).pending).toEqual([
         {
           state: mode === "restart" ? "interrupted" : "cancelled",
           message_json: expect.stringContaining(message),
@@ -306,9 +315,12 @@ it.for(["restart", "stop"] as const)(
         nextService.abort();
         await reopened.close();
       }
-      expect(readClosedInput(fixture.scope.storePath)).toEqual([
-        expect.objectContaining({ consumed_event_id: expect.any(String) }),
-      ]);
+      // Single-input promotion removes custody; its durable receipt is the
+      // transcript identity. Only collected inputs retain pending source rows.
+      expect(readClosedInputState(fixture.scope.storePath)).toEqual({
+        pending: [],
+        transcript: [{ event_id: expect.any(String), message_role: "user" }],
+      });
     } finally {
       stage.release.resolve();
       capture.release.resolve();
@@ -366,7 +378,7 @@ it("rejects an uncommitted ingress input when its grant is revoked during restar
     capture.release.resolve();
     fixture.active.complete();
     await withinTest(closing, signal);
-    expect(readClosedInput(fixture.scope.storePath)).toEqual([]);
+    expect(readClosedInputState(fixture.scope.storePath)).toEqual({ pending: [], transcript: [] });
   } finally {
     stage.release.resolve();
     capture.release.resolve();
