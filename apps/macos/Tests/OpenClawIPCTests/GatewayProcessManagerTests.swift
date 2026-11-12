@@ -2733,7 +2733,8 @@ struct GatewayProcessManagerTests {
                 supportsSharedEndpointRecovery: false,
                 activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: session))
-            let manager = GatewayProcessManager()
+            let clock = ManualTestClock()
+            let manager = GatewayProcessManager(readinessClock: clock)
             manager.setTestingConnection(connection)
             manager.setTestingSkipControlChannelRefresh(true)
             manager.desiredActive = true
@@ -2744,18 +2745,27 @@ struct GatewayProcessManagerTests {
 
             var dashboardOpened = false
             var completed = false
-            let fallback = await DeviceIdentityStore.withStateDirectory(stateDir) {
-                await OnboardingFirstRun.run(
-                    selectLocal: {}, prepareRuntime: {},
-                    startGateway: {
-                        guard await manager.waitForGatewayReady(timeout: 1) else {
-                            throw NSError(domain: "identity-maintenance-test", code: 1)
-                        }
-                    },
-                    supportsAutomaticSetup: { true },
-                    openDashboard: { dashboardOpened = true },
-                    markComplete: { completed = true })
+            let readiness = Task {
+                await DeviceIdentityStore.withStateDirectory(stateDir) {
+                    await OnboardingFirstRun.run(
+                        selectLocal: {}, prepareRuntime: {},
+                        startGateway: {
+                            guard await manager.waitForGatewayReady(timeout: 1) else {
+                                throw NSError(domain: "identity-maintenance-test", code: 1)
+                            }
+                        },
+                        supportsAutomaticSetup: { true },
+                        openDashboard: { dashboardOpened = true },
+                        markComplete: { completed = true })
+                }
             }
+            await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+            clock.advance(by: .milliseconds(300))
+            if !maintenanceFinishes {
+                await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+                clock.advance(by: .milliseconds(700))
+            }
+            let fallback = await readiness.value
             #expect(probes.withLock { $0 } >= 2)
             #expect(dashboardOpened == maintenanceFinishes)
             #expect(completed == maintenanceFinishes)
