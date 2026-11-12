@@ -7,6 +7,10 @@ import {
   decodeGitHubPublicationRequester,
   encodeGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
+import {
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
+  mergeCanonicalUserProfiles,
+} from "../state/user-profile-writes.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { restoreGitHubPublicationRequester } from "./github-publication-requester.js";
@@ -14,6 +18,7 @@ import {
   createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
   holdWorkerTurn,
+  forPublicationBackends,
 } from "./github-publication-requester.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
@@ -43,6 +48,7 @@ it("refuses unattested membership and member-attributed System publication snaps
     scopes: ["operator.admin"],
     grant: null,
     openclawIdPrincipal: principal,
+    authenticationSource: "openclaw-id-member",
   };
   expect(decodeGitHubPublicationRequester(JSON.stringify(snapshot))).toMatchObject({
     openclawIdPrincipal: principal,
@@ -52,6 +58,12 @@ it("refuses unattested membership and member-attributed System publication snaps
       JSON.stringify({ ...snapshot, openclawIdPrincipal: { ...principal, authority: undefined } }),
     ),
   ).toBeUndefined();
+  for (const invalid of [
+    { ...snapshot, openclawIdPrincipal: undefined },
+    { ...snapshot, authenticationSource: "non-member" },
+  ]) {
+    expect(decodeGitHubPublicationRequester(JSON.stringify(invalid))).toBeUndefined();
+  }
   expect(
     decodeGitHubPublicationRequester(JSON.stringify({ ...snapshot, actor: { kind: "system" } })),
   ).toBeUndefined();
@@ -79,12 +91,16 @@ describe("member publication authority", () => {
         kind: "operator",
         profileId: f.guestProfile,
       });
-      expect(captured.requester.snapshot).toMatchObject({ openclawIdPrincipal: principal });
+      expect(captured.requester.snapshot).toMatchObject({
+        authenticationSource: "openclaw-id-member",
+        openclawIdPrincipal: principal,
+      });
       expect(Object.isFrozen(captured.requester.snapshot.openclawIdPrincipal)).toBe(true);
       expect(Object.isFrozen(captured.requester.snapshot.openclawIdPrincipal?.authority)).toBe(
         true,
       );
       const json = encodeGitHubPublicationRequester(captured.requester.snapshot);
+      expect(decodeGitHubPublicationRequester(json)).toEqual(captured.requester.snapshot);
       const restored = await restoreGitHubPublicationRequester(
         json,
         f.guestSource.session,
@@ -131,6 +147,84 @@ describe("member publication authority", () => {
       );
       expect(f.publishedTitles).toEqual(change === "allowed" ? ["member-publication"] : []);
       if (change !== "allowed") {
+        expect(f.externalWrites).toEqual([]);
+      }
+    },
+  );
+  it.each(forPublicationBackends(["member", "nonmember"] as const))(
+    "rechecks parent-format $change provenance at recovery and write ($backend)",
+    async ({ backend, change }) => {
+      const f = await createRequesterPublicationFixture(checkpoint, backend);
+      const config = structuredClone(f.config);
+      delete config.gateway!.roles!.default;
+      setRuntimeConfigSnapshot(config);
+      const captured = await createGitHubPublicationRequesterFixture({
+        profileId: f.guestProfile,
+        scopes: ["operator.admin"],
+        ...f.guestSource.session,
+      });
+      const currentJson = encodeGitHubPublicationRequester(captured.requester.snapshot);
+      expect(decodeGitHubPublicationRequester(currentJson)).toEqual(captured.requester.snapshot);
+      expect(captured.requester.snapshot.authenticationSource).toBe("non-member");
+      const json = JSON.stringify({
+        version: 1,
+        actor: { kind: "operator", profileId: f.guestProfile },
+        scopes: ["operator.admin"],
+        grant: null,
+      });
+      const restored = await restoreGitHubPublicationRequester(
+        json,
+        f.guestSource.session,
+        f.guestSource.context.getCommittedRuntimeConfig,
+      );
+      onTestFinished(restored.release);
+      const claim = await holdWorkerTurn(f);
+      const accepted = await f.coordinator.requestForSessionV2(
+        f.request("historical-publication", captured.requester),
+      );
+      expect(accepted.status).toBe("requested");
+      f.replaceRequesterSnapshot(accepted.requestId, json);
+      if (change === "member") {
+        const member = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+          accountId: principal.accountId,
+        });
+        await mergeCanonicalUserProfiles(member.id, f.guestProfile);
+        // The canonical identity remains OCID-bound even with remote access off.
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+        const knownNonmember = await restoreGitHubPublicationRequester(
+          currentJson,
+          f.guestSource.session,
+          f.guestSource.context.getCommittedRuntimeConfig,
+        );
+        onTestFinished(knownNonmember.release);
+        expect(knownNonmember.assertCurrent).not.toThrow();
+        expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+        await expect(
+          restoreGitHubPublicationRequester(
+            json,
+            f.guestSource.session,
+            f.guestSource.context.getCommittedRuntimeConfig,
+          ),
+        ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+      } else {
+        expect(restored.assertCurrent).not.toThrow();
+        expect(
+          await f.coordinator.requestForSessionV2(
+            f.request("historical-publication", captured.requester),
+          ),
+        ).toMatchObject({ requestId: accepted.requestId });
+        expect(f.readRequester(accepted.requestId)).toEqual(JSON.parse(json));
+      }
+      await f.placements.releaseTurn(claim);
+      const restarted = f.restart();
+      await restarted.resumeSessionRequests();
+      expect(await restarted.readAsync(accepted.requestId)).toMatchObject(
+        change === "member"
+          ? { status: "failed", code: "identity_changed" }
+          : { status: "published" },
+      );
+      expect(f.publishedTitles).toEqual(change === "member" ? [] : ["historical-publication"]);
+      if (change === "member") {
         expect(f.externalWrites).toEqual([]);
       }
     },

@@ -18,6 +18,7 @@ import { userProfileDisplayName } from "../shared/user-profile-display-name.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
+import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
 import type {
   UserProfileAvatar,
   UserProfileAvatarInspection,
@@ -243,18 +244,38 @@ export function selectProfileDisplayEntries(db: EngineConnection, ids?: string[]
             .$asScalar()
             .as("gateway_owner_created_at")
         : eb.val<number | null>(null).as("gateway_owner_created_at"),
+    )
+    .select((eb) =>
+      tableExists(db, "user_profile_identities")
+        ? eb
+            .exists(
+              eb
+                .selectFrom("user_profile_identities")
+                .select("profile_id")
+                .where("provider", "=", openClawIdProfileProvider)
+                .whereRef("profile_id", "=", "user_profiles.id"),
+            )
+            .as("has_openclaw_id_identity")
+        : eb.val(0).as("has_openclaw_id_identity"),
     );
   const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
   // Worker transfer removes SQLite rows' null prototype; compare plain descriptors on both sides.
-  return rows.map(({ gateway_owner_created_at, ...row }): [string, ProfileDisplayRow] => [
-    row.id,
-    {
-      ...row,
-      ...(gateway_owner_created_at == null
-        ? {}
-        : { gatewayOwnerCreatedAt: gateway_owner_created_at }),
-    },
-  ]);
+  return rows.map(
+    ({
+      gateway_owner_created_at,
+      has_openclaw_id_identity,
+      ...row
+    }): [string, ProfileDisplayRow] => [
+      row.id,
+      {
+        ...row,
+        ...(has_openclaw_id_identity ? { hasOpenClawIdIdentity: true } : {}),
+        ...(gateway_owner_created_at == null
+          ? {}
+          : { gatewayOwnerCreatedAt: gateway_owner_created_at }),
+      },
+    ],
+  );
 }
 
 function normalizeUserProfileAvatarMime(value: string | null): UserProfileAvatarMime | null {
@@ -616,6 +637,7 @@ export function bindPreparedUserProfileIdentity(
           profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
           ...projectUserProfileGitHubFacts(rows.get(profileId)),
+          ...(rows.get(profileId)?.hasOpenClawIdIdentity ? { hasOpenClawIdIdentity: true } : {}),
           assignedRole: profile.assignedRole,
           githubLogin: profile.githubLogin,
         },

@@ -191,6 +191,9 @@ function prepareRequesterPolicy(
     }
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
+    if (!snapshot.authenticationSource && profile?.hasOpenClawIdIdentity) {
+      throw new GitHubPublicationRequesterUnavailableError();
+    }
     const principal = snapshot.openclawIdPrincipal;
     if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new GitHubPublicationRequesterUnavailableError();
@@ -394,6 +397,7 @@ export async function prepareGitHubPublicationRequesterV2(
         : undefined;
     const snapshot: GitHubPublicationRequesterSnapshot = Object.freeze({
       version: 1,
+      authenticationSource: principal ? "openclaw-id-member" : "non-member",
       actor: Object.freeze(
         source
           ? { kind: "operator" as const, profileId: source.authority.profileId }
