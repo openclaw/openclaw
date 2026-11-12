@@ -254,9 +254,7 @@ describe("CLI stream-json turn budget and forwarded subagent traffic", () => {
     parser.finish();
 
     expect(parser.getErrorText()).toBeNull();
-    expect(parser.getOutputTruncationText()).toContain(
-      "JSONL output exceeded 8388608 characters",
-    );
+    expect(parser.getOutputTruncationText()).toContain("JSONL output exceeded 8388608 characters");
     expect(assistantDeltas).toEqual([]);
     expect(parser.getOutput()).toMatchObject({ text: "parent answer" });
   });

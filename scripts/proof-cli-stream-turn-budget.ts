@@ -668,8 +668,7 @@ function scenarioSubagentFrameBound(): void {
   // Liveness is what the frame cap must not cost: every forwarded record still
   // reports attributed progress, on both sides of exhaustion.
   assert(
-    progressAtExhaustion === lines &&
-      sinks.attributedProgress.length === lines + postBudgetRecords,
+    progressAtExhaustion === lines && sinks.attributedProgress.length === lines + postBudgetRecords,
     `subagent-frame-bound: expected ${lines} attributed progress signals up to exhaustion and ${lines + postBudgetRecords} in total, saw ${progressAtExhaustion} and ${sinks.attributedProgress.length}`,
   );
   console.log(

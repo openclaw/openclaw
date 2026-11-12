@@ -6,7 +6,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEventRuntimePayload } from "../../infra/agent-events.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   MAX_RETAINED_TOOL_ARG_CHARS,
   MAX_TRACKED_TOOL_SUMMARIES,
@@ -14,6 +13,7 @@ import {
 } from "./execute-event-retention.js";
 import { createCliEventHandlers } from "./execute-events.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
+import { createPreparedCliContext } from "./prepared-context.test-support.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function buildContext(runId: string): PreparedCliRunContext {
@@ -24,36 +24,17 @@ function buildContext(runId: string): PreparedCliRunContext {
     input: "stdin" as const,
     serialize: true,
   };
-  return {
-    params: {
-      admittedRunContext: createTestAdmittedRunContext(runId),
+  return createPreparedCliContext(
+    {
+      provider: "claude-cli",
+      model: "claude-haiku-4-5",
+      runId,
       agentId: "main",
       sessionId: "session-retention",
       sessionKey: "agent:main:main",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      provider: "claude-cli",
-      model: "claude-haiku-4-5",
-      timeoutMs: 1_000,
-      runId,
     },
-    started: Date.now(),
-    startedMonotonicMs: performance.now(),
-    workspaceDir: "/tmp",
-    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
-    preparedBackend: { backend, env: {} },
-    executionTarget: { kind: "process" },
-    reusableCliSession: { mode: "none" },
-    hadSessionFile: false,
-    contextEngineConfig: {},
-    modelId: "claude-haiku-4-5",
-    normalizedModel: "claude-haiku-4-5",
-    systemPrompt: "system",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
-  } as PreparedCliRunContext;
+    { id: "claude-cli", config: backend, bundleMcp: false },
+  );
 }
 
 function buildToolTracking(): CliToolTracking {

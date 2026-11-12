@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { CliBackendParseJsonlEvent } from "../plugins/cli-backend.types.js";
+import type {
+  CliBackendParseJsonlEvent,
+  CliBackendParsedJsonlEvent,
+} from "../plugins/cli-backend.types.js";
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
@@ -199,6 +202,36 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ? ""
       : assistantText.slice(Math.max(replyBoundary.finalMessageStart, flushedMessageStart)).trim());
 
+  const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
+    const previousOutput = output;
+    const state: CliEventProjectionState = {
+      assistantText,
+      customThinkingText,
+      sessionId,
+      usage,
+      output,
+      sawCustomJsonlEvent,
+    };
+    projectCliBackendEvent({
+      ...params,
+      event,
+      state,
+      texts,
+      toolTracker,
+    });
+    ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
+    // Custom events carry no message boundaries: a tool start begins the next
+    // final-message segment, so pre-tool narration is never the final message.
+    if (event.kind === "toolStart") {
+      replyBoundary.startFinalMessageSegment(assistantText.length);
+    } else if (event.kind === "result" && output && !output.errorText) {
+      // A metadata-only result keeps the earlier result's final message.
+      const prior = previousOutput?.rawFinalText ?? previousOutput?.text.trim();
+      const finalText = event.text?.trim() || (prior ?? finalStreamedMessageText());
+      output = withCliRawFinalText(output, finalText);
+    }
+  };
+
   const dispatchTerminalResultEvents = createTerminalResultEventDispatcher((event) => {
     sawTerminalResult = true;
     handleCustomJsonlEvent(event);
@@ -270,34 +303,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (event.kind === "result") {
         sawTerminalResult = true;
       }
-      const previousOutput = output;
-      const state: CliEventProjectionState = {
-        assistantText,
-        customThinkingText,
-        sessionId,
-        usage,
-        output,
-        sawCustomJsonlEvent,
-      };
-      projectCliBackendEvent({
-        ...params,
-        event,
-        state,
-        texts,
-        toolTracker,
-      });
-      ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } =
-        state);
-      // Custom events carry no message boundaries: a tool start begins the next
-      // final-message segment, so pre-tool narration is never the final message.
-      if (event.kind === "toolStart") {
-        replyBoundary.startFinalMessageSegment(assistantText.length);
-      } else if (event.kind === "result" && output && !output.errorText) {
-        // A metadata-only result keeps the earlier result's final message.
-        const prior = previousOutput?.rawFinalText ?? previousOutput?.text.trim();
-        const finalText = event.text?.trim() || (prior ?? finalStreamedMessageText());
-        output = withCliRawFinalText(output, finalText);
-      }
+      handleCustomJsonlEvent(event);
     }
     return true;
   };
