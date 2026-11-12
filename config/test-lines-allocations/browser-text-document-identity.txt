@@ -1,0 +1,2 @@
+78
+# Regression proof that page text read across a navigation, reload, or closed tab is rejected.

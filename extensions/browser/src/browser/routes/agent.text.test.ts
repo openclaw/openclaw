@@ -36,6 +36,7 @@ describe("browser page text route", () => {
     expect(pageText).toHaveBeenCalledWith(
       expect.objectContaining({
         targetId: "abcd1234",
+        expectedUrl: "https://example.com",
         selector: "article",
         maxChars: 13,
         signal: expect.any(AbortSignal),

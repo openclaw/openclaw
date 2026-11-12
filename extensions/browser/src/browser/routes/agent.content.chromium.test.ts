@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "../paths.js";
+import { getPageForTargetId } from "../pw-session.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
 import { chromiumTempDirs as tempDirs, withChromiumPage } from "./chromium.test-support.js";
 import { registerBrowserRoutes } from "./index.js";
@@ -153,6 +154,36 @@ describe.runIf(process.env.OPENCLAW_BROWSER_CONTENT_E2E === "1")(
           await prompt;
         }
         expect((await call("get", "/text")).body).toMatchObject({ text: "Article text" });
+      });
+    }, 30_000);
+
+    it("rejects text from a document that replaced the tab during extraction", async () => {
+      await withContentPage(async ({ page, call, cdpUrl, targetId }) => {
+        const next = { contentType: "text/html", body: '<p id="next">Next</p>' };
+        await page.route(page.url(), (route) => route.fulfill(next));
+        // The route's page waits for the selector once it creates the locator.
+        const routePage = await getPageForTargetId({ cdpUrl, targetId });
+        const locate = routePage.locator.bind(routePage);
+        let located = Promise.withResolvers<void>();
+        vi.spyOn(routePage, "locator").mockImplementation((selector, options) => {
+          located.resolve();
+          return locate(selector, options);
+        });
+        const readWhile = async (selector: string, change: () => Promise<unknown>) => {
+          located = Promise.withResolvers<void>();
+          const response = call("get", "/text", { selector });
+          await located.promise;
+          await change();
+          return (await response).body;
+        };
+        const late = () => document.body.insertAdjacentHTML("beforeend", '<p id="late">Late</p>');
+        expect(await readWhile("#late", () => page.evaluate(late))).toMatchObject({ text: "Late" });
+        expect(await readWhile("#next", () => page.reload())).toEqual({
+          error: expect.stringContaining("target changed"),
+        });
+        expect((await call("get", "/text", { selector: "#next" })).body).toMatchObject({
+          text: "Next",
+        });
       });
     }, 30_000);
   },
