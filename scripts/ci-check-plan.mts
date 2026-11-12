@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Materialize compiler and lint selections only after the check-planning job installs dependencies.
 import { appendFileSync, existsSync } from "node:fs";
-import { detectChangedLanes } from "./changed-lanes.mts";
+import { detectChangedLanes, detectChangedLanesForPaths } from "./changed-lanes.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   resolveChangedCiTsgoInputs,
+  resolveCiTsgoGraphs,
   selectTsgoCoreTestStripe,
   TSGO_ROOT_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
@@ -34,7 +35,7 @@ export type CiCheckPlanInput = {
   changedBaseRef?: string;
   extensionLintMode?: "affected" | "full";
   preserveFullChecks?: boolean;
-  typeGraphBoundaryOwner: "" | "check-plan" | "additional-checks";
+  typeGraphBoundaryOwner: "" | "check-plan" | "additional-checks" | "changed-check";
   changedPaths: string[];
   changedCoreTestPaths: string[] | null;
   runnerProfile: string;
@@ -57,8 +58,28 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
         })
       : null;
   const started = performance.now();
-  const typePlan =
-    !input.preserveFullChecks && (runs("prod-types") || runs("test-types"))
+  if (input.typeGraphBoundaryOwner === "changed-check" && input.preserveFullChecks) {
+    throw new Error("Changed-check compiler delegation cannot preserve unrelated full checks");
+  }
+  const changedCheck =
+    input.typeGraphBoundaryOwner === "changed-check"
+      ? (await import("./check-changed.mts")).createChangedCheckPlan(
+          detectChangedLanesForPaths({
+            paths: input.changedPaths,
+            base: input.changedBaseRef ?? "origin/main",
+            head: "HEAD",
+          }),
+          { delegateCompilers: true, base: input.changedBaseRef, head: "HEAD" },
+        )
+      : null;
+  const typePlan = changedCheck
+    ? {
+        mode: "changed-check",
+        graphs: changedCheck.delegatedTypeGraphs.length
+          ? resolveCiTsgoGraphs(changedCheck.delegatedTypeGraphs)
+          : [],
+      }
+    : !input.preserveFullChecks && (runs("prod-types") || runs("test-types"))
       ? await (
           await import("./run-tsgo-core-test-shards.mts")
         ).createChangedCiTypeCheckPlan(input.changedPaths, {
@@ -455,7 +476,8 @@ function parseInput(value: unknown): CiCheckPlanInput {
   if (
     boundaryOwner !== "" &&
     boundaryOwner !== "check-plan" &&
-    boundaryOwner !== "additional-checks"
+    boundaryOwner !== "additional-checks" &&
+    boundaryOwner !== "changed-check"
   ) {
     throw new Error("Check planning requires its compiler boundary owner");
   }

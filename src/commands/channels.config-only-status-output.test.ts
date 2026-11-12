@@ -41,8 +41,9 @@ vi.mock("../channels/plugins/index.js", () => ({
   },
 }));
 
-vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig,
+vi.mock("../channels/plugins/read-only.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/read-only.js")>()),
+  listReadOnlyChannelPluginsForConfigAsync: listReadOnlyChannelPluginsForConfig,
 }));
 
 function registerPlugins(...plugins: ChannelPlugin[]) {
