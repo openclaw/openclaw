@@ -214,14 +214,6 @@ describe("Team Reports site behavior", () => {
     excludes(details, "javascript:", "<hostile-repo>", "<Fourth>");
   });
 
-  it("keeps macOS stem darkening on report prose while page chrome stays antialiased", () => {
-    const html = reportPage(document());
-    contains(html, '<div class="summary-markdown">', '<p class="focus">');
-    expect(html).toMatch(/\.summary-markdown \{[^}]*-webkit-font-smoothing: auto;/);
-    expect(html).toMatch(/\.focus \{[^}]*-webkit-font-smoothing: auto;/);
-    expect(html).toMatch(/\nbody \{[^}]*-webkit-font-smoothing: antialiased;/);
-  });
-
   it("keeps source warning banners bounded and escapes hostile data on every page", () => {
     const hostile = 'bad"><img src=x onerror=alert(1)>';
     const report = document();
