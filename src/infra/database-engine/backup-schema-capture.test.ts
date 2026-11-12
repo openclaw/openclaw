@@ -29,6 +29,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { agentPortProvider } from "./agent-port.js";
 import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture.test-support.js";
+import { crashCaptureAtCommit } from "./backup-schema-capture-crash.test-support.js";
 import { workboardPortFixture, writePortAnchor } from "./port-backup.test-support.js";
 import { admitDatabasePortDescriptor } from "./port-descriptor.js";
 import { inspectDatabasePort, materializeDatabasePort } from "./port.worker.js";
@@ -174,6 +175,58 @@ it.skipIf(!connection)(
         expect(await schemaExists(client, manifest.schema)).toBe(false);
       },
     ),
+);
+
+it.skipIf(!connection).each(["before", "after"] as const)(
+  "keeps capture cleanup metadata atomic when killed %s commit",
+  (phase) =>
+    withSeededWorkboard(async ({ state, client, namespace, namespaces, storeId, anchorPath }) => {
+      assert(connection);
+      const prefix = `${anchorPath}.pre-startup-migration-`;
+      const directory = `${prefix}${phase}.postgres.bak`;
+      await fs.mkdir(directory);
+      await fs.copyFile(anchorPath, path.join(directory, "anchor.sqlite"));
+      const gate = await crashCaptureAtCommit(
+        { connection, namespace, storeId, directory, phase },
+        state.env,
+      );
+      namespaces.add(gate.namespace);
+      await expect
+        .poll(
+          async () =>
+            (
+              await client.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [
+                gate.backendPid,
+              ])
+            ).rows,
+        )
+        .toEqual([]);
+      if (phase === "before") {
+        expect(await schemaExists(client, gate.namespace)).toBe(false);
+        return;
+      }
+      expect(
+        (
+          await client.query(
+            "SELECT obj_description(oid, 'pg_namespace') AS note FROM pg_namespace WHERE nspname = $1",
+            [gate.namespace],
+          )
+        ).rows,
+      ).toEqual([{ note: JSON.stringify({ openclawCapture: directory }) }]);
+      expect(
+        (
+          await client.query(
+            `SELECT store_id, title FROM "${gate.namespace}".openclaw_schema_meta CROSS JOIN "${gate.namespace}".workboard_cards`,
+          )
+        ).rows,
+      ).toEqual([{ store_id: storeId, title: "Captured" }]);
+      await fs.rm(directory, { recursive: true });
+      expect(
+        await pruneOrphanedPostgresCaptures(client, { storeId, directoryPrefix: prefix }),
+      ).toEqual([gate.namespace]);
+      expect(await schemaExists(client, namespace)).toBe(true);
+    }),
+  60_000,
 );
 
 it.skipIf(!connection)("drops the capture schema when a capture fails after creating it", () =>

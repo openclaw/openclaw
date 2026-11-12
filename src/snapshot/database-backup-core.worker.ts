@@ -166,14 +166,17 @@ export async function capturePostgresSchema(params: {
     const verification = await materializeDatabasePort({
       source: { engine: "postgres", db: client, namespace: anchor.namespace },
       destination: { engine: "postgres", db: client, namespace: schema },
-      descriptor,
+      // Commit the prune marker with the capture so a lost client cannot leave an
+      // unmarked schema behind. Ordinary restores keep their unmarked descriptor.
+      descriptor: {
+        ...descriptor,
+        postgresPostData: (namespace) =>
+          `${descriptor.postgresPostData?.(namespace) ?? ""}\n;\n` +
+          `COMMENT ON SCHEMA "${namespace}" IS ${client.escapeLiteral(JSON.stringify({ openclawCapture: params.directory }))}`,
+      },
       storeId: anchor.storeId,
       assertCurrent: params.assertCurrent,
     });
-    // The marker lets Doctor find a capture whose directory was removed; restored stores have none.
-    await client.query(
-      `COMMENT ON SCHEMA "${schema}" IS ${client.escapeLiteral(JSON.stringify({ openclawCapture: params.directory }))}`,
-    );
     const manifest: PostgresExportEnvelope = {
       schemaVersion: 2,
       snapshotId: path.basename(params.directory),
