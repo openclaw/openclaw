@@ -99,22 +99,25 @@ describe("browser operator control", () => {
     await dispatcher.dispatch({ method: "POST", path: "/control", requester: operator.requester });
 
     await vi.advanceTimersByTimeAsync(4 * 60_000);
-    // Operator input restarts the idle window.
+    // Input the panel marks as deliberate restarts the idle window.
     await dispatcher.dispatch({
       method: "POST",
       path: "/act",
+      query: { operatorInput: true },
       body: { kind: "not-an-action" },
       requester: operator.requester,
     });
     await vi.advanceTimersByTimeAsync(4 * 60_000);
     await expect(status()).resolves.toMatchObject({ controlled: true });
-    // The panel fitting the viewport to its layout is not input and keeps nothing alive.
-    await dispatcher.dispatch({
-      method: "POST",
-      path: "/act",
-      body: { kind: "resize" },
-      requester: operator.requester,
-    });
+    // Automatic panel requests (page-metrics reads, viewport fits) are not someone using the page.
+    for (const kind of ["evaluate", "resize"]) {
+      await dispatcher.dispatch({
+        method: "POST",
+        path: "/act",
+        body: { kind },
+        requester: operator.requester,
+      });
+    }
 
     await vi.advanceTimersByTimeAsync(60_000);
     await expect(status()).resolves.toMatchObject({ controlled: false });

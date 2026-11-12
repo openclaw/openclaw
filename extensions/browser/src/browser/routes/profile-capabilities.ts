@@ -3,6 +3,7 @@ import {
   admitBrowserInput,
   BROWSER_OPERATOR_CONTROL_MESSAGE,
   isBrowserInputRoute,
+  recordBrowserOperatorInput,
 } from "../operator-control.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -68,12 +69,14 @@ export function withBrowserProfileCapabilities(
           });
           return;
         }
-        if (
-          path !== "/control" &&
-          isBrowserInputRoute(method, path) &&
-          !admitBrowserInput(ctx.state(), profileCtx.profile, req)
-        ) {
-          return jsonError(res, 409, BROWSER_OPERATOR_CONTROL_MESSAGE);
+        if (path !== "/control" && isBrowserInputRoute(method, path)) {
+          const connId = req.requester?.connId;
+          if (!admitBrowserInput(ctx.state(), profileCtx.profile, connId)) {
+            return jsonError(res, 409, BROWSER_OPERATOR_CONTROL_MESSAGE);
+          }
+          if (toBoolean(req.query.operatorInput) === true) {
+            recordBrowserOperatorInput(ctx.state(), profileCtx.profile, connId);
+          }
         }
       }
       return await handler(...args);

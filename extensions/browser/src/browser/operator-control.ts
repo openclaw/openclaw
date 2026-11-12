@@ -64,28 +64,34 @@ export function isBrowserInputRoute(method: "GET" | "POST" | "DELETE", path: str
   return method !== "GET" && !OBSERVATION_POST_ROUTES.has(path);
 }
 
-/** False while someone else holds control; records input from Gateway clients. */
+/** False while a connection other than `connId` holds control of this browser. */
 export function admitBrowserInput(
   state: BrowserServerState,
   profile: ResolvedBrowserProfile,
-  req: BrowserRequest,
+  connId: string | undefined,
 ): boolean {
-  const control = controls.get(state)?.get(browserKey(profile));
-  const connId = req.requester?.connId;
-  if (control?.controller && control.controller.connId !== connId) {
-    return false;
+  const controller = controls.get(state)?.get(browserKey(profile))?.controller;
+  return !controller || controller.connId === connId;
+}
+
+/**
+ * Record deliberate input from a Gateway client; the Browser panel marks it on each request.
+ * It drives the agent's recent-use note and keeps the holder's control from going idle.
+ */
+export function recordBrowserOperatorInput(
+  state: BrowserServerState,
+  profile: ResolvedBrowserProfile,
+  connId: string | undefined,
+): void {
+  if (!connId) {
+    return;
   }
-  // The panel resizes the viewport to fit its own layout; that is not someone using the page.
-  const body = req.body && typeof req.body === "object" ? (req.body as { kind?: unknown }) : {};
-  if (connId && body.kind !== "resize") {
-    const now = Date.now();
-    const tracked = control ?? profileControl(state, profile);
-    tracked.lastOperatorInputAt = now;
-    if (tracked.controller) {
-      tracked.controller.lastInputAt = now;
-    }
+  const control = profileControl(state, profile);
+  const now = Date.now();
+  control.lastOperatorInputAt = now;
+  if (control.controller?.connId === connId) {
+    control.controller.lastInputAt = now;
   }
-  return true;
 }
 
 type BrowserOperatorActivity = {

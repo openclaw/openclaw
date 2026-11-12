@@ -447,7 +447,8 @@ describe("Browser panel", () => {
         path: "/act",
         target: "node",
         node: "browser-node",
-        query: { profile: "work" },
+        // Typed text is the person using the page, so the panel marks it as operator input.
+        query: { operatorInput: true, profile: "work" },
         body: { kind: "insertText", targetId: "form-tab", text },
       });
       if (outcome === "failed") {

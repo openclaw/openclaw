@@ -65,27 +65,31 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     addressInput: undefined,
   };
   // The Gateway releases control after idle input or from another window; keep the button true.
-  const watchControl = (client: BrowserRequestClient, epoch: number): void => {
-    setTimeout(async () => {
-      const current = () => panel.controlling && operations.isLive(epoch, client);
-      if (!current()) {
-        return;
-      }
-      try {
-        const control = await requestBrowserOperatorControl(client, "read");
-        if (!current()) {
-          return;
+  // Scoped to the route rather than the view epoch, which navigation and tab switches renew.
+  let controlWatch = 0;
+  const watchControl = (): void => {
+    const watch = ++controlWatch;
+    const routeKey = browserRouteKey(operations.route);
+    const current = () =>
+      watch === controlWatch && panel.controlling && browserRouteKey(operations.route) === routeKey;
+    const check = async () => {
+      const client = current() ? operations.captureClient() : null;
+      if (client) {
+        try {
+          const control = await requestBrowserOperatorControl(client, "read");
+          if (current() && !control.byYou) {
+            panel.setState("controlling", false);
+            panel.setState("noticeText", t("browser.controlReleased"));
+          }
+        } catch {
+          // A transient read failure keeps the current state; the next check retries.
         }
-        if (!control.byYou) {
-          panel.setState("controlling", false);
-          panel.setState("noticeText", t("browser.controlReleased"));
-          return;
-        }
-      } catch {
-        // A transient read failure keeps the current state; the next check retries.
       }
-      watchControl(client, epoch);
-    }, CONTROL_CHECK_INTERVAL_MS);
+      if (current()) {
+        setTimeout(() => void check(), CONTROL_CHECK_INTERVAL_MS);
+      }
+    };
+    setTimeout(() => void check(), CONTROL_CHECK_INTERVAL_MS);
   };
   const panel = {
     ...initialState,
@@ -597,12 +601,11 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     toggleControl(): void {
       const take = !panel.controlling;
       panel.setState("noticeText", null);
-      const epoch = operations.epoch;
       void panel.runAction(async (client) => {
         const control = await requestBrowserOperatorControl(client, take ? "take" : "release");
         panel.setState("controlling", control.byYou);
         if (control.byYou) {
-          watchControl(client, epoch);
+          watchControl();
         }
       }, false);
     },
