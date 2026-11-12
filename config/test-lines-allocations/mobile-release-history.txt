@@ -1,0 +1,2 @@
+# Exercise shallow release admission and history hydration through the release CLI.
+44

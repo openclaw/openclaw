@@ -1,0 +1,2 @@
+6
+# Isolate both lifetime fixture configs from ambient Computer Use activation.

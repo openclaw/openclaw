@@ -1,0 +1,5 @@
+# PR #194154: 41 net regression-test lines in the existing CLI executor matrix.
+# Covers explicit/default final sends with later-started work and earlier-started
+# failed work completing before or after the send. Both loss cases were reproduced
+# against the unrepaired candidate; the small callback hook reuses the existing suite.
+41

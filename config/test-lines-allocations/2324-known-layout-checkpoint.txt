@@ -1,0 +1,3 @@
+# Real managed-layout regression counts the skipped probe while preserving fresh guest PR admission.
+# Exact net growth; mixed-mode checkpoint coalescing extends an existing table without adding lines.
+35
