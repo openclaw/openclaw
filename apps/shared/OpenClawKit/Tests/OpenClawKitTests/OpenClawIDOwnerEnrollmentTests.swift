@@ -579,6 +579,8 @@ struct OpenClawIDOwnerEnrollmentTests {
                 }
                 return .init(status: 201, body: Data(#"{"message_id":"m","expires_at":1}"#.utf8))
             case let ("GET", path) where path.hasSuffix("/mailbox/device"):
+                // A real mailbox long-polls; answering an empty poll at once would spin the client.
+                if self.cursor == self.inbox.count { try await Task.sleep(for: .milliseconds(20)) }
                 let pending = Array(self.inbox[self.cursor...])
                 self.cursor = self.inbox.count
                 return ok(.object(["messages": .array(pending), "cursor": .string(String(self.cursor))]))

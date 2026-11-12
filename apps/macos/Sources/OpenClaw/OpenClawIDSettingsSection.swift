@@ -139,7 +139,9 @@ final class OpenClawIDSettingsModel {
             enrollmentID: device.deviceEnrollmentID, purpose: .devicePeer))
         let description = try await MacNodeModeCoordinator.shared.openClawIDEnrollmentDescription()
         try await self.actions(device).addNode(
-            peer: peer.peerKey, node: node, label: String(InstanceIdentity.displayName.prefix(64)),
+            peer: peer.peerKey,
+            node: node,
+            label: String(InstanceIdentity.displayName.prefix(64)),
             description: description)
         // The node route re-verifies W_node in the claw's snapshot before it dials.
         try await OpenClawIDNodeNativeTrustStore(
