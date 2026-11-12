@@ -14,6 +14,7 @@ import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../pl
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { listPluginContributionIds } from "../../plugins/plugin-registry.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
 import {
   formatChannelAccountLabel,
@@ -21,14 +22,18 @@ import {
   requireValidChannelConfig,
 } from "./shared.js";
 
-async function readGatewayChannelStatus() {
+async function readGatewayChannelStatus(signal?: AbortSignal) {
   try {
     return await callGateway({
       method: "channels.status",
       params: { probe: false, timeoutMs: 5_000 },
       timeoutMs: 5_000,
+      signal,
     });
   } catch {
+    // A Ctrl+C cancels the pending read; keep the canonical abort outcome instead
+    // of reporting the gateway request as unreachable.
+    signal?.throwIfAborted();
     return null;
   }
 }
@@ -100,6 +105,8 @@ export async function channelsListCommand(
   },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const cfg = await requireValidChannelConfig(runtime);
   if (!cfg) {
     return;
@@ -136,7 +143,8 @@ export async function channelsListCommand(
   const runtimeAccountsByChannel =
     opts.json === true
       ? new Map<string, ChannelAccountSnapshot[]>()
-      : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus());
+      : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus(signal));
+  signal?.throwIfAborted();
   // Installed ids are one prepared manifest fact set for the invocation. Rebuilding
   // discovery for each catalog row turns this read into a full filesystem walk per row.
   const manifestInstalledChannelIds = new Set<string>(

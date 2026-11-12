@@ -84,6 +84,21 @@ it.each([
     ],
     runtime: true,
   },
+  {
+    name: "plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: [
+      "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+      "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+    ],
+    runtime: true,
+  },
+  {
+    name: "mixed plugin reload product",
+    config: "test/vitest/vitest.gateway-server.config.ts",
+    files: ["src/gateway/server.plugin-reload-send-revocation.product.test.ts", "unknown.test.ts"],
+    runtime: false,
+  },
   { name: "reply delivery", config: reply, files: [delivery], runtime: true },
   { name: "broad reply", config: reply, files: [], runtime: false },
   {
