@@ -174,7 +174,7 @@ export function resolveGoogleThinkingProfile({
 
 export type GoogleServiceTier = "standard" | "flex" | "priority";
 
-export function normalizeGoogleServiceTier(value: unknown): GoogleServiceTier | undefined {
+function normalizeGoogleServiceTier(value: unknown): GoogleServiceTier | undefined {
   const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized === "standard" || normalized === "flex" || normalized === "priority"
     ? normalized

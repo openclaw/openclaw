@@ -25,6 +25,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../state/agent-database-admission-error.js";
 import { evaluateTurnAdmission, isMutationOwnedTurn } from "./session-controller.admission-rule.js";
 import type {
@@ -313,12 +314,15 @@ function disposeSessionControllerMailbox(mailbox: SessionControllerMailbox): voi
   clearTimeout(mailbox.timer);
   if (mailbox.recentSources.size) {
     const expires = Math.min(...[...mailbox.recentSources.values()].map((value) => value.expires));
-    mailbox.timer = setTimeout(
-      () => {
-        mailbox.timer = undefined;
-        disposeSessionControllerMailbox(mailbox);
-      },
-      Math.max(1, expires - now),
+    // Receipt maintenance outlives the completed turn and must not retain its async context.
+    mailbox.timer = runInDetachedAsyncContext(() =>
+      setTimeout(
+        () => {
+          mailbox.timer = undefined;
+          disposeSessionControllerMailbox(mailbox);
+        },
+        Math.max(1, expires - now),
+      ),
     );
     mailbox.timer.unref?.();
     return;

@@ -134,6 +134,8 @@ export type SessionExactEntriesWorkerRequest = (
   /** Inspect authority facts without opening the original SQLite family. */
   preserveSourceArtifacts?: true;
   inspectionSourcePath?: string;
+  /** The enclosing inspection retains these private bytes through worker settlement. */
+  inspectionSnapshot?: DatabasePathIdentity;
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
   creationDigest?: string;

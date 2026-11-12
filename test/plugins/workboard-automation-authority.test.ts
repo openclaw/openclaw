@@ -171,6 +171,9 @@ it.each(["run_settled", "subagent_ended"] as const)(
     for (const service of services.filter((entry) =>
       ["workboard-automation-nudge", "workboard-lifecycle-sync"].includes(entry.id),
     )) {
+      if (service.apiVersion === 2 || service.apiVersion === 3) {
+        throw new Error("Expected Workboard service API version 1");
+      }
       registry.services.push({
         pluginId: "workboard",
         origin: "bundled",

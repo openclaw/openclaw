@@ -1,2 +1,0 @@
-# Hello projection ordering, source isolation, and redundant-copy regression.
-8

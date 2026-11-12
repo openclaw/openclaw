@@ -18,6 +18,8 @@ In **Search settings**, Escape clears the search before leaving Settings. While 
 
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
+Page-name matches remain available while configuration-field search loads. **Loading…** means field search is still incomplete. If it fails, page navigation remains available; choose **Retry** to load field results again.
+
 Configuration field text and `tag:` comparisons ignore case and match canonically equivalent composed and decomposed Unicode text. Search normalizes only comparison copies; field values, labels, and stored tags keep their original text.
 
 People search in **Session access**, the **New Session → Where** picker, and provider
@@ -82,6 +84,10 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 ```
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
+
+## Appearance preferences
+
+Personal Appearance preferences remain available when you cannot read Gateway-wide settings. Session observer and session-source settings require Gateway read access; unavailable reads do not stay marked as loading. A missing observer status does not mean that no utility model is configured.
 
 ## Browser tab icon
 
@@ -174,7 +180,12 @@ times in milliseconds. It samples every ten seconds while the page is visible
 and summarizes the last 100 successful samples from the current connection.
 The sample count makes small sets visible; p95 and p99 become more useful as
 samples accumulate. Reconnecting, switching Gateways, or leaving the page resets
-the readings. Failed requests are excluded and shown as a retry notice.
+the readings. Transient failures are excluded and shown as a retry notice.
+Ping and host activity require `operator.read` and their advertised Gateway
+methods. When either diagnostic is unavailable or denied, it settles as unavailable
+instead of repeatedly requesting access or claiming to retry. The connection can
+remain healthy, and browser-local connection settings remain usable. A fresh
+connection or refreshed capabilities can make the diagnostics available again.
 
 The ping graph shows individual round trips. **Gateway activity** uses the same
 CPU, process memory, and event-loop delay graphs as the debug overlay, with up to
@@ -207,11 +218,13 @@ Docs translations are generated for the same non-English locale set except Catal
 
 Ask the agent to list themes, choose one by name or description, or design and apply a new theme. The `theme` tool uses the same catalog and profile selection as Appearance. Plugin themes and agent-created personal themes appear alongside built-ins with their names and descriptions. Profile theme changes reach connected browsers live; plugin theme additions, updates, and removals take effect after plugin hot reload without restarting the Gateway or reloading the browser. If a selected plugin theme becomes unavailable, Claw renders temporarily and the selection returns when the theme is available again. A loading error in Appearance offers **Retry** to refresh the catalog and palette.
 
+Custom and inherited accent colors keep the selected theme’s new-session and send icon colors. Their button fills adjust only when needed for contrast; the selected accent remains unchanged for other surfaces.
+
 Personal theme definitions are saved to your authenticated Gateway profile. Existing browser-local tweakcn imports remain local and are never uploaded automatically. The agent reports a selection as saved; a browser that is offline applies it when it next connects. Reconnecting preserves your pending local choices while refreshing other appearance preferences from your profile. A theme that supplies only one color mode uses that mode even when the preference is System. Explicit accent and font overrides continue to take precedence over the theme.
 
 The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon, Phosphor, CRT, Manuscript, Rosé, and Miami themes (Claw is default), plus themes contributed by enabled plugins, personal themes saved through the agent, and one browser-local tweakcn import slot. Each theme ships its own self-hosted typeface, loaded only when selected or previewed: Claw uses Instrument Sans, Knot uses Geist, Dash pairs DM Sans with Fraunces for chat prose, Absolutely pairs Space Grotesk with Lora for chat prose, Tide uses IBM Plex Sans, Rosé uses DM Sans, and Miami uses Space Grotesk. Beacon targets WCAG AAA (7:1) contrast with the Atkinson Hyperlegible Next typeface for low vision, bright sunlight, projectors, and low-quality panels. Phosphor and CRT set the entire surface, chat prose included, in JetBrains Mono — Phosphor as green-on-glass, CRT as a white-on-black console with squared corners. Manuscript is the one light-first theme: parchment and iron-gall ink with a lapis accent, set entirely in the Lora serif, with a candlelit dark mode. To import a theme, open the [tweakcn editor](https://tweakcn.com/editor/theme), choose or create a theme, click **Share**, and paste the copied link into Appearance. The importer also accepts `https://tweakcn.com/r/themes/<id>` registry URLs, editor URLs like `https://tweakcn.com/editor/theme?theme=amethyst-haze`, relative `/themes/<id>` paths, raw theme IDs, and default theme names such as `amethyst-haze`.
 
-Theme stylesheets can set `--chat-composer-corner-shape` (default `superellipse(1.5)`) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
+Theme stylesheets can set `--chat-composer-corner-shape` (default `round`) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
 
 Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. A theme can also hide **Lobsterdex**, including its visit and sound controls and collected-lobster tab icons. This preserves your collection, saved tab icon, and visit preferences; switching back to a theme that shows Lobsterdex restores them. Hiding Lobsterdex alone does not change mascot or critter behavior. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
 
@@ -233,7 +246,7 @@ Selecting a **different theme** in Appearance applies its complete default look,
 
 The mounted UI keeps a live display-preference snapshot for its connected Gateway. Local changes and same-Gateway browser-tab edits update open composers without a reload. Sidebar width, personal rail shortcuts, and pinned agents also update across tabs; collapsing the sidebar stays local to each tab. Resizing the sidebar preserves shortcuts changed in another tab. Selecting a different Gateway in another tab does not retarget the current tab. Credentials remain owned by the connection, separate from this display snapshot.
 
-Personal rail shortcuts start empty and their order syncs across devices for an authenticated Gateway profile with write access. Add shortcuts by dragging sessions, pages, plugins, or people into the rail. After upgrading, older sidebar order and pins are not carried over: the rail uses the new `ui.railShortcuts` preference and browser-local `railShortcuts` field. Old values remain stored but are ignored. Shortcuts saved under the new identity remain unchanged; profiles without a saved list do not import shared navigation or pinned sessions. On read-only connections or connections without a durable profile, navigation changes stay browser-local and never write shared Gateway configuration. The Sessions owner filter is stored in the browser per Gateway and profile; its default is **My sessions** for an identified profile and **All owners** while identity is unresolved or absent. Sidebar width and scroll position remain browser-specific. Agent-switcher pins are a separate browser-profile preference. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
+Personal rail shortcuts start empty and their order syncs across devices for an authenticated Gateway profile with write access. Add shortcuts by dragging sessions, pages, plugins, or people into the rail. After upgrading, older sidebar order and pins are not carried over: the rail uses the new `ui.railShortcuts` preference and browser-local `railShortcuts` field. Old values remain stored but are ignored. Shortcuts saved under the new identity remain unchanged; profiles without a saved list do not import shared navigation or pinned sessions. On read-only connections or connections without a durable profile, navigation changes stay browser-local and never write shared Gateway configuration. The Sessions owner filter is stored in the browser per Gateway and profile; its default is **All owners**, except guests, who start with **Involving me**. Sidebar width and scroll position remain browser-specific. Agent-switcher pins are a separate browser-profile preference. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
 
 Choose an **Accent color** preset or custom color in Appearance to override the active theme's accent. For an authenticated Gateway profile, the accent precedence is the profile's `ui.accent` preference, the gateway-wide `ui.prefs.accent` setting, the operator-configured `ui.seamColor`, and finally the active theme's default. A theme selection stores the explicit `"theme"` accent preference, which uses the selected theme's complete palette in both light and dark modes instead of inheriting gateway-wide color overrides. **Restore default** clears only that profile's preference, leaving the gateway-wide settings unchanged. Connections without an authenticated profile keep the existing gateway-wide preference behavior.
 
@@ -303,6 +316,8 @@ The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
 **Skill workshop** tabs open the per-agent skill manager at `/skills` and Skill
 Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
 shows the searchable local inventory. Select a plugin to open its overview.
+Catalog browsing and search load independently of that inventory. Installation
+stays disabled until the Gateway confirms the current inventory and permissions.
 
 Opening a plugin shows its description, publisher when available, skills, tools,
 MCP servers, and full README on one overview. Select a tool to read its full
@@ -348,6 +363,8 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
+filter remains available while the installed inventory loads; inventory status
+and installation wait for the inventory and destination checks to finish. The
 **Skill workshop** tab shows [learned skills](/tools/skill-workshop) with their
 use counts and recent changes with **Undo**. **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.
@@ -648,8 +665,11 @@ Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 ## Templates (Labs)
 
 Enable **Settings → Labs → Templates** to browse official Template packages from
-ClawHub on the **Agents** page. Search the catalog, review the files and
+ClawHub on the **Templates** page. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
+Opening a catalog entry keeps the selected published version in its detail link,
+so the files you review and the agent you add use the same release. A detail link
+without a version opens the latest published release.
 Add creates an ordinary agent and opens its chat. It does not create a separate
 installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See

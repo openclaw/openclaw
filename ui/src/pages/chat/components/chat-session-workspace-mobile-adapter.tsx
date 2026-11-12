@@ -54,7 +54,7 @@ type SessionWorkspaceMobileLocation =
     };
 
 type SessionWorkspaceMobileStatus =
-  | { kind: "ready"; refreshing: boolean }
+  | { kind: "ready" }
   | { kind: "loading" }
   | { kind: "empty"; heading: string; description: string }
   | { kind: "error" | "unavailable"; message: string; onRetry?: () => void };
@@ -430,7 +430,7 @@ export function MobileWorkspaceContents(props: {
         workspace.filter === "all" &&
         hasTranscriptAttachments(workspace.transcriptAttachments, searchQuery))
     ) {
-      status = { kind: "ready", refreshing: false };
+      status = { kind: "ready" };
     } else if (!browser && (browserPath || workspace.filter === "all")) {
       status = {
         kind: "unavailable",
@@ -496,7 +496,7 @@ export function MobileWorkspaceContents(props: {
     }
   };
   /** Controlled catalog only. The mobile host mounts the retained reader for a file destination. */
-  function View(view: { status: SessionWorkspaceMobileStatus }) {
+  function View(view: { status: SessionWorkspaceMobileStatus; refreshing?: boolean }) {
     let scroll!: HTMLDivElement;
     let content!: HTMLDivElement;
     let searchField: HTMLInputElement | undefined;
@@ -506,8 +506,7 @@ export function MobileWorkspaceContents(props: {
     };
     const folder = () => Boolean(folderLocation());
     const searchLabel = () => folderLocation()?.searchLabel ?? t("chat.workspaceFiles.search");
-    const busy = () =>
-      view.status.kind === "loading" || (view.status.kind === "ready" && view.status.refreshing);
+    const busy = () => view.status.kind === "loading" || view.refreshing;
     const updateFades = () => {
       scroll.toggleAttribute("data-fade-top", scroll.scrollTop > 1);
       scroll.toggleAttribute(
@@ -698,15 +697,8 @@ export function MobileWorkspaceContents(props: {
     >
       <Loading on={scope()} fallback={<View status={{ kind: "loading" }} />}>
         {read()}
-        <View
-          status={
-            isPending(read)
-              ? model().status.kind === "ready"
-                ? { kind: "ready", refreshing: true }
-                : { kind: "loading" }
-              : model().status
-          }
-        />
+        {/* The owner retains accepted listings, including empty and unavailable results. */}
+        <View status={model().status} refreshing={isPending(read)} />
       </Loading>
     </Errored>
   );

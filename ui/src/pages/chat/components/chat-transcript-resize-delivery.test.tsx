@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
@@ -11,6 +11,7 @@ import {
   requireElement,
   resetTranscriptTestDom,
   transcriptSize,
+  transcriptRows,
 } from "./chat-transcript.test-support.ts";
 
 beforeEach(installTranscriptDomMocks);
@@ -48,15 +49,51 @@ it.each([false, true])(
 
     frame();
     await flushDeferredRowPrune();
-    expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe(
-      streaming ? "" : "180px",
-    );
+    expect(row.dataset.rowSize).toBe(streaming ? undefined : "180");
+    expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe("");
     if (streaming) {
       expect(row.style.contentVisibility).toBe("visible");
       renderRows(rows.map((item) => Object.assign({}, item, { streaming: false })));
       await flushDeferredRowPrune();
-      expect(row.style.getPropertyValue("contain-intrinsic-block-size")).toBe("180px");
+      expect(row.dataset.rowSize).toBe("180");
     }
     expect(transcriptSize(container)).toBe(180);
   },
 );
+
+it("defers replacement rows when resize delivery reads a pending native jump", async () => {
+  // Scroll idle must share the manually advanced frame clock.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const frame = stubAnimationFrames();
+  const rows = contentRows(80);
+  const mounting = mountTestTranscript("resize-native-jump", rows);
+  await vi.advanceTimersByTimeAsync(0);
+  const { container, renderRows } = await mounting;
+  frame();
+  await vi.advanceTimersByTimeAsync(0);
+  renderRows(rows);
+  container.scrollTop = 800;
+  container.dispatchEvent(new Event("scroll"));
+  frame();
+  await vi.advanceTimersByTimeAsync(0);
+  const before = transcriptRows(container);
+  const outgoing = before[0]!;
+  expect(before.length).toBeLessThan(rows.length);
+  expect(container.querySelector('.chat-virtual-row[data-index="40"]')).toBeNull();
+
+  // Native scrolling can advance before its scroll event. The outgoing row's
+  // observer must not replace its own observed subtree during delivery.
+  container.scrollTop = 4000;
+  emitTranscriptResize(outgoing, 800, 120);
+  expect(transcriptRows(container)).toEqual(before);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(transcriptRows(container)).toEqual(before);
+
+  frame();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(container.scrollTop).toBe(4000);
+  expect(container.querySelector('.chat-virtual-row[data-index="40"]')).not.toBeNull();
+});

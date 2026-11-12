@@ -23,6 +23,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { parseApprovalResolvedEvent } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -33,8 +34,9 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { createMsFormatter } from "../../lib/format.ts";
+import { createCompactMsFormatter, createMsFormatter } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -43,6 +45,7 @@ import { HistoryRow } from "./approval-history-row.tsx";
 import { GrantRow } from "./standing-grant-row.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
+registerEnglishCatalog(registerRouteSubtitlesEnglish);
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -114,9 +117,9 @@ export function ApprovalsPage() {
       // Refresh the system timezone with history, not unrelated grants or loading notices.
       historyItems();
       getLocale();
-      // History is a rolling 30-day window, so the row can drop the year.
+      // History is a rolling 30-day window: the row drops the year, and today's date.
       return {
-        short: createMsFormatter({
+        short: createCompactMsFormatter({
           month: "short",
           day: "numeric",
           hour: "numeric",
@@ -443,14 +446,14 @@ export function ApprovalsPage() {
       <SettingsWorkspace>
         <SettingsPage wide>
           {!view().connected ? (
-            <div class="callout warn" role="status">
+            <InlineAlert tone="warning" role="status">
               {t("approvalHistory.offline")}
-            </div>
+            </InlineAlert>
           ) : null}
           {view().connected && !view().approvalsAccess ? (
-            <div class="callout warn" role="status">
+            <InlineAlert tone="warning" role="status">
               {t("common.disabled")} · <code>{APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
-            </div>
+            </InlineAlert>
           ) : null}
           {view().approvalsAccess ? (
             <ApprovalErrorNotice

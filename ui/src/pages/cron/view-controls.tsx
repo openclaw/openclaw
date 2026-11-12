@@ -1,6 +1,8 @@
 import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
+import { iconButtonClass, ROW_GLYPH_STROKE } from "../../components/solid/icon-button.tsx";
 import { Icon, sessionIcon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
@@ -14,17 +16,11 @@ export function ErrorBanner(props: { error: string | null; reads?: CronProps["re
   return (
     <>
       {props.error ? (
-        <div class="cron-error-banner" role="alert">
-          {props.error}
-        </div>
+        <InlineAlert tone="danger">{props.error}</InlineAlert>
       ) : props.reads ? (
         <Loading on={modelRequest()}>
           <Errored
-            fallback={(error) => (
-              <div class="cron-error-banner" role="alert">
-                {formatUiError(error())}
-              </div>
-            )}
+            fallback={(error) => <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>}
           >
             {props.reads.models()}
           </Errored>
@@ -69,9 +65,9 @@ export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
       id={id}
       label={t("cron.actions.moreJob", { name: displayName() })}
       class="cron-job-menu"
-      triggerClass="btn btn--sm btn--ghost cron-job-menu__trigger"
+      triggerClass={[iconButtonClass({ size: 28, glyph: "row" }), "cron-job-menu__trigger"]}
       triggerAttributes={{ title: t("cron.actions.moreJob", { name: displayName() }) }}
-      trigger={sessionIcon("moreHorizontal", 16, 1.5)}
+      trigger={sessionIcon("moreHorizontal", 12, ROW_GLYPH_STROKE)}
       placement="bottom-end"
       items={[
         ...(props.job.schedule.kind === "event"

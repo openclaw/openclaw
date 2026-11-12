@@ -288,9 +288,7 @@ function createDisclosure(
       // revisions cannot resize it, even when the revised note is shorter.
       stopViewportResize = observeWindowResize(window, clampExtent);
     }
-    if (typeof ResizeObserver !== "undefined") {
-      stopResize = observeResize([body], clampExtent);
-    }
+    stopResize = observeResize([body], clampExtent);
   }
 
   function disconnectHeader(): void {

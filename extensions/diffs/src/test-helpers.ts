@@ -73,7 +73,10 @@ export function registerDiffsForTest(params: {
   )?.[0].handler;
   assert.ok(handler, "Diffs must register its viewer route");
   const service = registerService.mock.calls[0]?.[0];
-  assert.ok(service && service.apiVersion !== 2, "Diffs must register its cleanup service");
+  assert.ok(
+    service && service.apiVersion !== 2 && service.apiVersion !== 3,
+    "Diffs must register its cleanup service",
+  );
   return {
     handler,
     tool(context: OpenClawPluginToolContext = {}) {

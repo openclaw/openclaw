@@ -375,11 +375,18 @@
 
 .logbook-standup__body {
   font-size: 13px;
+  /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .logbook-ask__form {
   display: flex;
   gap: 6px;
+}
+
+.logbook-ask__form > .btn {
+  padding-block: 0;
 }
 
 .logbook-ask__input {

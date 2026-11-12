@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeDefaultRetainedNativeWorkerSource,
@@ -128,9 +129,11 @@ it("keeps source digests and native admission for every selected owner", async (
               expect(receipt?.nativeArtifacts[fixture.filename]?.contentHash).toMatch(
                 /^[a-f0-9]{64}$/,
               );
-              expect(
+              expectBytesEqual(
                 fs.readFileSync(receipt!.nativeArtifacts[fixture.filename]!.capturedPath),
-              ).toEqual(fixture.bytes);
+                fixture.bytes,
+                fixture.filename,
+              );
               expect(
                 persisted?.plugins[position]?.sourceAdmissions?.[`${fixture.root}\0`]?.sourceDigest,
               ).toBe(expected.sourceDigests[entries[position]!.pluginId]);

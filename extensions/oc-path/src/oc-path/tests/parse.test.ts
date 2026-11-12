@@ -16,22 +16,28 @@ describe("parseMd — frontmatter", () => {
     [String.raw`"bad\qescape"`, String.raw`bad\qescape`],
     ["ready # operator note", "ready"],
     ["ready\n...", "ready"],
-    ["|-\n  alpha\n  beta", "alpha\nbeta"],
-    ["|\n  alpha\n  beta", "alpha\nbeta\n"],
-    ["|+\n  alpha\n  beta\n", "alpha\nbeta\n\n"],
-    [">-\n  alpha\n  beta", "alpha beta"],
+    ["|-\n  alpha\n  beta", "alpha\nbeta", "fallback"],
+    ["|\n  alpha\n  beta", "alpha\nbeta\n", "fallback"],
+    ["|+\n  alpha\n  beta\n", "alpha\nbeta\n\n", "fallback"],
+    [">-\n  alpha\n  beta", "alpha beta", "fallback"],
     ['"alpha\n  beta"', "alpha beta"],
     ["'alpha\n  beta'", "alpha beta"],
     ["alpha\n  beta", "alpha beta"],
+    ["\n  - alice\n  - bob", "- alice\n- bob", "fallback"],
+    ["\n  nested:\n    a: 1\n    b: 2", "nested:\n  a: 1\n  b: 2", "fallback"],
+    ["\n  - *person", "- *person", "fallback"],
     ...["ready#literal", "00123", "true", "123", "null", "[]", "{}"].map((value) => [value, value]),
-  ])("reads string scalar %s without changing non-string spelling", (encoded, value) => {
-    const raw = `---\nnote: ${encoded}\nfollowing: 'quoted'\n---\n`;
-    const ast = parseMd(raw);
-    expect(ast.frontmatter).toEqual([
-      { key: "note", value, line: 2 },
-      { key: "following", value: "quoted", line: encoded.split("\n").length + 2 },
-    ]);
-    expect(ast.raw).toBe(raw);
+  ])("reads frontmatter %s without changing non-string spelling", (encoded, value, mode = "") => {
+    for (const following of mode === "fallback" ? ["quoted", "[unclosed"] : ["quoted"]) {
+      const raw = `\uFEFF---\nprimary: &person alice\nnote: ${encoded}\nfollowing: ${following === "quoted" ? "'quoted'" : following}\n---\n`;
+      const ast = parseMd(raw);
+      expect(ast.frontmatter).toEqual([
+        { key: "primary", value: "alice", line: 2 },
+        { key: "note", value, line: 3 },
+        { key: "following", value: following, line: encoded.split("\n").length + 3 },
+      ]);
+      expect(ast.raw).toBe(raw);
+    }
   });
 });
 

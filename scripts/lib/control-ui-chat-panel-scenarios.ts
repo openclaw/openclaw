@@ -69,6 +69,17 @@ export function createChatPanelScenarios(): readonly EngineScenario[] {
   const route = controlUiSessionPath(sessionKeys[0]);
   return [
     {
+      id: "chat-actions-session-open",
+      route,
+      expected: "Opening an uncached session presents its 400-message tail and ready composer.",
+      rowSelector: "[data-virtual-row-key]",
+      prepare: prepareChat,
+      run: async (page, gateway) => {
+        await keyboardSession(page, gateway, 1);
+        return { openedSessions: 1, fixtureMessages: 400 };
+      },
+    },
+    {
       id: "chat-actions-terminal",
       route,
       expected:
@@ -160,6 +171,46 @@ export function createChatPanelScenarios(): readonly EngineScenario[] {
       },
     },
     {
+      id: "chat-actions-split-open",
+      route,
+      viewports: ["desktop"],
+      expected:
+        "Opening a second pane presents both transcript tails and retains the original composer.",
+      rowSelector: "[data-virtual-row-key]",
+      prepare: async (page) => {
+        await prepareChat(page);
+        await openSessionMenu(page);
+      },
+      run: async (page) => {
+        const originalComposer = await page.locator(composer).elementHandle();
+        const menu = page.locator(`${activePane} openclaw-chat-header-session-menu`);
+        await menu.getByRole("menuitem", { name: "Open split view", exact: true }).click();
+        await page.waitForFunction(() => {
+          const cells = document.querySelectorAll(".chat-split-view__cell");
+          return (
+            cells.length === 2 &&
+            [...cells].every((cell) => {
+              const rows = cell.querySelector<HTMLElement>(".chat-thread-inner--virtual");
+              return (
+                rows &&
+                getComputedStyle(rows).visibility === "visible" &&
+                rows.textContent?.includes("Transcript 0 message 399.")
+              );
+            })
+          );
+        });
+        await frames(page);
+        const originalConnected = await originalComposer?.evaluate(
+          (element) => element.isConnected,
+        );
+        await originalComposer?.dispose();
+        if (!originalConnected) {
+          throw new Error("Opening split view replaced the original composer");
+        }
+        return { openedPanes: 2, transcriptTails: 2, originalComposerRetained: true };
+      },
+    },
+    {
       id: "chat-actions-split-view",
       route,
       viewports: ["desktop"],
@@ -176,6 +227,11 @@ export function createChatPanelScenarios(): readonly EngineScenario[] {
           () => document.querySelectorAll(".chat-split-view__cell").length === 2,
         );
         await page.locator(composer).waitFor({ state: "visible" });
+        await page
+          .locator(".chat-split-view__cell")
+          .last()
+          .getByText("Transcript 0 message 399.", { exact: false })
+          .waitFor({ state: "visible" });
         const closeMenu = await openSessionMenu(page);
         if (await page.locator(`${activePane} .agent-chat__header--mobile`).isVisible()) {
           await closeMenu.getByRole("menuitem", { name: "Advanced", exact: true }).click();

@@ -122,6 +122,7 @@ function preparePolicyRuntime(input: ReturnType<typeof turn>) {
     agentId: input.agentId,
     agentDir: resolveAgentDir(input.config, input.agentId),
     workspaceDir: input.workspaceDir,
+    runtimePluginSelections: [{ provider: input.provider, modelId: input.model }],
   });
 }
 
@@ -226,7 +227,13 @@ describe("worker turn execution", () => {
     };
     registry.typedHooks.push(registration);
     initializeGlobalHookRunner(registry);
-    const environments = { ...unusedEnvironments(), get: attachedEnvironment };
+    const tunnel = unusedTunnel({});
+    const environments = {
+      ...unusedEnvironments(),
+      get: attachedEnvironment,
+      acquireTurnCredential: vi.fn(async () => credential()),
+      startTunnel: vi.fn(async () => tunnel),
+    };
     const provider = turnProvider(environments);
     const runLocal = vi.fn();
     const onUserMessagePersisted = vi.fn();
@@ -267,12 +274,7 @@ describe("worker turn execution", () => {
         expect(sql?.queries).toEqual([]);
         sql?.restore();
         expect((await openSessionManager()).getEntries()).toEqual([]);
-        expectNoCalls(
-          onUserMessagePersisted,
-          environments.acquireTurnCredential,
-          environments.startTunnel,
-          runLocal,
-        );
+        expectNoCalls(onUserMessagePersisted, tunnel.launchTurn, runLocal);
         return;
       }
       const result = await execution;
@@ -282,7 +284,7 @@ describe("worker turn execution", () => {
         error: { kind: "hook_block" },
         livenessState: "blocked",
       });
-      expectNoCalls(environments.acquireTurnCredential, environments.startTunnel, runLocal);
+      expectNoCalls(tunnel.launchTurn, runLocal);
       const messages = (await openSessionManager()).buildSessionContext().messages;
       expect(messages).toEqual([
         expect.objectContaining({
@@ -328,7 +330,13 @@ describe("worker turn execution", () => {
     };
     registry.typedHooks.push(registration);
     initializeGlobalHookRunner(registry);
-    const environments = { ...unusedEnvironments(), get: attachedEnvironment };
+    const tunnel = unusedTunnel({});
+    const environments = {
+      ...unusedEnvironments(),
+      get: attachedEnvironment,
+      acquireTurnCredential: vi.fn(async () => credential()),
+      startTunnel: vi.fn(async () => tunnel),
+    };
     const provider = turnProvider(environments);
     let current = true;
     const execution = execute(
@@ -348,7 +356,7 @@ describe("worker turn execution", () => {
       release.resolve();
       expect(await outcome).toMatchObject({ message: "synthetic authority closed" });
       expect((await openSessionManager()).getEntries()).toEqual([]);
-      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+      expect(tunnel.launchTurn).not.toHaveBeenCalled();
     } finally {
       release.resolve();
       await outcome;
@@ -554,7 +562,7 @@ describe("worker turn execution", () => {
   );
 
   it.each([false, true])(
-    "preserves recorded workspace context and limits launch authority to supervisor tools (declared: %s)",
+    "preserves recorded agent-workspace checkout context and limits launch authority to supervisor tools (declared: %s)",
     async (declared) => {
       await seedActivePlacement();
       const launchToolNames = resolveNodeWorkerLaunchToolNames({
@@ -584,8 +592,12 @@ describe("worker turn execution", () => {
       const provider = credentialedProvider(tunnel);
       const input = turn("launch-tool-negotiation");
       const agentWorkspace = path.join(root, "agent-bootstrap");
-      await mkdir(agentWorkspace);
+      // The selected checkout shares the agent repository, so its bootstrap files own identity.
+      const gitDir = path.join(agentWorkspace, ".git", "worktrees", "worker");
+      await mkdir(gitDir, { recursive: true });
       await Promise.all([
+        writeFile(path.join(gitDir, "commondir"), path.join(agentWorkspace, ".git")),
+        writeFile(path.join(root, ".git"), `gitdir: ${gitDir}\n`),
         writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions."),
         writeFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent identity."),
         writeFile(path.join(agentWorkspace, "USER.md"), "Canonical user context."),

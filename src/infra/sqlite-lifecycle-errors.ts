@@ -1,7 +1,33 @@
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export class SqliteSnapshotCleanupError extends Error {}
+
+/** A removal failure after retirement, never an admission or native-close failure. */
+export class SqliteSnapshotDirectoryBusyError extends SqliteSnapshotCleanupError {
+  override name = "SqliteSnapshotDirectoryBusyError";
+}
+
+/** Call only around final removal after retirement and native close have succeeded. */
+export function classifyRetiredSqliteSnapshotRemovalError(
+  directory: string,
+  error: unknown,
+): unknown {
+  const code = extractErrorCode(error);
+  if (
+    error instanceof Error &&
+    "syscall" in error &&
+    (error.syscall === "rmdir" || error.syscall === "unlink") &&
+    (code === "EBUSY" || code === "ENOTEMPTY")
+  ) {
+    return new SqliteSnapshotDirectoryBusyError(
+      `SQLite retired snapshot directory removal is busy: ${directory}`,
+      { cause: error },
+    );
+  }
+  return error;
+}
 
 export class OpenClawStateOwnershipError extends Error {}
 

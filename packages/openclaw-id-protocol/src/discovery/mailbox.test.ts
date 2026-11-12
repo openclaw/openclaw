@@ -22,6 +22,14 @@ describe("mailbox notices", () => {
     expect(noticeRecipientAllowed("kit_used", "gateway")).toBe(false);
   });
 
+  it("sends rebind only to all owner devices, with the new binding_seq as ref", () => {
+    expect(noticeRecipientAllowed("rebind", "owners")).toBe(true);
+    expect(noticeRecipientAllowed("rebind", FP)).toBe(false);
+    expect(noticeRecipientAllowed("rebind", "gateway")).toBe(false);
+    expect(isValidNotice("rebind", "2")).toBe(true);
+    expect(isValidNotice("rebind", "two")).toBe(false);
+  });
+
   it.each([
     ["0", 0],
     ["7", 7],

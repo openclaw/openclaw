@@ -23,8 +23,10 @@ import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-cont
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
+import { readTemplatePluginInstallNotice } from "../../../../src/shared/template-install-notice.js";
 import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
+import { getMessageDerivations, readMessageDerivations } from "./message-derivations.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import {
   resolveMessageSender,
@@ -396,11 +398,9 @@ function resolveDeliveryReplyTarget(
       : null;
 }
 
-const normalizedMessages = new WeakMap<object, NormalizedMessage>();
-
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const original = asOptionalRecord(message);
-  const cached = original && normalizedMessages.get(original);
+  const cached = original && readMessageDerivations(original)?.normalized;
   if (cached) {
     return cached;
   }
@@ -522,6 +522,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
         const inline = isAssistantMessage ? readPluginInlineViewBlock(item) : undefined;
         return inline ? [inline] : [];
       }
+      if (type === "template_plugin_install") {
+        const receipt = isAssistantMessage ? readTemplatePluginInstallNotice(item) : undefined;
+        return receipt ? [receipt] : [];
+      }
       if (type === "clawhub") {
         const recommendation = isAssistantMessage ? readClawHubRecommendation(item) : null;
         return recommendation ? [recommendation] : [];
@@ -621,7 +625,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   // Retained and live messages are immutable snapshots. Missing timestamps
   // still resolve against the current clock on each call.
   if (original && asFiniteNumber(m.timestamp) !== undefined) {
-    normalizedMessages.set(original, normalized);
+    getMessageDerivations(original).normalized = normalized;
   }
   return normalized;
 }
