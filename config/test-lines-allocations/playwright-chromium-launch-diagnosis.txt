@@ -1,0 +1,2 @@
+20
+# Regression for reporting the launch error of an installed Chromium that cannot load its system libraries.
