@@ -2717,7 +2717,8 @@ struct GatewayProcessManagerTests {
                 supportsSharedEndpointRecovery: false,
                 activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: session))
-            let manager = GatewayProcessManager()
+            let clock = ManualTestClock()
+            let manager = GatewayProcessManager(readinessClock: clock)
             manager.setTestingConnection(connection)
             manager.setTestingSkipControlChannelRefresh(true)
             manager.desiredActive = true
@@ -2726,9 +2727,18 @@ struct GatewayProcessManagerTests {
             await PortGuardian.shared.setTestingDescriptor(self.gatewayDescriptor(pid: 4242), forPort: port)
             defer { manager.desiredActive = false }
 
-            let ready = await DeviceIdentityStore.withStateDirectory(stateDir) {
-                await manager.waitForGatewayReady(timeout: 1)
+            let readiness = Task {
+                await DeviceIdentityStore.withStateDirectory(stateDir) {
+                    await manager.waitForGatewayReady(timeout: 1)
+                }
             }
+            await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+            clock.advance(by: .milliseconds(300))
+            if !maintenanceFinishes {
+                await clock.waitForSleep(until: clock.now.advanced(by: .milliseconds(300)))
+                clock.advance(by: .milliseconds(700))
+            }
+            let ready = await readiness.value
             #expect(probes.withLock { $0 } >= 2)
             #expect(ready == maintenanceFinishes)
             #expect(!manager._testHasLaunchAgentReadinessFailure())

@@ -10,7 +10,7 @@
  * Run two A/A controls followed by five serial interleaved A/B pairs. Select a pinned
  * sparse source overlay with OPENCLAW_BENCH_BASELINE_DIR. --profile writes a separate
  * main-thread CPU profile; all arms report exact main V8 allocated bytes and process
- * CPU (workers included, Git children excluded). Setup/verification/drainage are untimed.
+ * CPU (workers included, broker/Git children excluded). Setup/verification/drainage are untimed.
  * Only scheduled waits are virtualized: filesystem, SQLite, snapshots and removal are
  * real. Report actual owner wall time separately from the logical maintenance timeline.
  * Acceptance: <=1 candidate admission/minute, identical complete snapshot contents,
@@ -20,14 +20,35 @@
  * worktrees, not transcript bodies. The fixture has 5,000 real session metadata rows.
  * Checkouts hardlink immutable synthetic files to limit disk use;
  * the one edited file is unlinked before writing. Source setup is excluded from timing.
+ *
+ * Reclaim-starvation mode: --scratch-clones 806 --observe-ms 30000 --psi-trace.
+ * Uses real timers and a fixed observation window; clone-shaped expired scratch splits
+ * the source's file count across candidates. Linux-only --psi-trace injects 1–5% full
+ * pressure with 30% spikes into the production probe's /proc input; btrfs commit counters
+ * stay real. kernelSamples retain uninjected host PSI. Run on btrfs with a separate
+ * synthetic background IO workload to measure deletion impact; trace admission alone
+ * is not a physical pressure experiment. Acceptance: baseline near-zero scratch progress,
+ * candidate positive progress, no commit/loop latency regression beyond A/A spread.
+ * PSI runs flush setup writes, settle for 30 seconds, then commit a small marker before
+ * timing. Report both flush durations; bulk fixture writeback is not cleanup IO.
+ * Warm the removal runtime's imports before timing so source-mode compilation is not
+ * mistaken for steady-state Gateway latency. Cold-process figures remain separate.
+ * Seed a large isolated DB with generateTeamShapeFixture from team-shape-fixture.ts,
+ * using session keys agent:main:synthetic-0 through agent:main:synthetic-4999, then
+ * reuse its closed agent database with --agent-db-fixture for every measured arm.
+ * The transcript owner compresses synthetic content; report physical DB bytes, not
+ * the requested logical size. COPYFILE_EXCL refuses replacing an already opened DB.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
@@ -46,6 +67,10 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "18432" },
     worktrees: { type: "string", default: "3" },
     profile: { type: "boolean", default: false },
+    "scratch-clones": { type: "string", default: "0" },
+    "observe-ms": { type: "string", default: "0" },
+    "psi-trace": { type: "boolean", default: false },
+    "agent-db-fixture": { type: "string" },
   },
 });
 assert(values.source, "--source is required");
@@ -94,7 +119,11 @@ if (values.prepare) {
 assert(values.output && global.gc, "--output and --expose-gc are required");
 const output = path.resolve(values.output);
 const worktrees = Number(values.worktrees);
+const scratchClones = Number(values["scratch-clones"]);
+const observeMs = Number(values["observe-ms"]);
 assert(Number.isSafeInteger(worktrees) && worktrees >= 2);
+assert(Number.isSafeInteger(scratchClones) && scratchClones >= 0);
+assert(Number.isSafeInteger(observeMs) && observeMs >= 0);
 fs.mkdirSync(output);
 for (const directory of ["home", "tmp", "state"]) {
   fs.mkdirSync(path.join(output, directory));
@@ -104,6 +133,8 @@ if (baseline) {
   await import("./worker-retained-heap-preload.js");
 }
 const configPath = path.join(output, "openclaw.json");
+// os.tmpdir also consults the native environment, before the isolated JS env below.
+process.env.TMPDIR = path.join(output, "tmp");
 process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
   startupTrace: false,
   caseEnv: {
@@ -125,12 +156,18 @@ const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snap
 setRuntimeConfigSnapshot(config, config);
 const { managedWorktrees } = await import("../../src/agents/worktrees/service.js");
 const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
-const { runOpenClawAgentWriteTransaction, openOpenClawAgentDatabase } =
-  await import("../../src/state/openclaw-agent-db.js");
+const {
+  runOpenClawAgentWriteTransaction,
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} = await import("../../src/state/openclaw-agent-db.js");
 const { writeSessionEntry } =
   await import("../../src/config/sessions/session-accessor.sqlite-entry-store.js");
 const { GatewayScheduler } = await import("../../src/infra/gateway-scheduler.js");
 const { startWorktreeMaintenance } = await import("../../src/gateway/worktree-maintenance.js");
+const { getSpawnBroker, runWithSpawnBroker } =
+  await import("../../src/process/spawn-broker/context.js");
+const { createSpawnBrokerHost } = await import("../../src/process/spawn-broker/host.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as {
   files: number;
@@ -189,14 +226,39 @@ for (let index = 0; index < worktrees; index++) {
   records.push(record);
   console.error(JSON.stringify({ prepared: records.length, worktrees, files: fixture.files }));
 }
+// Put scratch last so the old owner must traverse the ordinary removal backlog first.
+const scratchRoot = path.join(records.at(-1)!.path, ".openclaw/tmp");
+const expired = new Date(Date.now() - 25 * 60 * 60_000);
+for (let index = 0; index < scratchClones; index++) {
+  const clone = path.join(scratchRoot, `clone-${index}`);
+  fs.mkdirSync(path.join(clone, ".git/objects"), { recursive: true });
+  fs.writeFileSync(path.join(clone, ".git/HEAD"), "ref: refs/heads/main\n");
+  fs.utimesSync(path.join(clone, ".git/HEAD"), expired, expired);
+  for (let entry = index; entry < fixture.paths.length; entry += scratchClones) {
+    const file = path.join(clone, `${entry}.ts`);
+    fs.copyFileSync(path.join(source, fixture.paths[entry]!), file, fs.constants.COPYFILE_FICLONE);
+    fs.utimesSync(file, expired, expired);
+  }
+  fs.utimesSync(path.join(clone, ".git/objects"), expired, expired);
+}
 const sessions = 5_000;
+if (values["agent-db-fixture"]) {
+  const destination = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(
+    values["agent-db-fixture"],
+    destination,
+    fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
+  );
+}
 for (let offset = 0; offset < sessions; offset += 100) {
   runOpenClawAgentWriteTransaction(
     (database) => {
       for (let index = offset; index < Math.min(offset + 100, sessions); index++) {
         const record = records[index];
         writeSessionEntry(database, `agent:main:synthetic-${index}`, {
-          sessionId: `synthetic-${index}`,
+          // Preserve the canonical fixture's current transcript window.
+          sessionId: `team-shape-session-${index}`,
           updatedAt: 1,
           lifecycleRevision: `synthetic-${index}`,
           status: "done",
@@ -212,6 +274,29 @@ for (let offset = 0; offset < sessions; offset += 100) {
 const agentDatabase = openOpenClawAgentDatabase({ agentId: "main" });
 agentDatabase.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 const agentDatabaseBytes = fs.statSync(agentDatabase.path).size;
+const preparationFlushMs: number[] = [];
+const pressureFiles = [1, 2, 3, 4, 5, 30].map((full) => {
+  const file = path.join(output, `synthetic-psi-${full}`);
+  if (values["psi-trace"]) {
+    fs.writeFileSync(
+      file,
+      `some avg10=${full + 10} avg60=20 total=0\nfull avg10=${full} avg60=3 total=0\n`,
+    );
+  }
+  return file;
+});
+if (values["psi-trace"]) {
+  assert.equal(process.platform, "linux", "PSI trace requires Linux; no platform spoofing");
+  for (let flush = 0; flush < 2; flush++) {
+    if (flush) {
+      await delay(30_000);
+      fs.writeFileSync(path.join(output, "setup-complete"), "synthetic preparation complete\n");
+    }
+    const started = performance.now();
+    execFileSync("sync", ["-f", output]);
+    preparationFlushMs.push(performance.now() - started);
+  }
+}
 let skippedWaitMs = 0;
 const now = () => Date.now() + skippedWaitMs;
 const scheduler = new GatewayScheduler({
@@ -219,6 +304,10 @@ const scheduler = new GatewayScheduler({
     now,
     monotonicNow: () => performance.now() + skippedWaitMs,
     arm: (run, delayMs) => {
+      if (observeMs) {
+        const timer = setTimeout(() => void run(), delayMs);
+        return () => clearTimeout(timer);
+      }
       // Park the unrelated hourly recurrence; only cleanup continuation timers advance.
       if (delayMs > 10 * 60_000) {
         return () => {};
@@ -235,6 +324,7 @@ const removals: Array<{ id: string; atMs: number; wallMs: number }> = [];
 const admissions: number[] = [];
 const gc = managedWorktrees.gc.bind(managedWorktrees);
 managedWorktrees.gc = async (params) => {
+  assert.equal(getSpawnBroker(), broker, "Maintenance must retain the Gateway spawn broker");
   if (params?.beforeRemoval) {
     const beforeRemoval = params.beforeRemoval;
     params.beforeRemoval = async (record) => {
@@ -255,33 +345,96 @@ managedWorktrees.remove = async (input) => {
   }
 };
 const inspector = new Session();
+const maintenanceErrors: string[] = [];
+const kernelSamples: Array<{ atMs: number; psi: string; commits: string[] }> = [];
+let pressureIndex = 0;
+const open = fsPromises.open;
+let pressureProbeReads = 0;
+if (values["psi-trace"]) {
+  fsPromises.open = (file, flags, mode) => {
+    if (file === "/proc/pressure/io") {
+      pressureProbeReads++;
+      return open(pressureFiles[pressureIndex]!, flags, mode);
+    }
+    return open(file, flags, mode);
+  };
+}
+const sampleKernel = () => {
+  const tick = kernelSamples.length;
+  pressureIndex = tick % 7 === 6 ? 5 : tick % 5;
+  kernelSamples.push({
+    atMs: performance.now(),
+    psi: fs.existsSync("/proc/pressure/io") ? fs.readFileSync("/proc/pressure/io", "utf8") : "",
+    commits: fs.existsSync("/sys/fs/btrfs")
+      ? fs.readdirSync("/sys/fs/btrfs").flatMap((id) => {
+          const file = `/sys/fs/btrfs/${id}/commit_stats`;
+          return fs.existsSync(file) ? [fs.readFileSync(file, "utf8")] : [];
+        })
+      : [],
+  });
+};
+let kernelTimer: ReturnType<typeof setInterval> | undefined;
+const loop = monitorEventLoopDelay({ resolution: 10 });
 let owner: ReturnType<typeof startWorktreeMaintenance> | undefined;
+let observationTimer: ReturnType<typeof setTimeout> | undefined;
+const broker = process.platform === "linux" ? createSpawnBrokerHost() : undefined;
 try {
+  await broker?.ready();
+  const runtimeImportStarted = performance.now();
+  await runWithSpawnBroker(
+    broker,
+    () => import("../../src/gateway/worker-environments/local-workspace-projection.js"),
+  );
+  const runtimeImportWarmupMs = performance.now() - runtimeImportStarted;
   global.gc();
   if (values.profile) {
     inspector.connect();
     await inspector.post("Profiler.enable");
     await inspector.post("Profiler.start");
   }
+  sampleKernel();
+  kernelTimer = setInterval(sampleKernel, 1_000);
+  loop.enable();
   const allocationBefore = getHeapStatistics().total_allocated_bytes;
   assert(Number.isFinite(allocationBefore), "Runtime must expose exact V8 allocation counters");
   const loadBefore = os.loadavg();
   const cpuBefore = process.cpuUsage();
   const mainCpuBefore = process.threadCpuUsage();
   const started = performance.now();
-  const result = await new Promise<ManagedWorktreeGcResult>((resolve, reject) => {
-    owner = startWorktreeMaintenance({
-      scheduler,
-      getRuntimeConfig: () => config,
-      onComplete: resolve,
-      onError: (message) => reject(new Error(message)),
-    });
-    owner.request();
-  });
+  const result = await runWithSpawnBroker(
+    broker,
+    () =>
+      new Promise<ManagedWorktreeGcResult>((resolve, reject) => {
+        owner = startWorktreeMaintenance({
+          scheduler,
+          getRuntimeConfig: () => config,
+          onComplete: (completed) => {
+            if (!observeMs) {
+              resolve(completed);
+            }
+          },
+          onError: (message) => {
+            maintenanceErrors.push(message);
+            if (!observeMs) {
+              reject(new Error(message));
+            }
+          },
+        });
+        const receipt = owner.request();
+        if (observeMs) {
+          observationTimer = setTimeout(
+            () => resolve(owner!.request({ jobId: receipt.jobId })),
+            observeMs,
+          );
+        }
+      }),
+  );
   const wallMs = performance.now() - started;
   const processCpu = process.cpuUsage(cpuBefore);
   const mainCpu = process.threadCpuUsage(mainCpuBefore);
   const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
+  loop.disable();
+  clearInterval(kernelTimer);
   if (values.profile) {
     fs.writeFileSync(
       path.join(output, "cpu.cpuprofile"),
@@ -289,12 +442,14 @@ try {
     );
     inspector.disconnect();
   }
-  assert.equal(removals.length, worktrees);
+  if (!observeMs) {
+    assert.equal(removals.length, worktrees);
+  }
   const archived = new Map(
     (await managedWorktrees.listRegistryRecords()).map((record) => [record.id, record]),
   );
   const trees: string[] = [];
-  for (const record of records) {
+  for (const record of observeMs ? [] : records) {
     const current = archived.get(record.id);
     assert(current?.removedAt !== undefined && current.snapshotRef);
     assert(!fs.existsSync(record.path));
@@ -308,7 +463,9 @@ try {
     );
     trees.push(git(repo, "rev-parse", `${current.snapshotRef}^{tree}`));
   }
-  assert.equal(new Set(trees).size, 1);
+  if (!observeMs) {
+    assert.equal(new Set(trees).size, 1);
+  }
   const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
   const digest = createHash("sha256");
   for (const relative of [
@@ -317,6 +474,7 @@ try {
     "src/agents/worktrees/registry-read.kernel.ts",
     "src/agents/worktrees/registry-retirement.ts",
     "src/gateway/worktree-maintenance.ts",
+    "src/infra/host-io-pressure.ts",
   ]) {
     const original = baseline && path.join(baseline, relative);
     digest.update(
@@ -331,11 +489,24 @@ try {
     diagnosticProfile: values.profile,
     node: process.version,
     platform: process.platform,
+    spawnBroker: Boolean(broker),
+    runtimeImportWarmupMs,
     filesPerWorktree: fixture.files,
     bytesPerWorktree: fixture.files * fixture.fileBytes,
     worktrees,
     sessions,
     agentDatabaseBytes,
+    preparationFlushMs,
+    agentDatabasePath: agentDatabase.path,
+    scratchClones,
+    scratchRemaining:
+      scratchClones && fs.existsSync(scratchRoot) ? fs.readdirSync(scratchRoot).length : 0,
+    injectedPsiTrace: values["psi-trace"],
+    pressureProbeReads,
+    maintenanceErrors,
+    kernelSamples,
+    eventLoopP99Ms: loop.percentile(99) / 1e6,
+    eventLoopMaxMs: loop.max / 1e6,
     wallMs,
     logicalElapsedMs: wallMs + skippedWaitMs,
     skippedWaitMs,
@@ -356,7 +527,15 @@ try {
   fs.writeFileSync(path.join(output, "report.json"), JSON.stringify(report, null, 2));
   console.log(JSON.stringify(report));
 } finally {
-  await owner?.stop();
-  await scheduler.stop();
-  await drainGlobalSingletonLifecycleState();
+  clearTimeout(observationTimer);
+  clearInterval(kernelTimer);
+  loop.disable();
+  fsPromises.open = open;
+  try {
+    await owner?.stop();
+    await scheduler.stop();
+    await drainGlobalSingletonLifecycleState();
+  } finally {
+    await broker?.close();
+  }
 }

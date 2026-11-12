@@ -29,6 +29,7 @@ async function fixture() {
   return {
     root,
     target,
+    cursor,
     pause,
     async file(name: string, age = SCRATCH_TTL_MS + 1) {
       const file = path.join(root, name);
@@ -37,7 +38,8 @@ async function fixture() {
       await fs.utimes(file, (now - age) / 1000, (now - age) / 1000);
       return file;
     },
-    run: () => cleanScratch({ targets: [target], now, assertCurrent: () => {}, pause, cursor }),
+    run: (nextCursor = cursor) =>
+      cleanScratch({ targets: [target], now, assertCurrent: () => {}, pause, cursor: nextCursor }),
   };
 }
 
@@ -112,19 +114,36 @@ it("expires nested clone object links by directory age, not another checkout's p
   expect((await fs.stat(shared)).nlink).toBe(1);
 });
 
-it("cleans only node-coverage directories in runtime temp and advances a bounded pass", async () => {
-  const f = await fixture();
-  f.target.kind = "coverage";
-  const unrelated = await f.file("other-temp/proof");
-  const regular = await f.file("node-coverage-file");
-  for (let index = 0; index < 258; index++) {
-    await f.file(`node-coverage-${index}/proof`);
-  }
-  expect(await f.run()).toMatchObject({ entriesRemoved: 256, bytesRemoved: 1280 });
-  expect(await f.run()).toMatchObject({ entriesRemoved: 2, bytesRemoved: 10 });
-  expect(await fs.readFile(unrelated, "utf8")).toBe("proof");
-  expect(await fs.readFile(regular, "utf8")).toBe("proof");
-});
+it.each(["checkout", "coverage"] as const)(
+  "resumes bounded %s cleanup after losing its cursor",
+  async (kind) => {
+    const f = await fixture();
+    f.target.kind = kind;
+    const prefix = kind === "checkout" ? ".openclaw/tmp/" : "";
+    const unrelated = await f.file("other-temp/proof");
+    const regular = await f.file("node-coverage-file");
+    for (let index = 0; index < 258; index++) {
+      await f.file(`${prefix}node-coverage-${index}/proof`);
+    }
+    expect(await f.run()).toMatchObject({ entriesRemoved: 256, bytesRemoved: 1280 });
+    await closeScratchCleanupCursor(f.cursor);
+    const restartedCursor: ScratchCleanupCursor = {};
+    cursors.push(restartedCursor);
+    expect(await f.run(restartedCursor)).toMatchObject({
+      entriesRemoved: 2,
+      bytesRemoved: 10,
+      scanned: kind === "checkout" ? 4 : 6,
+      errors: [],
+    });
+    expect(await f.run(restartedCursor)).toMatchObject({
+      entriesRemoved: 0,
+      filesRemoved: 0,
+      scanned: kind === "checkout" ? 0 : 2,
+    });
+    expect(await fs.readFile(unrelated, "utf8")).toBe("proof");
+    expect(await fs.readFile(regular, "utf8")).toBe("proof");
+  },
+);
 
 it("retains an entry when its newest file cannot be established within the scan depth", async () => {
   const f = await fixture();
