@@ -249,7 +249,7 @@ export function QuestionFreeText(props: QuestionFreeTextProps) {
                   id={inputId}
                   class="input"
                   placeholder={t("chat.questions.answerPlaceholder", {
-                    label: props.question.secretStore?.name ?? answerLabel(),
+                    label: answerLabel(),
                   })}
                 />
               </div>

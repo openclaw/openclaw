@@ -155,7 +155,7 @@ it.for([false, true])(
                 type: "buttons",
                 buttons: [
                   {
-                    label: "Open secure form",
+                    label: "Open form",
                     action: { type: "url", url: `https://console.example.test/ask/${questionId}` },
                   },
                 ],

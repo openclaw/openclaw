@@ -1,6 +1,7 @@
 import type { Question, QuestionResolveResult } from "@openclaw/gateway-protocol";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import { normalizeSecretsRequestParams } from "../../../src/agents/tools/secrets-tool.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
@@ -71,17 +72,12 @@ async function newPage(viewport = { height: 900, width: 1440 }, hasTouch = false
 
 function secretStoreQuestion(id: string) {
   return questionRecord(id, {
-    questionId: "api_key",
-    header: "API key",
-    question: "Provide the deployment API key",
-    options: [],
-    isSecret: true,
-    secretStore: {
+    ...normalizeSecretsRequestParams({
+      action: "request",
       name: "DEPLOY_API_KEY",
-      kind: "secret",
       allowedHosts: ["api.example.test"],
       reason: "Publish the release artifacts.",
-    },
+    }).questions[0],
     secretStoreExisting: {
       updatedAtMs: Date.now() - 60_000,
       updatedBy: "release-operator",
@@ -90,7 +86,7 @@ function secretStoreQuestion(id: string) {
 }
 
 function storedSecretAnswer(): QuestionResolveResult {
-  return { status: "answered", answers: { answers: { api_key: ["stored"] } } };
+  return { status: "answered", answers: { answers: { secret_value: ["stored"] } } };
 }
 
 function historyMessages() {
@@ -198,7 +194,10 @@ async function showQuestion(
   request: ReturnType<typeof questionRecord>,
 ) {
   await gateway.emitGatewayEvent("question.requested", request);
-  const panel = panelFor(page, request.questions[0]!.question);
+  const panel = panelFor(
+    page,
+    request.questions[0]!.secretStore?.name ?? request.questions[0]!.question,
+  );
   await panel.waitFor();
   return panel;
 }
@@ -637,15 +636,15 @@ suite.define(() => {
     const panel = await showQuestion(page, gateway, request);
     await expectCount(panel.getByText("Requested by main", { exact: false }), 1);
     await expectCount(panel.getByText("Publish the release artifacts."), 1);
-    await expectCount(panel.getByText("Replaces DEPLOY_API_KEY", { exact: false }), 1);
+    await expectCount(panel.getByText("Replaces the saved value", { exact: false }), 1);
     const secretInput = panel.getByLabel("API key", { exact: true });
     await expectCount(secretInput, 1);
     expect(await secretInput.getAttribute("type")).toBe("password");
     expect(await secretInput.getAttribute("autocomplete")).toBe("off");
     expect(await secretInput.getAttribute("autocapitalize")).toBe("none");
     expect(await secretInput.getAttribute("autocorrect")).toBe("off");
-    await expectCount(panel.getByText("Not sent to the agent", { exact: false }), 1);
-    expect(await secretInput.getAttribute("placeholder")).toBe("DEPLOY_API_KEY");
+    await expectCount(panel.getByText("The agent cannot read the value", { exact: false }), 1);
+    expect(await secretInput.getAttribute("placeholder")).toBe("API key");
     await expectCount(panel.locator('[role="radiogroup"]'), 0);
     const hostsInput = panel.locator(".chat-question-panel__hosts");
     expect(await hostsInput.inputValue()).toBe("api.example.test");
@@ -682,7 +681,7 @@ suite.define(() => {
       gateway,
       {
         id: request.id,
-        answers: { answers: { api_key: [fakeSecret] } },
+        answers: { answers: { secret_value: [fakeSecret] } },
         secretStoreAllowedHosts: [
           "corrected.example.test",
           "uploads.example.test",
@@ -730,9 +729,9 @@ suite.define(() => {
       const panel = document.locator("openclaw-chat-question-panel");
       await panel.waitFor();
       expect(await document.getByRole("heading", { level: 1 }).textContent()).toContain(
-        "Secure credential request",
+        "DEPLOY_API_KEY",
       );
-      expect(await page.title()).toBe("Secure credential request — OpenClaw");
+      expect(await page.title()).toBe("DEPLOY_API_KEY — OpenClaw");
       const secretInput = panel.getByLabel("API key", { exact: true });
       expect(await secretInput.getAttribute("type")).toBe("password");
       await secretInput.fill(fakeSecret);
@@ -743,7 +742,7 @@ suite.define(() => {
 
       await expectResolution(gateway, {
         id: request.id,
-        answers: { answers: { api_key: [fakeSecret] } },
+        answers: { answers: { secret_value: [fakeSecret] } },
         secretStoreAllowedHosts: ["api.example.test"],
       });
       const outcomeHeading = document.getByRole("heading", {

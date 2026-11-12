@@ -289,11 +289,7 @@ function QuestionPageContent(
       }
       return value && value.status !== "pending"
         ? questionStatusLabel(value)
-        : t(
-            value?.questions.length === 1 && value.questions[0]?.secretStore?.kind === "secret"
-              ? "chat.questions.storeTitle"
-              : "chat.questions.eyebrow",
-          );
+        : (panelProps()?.model.title ?? t("chat.questions.eyebrow"));
     };
     createDocumentTitle(() => `${title()} — ${t("approvalPage.brandName")}`);
     createPendingFocus(title, {

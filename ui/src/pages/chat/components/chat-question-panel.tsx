@@ -341,16 +341,18 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                 aria-expanded="false"
               >
                 <span>
-                  {!model().nonBlocking && (
+                  {!model().nonBlocking && !protectedStore() && (
                     <>
                       <strong>{model().title}</strong> ·{" "}
                     </>
                   )}
                   {model().collapsedLabel
                     ? `${model().collapsedLabel} · ${item().question}`
-                    : item().header}
+                    : protectedStore()
+                      ? model().title
+                      : item().header}
                 </span>
-                {!model().collapsedLabel && (
+                {!model().collapsedLabel && (!protectedStore() || model().questions.length > 1) && (
                   <span class="chat-question-panel__progress">{progress()}</span>
                 )}
                 <span class="chat-question-panel__chevron">
@@ -361,7 +363,10 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
             </section>
           ) : (
             <section
-              class="chat-question-panel"
+              class={[
+                "chat-question-panel",
+                { "chat-question-panel--credential": protectedStore() },
+              ]}
               ref={(element) => (panel = element)}
               role="group"
               aria-label={model().title}
@@ -382,7 +387,9 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                     <div class="chat-question-panel__title">{model().title}</div>
                   )}
                   {requestNavigation()}
-                  <span class="chat-question-panel__progress">{progress()}</span>
+                  {(!protectedStore() || model().questions.length > 1) && (
+                    <span class="chat-question-panel__progress">{progress()}</span>
+                  )}
                   <button
                     class="chat-question-panel__collapse"
                     type="button"
@@ -406,7 +413,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   </div>
                 )}
               </div>
-              {!model().nonBlocking && (
+              {!model().nonBlocking && !protectedStore() && (
                 <div class="chat-question-panel__heading">
                   <span class="chat-question-panel__prompt">{item().question}</span>
                 </div>
@@ -438,39 +445,36 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               />
               {item().secretStore && (
                 <div class="chat-question-panel__store">
-                  {protectedStore() && <div>{t("chat.questions.storePrivacy")}</div>}
-                  <div class="chat-question-panel__store-requester">
-                    {t("chat.questions.storeRequestedBy", {
-                      agent: model().agentId ?? t("common.unknown"),
-                      session: model().sessionKey ?? t("common.unknown"),
-                    })}
-                  </div>
-                  <div class="chat-question-panel__store-entry">
-                    {t("chat.questions.storeEntry", {
-                      name: item().secretStore!.name,
-                      kind:
-                        item().secretStore!.kind === "secret"
-                          ? t("secretsStore.protectedSecret")
-                          : t("secretsStore.agentReadable"),
-                    })}
-                  </div>
                   {item().secretStore!.reason && (
                     <div class="chat-question-panel__store-reason">
                       {item().secretStore!.reason}
+                    </div>
+                  )}
+                  {!model().requestedBySession && (
+                    <div class="chat-question-panel__store-requester">
+                      {t("chat.questions.storeRequestedBy", {
+                        agent: model().agentId ?? t("common.unknown"),
+                      })}
+                    </div>
+                  )}
+                  {!protectedStore() && (
+                    <div class="chat-question-panel__store-entry">
+                      {t("chat.questions.storeEntry", {
+                        name: item().secretStore!.name,
+                        kind: t("secretsStore.agentReadable"),
+                      })}
                     </div>
                   )}
                   {item().secretStoreExisting && (
                     <div class="chat-question-panel__store-replacement">
                       {item().secretStoreExisting!.updatedBy
                         ? t("chat.questions.storeReplacementBy", {
-                            name: item().secretStore!.name,
                             updated: formatRelativeTimestamp(
                               item().secretStoreExisting!.updatedAtMs,
                             ),
                             updatedBy: item().secretStoreExisting!.updatedBy!,
                           })
                         : t("chat.questions.storeReplacement", {
-                            name: item().secretStore!.name,
                             updated: formatRelativeTimestamp(
                               item().secretStoreExisting!.updatedAtMs,
                             ),
@@ -494,7 +498,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               />
               {protectedStore() && (
                 <label class="chat-question-panel__store-hosts">
-                  <span>{t("secretsStore.allowedHosts")}</span>
+                  <span>{t("chat.questions.storeHosts")}</span>
                   <input
                     ref={(element) => (hostsInput = element)}
                     class="chat-question-panel__other chat-question-panel__hosts"
@@ -514,6 +518,9 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                     }
                   />
                 </label>
+              )}
+              {protectedStore() && (
+                <div class="chat-question-panel__store">{t("chat.questions.storePrivacy")}</div>
               )}
               {item().resource && (
                 <ChatQuestionResource

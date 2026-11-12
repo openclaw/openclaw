@@ -372,16 +372,18 @@ describe("shared question panel", () => {
 
     expect(hosts.value).toBe("api.example.test");
     expect(secret.autocomplete).toBe("off");
-    expect(secret.placeholder).toBe("FAKE_DEPLOYMENT_API_KEY");
+    expect(secret.placeholder).toBe("API key");
     expect(secret.labels?.[0]?.textContent).toContain("API key");
     expect(container.querySelector(".chat-question-panel__options")).toBeNull();
     expect(container.querySelector(".chat-question-panel__option-marker")).toBeNull();
     expect(container.querySelector("kbd")).toBeNull();
     expect(container.textContent).toContain("release-agent");
-    expect(container.textContent).toContain("agent:main:main");
-    expect(container.textContent).toContain("Stores FAKE_DEPLOYMENT_API_KEY as Protected secret");
+    expect(container.textContent).not.toContain("agent:main:main");
+    expect(container.querySelector(".chat-question-panel__title")?.textContent).toBe(
+      "FAKE_DEPLOYMENT_API_KEY",
+    );
     expect(container.textContent).toContain("Deploy the approved release");
-    expect(container.textContent).toContain("Replaces FAKE_DEPLOYMENT_API_KEY — last updated");
+    expect(container.textContent).toContain("Replaces the saved value · updated");
     expect(container.textContent).toContain("by release-owner");
 
     hosts.value = "api.example.test, uploads.example.test";

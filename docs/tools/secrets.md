@@ -69,9 +69,9 @@ value must enter the store, it arrives through the human prompt, the
 The web Control UI docks the prompt above the composer with a masked input.
 Use the eye button to show or hide what you typed before submitting. The value
 starts hidden for each question, and revealing it does not send it to the agent.
-The prompt always shows who is asking (agent and session), the entry name, the
-agent's stated reason, and an editable list of allowed hosts, so you have the
-final say on where the credential may be used. If the name already exists, the
+The prompt leads with the entry name and the agent's stated reason. It identifies
+the requesting agent (or links the requesting session when answering from another
+conversation) and keeps the allowed outbound hosts editable before you save. If the name already exists, the
 prompt says so and shows when and by whom the entry was last updated.
 Submitting replaces the stored value. The Gateway preserves submitted values
 exactly, including leading or trailing whitespace. Web, TUI, and Apple request fields
@@ -132,7 +132,7 @@ Control UI, TUI, and native app cards arrive through the existing Gateway connec
 and do not require `gateway.publicOrigin` or a public link.
 
 Chat channels never accept the value. On Telegram, Discord, and similar
-surfaces the request includes an **Open secure form** button where supported,
+surfaces the request includes an **Open form** button where supported,
 with a normal Control UI link as the text-only fallback. The message shows the
 entry name, reason, and Gateway hostname before you leave the chat. The link
 still requires the normal Gateway sign-in and session access; opening it does

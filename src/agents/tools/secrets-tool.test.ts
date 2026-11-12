@@ -713,7 +713,7 @@ describe("secrets tool", () => {
         );
 
         expect(sent).toHaveLength(1);
-        expect(sent[0]?.text).toContain("Credential request unavailable here");
+        expect(sent[0]?.text).toContain("No credential form link is configured");
         expect(sent[0]?.text).not.toMatch(/https?:/);
         expect(manager.get(requestedQuestionId(gateway.mock))).toMatchObject({
           status: "cancelled",

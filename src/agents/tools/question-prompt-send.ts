@@ -53,17 +53,14 @@ export async function sendQuestionToolPrompt(params: {
       ? `${controlUiBase}/ask/${encodeURIComponent(questionId)}`
       : undefined;
     const prompt = [
-      `🔒 Credential needed: ${binding.name}`,
+      binding.name,
       ...(binding.reason ? [binding.reason] : []),
-      "Enter it in the OpenClaw secure form, not in this chat.",
-      "The value is saved to the secret store, not sent to the agent.",
-      ...(controlUiBase
-        ? [`Continue on ${new URL(controlUiBase).host}. Sign in to your Gateway if asked.`]
-        : []),
+      "Enter the value in the form, not in chat.",
+      ...(controlUiBase ? [`${new URL(controlUiBase).host} · Gateway sign-in required.`] : []),
     ].join("\n\n");
     const text = url
-      ? `${prompt}\n\nOpen secure form: ${url}`
-      : "Credential request unavailable here: no configured Control UI link. Use an existing trusted Control UI or native app and retry, or enter the credential locally in Settings or the masked CLI. Never send credentials in chat.";
+      ? `${prompt}\n\nOpen form: ${url}`
+      : "No credential form link is configured. Retry in a trusted Control UI or native app, or use Settings or the masked CLI. Never paste credentials in chat.";
     await send({
       text,
       ...(url
@@ -73,7 +70,7 @@ export async function sendQuestionToolPrompt(params: {
                 { type: "text" as const, text: prompt },
                 {
                   type: "buttons" as const,
-                  buttons: [{ label: "Open secure form", action: { type: "url" as const, url } }],
+                  buttons: [{ label: "Open form", action: { type: "url" as const, url } }],
                 },
               ],
             },

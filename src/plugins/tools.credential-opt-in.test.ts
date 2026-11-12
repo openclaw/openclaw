@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureEnvironmentKey } from "../shared/environment-key.js";
 import { createInstalledPluginIndexFixture } from "./gateway-startup.test-helpers.js";
 import { runPluginRegisterSyncInRegistry } from "./loader-module-runtime.js";
 import { createPluginRecord } from "./loader-records.js";
@@ -89,6 +90,7 @@ it.each([false, true])(
           autoEnabledReasons: {},
           workspaceDir: undefined,
           env: process.env,
+          environmentKey: captureEnvironmentKey(),
           logger: { info() {}, warn() {}, error() {} },
           manifestRegistry,
         },

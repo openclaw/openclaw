@@ -419,8 +419,8 @@ describe("handleToolExecutionStart read path checks", () => {
           await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledOnce());
           const payload = onToolResult.mock.calls[0]?.[0];
           if (available) {
-            expect(payload?.text).toContain("Credential needed: TEST_API_KEY");
-            expect(payload?.text).toContain("not in this chat");
+            expect(payload?.text).toContain("TEST_API_KEY");
+            expect(payload?.text).toContain("not in chat");
             expect(payload?.text).toContain(
               `https://console.example.test/control/ask/${questionId}`,
             );
@@ -431,7 +431,7 @@ describe("handleToolExecutionStart read path checks", () => {
                   type: "buttons",
                   buttons: [
                     {
-                      label: "Open secure form",
+                      label: "Open form",
                       action: {
                         type: "url",
                         url: `https://console.example.test/control/ask/${questionId}`,
@@ -443,10 +443,10 @@ describe("handleToolExecutionStart read path checks", () => {
             });
             expect(payload?.presentationTextMode).toBe("fallback");
           } else {
-            expect(payload?.text).toContain("Credential request unavailable here");
+            expect(payload?.text).toContain("No credential form link is configured");
             expect(payload?.text).toContain("Control UI or native app");
-            expect(payload?.text).toContain("retry");
-            expect(payload?.text).toContain("Never send credentials in chat");
+            expect(payload?.text).toContain("Retry");
+            expect(payload?.text).toContain("Never paste credentials in chat");
             expect(payload?.text).not.toMatch(/https?:/);
           }
           expect(payload?.channelData).toEqual({ askUser: { questionId } });
@@ -475,7 +475,7 @@ describe("handleToolExecutionStart read path checks", () => {
         } else {
           await expect(outcome).resolves.toHaveProperty(
             "error.message",
-            expect.stringContaining("Use an existing trusted Control UI or native app and retry"),
+            expect.stringContaining("Retry in a trusted Control UI or native app"),
           );
           expect(gatewayCall).toHaveBeenCalledWith(
             "question.resolve",
