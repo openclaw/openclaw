@@ -1,0 +1,3 @@
+# Native plugin catalog/default/admin/blocked/member-view coverage, real owner-key
+# signing and direct-channel authority refusals, plus real Gateway reconnect proof.
+56

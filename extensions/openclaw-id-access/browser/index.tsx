@@ -25,15 +25,18 @@ async function canSeePeople(host: ControlUiHost): Promise<boolean> {
   }
   try {
     const status = await host.request<StatusResult>("openclawId.status", {});
-    return status.status.state !== "off" && status.owner === true;
+    return (
+      status.status.state !== "off" &&
+      (status.owner === true || status.connection?.kind === "member")
+    );
   } catch {
     return false;
   }
 }
 
 /**
- * Registers the owner-only Access page and its sidebar destination while enabled.
- * Connection changes recheck the Gateway-owned flag and owner admission.
+ * Registers the Access page and its sidebar destination while enabled.
+ * Connection changes recheck the Gateway-owned flag and owner/member admission.
  */
 export default defineControlUiPlugin({
   id: "openclaw-id-access",

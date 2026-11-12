@@ -19,7 +19,6 @@ import {
   bytesToHex,
   submitRedemption,
   submitStatement,
-  type AuthorityEvent,
   type AuthorityState,
   type Channel,
   type Ed25519PublicKey,
@@ -29,6 +28,7 @@ import {
   registerInvite,
   ROOT_EPOCH,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
 import { verifyBinding } from "./binding-check.js";
@@ -55,6 +55,7 @@ import {
   retainMemberProfiles,
   type OpenClawIdMemberProfiles,
 } from "./member-profiles.js";
+import { roleChangeDisconnects } from "./member-role-change.js";
 import { readMemberView, readOwnerView } from "./membership-views.js";
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
@@ -427,6 +428,17 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
+        const change = parseStatement(input, "MembershipChange");
+        if (change.ok && change.statement.body.target.op === "set_role") {
+          const role = change.statement.body.target.role;
+          if (!Object.hasOwn(getRuntimeConfigSnapshot()?.gateway?.roles?.definitions ?? {}, role)) {
+            return {
+              ok: false,
+              code: "role_undefined",
+              detail: `The role ${role} is not defined on this claw. Choose another role on the Access page.`,
+            };
+          }
+        }
         const resolved = resolvedInvite(input);
         await commit({
           ...current,
@@ -787,16 +799,6 @@ export type OpenClawIdAuthority = ReturnType<typeof createOpenClawIdAuthority>;
 // Inactivity windows with the protocol defaults filled in.
 function withDefaults(windows: Partial<InactivityWindows>): InactivityWindows {
   return { ...DEFAULT_INACTIVITY_WINDOWS, ...windows };
-}
-
-// A member whose role changed reconnects, so their Gateway connections pick up the
-// new role's scope ceiling instead of keeping the one granted at connect.
-function roleChangeDisconnects(before: AuthorityState, after: AuthorityState): AuthorityEvent[] {
-  const peerKeys = Object.entries(after.members).flatMap(([accountId, member]) => {
-    const previous = before.members[accountId];
-    return previous && previous.role !== member.role ? member.peer_keys : [];
-  });
-  return peerKeys.length > 0 ? [{ type: "disconnect", peer_keys: peerKeys }] : [];
 }
 
 // Every listed node, member or owner device key, admitted now or not.

@@ -8,6 +8,7 @@ import {
   fingerprint,
   generateInviteSecret,
   inviteSecretHash,
+  isMemberRole,
   PENDING_REDEMPTION_TTL_SECONDS,
   type IrohEndpointKey,
   type MemberRole,
@@ -28,6 +29,7 @@ export async function createInvite(
   email: string,
   role: MemberRole,
 ): Promise<CreatedInvite> {
+  requireDefinedRole(link, role);
   const now = Math.floor(Date.now() / 1000);
   const { invite_id, secret } = generateInviteSecret();
   const proofKey = await deriveInviteProofKey(secret);
@@ -98,4 +100,34 @@ export async function removeMember(
     statement,
   });
   return result?.removal ?? null;
+}
+
+function requireDefinedRole(link: Link, role: MemberRole): void {
+  if (!isMemberRole(role)) {
+    throw Object.assign(new Error("This configured role name cannot be used for a member."), {
+      code: "role_invalid",
+    });
+  }
+  if (!link.roles?.some((entry) => entry.defined && entry.name === role)) {
+    throw Object.assign(
+      new Error(`The role ${role} is not defined on this claw. Choose another role.`),
+      { code: "role_undefined" },
+    );
+  }
+}
+
+/** Changes only the membership role, with the same owner signature and submit path as removal. */
+export async function changeMemberRole(
+  request: Request,
+  link: Link,
+  accountId: string,
+  role: MemberRole,
+): Promise<void> {
+  requireDefinedRole(link, role);
+  const statement = await signMembershipChange(link, {
+    op: "set_role",
+    account_id: accountId,
+    role,
+  });
+  await request("openclawId.authority", { action: "submit", statement });
 }

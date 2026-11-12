@@ -81,11 +81,18 @@ export async function readOwnerLinkStatus(params: {
   return {
     roles: [...new Set([...Object.keys(definitions), ...members.map((member) => member.role)])]
       .toSorted()
-      .map((name) => ({
-        name,
-        defined: defined(name),
-        requiresSandbox: defined(name) && definitions[name]?.sandbox === "required",
-      })),
+      .map((name) => {
+        const definition = defined(name) ? definitions[name] : undefined;
+        return definition
+          ? {
+              name,
+              defined: true as const,
+              sessions: definition.sessions.others,
+              requiresSandbox: definition.sandbox === "required",
+              admin: definition.scopes.includes("operator.admin"),
+            }
+          : { name, defined: false as const, requiresSandbox: false };
+      }),
     sandboxBackend,
     linked: Boolean(state),
     clawId: record?.claw_id,

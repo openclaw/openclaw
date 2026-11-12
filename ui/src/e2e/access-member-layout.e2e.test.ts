@@ -97,10 +97,41 @@ suite.define(() => {
           linked: true,
           clawId: "synthetic-claw",
           ownerDevices: [{ devicePub, label: "Synthetic browser", peerKeys: [], cert: {} }],
+          roles: [
+            {
+              name: "operator",
+              defined: true,
+              sessions: "write",
+              requiresSandbox: false,
+              admin: false,
+            },
+            {
+              name: "viewer",
+              defined: true,
+              sessions: "view",
+              requiresSandbox: false,
+              admin: false,
+            },
+            {
+              name: "administrator",
+              defined: true,
+              sessions: "write",
+              requiresSandbox: false,
+              admin: true,
+            },
+            {
+              name: "isolated",
+              defined: true,
+              sessions: "none",
+              requiresSandbox: true,
+              admin: false,
+            },
+          ],
           members: names.map((displayName, index) => ({
             accountId: "member-" + index,
             displayName,
-            role: "operator",
+            role: index === 1 ? "deleted-role" : "operator",
+            roleDefined: index !== 1,
             peerKeys: [],
             email: "member-" + index + "@example.test",
           })),
@@ -151,9 +182,68 @@ suite.define(() => {
         await expect
           .poll(() => member.getByRole("button", { name: "Remove", exact: true }).isEnabled())
           .toBe(true);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.setViewportSize({ width: 1400, height: 1000 });
+          const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
+            animations: "disabled",
+          });
+          writeFileSync(path.join(suite.artifactDir, "access-overview.png"), frame.png);
+        }
+        await page.setViewportSize({ width: 1400, height: 1000 });
+        const invite = page.locator('[aria-labelledby="ocid-access-invite"]');
+        await invite
+          .getByRole("textbox", { name: "Email address to invite" })
+          .fill("review@example.test");
+        await invite.locator(".ocid-access__role-picker button").click();
+        const options = page.getByRole("option");
+        expect(await options.allTextContents()).toEqual([
+          expect.stringContaining("Operator"),
+          expect.stringContaining("administrator"),
+          expect.stringContaining("isolated"),
+          expect.stringContaining("Viewer"),
+        ]);
+        expect(await options.nth(2).textContent()).toContain("Sandbox required");
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, invite, [options.last()], {
+            animations: "disabled",
+          });
+          writeFileSync(path.join(suite.artifactDir, "invite-role-list.png"), frame.png);
+        }
+        await page.getByRole("option", { name: /^administrator · Administrator access/ }).click();
+        await invite.getByRole("button", { name: "Create invite link", exact: true }).click();
+        const confirmAdmin = invite.getByRole("button", { name: "Confirm administrator invite" });
+        await confirmAdmin.waitFor();
+        expect(await invite.textContent()).toContain("change Gateway settings");
+        expect(await gateway.getRequests("openclawId.authority")).toEqual([]);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, invite, [confirmAdmin], {
+            animations: "disabled",
+          });
+          writeFileSync(path.join(suite.artifactDir, "administrator-confirmation.png"), frame.png);
+        }
+        await invite.getByRole("button", { name: "Cancel", exact: true }).click();
+        const blocked = page.locator(".ocid-access__row--member").filter({ hasText: "Bo" });
+        expect(await blocked.textContent()).toContain(
+          "The role deleted-role is not defined on this claw",
+        );
+        await blocked.getByRole("button", { name: "Change role", exact: true }).click();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            blocked,
+            [blocked.getByRole("button", { name: "Save role" })],
+            { animations: "disabled", scrollTo: blocked },
+          );
+          writeFileSync(path.join(suite.artifactDir, "blocked-member-change-role.png"), frame.png);
+        }
+        await blocked.getByRole("button", { name: "Cancel", exact: true }).click();
         const node = page.locator('[aria-labelledby="ocid-nodes"] .ocid-access__row').first();
         for (const width of [390, 820, 1400]) {
           await page.setViewportSize({ width, height: width === 390 ? 480 : 844 });
+          await blocked.getByRole("button", { name: "Change role", exact: true }).click();
+          await expectContained(surface);
+          await blocked.getByRole("button", { name: "Save role" }).click({ trial: true });
+          await blocked.getByRole("button", { name: "Cancel", exact: true }).click();
           await node.getByRole("button", { name: "Remove node", exact: true }).click();
           const nodeConfirm = node.getByRole("button", {
             name: "Remove Integration review workstation",

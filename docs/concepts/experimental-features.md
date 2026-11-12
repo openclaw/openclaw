@@ -447,6 +447,25 @@ removing one denies that role. Missing presets are installed again on the next
 activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
 clearing a stored profile role with `null` remains allowed.
 
+On **Access**, choose an invite's role from the claw's defined roles. **Operator**
+is selected when it is defined; otherwise the first role alphabetically is selected.
+Each option describes access to other people's sessions, sandbox requirements, and
+administrator access. Roles with `operator.admin` are marked **Administrator access**
+and require confirmation before creating an invite. With no roles defined, add a
+definition in config before inviting anyone; there is no role-definition editor here.
+Member role names use 1–64 lowercase letters, digits, `-`, or `_`, starting with a
+letter. Other configured names are shown as unavailable rather than renamed.
+Approving a request grants exactly the role named in its invite.
+
+From an approved owner browser, choose **Change role** on a member, select a defined
+role, and save. The browser signs the membership change with its owner device key.
+The member's devices disconnect and reconnect with the new limits. Members whose
+role was deleted are marked **Blocked** with the missing role's name; choose another
+role to restore access. Members who can load the Access plugin see their own role,
+not other people's access or owner controls. The plugin currently requires
+`operator.read`; session-read-only members, including the Viewer preset, cannot
+open it.
+
 Preset installation never sets or changes `gateway.roles.default` or
 `gateway.roles.assignments`. Without a default, other sign-in methods keep their
 existing behavior, including device-token-only reconnects. Existing team Gateways
@@ -468,7 +487,7 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 - **Access**, under **Pages**: the **Remote access** page from the bundled
   `openclaw-id-access` plugin (enabled by default). It shows who may reach this
   claw through OpenClaw ID; its **People** section lets you invite someone,
-  approve or deny their request, and remove members. Use an approved owner
+  approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
 - **Your devices**, in the account menu: view approved owner browsers and choose

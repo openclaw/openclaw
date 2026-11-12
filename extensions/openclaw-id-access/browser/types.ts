@@ -72,6 +72,16 @@ export type Invite = {
   };
 };
 
+/** Small public role summary, not the full permission definition. */
+export type Role = { name: string; requiresSandbox: boolean } & (
+  | { defined: false }
+  | {
+      defined: true;
+      sessions: "none" | "view" | "suggest" | "write";
+      admin: boolean;
+    }
+);
+
 /**
  * The claw's link state: `openclawId.status` returns only linked, clawId, hostname and
  * rootPub; `openclawId.people` (owner only) returns all of it.
@@ -84,7 +94,7 @@ export type Link = {
   seq?: number;
   ownerDevices?: OwnerDevice[];
   members?: Member[];
-  roles?: Array<{ name: string; defined: boolean; requiresSandbox: boolean }>;
+  roles?: Role[];
   /** Default engine liveness; null means this backend is not probed here. */
   sandboxBackend?: { backend: string; available: boolean | null };
   invites?: Invite[];
@@ -106,6 +116,7 @@ export type StatusResult = {
   channel: "local_operator" | "tunnel" | null;
   /** Whether `openclawId.people` answers this client (loopback operator or an owner device). */
   owner?: boolean;
+  connection?: { kind: "member"; role: MemberRole } | { kind: "owner" | "local" | "none" };
 };
 
 /** Owner-only public node projection; never contains the invitation proof key. */

@@ -56,6 +56,16 @@ function linked(overrides: Partial<StatusResult["link"]> = {}): StatusResult {
         { devicePub: "ed25519:mine", label: "This browser", peerKeys: ["iroh:a"], cert: {} },
         { devicePub: "ed25519:old-laptop", label: "Old laptop", peerKeys: ["iroh:b"], cert: {} },
       ],
+      roles: [
+        {
+          name: "operator",
+          defined: true,
+          sessions: "write",
+          requiresSandbox: false,
+          admin: false,
+        },
+        { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
+      ],
       members: [],
       invites: [pendingInvite],
       ...overrides,
@@ -224,6 +234,7 @@ describe("Access page", () => {
           <InviteForm
             motion={createPeopleMotion()}
             components={hostFor([linked()]).host.components}
+            roles={linked().link.roles!}
             disabled={false}
             locale="en-US"
             onCreate={onCreate}
@@ -239,7 +250,7 @@ describe("Access page", () => {
     expect(container.textContent).toContain("The link expires in 7 days.");
     expect(container.textContent).toContain("Invites cannot grant owner access.");
     expect(container.querySelector('option[value="operator"]')?.textContent).toBe(
-      "Operator · Chat, run tools, and use connected services",
+      "Operator · Read and change other people's sessions · Sandbox follows agent settings · No administrator access",
     );
     expect(container.querySelector('option[value="owner"]')).toBeNull();
     const picker = container.querySelector("select")!;
@@ -260,6 +271,148 @@ describe("Access page", () => {
     expect(document.activeElement).toBe(container.querySelector("input"));
     expect(container.querySelector("select")?.value).toBe("operator");
     expect(container.textContent).not.toContain("https://example.test/#synthetic-invite");
+  });
+
+  it("lists defined roles with summaries and confirms administrator invites", async () => {
+    const { container, request } = await mountPage([
+      linked({
+        rootPub: pendingInvite.pending!.devicePub,
+        roles: [
+          { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
+          {
+            name: "root-helper",
+            defined: true,
+            sessions: "write",
+            requiresSandbox: false,
+            admin: true,
+          },
+          {
+            name: "operator",
+            defined: true,
+            sessions: "write",
+            requiresSandbox: false,
+            admin: false,
+          },
+          {
+            name: "isolated",
+            defined: true,
+            sessions: "none",
+            requiresSandbox: true,
+            admin: false,
+          },
+          { name: "deleted", defined: false, requiresSandbox: false },
+        ],
+      }),
+    ]);
+    await vi.waitFor(() => expect(container.querySelector("select")).not.toBeNull());
+    const picker = container.querySelector("select")!;
+    expect([...picker.options].map((o) => o.value)).toEqual([
+      "operator",
+      "isolated",
+      "root-helper",
+      "viewer",
+    ]);
+    expect(picker.value).toBe("operator");
+    expect(picker.textContent).toContain("No access to other people's sessions");
+    expect(picker.textContent).toContain("Sandbox required");
+    expect(picker.textContent).toContain("Administrator access");
+    const input = container.querySelector("input")!;
+    input.value = "friend@example.test";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    picker.value = "root-helper";
+    picker.dispatchEvent(new Event("change"));
+    flush();
+    button(container, "Create invite link")!.click();
+    flush();
+    expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
+    expect(container.textContent).toContain("change Gateway settings");
+    button(container, "Confirm administrator invite")!.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "openclawId.authority",
+        expect.objectContaining({ action: "register_invite" }),
+      ),
+    );
+  });
+
+  it.each([
+    { roles: [] },
+    {
+      roles: [
+        { name: "viewer", defined: true, sessions: "view", requiresSandbox: false, admin: false },
+      ],
+    },
+  ] as const)(
+    "uses the first role without operator and refuses an empty catalog (%j)",
+    async ({ roles }) => {
+      const { container } = await mountPage([linked({ roles: [...roles] })]);
+      await vi.waitFor(() => expect(button(container, "Create invite link")).toBeDefined());
+      expect(container.querySelector("select")?.value ?? "").toBe(roles[0]?.name ?? "");
+      if (roles.length === 0) {
+        expect(container.textContent).toContain("No roles are defined on this claw");
+        expect(button(container, "Create invite link")?.disabled).toBe(true);
+      }
+    },
+  );
+
+  it("repairs a blocked member with a signed role change at the fresh seq", async () => {
+    const member = {
+      accountId: "blocked",
+      displayName: "Bo",
+      role: "deleted",
+      roleDefined: false,
+      peerKeys: [],
+    };
+    const { container, request } = await mountPage([linked({ members: [member] })]);
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("The role deleted is not defined on this claw"),
+    );
+    button(container, "Change role")!.click();
+    flush();
+    const picker = container.querySelector(
+      ".ocid-access__row--member select",
+    )! as HTMLSelectElement;
+    picker.value = "viewer";
+    picker.dispatchEvent(new Event("change"));
+    flush();
+    request.mockImplementation(async (method: string) =>
+      method === "openclawId.people"
+        ? { link: linked({ members: [member], seq: 6 }).link }
+        : method === "openclawId.status"
+          ? linked()
+          : {},
+    );
+    button(container, "Save role")!.click();
+    const { signMembershipChange } = await import("./owner-signing.js");
+    await vi.waitFor(() =>
+      expect(signMembershipChange).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 6 }), {
+        op: "set_role",
+        account_id: "blocked",
+        role: "viewer",
+      }),
+    );
+    expect(request).toHaveBeenCalledWith("openclawId.authority", {
+      action: "submit",
+      statement: { signed: { op: "set_role", account_id: "blocked", role: "viewer" } },
+    });
+  });
+
+  it("shows a member their own role without requesting people or exposing controls", async () => {
+    const { container, request } = await mountPage([
+      { ...linked(), owner: false, connection: { kind: "member", role: "researcher" } },
+    ]);
+    await vi.waitFor(() => expect(container.textContent).toContain("Your role: researcher"));
+    expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
+    for (const label of [
+      "Create invite link",
+      "Change role",
+      "Approve",
+      "Deny",
+      "Remove",
+      "Add node",
+    ]) {
+      expect(button(container, label)).toBeUndefined();
+    }
   });
 
   it("shows who is asking, from which device, and which invite they used", async () => {
