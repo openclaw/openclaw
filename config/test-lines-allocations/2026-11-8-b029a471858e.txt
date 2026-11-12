@@ -1,0 +1,5 @@
+76
+# LOCAL 2026.11.8 row 205; source b029a471858e63304a3c6e6e1b6d698fbf2fdc65.
+# Doctor consumes existing enabled CLI runtime policy for valid model pins; unavailable API providers stay stale, default/agent scopes distinct.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
