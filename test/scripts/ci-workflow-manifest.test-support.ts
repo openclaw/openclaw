@@ -365,7 +365,7 @@ export function runCiManifestFixture(options: {
       if (!options.changedCoreTestSupport) {
         writeFileSync(
           path.join(root, "scripts/changed-lanes.mts"),
-          `export { detectChangedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/changed-lanes.mts")).href)};\n`,
+          `export { detectChangedLanes, detectChangedLanesForPaths } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/changed-lanes.mts")).href)};\n`,
         );
       }
       // Substitute the native compiler inventory, retaining canonical graph selection

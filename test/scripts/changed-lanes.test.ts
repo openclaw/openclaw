@@ -270,6 +270,7 @@ function runChangedCheckWithRecordedCommands(
   failingCommand: string | null,
   paths = ["src/gateway/server-runtime-state.ts"],
   cwd = repoRoot,
+  options: { delegateCompilers?: boolean; failureCode?: number } = {},
 ) {
   const dir = tempDirs.make("openclaw-changed-check-order-");
   const binDir = path.join(dir, "bin");
@@ -292,7 +293,7 @@ exports.start = (bin, args) => {
 exports.result = (bin, args) => {
   if (bin === "pnpm" && args[0] === ${JSON.stringify(failingCommand)}) {
     console.error("Synthetic check failure: " + args[0]);
-    return 23;
+    return ${options.failureCode ?? 23};
   }
   return 0;
 };
@@ -318,7 +319,7 @@ if (require.main === module) {
   }
   const result = runRepoScript(
     "scripts/check-changed.mjs",
-    ["--", ...paths],
+    [...(options.delegateCompilers ? ["--delegate-compilers"] : []), "--", ...paths],
     syntheticCoreTestOwnerEnv(
       dir,
       {
@@ -454,46 +455,63 @@ describe("scripts/changed-lanes", () => {
     },
   );
 
-  it.each([{ failingCommand: "check:no-conflict-markers" }, { failingCommand: null }])(
-    "retains serial execution and runs every selected check after $failingCommand fails",
-    ({ failingCommand }) => {
-      const { events, paths, result } = runChangedCheckWithRecordedCommands(failingCommand);
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.signal, result.stderr).toBeNull();
-      expect(result.status, result.stderr).toBe(failingCommand === null ? 0 : 23);
-      const commands = events.filter((event) => event.event === "start");
-      const planned = createChangedCheckPlan(
-        detectChangedLanesForPaths({ paths, base: "HEAD", staged: true }),
-      ).commands.map((command) => ({
-        bin: command.bin ?? "pnpm",
-        args: command.args,
-      }));
-      expect(commands.map(({ bin, args }) => ({ bin, args }))).toEqual(planned);
-      expect(events).toEqual(
-        commands.flatMap(({ bin, args }) => [
-          { event: "start", bin, args },
-          { event: "finish", bin, args },
-        ]),
+  it.each([
+    { delegateCompilers: false, failureCode: 0 },
+    { delegateCompilers: false, failureCode: 23 },
+    ...[23, 124, 143].map((failureCode) => ({ delegateCompilers: true, failureCode })),
+  ])("preserves serial ownership and status for %j", ({ delegateCompilers, failureCode }) => {
+    const failingCommand = failureCode === 0 ? null : "check:no-conflict-markers";
+    const { events, paths, result } = runChangedCheckWithRecordedCommands(
+      failingCommand,
+      undefined,
+      undefined,
+      { delegateCompilers, failureCode },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.signal, result.stderr).toBeNull();
+    expect(result.status, result.stderr).toBe(failureCode);
+    const plan = createChangedCheckPlan(
+      detectChangedLanesForPaths({ paths, base: "HEAD", staged: true }),
+      { delegateCompilers },
+    );
+    if (delegateCompilers) {
+      expect(plan.delegatedTypeGraphs).toEqual(["core"]);
+    }
+    const planned = plan.commands.map(({ bin, args }) => ({ bin: bin ?? "pnpm", args }));
+    const admitted =
+      failureCode === 124 || failureCode === 143
+        ? planned.slice(0, planned.findIndex(({ args }) => args[0] === failingCommand) + 1)
+        : planned;
+    const starts = events.filter(({ event }) => event === "start");
+    expect(starts.map(({ bin, args }) => ({ bin, args }))).toEqual(admitted);
+    expect(events).toEqual(
+      admitted.flatMap(({ bin, args }) => [
+        { event: "start", bin, args },
+        { event: "finish", bin, args },
+      ]),
+    );
+    if (failingCommand) {
+      expect(result.stderr).toContain("Synthetic check failure: " + failingCommand);
+    }
+    if (delegateCompilers) {
+      const compilers = starts.filter(({ args }) => args[0]?.startsWith("tsgo:"));
+      expect(compilers.map(({ bin, args }) => ({ bin, args }))).toEqual(
+        failureCode === 23 ? [{ bin: "pnpm", args: ["tsgo:core:test"] }] : [],
       );
-      const broadAudits = commands.filter(({ args }) =>
-        args.some((arg) =>
-          [
-            "check:coercion-helpers",
-            "check:deprecated-api-usage",
-            "scripts/check-deadcode-exports.mts",
-          ].includes(arg),
-        ),
-      );
-      if (failingCommand !== null) {
-        expect(result.stderr).toContain(`Synthetic check failure: ${failingCommand}`);
-      }
+    } else {
+      const auditOwners = new Set([
+        "check:coercion-helpers",
+        "check:deprecated-api-usage",
+        "scripts/check-deadcode-exports.mts",
+      ]);
+      const broadAudits = starts.filter(({ args }) => args.some((arg) => auditOwners.has(arg)));
       expect(broadAudits).toHaveLength(3);
-      const lastTypecheck = commands.findLastIndex(({ args }) => args[0]?.startsWith("tsgo:"));
+      const lastTypecheck = starts.findLastIndex(({ args }) => args[0]?.startsWith("tsgo:"));
       for (const audit of broadAudits) {
-        expect(commands.indexOf(audit)).toBeGreaterThan(lastTypecheck);
+        expect(starts.indexOf(audit)).toBeGreaterThan(lastTypecheck);
       }
-    },
-  );
+    }
+  });
 
   it.each([
     {
