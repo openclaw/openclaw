@@ -1,0 +1,2 @@
+# Default omission and explicit opt-in for tool_describe and Code Mode describe() output schemas.
+123

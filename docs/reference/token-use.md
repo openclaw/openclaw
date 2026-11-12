@@ -240,7 +240,8 @@ publisher reads public pricing sources, including OpenCode's official catalog
 and Venice's public model API when the provider declares the native source.
 Base rates and context tiers come from the same source; usage rendering makes no
 network requests. Hosted updates activate with the Gateway's next prepared
-catalog generation, without restarting. Each estimation operation captures one
+catalog generation, without restarting. A hosted row's price replaces the
+bundled row's for each new model call's recorded cost as well as for estimates. Each estimation operation captures one
 pricing context, so a publication cannot change its rates halfway through.
 Set `models.catalogRefresh.enabled: false` to disable
 hosted catalog traffic on offline or restricted networks; bundled pricing still

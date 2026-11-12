@@ -254,7 +254,8 @@ export async function prepareModelPricingContext(
   });
 }
 
-function hasKnownPricing(pricing: PricingValue): boolean {
+/** Any positive rate establishes a price; all-zero rates alone cannot. */
+export function hasKnownPricing(pricing: PricingValue): boolean {
   return (
     Boolean(
       pricing.tieredPricing?.some(

@@ -203,18 +203,26 @@ struct ChatProTab: View {
             diameter: 38,
             avatarDiameter: 28)
         {
-            Text(self.agentBadge)
-                .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 16))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(OpenClawBrand.carapaceElevated))
+            Group {
+                if let image = self.agentAvatarImage {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Text(self.agentBadge)
+                        .font(OpenClawType.avatar(size: self.agentBadge.count > 2 ? 12 : 16))
+                        .foregroundStyle(.white)
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(OpenClawBrand.carapaceElevated))
+            .clipShape(Circle())
         }
         .overlay(alignment: .topTrailing) {
             self.gatewayAvatarStatusDot
         }
         .accessibilityElement(children: .ignore)
+        .openClawToolbarGlyphScale()
     }
 
     private var gatewayAvatarStatusDot: some View {
@@ -244,7 +252,8 @@ struct ChatProTab: View {
         Button(action: self.handleHeaderAgentIdentityTap) {
             self.headerAgentIdentityLabel
         }
-        .frame(minHeight: 44)
+        .openClawToolbarHitTarget(preservesIntrinsicWidth: true)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel(Text(verbatim: self.headerAgentAccessibilityLabel))
         .accessibilityValue(self.showsExpandedGatewayStatus ? "Expanded" : "Collapsed")
@@ -449,10 +458,11 @@ struct ChatProTab: View {
             } icon: {
                 Image(systemName: "ellipsis.circle")
                     .font(.system(size: 22))
+                    .openClawToolbarGlyphScale()
             }
             .foregroundStyle(OpenClawBrand.accent)
         }
-        .frame(width: 44, height: 44)
+        .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .buttonStyle(.plain)
         .accessibilityLabel("Chat actions")
@@ -470,7 +480,7 @@ struct ChatProTab: View {
             VStack(spacing: 0) {
                 if self.activeAgent?.workspacegit == true {
                     self.chatActionButton(
-                        title: "New chat in worktree",
+                        title: String(localized: "New chat in worktree"),
                         systemImage: "arrow.triangle.branch",
                         disabled: self.areSessionActionsDisabled)
                     {
@@ -479,7 +489,7 @@ struct ChatProTab: View {
                 }
 
                 self.chatActionButton(
-                    title: "New session options…",
+                    title: String(localized: "New session options…"),
                     systemImage: "slider.horizontal.3",
                     disabled: self.areSessionActionsDisabled)
                 {
@@ -508,14 +518,14 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
-                    title: "Export transcript",
+                    title: String(localized: "Export transcript"),
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
                 {
                     self.pendingChatAction = .exportTranscript
                 }
 
-                self.chatActionButton(title: "Gateway settings", systemImage: "network") {
+                self.chatActionButton(title: String(localized: "Gateway settings"), systemImage: "network") {
                     self.pendingChatAction = .gatewaySettings
                 }
                 .accessibilityIdentifier("chat-gateway-settings")
@@ -733,6 +743,12 @@ struct ChatProTab: View {
 
     private var agentBadge: String {
         self.isAttachmentOwnerPinned ? self.appModel.chatPresentation.presentationAgentBadge : self.currentAgentBadge
+    }
+
+    private var agentAvatarImage: UIImage? {
+        self.isAttachmentOwnerPinned
+            ? self.appModel.chatPresentation.presentationAgentAvatar
+            : self.appModel.agentAvatarImage(for: self.currentActiveAgent?.id ?? self.appModel.chatAgentId)
     }
 
     nonisolated static let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [

@@ -74,9 +74,15 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   all other required lanes must pass. See
   [Publication requirements](#publication-requirements). Stable tags require stable/full
   evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
-  stable. Soak and performance cannot be waived. All-group
+  stable. Soak remains mandatory; performance exceptions are limited to the
+  checked-in policy. All-group
   qualification requires all nine Linux/Windows/macOS Gateway install/upgrade
   combinations. Preserve first failures, identity, and complete evidence.
+- Selected npm plugins must publish successfully before core npm. ClawHub starts
+  at its existing dispatch point and runs independently thereafter; planning,
+  authorization, dispatch, publication, verification, and recovery never block
+  core, GitHub finalization, main closeout, or the retrospective PR. Record a
+  separate owner, exact run/attempt, status, and next action for ClawHub.
 - Native macOS, Windows, Linux, and Android publication is independent of
   npm/ClawHub, GitHub finalization, and main closeout. Each platform retains
   its own signing, qualification, artifact, and updater requirements; report
@@ -537,8 +543,9 @@ gh workflow run openclaw-performance.yml \
 - Compare available Kova, gateway startup, and CLI startup metrics with earlier
   release evidence or clawgrit reports before publish/closeout.
 - Record regressions in release evidence and investigate their product impact.
-  Stable/full qualification requires blocking performance. Every selected
-  performance child must succeed; failures cannot be waived.
+  Stable/full qualification requires blocking performance subject only to the
+  checked-in policy’s exact Kova grants. Retain failed reports; a failed-job
+  grant does not authorize a not-run exemption.
 - `npm-beta-v1` defers the performance child. Every selected child still needs
   terminal evidence and must prove artifact-only publication.
 
@@ -572,10 +579,16 @@ attestation, not a bot exception. Scheduled main qualification explicitly uses
 An existing `--request-file` reconciles the original request without changing
 its route, Q/P identities, or inputs. `--reconcile-request <file>` is read-only.
 Only `--resume-request <file>` can continue a candidate request after admission
-and before any Q ref mutation or FRV POST. Stable/checklist refusals print that
-exact next command for a v2 prepared request whose Q ref is still intended;
-run it explicitly, then rerun the wrapper. Reconciliation alone does not advance
-an admitted request into qualification. Uncertain writes never retry. Keep
+and before its first FRV POST. If Q ref creation succeeded but readback failed,
+resume verifies the existing exact Q=C ref and empty workflow inventory, then
+reuses it without a second ref POST. Missing/moved refs or uncertain/nonempty
+inventories block. Read-only reconciliation verifies an uncertain prepared ref
+before suggesting resume; it does not rewrite or advance the request. Every
+resume revalidates authenticated admission and signer authority after recovery
+inventory reads, then checks the ref immediately before dispatch. Stable/checklist
+wrappers relay the helper’s verified recovery advice, never infer safety from raw
+uncertain state. Run the explicit resume command when offered, then rerun the wrapper.
+An attempted or uncertain FRV POST remains observation-only and never retries. Keep
 original producer and current consumer identities when reusing evidence.
 
 Select `npmDistTag=beta` for beta publication and `route=prepared` only for an
@@ -671,7 +684,7 @@ The selected FRV run must conclude **success**. Stable publication requires
 stable/full evidence, soak, and blocking performance.
 Decide blocker or flake for every failed test. Rerun flakes on the same Release
 SHA at most twice and file a fix-in-parallel issue/PR on `main`; never re-cut
-solely to clear a flake. An exact failed live-provider/Telegram leaf may instead
+solely to clear a flake. An exact eligible failed leaf may instead
 have a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Land and pin P, then run or revalidate FRV without changing C/Q. The publisher
 does not grant waivers or accept failed FRV. All unwaived failures and missing,
@@ -697,8 +710,9 @@ for publication ordering and prepared/direct recovery.
   `openclaw-release-approval-v1-<parent run>-<attempt>` receipt; bot-dispatched
   children verify it (`scripts/release-approval-receipt.mjs verify`) before
   their gates. The ClawHub OIDC child skips its `clawhub-plugin-release` gate
-  on a verified receipt and instead waits for the parent's
-  `openclaw-clawhub-parent-authorization-v2-*` receipt before publishing. npm
+  on a verified receipt and uses its own publication authorization after
+  dispatch. Core-parent completion or failure must not strand already-authorized
+  ClawHub work; keep its live-authority and exact-byte checks in that lane. npm
   children (`Plugin NPM Release`, `openclaw-npm-release.yml`) skip their
   `npm-release` approval job on the verified-receipt route and publish in
   `npm-publish`, with trusted publishers bound to that environment. Immediately
@@ -712,17 +726,17 @@ for publication ordering and prepared/direct recovery.
 - Never approve a `plugin-clawhub-release.yml` child by hand. It is
   receipt-verified on the bot route and needs no approval. The
   `Artifact not found` line for `openclaw-clawhub-recovery-approval-<run>-1`
-  is a non-fatal probe. A late human approval fails at `Revalidate trusted tooling identity`
-  with `parent state completed/failure is not allowed by authorization route`
-  once the parent has died (2026.9.6: runs 35930335388/35930341394). If core
-  npm already published, recover ClawHub through explicit ClawHub recovery
-  ([publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#interrupted-preparation-and-publication));
-  otherwise cancel the children and re-dispatch the parent. Bootstrap children
+  is a non-fatal probe. Historical parent-bound children could fail with
+  `parent state completed/failure is not allowed by authorization route`
+  (2026.9.6: runs 35930335388/35930341394). Recover that ClawHub surface through
+  explicit [publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#interrupted-preparation-and-publication),
+  without holding or redispatching core publication. Bootstrap children
   (`plugin-clawhub-new.yml`) always wait on `clawhub-plugin-bootstrap`. Approve
   them after the secretless pack jobs finish
   ([first package](../release-openclaw-maintainer/references/first-package.md)).
-- A v2 ClawHub child can stage most packages before one failure makes the
-  awaited parent fail, preventing finalization of the staged siblings.
+- A historical awaited v2 ClawHub child can stage most packages before one
+  failure makes its parent fail, preventing finalization of staged siblings.
+  New publication keeps that failure isolated to the ClawHub lane.
   Reconcile the original child's `*-publish-json` artifacts before any
   republish or parent resume. Use
   `pnpm release:clawhub-recovery -- --version <version> --reason '<parent failure>' --clawhub-source <isolated pinned ClawHub checkout> <package-publish.json>...`
@@ -731,22 +745,23 @@ for publication ordering and prepared/direct recovery.
   not distinguish staged from missing, and attempt status needs publisher
   authentication. Parent receipts and live-authority revalidation remain
   required; recovery does not turn a failed parent into successful evidence.
-- Before the first child dispatch the parent sweeps all selected publishers for a failed earlier parent's
-  `waiting`/`queued` children of the same release (ClawHub and core by the
-  `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only
-  while no other publish parent is live): it
-  attempts gate rejection and cancellation, then waits up to 5 minutes per workflow.
+- Before npm child dispatch the parent sweeps selected npm publishers for a
+  failed earlier parent's `waiting`/`queued` children of the same release (core
+  by the `parent=<run>/<attempt>` run title; plugin npm by the release SHA, only
+  while no other publish parent is live). The independent ClawHub lane owns
+  its corresponding sweep. Each owner attempts gate rejection and cancellation,
+  then waits up to 5 minutes per workflow.
   Rejection denied with 403 needs a reviewer; logs and the step summary include
   the reject/cancel commands. Unconfirmed cancellation warns. Core npm has an
   independent publish slot and rechecks its live parent, so it does not block;
-  plugin npm and ClawHub retain target-serialized slots and refuse before any
-  new dispatch if cancellation remains unconfirmed. Legacy unidentified ClawHub
-  children or live publishers also retain the dispatch guard. A parent failure
-  cancels its own waiting npm children and its recorded unfinished ClawHub
-  children; it rejects a recorded child's pending gate first, because a cancel
-  request alone leaves a Plugin ClawHub New child waiting on
-  `clawhub-plugin-bootstrap`. A 403 rejection warns with the reviewer commands.
-  To clean up as a reviewer, list
+  plugin npm retains its target-serialized slot and refuses before a new dispatch
+  if cancellation remains unconfirmed. ClawHub reconciliation, serialized slots,
+  and dispatch guards run only in its independent lane; none holds npm dispatch
+  or core completion. Do not cancel authorized ClawHub work merely because its
+  original core parent failed. A core parent failure cancels its own waiting npm
+  children. A detached ClawHub parent failure rejects its recorded child's pending
+  gate before cancellation; an unconfirmed rejection warns with reviewer commands.
+  To clean up a confirmed stale, no-longer-authorized child as a reviewer, list
   `workflow_dispatch` runs by `github-actions[bot]` created for this release,
   reject their gate, cancel:
 
@@ -922,7 +937,8 @@ Interpret state precisely:
   remained active.
 
 Read every selected lane's actual conclusion. `passed` requires every selected
-validation lane to succeed; omitted coverage is not run, never passed.
+validation lane to satisfy pinned P's policy, with terminal evidence and raw
+waived failures retained; omitted coverage is not run, never passed.
 
 The `full-release-diagnostics-<run-id>-<attempt>` artifact is the terminal
 failure and timing manifest. Use it after an early blocker instead of
@@ -951,8 +967,8 @@ run-ID-cached bytes first.
    candidate, treat the failure as a blocker and backport or supersede; do not
    rerun it as inherited success. A signature repeated on another candidate is
    deterministic until a named mechanism and fix prove otherwise. Track a fix
-   for genuine flakes on `main`; every selected job must still pass before
-   publication. Classify blockers further:
+   for genuine flakes on `main`; every unwaived selected job must still pass before
+   publication under pinned P's policy. Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
    - qualification harness/contract defect: repair the candidate closure and
@@ -973,8 +989,9 @@ run-ID-cached bytes first.
      npm run and qualified bytes, repair the selector, and reconcile the exact
      failed parent's children before resuming the selected publication route.
      Direct finalization normally waits for npm and Docker verification; the
-     prepared button also verifies ClawHub downloads. Do not manually un-draft
-     a release to bypass those gates. Follow
+     prepared button also retains its required core checks, but neither route
+     waits for ClawHub downloads. Do not manually un-draft a release to bypass
+     required core gates. Follow
      [publication recovery](../release-openclaw-maintainer/references/publication-recovery.md#published-version-failed-parent)
      for direct resume or a new prepared button run.
    - child stuck `waiting`, ClawHub `Artifact not found`, or parent failing

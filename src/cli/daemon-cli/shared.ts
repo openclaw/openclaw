@@ -16,6 +16,7 @@ import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervis
 import { parseTcpPort } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { createDaemonActionContext } from "./response.js";
 export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 
@@ -68,6 +69,22 @@ export function resolveDaemonInstallBlockMessage(
     );
   }
   return undefined;
+}
+
+/** Service-policy refusals carry their own remedy; show it instead of the generic CLI failure. */
+export function assertGatewayServiceActionAllowed(
+  label: "start" | "stop" | "uninstall" | "restart",
+  action: string,
+): void {
+  const refusal = resolveGatewayServiceMutationError(action);
+  if (refusal) {
+    throw new ExpectedCliError({
+      message: refusal.message,
+      humanOutput: `Gateway ${label} blocked: ${refusal.message}`,
+      machineOutput: refusal.message,
+      cause: refusal,
+    });
+  }
 }
 
 export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?: number): string {
@@ -190,6 +207,24 @@ export function projectDaemonServiceForJson<
 
 export function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
   return Object.entries(filterDaemonEnv(env)).map(([key, value]) => `${key}=${value}`);
+}
+
+export function resolveLaunchdInspectionWarnings(service: {
+  foreignLaunchdInspectionError?: string;
+  staleLaunchdInspectionError?: string;
+}): string[] {
+  const warnings: string[] = [];
+  if (service.foreignLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect foreign launchd jobs: ${service.foreignLaunchdInspectionError}`,
+    );
+  }
+  if (service.staleLaunchdInspectionError) {
+    warnings.push(
+      terminalText`Could not inspect stale OpenClaw updater launchd jobs: ${service.staleLaunchdInspectionError}; interrupted-update leftovers were NOT checked. Check launchctl availability and rerun ${formatCliCommand("openclaw doctor")}.`,
+    );
+  }
+  return warnings;
 }
 
 export function normalizeListenerAddress(raw: string): string {

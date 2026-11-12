@@ -184,6 +184,7 @@ describe("ManagedWorktreeService provisioned state", () => {
       expect.objectContaining({
         details: expect.objectContaining({
           outcome: "returned",
+          provisionEstimate: expect.any(Number),
           provisionInspect: expect.any(Number),
           provisionCopy: expect.any(Number),
         }),
@@ -348,7 +349,7 @@ describe("ManagedWorktreeService provisioned state", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "batches supported literal UTF-8 paths without expanding wildcard or magic names",
+    "filters supported literal UTF-8 paths without expanding wildcard or magic names",
     async () => {
       await fs.writeFile(path.join(repo, ".gitignore"), "*.local\n");
       await fs.writeFile(
@@ -372,6 +373,9 @@ describe("ManagedWorktreeService provisioned state", () => {
       for (const name of [...names, "literalZ.local", "unselected.local"]) {
         await fs.writeFile(path.join(repo, name), "bytes:" + name);
       }
+      // A tracked wildcard lookalike must not suppress the literal untracked filename.
+      await git(repo, "add", "-f", "literalZ.local");
+      await git(repo, "commit", "-m", "track wildcard lookalike");
       using commands = vi.spyOn(gitExec, "executeGitCommandBuffered");
 
       expect(
@@ -380,38 +384,22 @@ describe("ManagedWorktreeService provisioned state", () => {
           input: { sourceRoot: repo },
         }),
       ).toEqual({ paths: names, estimatedBytes: names.length * 4096 });
-      const batches = commands.mock.calls
-        .filter(([, args]) => args.includes("ls-files") && args.includes("--exclude-standard"))
-        .map(([, args]) => {
-          expect(args).toContain("--literal-pathspecs");
-          expect(args).toContain("--");
-          return args.slice(args.indexOf("--") + 1);
-        });
-      expect(batches.flat()).toEqual(names);
-      expect(batches.some((batch) => batch.length === 128)).toBe(true);
+      // The selected inventory fits the output budget regardless of unrelated ignored files.
+      // Filtering must not spawn once per 128 files as dependency trees grow.
       expect(
-        batches.some(
-          (batch) =>
-            batch.length < 128 &&
-            batch.reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0) >= 16_384,
+        commands.mock.calls.filter(
+          ([, args]) => args.includes("ls-files") || args.includes("check-ignore"),
         ),
-      ).toBe(true);
-      for (const batch of batches) {
-        expect(batch.length).toBeGreaterThan(0);
-        expect(batch.length).toBeLessThanOrEqual(128);
-        expect(
-          batch.slice(0, -1).reduce((bytes, entry) => bytes + Buffer.byteLength(entry) + 1, 0),
-        ).toBeLessThan(16_384);
-      }
+      ).toHaveLength(2);
       const created = await service.create({
         repoRoot: repo,
         name: "literal-batches",
         baseRef: "HEAD",
       });
       expect(await getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual(names.toSorted());
-      await expect(fs.stat(path.join(created.path, "literalZ.local"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      expect(await fs.readFile(path.join(created.path, "literalZ.local"), "utf8")).toBe(
+        "bytes:literalZ.local",
+      );
       await expect(fs.stat(path.join(created.path, "unselected.local"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -427,7 +415,7 @@ describe("ManagedWorktreeService provisioned state", () => {
           (args.includes("ls-files") || args.includes("ls-tree")) &&
           args.includes("--"),
       );
-      expect(membership.length).toBe(batches.length * 3);
+      expect(membership.length).toBeGreaterThan(0);
       for (const call of membership) {
         const options = call[2];
         expect(options?.killProcessTree).toBe(true);

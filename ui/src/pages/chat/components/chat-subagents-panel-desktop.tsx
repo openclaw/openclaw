@@ -281,9 +281,9 @@ export function ChatSubagentsPanelDesktop(props: ChatSubagentsPanelDesktopProps)
           fallback={
             !props.nativeSnapshot &&
             !props.nativeError &&
-            (props.loading || (props.hasResult && !props.error)) && (
+            ((props.loading && !props.hasResult) || (props.hasResult && !props.error)) && (
               <Show
-                when={props.loading}
+                when={props.loading && !props.hasResult}
                 fallback={
                   <PanelEmptyState
                     presentation="desktop"

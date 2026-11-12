@@ -1,4 +1,5 @@
 import { For, createMemo } from "solid-js";
+import { iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   Menu,
@@ -128,8 +129,8 @@ export function UsageDisplayMenu(props: { usage: UsageProps; phone: boolean }) {
       class="usage-display-menu"
       panelClass="usage-display-menu__panel"
       triggerClass={[
-        "btn btn--sm usage-display-menu__trigger",
-        props.phone ? "usage-filter-sheet__trigger" : "btn--icon",
+        props.phone ? "btn btn--sm usage-filter-sheet__trigger" : iconButtonClass(),
+        "usage-display-menu__trigger",
       ]}
       triggerAttributes={{ title: t("usage.display.title") }}
       placement="bottom-end"

@@ -46,6 +46,7 @@ function mountSlashMenu(paneId: string) {
 
 it("navigates the full slash menu in visual order and runs the highlighted command", async () => {
   const { menu, host, view } = mountSlashMenu("menu-keyboard-order");
+  await import("./chat-composer-slash-menu-options.tsx");
   await waitForSolid(() => expect(view.container.querySelector('[aria-busy="true"]')).toBeNull());
   const options = view.getAllByRole("option");
   const names = options.map((option) => option.querySelector(".slash-menu-name")!.textContent);
@@ -56,9 +57,8 @@ it("navigates the full slash menu in visual order and runs the highlighted comma
   expect(view.getByRole("option", { selected: true })).toBe(options[0]);
 
   const press = (key: string) => {
-    expect(menu.handleKeydown(new KeyboardEvent("keydown", { key, cancelable: true }), host)).toBe(
-      true,
-    );
+    const event = new KeyboardEvent("keydown", { key, cancelable: true });
+    expect(menu.handleKeydown(event, host)).toBe(true);
     flush();
   };
   for (const key of ["ArrowDown", "ArrowUp"]) {

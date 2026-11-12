@@ -18,7 +18,7 @@ import {
   setupLegacyMainSessionMigrationTests,
 } from "./legacy-main-session-migration.test-support.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-read.js";
 import {
   readSqliteSessionGenerationClaim,
   readSqliteSessionGenerationWindows,

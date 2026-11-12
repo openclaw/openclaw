@@ -383,6 +383,16 @@ describe("mutations", () => {
     expectCall(2, "device.pair.remove", { params: { deviceId: "device-2" } });
     expectCall(3, "device.pair.reject", { params: { requestId: "req-1" } });
   });
+  it("clears around OpenClaw ID browsers, which the Access page manages", async () => {
+    list(
+      [],
+      [paired({ deviceId: "ocid-1", managedBy: "openclaw-id" }), paired()],
+    ).mockResolvedValueOnce({ deviceId: "device-1" });
+    await run("clear", "--yes");
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expectCall(1, "device.pair.remove", { params: { deviceId: "device-1" } });
+    expect(stripAnsi(output())).toContain("Kept 1 OpenClaw ID browser");
+  });
   it.each([
     { name: "omitted", flags: [], scopes: undefined },
     { name: "empty", flags: ["--no-scopes"], scopes: [] },
@@ -601,6 +611,11 @@ describe("list output", () => {
     expect(text.split("\n")).toContain(`  ${secondId}  Kitchen Mac`);
     expect(text).not.toMatch(/MacBook Pro|openclaw-macos|openclaw-ios/);
     expect(output()).not.toMatch(connectionSecrets);
+  });
+  it("marks OpenClaw ID browsers as managed on the Access page", async () => {
+    list([], [paired({ deviceId: "ocid-1", displayName: "Remote", managedBy: "openclaw-id" })]);
+    await run("list");
+    expectText(stripAnsi(output()), ["Remote (OpenClaw ID)", "Manage them on the Access page"], []);
   });
   it("emits transport failures as JSON", async () => {
     const error = new Error("gateway closed (1006)");
