@@ -10,6 +10,7 @@ import {
   SQLITE_WORKER_CLOSE_RECEIPT,
   type SqliteWorkerCloseReceipt,
 } from "../infra/sqlite-worker-contract.js";
+import { stopAgentDatabaseWalMaintenance } from "./openclaw-agent-db-close.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { closeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-lifecycle.js";
 import type { AgentDatabaseFileExecutionIdentity } from "./openclaw-agent-execution-contract.js";
@@ -42,7 +43,9 @@ export function createAgentDatabaseExecutionCloser(
     async close() {
       const { sharedBorrow, ...state } = capture();
       receipt = undefined;
-      await state.database?.walMaintenance.stop();
+      if (state.database) {
+        await stopAgentDatabaseWalMaintenance(state.database);
+      }
       const errors: unknown[] = [];
       try {
         receipt = closeAgentDatabaseExecution({ ...state, releaseSharedBorrow: () => {} });

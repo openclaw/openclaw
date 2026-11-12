@@ -198,4 +198,26 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
     See [Exec approvals](/tools/exec-approvals).
 
   </Accordion>
+  <Accordion title="Message widgets">
+    Opt in to send `show_widget` as a [Telegram message widget](https://core.telegram.org/bots/widgets) (Bot API 10.4), a small interactive card inside a private chat with the bot:
+
+```json5
+{
+  channels: {
+    telegram: {
+      widgets: true,
+    },
+  },
+}
+```
+
+    Default: off, for client compatibility. Older Telegram clients cannot render widgets, so keep this off unless every client used with the bot is current. The setting also works per account (`channels.telegram.accounts.<id>.widgets`). `/status` shows whether widgets are on. While it is off, `show_widget` behaves as before and taps on earlier widgets are dropped. Groups, channels, and DM topics always use the normal widget surfaces.
+
+    - **No network.** Widgets run in Telegram's sandbox without CDNs, libraries, or remote images. The agent draws charts with inline SVG or canvas and inlines images as `data:` URLs.
+    - **Limits.** 32 KB of HTML and 4 KB after compression. There are no text inputs; widgets use buttons.
+    - **Trial run.** Before sending, OpenClaw runs the widget once in QuickJS with a stand-in DOM, its timers, and a tap on every enabled button. Script errors, endless loops, removed elements, unsupported CSS (`vh`, `sticky`, scrolling, `color-mix()`), network use, element and CSS-rule limits, and `request()` outside a tap go back to the agent to fix, and the widget is not sent until they pass. Approximate findings (more than 16 translucent or shadowed elements, `undefined`/`NaN` on screen) are passed to the agent as notes while the widget is still sent. Widgets that use web APIs the trial run does not model, such as `URL`, are sent unchecked.
+    - **Taps.** A widget that calls `TelegramWidget.request(data)` reaches the agent as `widget_request: <data>`. The tap is acknowledged at once. The agent answers by calling `show_widget` with only the new `state` (at most 1,024 bytes), which updates the tapped widget in place without an "edited" mark or a new message. New widget code always sends a new message, and a typed message always starts a new one.
+    - **Rate limits.** Widget code cannot send `/` or `!` commands. Each widget gets at most 10 requests per minute, and the same request text reaches the agent once per minute.
+
+  </Accordion>
 </AccordionGroup>
