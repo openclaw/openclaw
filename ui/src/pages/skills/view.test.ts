@@ -122,6 +122,40 @@ describe("renderSkills", () => {
     },
   );
 
+  it.each([
+    { name: "literal", apiKey: "__OPENCLAW_REDACTED__", expected: "Stored in openclaw.json.", disabled: false },
+    { name: "environment", apiKey: "${SET_TOKEN}", expected: "From environment · SET_TOKEN", disabled: true },
+    { name: "reference", apiKey: { source: "env", provider: "default", id: "SET_TOKEN" }, expected: "Set by a reference", disabled: true },
+    { name: "unknown", apiKey: undefined, expected: "Key source unknown", disabled: true },
+  ])("shows and locks the $name key source", async ({ name, apiKey, expected, disabled }) => {
+    const container = createContainer();
+    installDialogMethod("showModal", function () {
+      this.setAttribute("open", "");
+    });
+    const config = { skills: { entries: { "repo-skill": { apiKey } } } };
+    renderView(container, {
+      detailKey: "repo-skill",
+      edits: { "repo-skill": "typed-not-real" },
+      apiKeyConfig: {
+        snapshot: () =>
+          name === "unknown"
+            ? null
+            : { valid: true, parsed: config, config, raw: JSON.stringify(config) },
+        error: () => null,
+        retry: () => undefined,
+      },
+    });
+    await getRenderedModalDialog(container);
+    expect(normalizeText(container)).toContain(expected);
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
+      disabled,
+    );
+    const save = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => normalizeText(button) === "Save key",
+    );
+    expect(save?.disabled).toBe(disabled);
+  });
+
   it("preserves retained group identity and restores removed groups when filtering", async () => {
     const container = createContainer();
     const report = skillReport([

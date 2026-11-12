@@ -138,8 +138,15 @@ function contextWithClient(
     settingsAgentSelection: createSelection(),
     channels: { subscribe },
     runtimeConfig: {
-      state: { configSnapshot: {}, configLoading: false },
+      state: {
+        client,
+        connected: options.connected ?? false,
+        configSnapshot: {},
+        configLoading: false,
+        lastError: null,
+      },
       ensureLoaded: vi.fn(async () => undefined),
+      refresh: vi.fn(async () => undefined),
       subscribe,
     },
     overlays: {

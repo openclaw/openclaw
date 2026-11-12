@@ -199,6 +199,14 @@ export function resolveEditableSnapshotConfig(
   );
 }
 
+/** Stored provenance never comes from a draft, bootstrap data, or a retired connection. */
+export function currentStoredConfigSnapshot(state: RuntimeConfigState): ConfigSnapshot | null {
+  if (!state.connected || state.configLoading || state.lastError || staleConfigSnapshots.has(state)) {
+    return null;
+  }
+  return state.configSnapshot;
+}
+
 export function currentConfigObject(
   state: Pick<RuntimeConfigState, "configForm" | "configSnapshot">,
 ): Record<string, unknown> | null {

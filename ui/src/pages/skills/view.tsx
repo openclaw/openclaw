@@ -25,6 +25,7 @@ import {
   computeSkillReasons,
   isSkillAvailable,
 } from "../../lib/skills-shared.ts";
+import { storedSkillApiKeySource } from "../../lib/skills/api-key-source.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { LitContent } from "../../lit/solid-bridge.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
@@ -264,6 +265,22 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
     resolveSafeExternalUrl(props.skill.homepage ?? "", window.location.href),
   );
   const editValue = createMemo(() => props.view.state.skillEdits[props.skill.skillKey] ?? "");
+  const keySource = createMemo(() =>
+    storedSkillApiKeySource(props.view.apiKeyConfig.snapshot(), props.skill.skillKey),
+  );
+  const keyLocked = () => keySource() !== null && keySource()?.kind !== "literal";
+  const keySourceLabel = () => {
+    const source = keySource();
+    return source === undefined
+      ? t("skillsPage.apiKeySourceUnknown")
+      : source === null
+        ? t("skillsPage.apiKeyUnset")
+        : source.kind === "literal"
+          ? t("skillsPage.apiKeyLiteral")
+          : source.kind === "environment"
+            ? t("skillsPage.apiKeyFromEnvironment", { name: source.name })
+            : t("skillsPage.apiKeyFromSecretRef");
+  };
   const message = createMemo(() => props.view.state.skillMessages[props.skill.skillKey] ?? null);
   const installOption = createMemo(() => {
     const missingBins = new Set([...props.skill.missing.bins, ...props.skill.missing.anyBins]);
@@ -409,13 +426,28 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
               <input
                 type="password"
                 required
-                disabled={updateLocked()}
+                disabled={updateLocked() || keyLocked()}
                 value={editValue()}
                 onInput={(event) =>
                   props.view.onEdit(props.skill.skillKey, event.currentTarget.value)
                 }
               />
             </label>
+            <div class="muted">{keySourceLabel()}</div>
+            <Show when={keySource() === undefined && props.view.apiKeyConfig.error()}>
+              {(error) => (
+                <div class="callout danger" role="alert">
+                  {t("skillsPage.apiKeyConfigError", { error: formatUiExternalText(error()) })}
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    onClick={() => props.view.apiKeyConfig.retry()}
+                  >
+                    {t("skillsPage.retry")}
+                  </button>
+                </div>
+              )}
+            </Show>
             <Show when={homepageHref()}>
               {(href) => (
                 <div class="muted" style={{ "font-size": "13px" }}>
@@ -428,7 +460,7 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
             </Show>
             <button
               class="btn primary"
-              disabled={updateLocked() || !editValue().trim()}
+              disabled={updateLocked() || keyLocked() || !editValue().trim()}
               onClick={() => props.view.onSaveKey(props.skill.skillKey)}
             >
               {t("skillsPage.saveKey")}

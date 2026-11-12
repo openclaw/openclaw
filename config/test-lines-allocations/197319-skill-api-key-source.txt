@@ -1,0 +1,4 @@
+# Release-specific #197319: Gateway-redacted provenance, real config-writer admission,
+# inline Skills source states and retry/draft preservation. Shared fixture extracted
+# without duplicating the existing Skills tests; exact net test/support growth.
+393

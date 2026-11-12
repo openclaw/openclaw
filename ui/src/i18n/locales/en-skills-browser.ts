@@ -42,6 +42,17 @@ const catalog = {
     apiKey: "API key",
     getKey: "Get your key:",
     saveKey: "Save key",
+    apiKeyUnset: "No API key stored. Save a key to openclaw.json.",
+    apiKeyLiteral: "Stored in openclaw.json.",
+    apiKeySourceUnknown:
+      "Key source unknown. No key will be saved until the configuration can be read.",
+    apiKeyFromEnvironment:
+      "From environment · {name}. Change it at its source; no key will be saved here.",
+    apiKeyFromSecretRef:
+      "Set by a reference or an unverified source. Change it in the config file; no key will be saved here.",
+    apiKeyConfigError:
+      "Couldn't read the configuration, so this key's source is unknown: {error}",
+    retry: "Retry",
     source: "Source:",
     refreshing: "Refreshing…",
     fullSecurityReport: "Full security report",

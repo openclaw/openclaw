@@ -3,8 +3,10 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SkillStatusEntry } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -12,7 +14,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { SkillsPage, type SkillsRouteData } from "./skills-page.tsx";
-import { createSkill } from "./view.test-support.ts";
+import { createDialogMethodInstaller, createSkill } from "./view.test-support.ts";
 
 const personalLibrary = {
   entries: [],
@@ -34,6 +36,7 @@ const remoteSkill = {
 function mountSkills(
   request: (method: string, params?: unknown) => Promise<unknown>,
   surface: "discovery" | "settings" = "discovery",
+  skills: SkillStatusEntry[] = [],
 ) {
   const client = { request } as unknown as GatewayBrowserClient;
   const connection = createApplicationGateway({
@@ -58,9 +61,12 @@ function mountSkills(
     ensureList: vi.fn(async () => agentsList),
     subscribe: () => () => undefined,
   } as unknown as ApplicationContext["agents"];
+  const runtimeConfig = createRuntimeConfigCapability(connection.gateway);
+  disposals.push(() => runtimeConfig.dispose());
   const context = {
     basePath: "",
     gateway: connection.gateway,
+    runtimeConfig,
     agents,
     agentSelection: createAgentSelectionCapability(connection.gateway, agents),
     settingsAgentSelection: createAgentSelectionCapability(
@@ -80,7 +86,7 @@ function mountSkills(
     agents,
     selectedAgentId: "main",
     selectionIntentRevision: selection.intentRevision,
-    report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills: [] },
+    report: { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills },
     error: null,
   };
   const [routeData, setRouteData] = createSignal(initialRouteData, { ownedWrite: true });
@@ -103,12 +109,63 @@ function mountSkills(
   };
 }
 
+const disposals: Array<() => void> = [];
+
 afterEach(() => {
+  for (const dispose of disposals.splice(0)) {
+    dispose();
+  }
   cleanupSolid();
   document.body.replaceChildren();
 });
 
 describe("Skills discovery lifecycle", () => {
+  it("loads key provenance on detail open and preserves a dirty draft when retrying a denied read", async () => {
+    const initialRead = deferred<unknown>();
+    let reads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.list") {
+        return { ...personalLibrary, defaultTarget: "workspace" };
+      }
+      if (method === "config.get") {
+        if (++reads === 1) {
+          return initialRead.promise;
+        }
+        return { valid: true, parsed: {}, config: {}, raw: "{}", hash: "fixture" };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    createDialogMethodInstaller(disposals)("showModal", function () {
+      this.setAttribute("open", "");
+    });
+    const { page, context } = mountSkills(request, "settings", [createSkill()]);
+    await waitForFast(() =>
+      expect(page.querySelector(".plugins-item__detail-button")).not.toBeNull(),
+    );
+    expect(reads).toBe(0);
+    page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+    await waitForFast(() => expect(reads).toBe(1));
+    await waitForFast(() =>
+      expect(page.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(true),
+    );
+    initialRead.reject(new Error("config.get denied"));
+    await waitForFast(() => expect(page.textContent).toContain("config.get denied"));
+    const draft = '{"unrelated":"keep this draft"}';
+    context.runtimeConfig.setRaw(draft);
+    const retry = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(retry).toBeDefined();
+    retry!.click();
+    await waitForFast(() =>
+      expect(page.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(false),
+    );
+    expect(reads).toBe(2);
+    expect(context.runtimeConfig.state.configRaw).toBe(draft);
+    expect(context.runtimeConfig.state.configFormDirty).toBe(true);
+    expect(request.mock.calls.some(([method]) => method === "skills.update")).toBe(false);
+  });
+
   it("shows a settings heading with its four actions in one row below it", async () => {
     const { page } = mountSkills(
       async (method) => (method === "skills.library.list" ? personalLibrary : { skills: [] }),

@@ -4,13 +4,15 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { currentStoredConfigSnapshot } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
+import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { skillApiKeyReplaceable } from "../../lib/skills/api-key-source.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
@@ -172,6 +174,7 @@ class SkillsPageState {
       },
     });
     const agents = projectAgents(context.agents);
+    const runtimeConfig = projectRuntimeConfig(context.runtimeConfig);
     const config = context.config ? projectApplicationConfig(context.config) : undefined;
     createEffect(
       () => agents.revision(),
@@ -182,6 +185,7 @@ class SkillsPageState {
       },
     );
     createEffect(() => config?.revision(), changed);
+    createEffect(() => runtimeConfig.revision(), changed);
     createEffect(
       () => this.agentSelection,
       (selection) => {
@@ -419,6 +423,12 @@ class SkillsPageState {
     }
   }
 
+  private currentKeySnapshot() {
+    this.revision();
+    const state = this.context.runtimeConfig.state;
+    return state.client === this.client ? currentStoredConfigSnapshot(state) : null;
+  }
+
   private canUpdateSkills(): boolean {
     return canCallGatewayMethod(this.gateway.snapshot, "skills.update", "operator.admin");
   }
@@ -530,9 +540,22 @@ class SkillsPageState {
                   updateSkillEdit(this.state, key, value);
                 }
               }}
+              apiKeyConfig={{
+                snapshot: () => this.currentKeySnapshot(),
+                error: () => {
+                  this.revision();
+                  return this.context.runtimeConfig.state.lastError;
+                },
+                retry: () => void this.context.runtimeConfig.refresh({ preservePendingChanges: true }),
+              }}
               onSaveKey={(key) => {
                 if (this.canUpdateSkills()) {
-                  void saveSkillApiKey(this.state, key, () => this.canUpdateSkills());
+                  void saveSkillApiKey(
+                    this.state,
+                    key,
+                    () => skillApiKeyReplaceable(this.currentKeySnapshot(), key),
+                    () => this.canUpdateSkills(),
+                  );
                 }
               }}
               onInstall={(skillKey, name, installId) => {
@@ -543,6 +566,7 @@ class SkillsPageState {
               onDetailOpen={(key) => {
                 this.state.skillsDetailKey = key;
                 this.state.skillsDetailTab = "overview";
+                void this.context.runtimeConfig.ensureLoaded();
               }}
               onDetailClose={() => (this.state.skillsDetailKey = null)}
               onDetailTabChange={(tab) => this.changeDetailTab(tab)}

@@ -92,6 +92,11 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     skillCardErrors: value("skillCardErrors", {}),
   };
   return {
+    apiKeyConfig: {
+      snapshot: () => ({ valid: true, parsed: {}, config: {} }),
+      error: () => null,
+      retry: () => undefined,
+    },
     canUpdate: true,
     canInstall: true,
     loading: state.skillsLoading,

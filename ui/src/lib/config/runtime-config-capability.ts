@@ -187,7 +187,7 @@ export function createRuntimeConfigCapability(
     },
     ensureLoaded,
     ensureSchemaLoaded,
-    refresh: async (options?: { background?: boolean }) => {
+    refresh: async (options?: { background?: boolean; preservePendingChanges?: boolean }) => {
       appliedRefresh.cancel();
       try {
         await run(() => loadConfig(state, { ...options, draftWrites: writes }), "config");

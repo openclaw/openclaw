@@ -154,6 +154,8 @@ export type ConfigSnapshot = {
   runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
   issues?: ConfigSnapshotIssue[] | null;
+  warnings?: ConfigSnapshotIssue[];
+  includedPaths?: string[];
 };
 
 export type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";

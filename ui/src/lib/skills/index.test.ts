@@ -8,7 +8,11 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
-import { createDeferredRequestQueue, type TestRequest } from "./index.test-support.ts";
+import {
+  createDeferredRequestQueue,
+  createSkillsState as createState,
+  type TestRequest,
+} from "./index.test-support.ts";
 import {
   clawhubVerdictKey,
   installFromClawHub,
@@ -25,73 +29,6 @@ import {
 } from "./index.ts";
 
 type SkillsState = Parameters<typeof loadSkills>[0];
-
-function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
-  const request = vi.fn<TestRequest>();
-  const state: SkillsState = {
-    client: {
-      request,
-    } as unknown as SkillsState["client"],
-    connected: true,
-    runtimeConfig: {
-      runExternalMutation: async (task) => {
-        try {
-          return {
-            ok: true,
-            value: await task(expectDefined(state.client, "connected skill mutation client")),
-            refresh: { ok: true },
-          };
-        } catch (error) {
-          return {
-            ok: false,
-            reason: "error",
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      },
-    },
-    skillsAgentId: "main",
-    skillsAgentRevision: 0,
-    skillsLoading: false,
-    skillsReport: null,
-    skillsError: null,
-    skillsFilter: "",
-    skillsStatusFilter: "all",
-    skillsDetailKey: null,
-    skillsDetailTab: "overview",
-    skillOperation: null,
-    skillEdits: {},
-    skillMessages: {},
-    clawhubSearchQuery: "github",
-    clawhubSearchResults: [
-      {
-        score: 0.9,
-        registry: "https://clawhub.ai",
-        slug: "github",
-        installRef: "@openclaw/github",
-        displayName: "GitHub",
-        summary: "Previous result",
-        version: "1.0.0",
-      },
-    ],
-    clawhubSearchLoading: false,
-    clawhubSearchError: "old error",
-    clawhubIconUrls: {},
-    clawhubDetail: null,
-    clawhubDetailRef: null,
-    clawhubDetailLoading: false,
-    clawhubDetailError: null,
-    clawhubInstallMessage: null,
-    clawhubVerdicts: {},
-    clawhubVerdictsLoading: false,
-    clawhubVerdictsError: null,
-    skillCardContents: {},
-    skillCardContentKeys: {},
-    skillCardLoadingKey: null,
-    skillCardErrors: {},
-  };
-  return { state, request };
-}
 
 function mockSkillMutationRequests(request: ReturnType<typeof vi.fn<TestRequest>>) {
   request.mockResolvedValue({});
@@ -702,7 +639,7 @@ describe("skill mutations", () => {
       name: "saves API keys and reports success",
       run: async (state: SkillsState) => {
         state.skillEdits.github = "  sk-test  ";
-        await saveSkillApiKey(state, "github");
+        await saveSkillApiKey(state, "github", () => true);
       },
       expectedRequest: ["skills.update", { skillKey: "github", apiKey: "sk-test" }],
       expectedMessage: "API key saved — stored in openclaw.json (skills.entries.github)",
@@ -729,7 +666,7 @@ describe("skill mutations", () => {
         state.skillEdits.github = editValue;
       }
 
-      await saveSkillApiKey(state, "github");
+      await saveSkillApiKey(state, "github", () => true);
 
       expect(request).not.toHaveBeenCalled();
       expect(state.skillMessages.github).toBeUndefined();
