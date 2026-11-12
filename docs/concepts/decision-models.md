@@ -50,6 +50,10 @@ Configure the provider plugin before selecting its model:
   Decisions endpoint. Configure a Celeris key; the model is not a chat model.
 - [Fastino](/providers/fastino) connects to hosted GLiDE. Its current hosted
   selector is unversioned; selecting it does not pin an evaluation checkpoint.
+- [Google](/providers/google#decision-models) uses the bundled `google` plugin
+  and the Gemini Decisions API. Configure a Gemini API key. Text/JSON and inline
+  image evidence use the native endpoint; evaluations send the supplied evidence
+  to Google and incur Gemini API usage charges.
 - [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
   Install the plugin candidate from a compatible development checkout and
   configure a Liquid AI API key. Text/JSON and inline image evidence use the
@@ -93,6 +97,7 @@ The current plugins declare these model references:
 | `baseten/decision-models/baseten-mammoth-27b-latest` | Mammoth 27B            | Baseten credential                                     |
 | `celeris/celeris-1.1-decision`                       | Celeris-1.1 Decision   | Celeris credential                                     |
 | `fastino/fastino/GLiDE`                              | GLiDE (hosted)         | Fastino credential; unversioned hosted selector        |
+| `google/gemini-decision-1`                           | Gemini Decision 1      | Gemini API key                                         |
 | `nace/drex-max-v1.1`                                 | Drex Max v1.1          | Nace credential and model access                       |
 | `onnx/deberta-v3-base-zeroshot-v2.0`                 | DeBERTa Zero-shot v2   | Download pinned ONNX artifacts                         |
 | `onnx/gliclass-base-v3.0`                            | GLiClass Base v3       | Download pinned ONNX artifacts                         |
@@ -427,7 +432,7 @@ identify the contract; `evaluate(batch, context)` returns validated typed answer
 or a supported unavailable reason. The context includes the selected model,
 optional agent ID, composed cancellation signal, monotonic deadline, and an optional
 host-owned `isAdmissible()` predicate for automatic consumers. External transports
-check that predicate at final synchronous I/O, after awaited preparation; see the
+check that predicate when the request starts; see the
 [provider contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
 
 Declare provider ownership and static model metadata in the plugin manifest:
