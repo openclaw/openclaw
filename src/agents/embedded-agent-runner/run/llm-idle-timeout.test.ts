@@ -252,7 +252,7 @@ describe("streamWithIdleTimeout", () => {
       notifyLlmRequestActivity(options?.signal, false);
       setTimeout(() => {
         stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
-      }, 120);
+      }, 90);
       return stream;
     });
     const wrapped = streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN });
@@ -264,9 +264,9 @@ describe("streamWithIdleTimeout", () => {
     const iterator = stream[Symbol.asyncIterator]();
     const next = iterator.next();
 
-    setTimeout(() => notifyToolActivity(TEST_RUN), 40);
-    setTimeout(() => notifyToolActivity(TEST_RUN), 80);
-    await vi.advanceTimersByTimeAsync(120);
+    setTimeout(() => notifyToolActivity(TEST_RUN), 30);
+    setTimeout(() => notifyToolActivity(TEST_RUN), 60);
+    await vi.advanceTimersByTimeAsync(90);
 
     await expect(next).resolves.toEqual({
       done: false,
@@ -274,6 +274,57 @@ describe("streamWithIdleTimeout", () => {
     });
     await iterator.return?.();
   });
+
+  it.each([false, true])(
+    "tool heartbeats do not reset model progress (yielded progress=%s)",
+    async (yielded) => {
+      vi.useFakeTimers();
+      const source = createAssistantMessageEventStream();
+      const onTimeout = vi.fn();
+      let requestSignal: AbortSignal | undefined;
+      const stream = await streamWithIdleTimeout(
+        (_model, _context, options) => {
+          requestSignal = options?.signal;
+          notifyLlmRequestActivity(requestSignal, false);
+          return source;
+        },
+        50,
+        onTimeout,
+        { runId: TEST_RUN },
+      )({} as Parameters<StreamFn>[0], { messages: [] });
+      const iterator = stream[Symbol.asyncIterator]();
+      let next = iterator.next().catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(40);
+        notifyToolActivity(TEST_RUN);
+        if (yielded) {
+          source.push({ type: "text_delta", contentIndex: 0, delta: "progress" });
+          await expect(next).resolves.toMatchObject({ done: false });
+          next = iterator.next().catch((error: unknown) => error);
+        }
+        await vi.advanceTimersByTimeAsync(40);
+        notifyToolActivity(TEST_RUN);
+        await vi.advanceTimersByTimeAsync(19);
+        expect(onTimeout).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        if (yielded) {
+          expect(onTimeout).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(20);
+          notifyToolActivity(TEST_RUN);
+          await vi.advanceTimersByTimeAsync(20);
+        }
+        expect(onTimeout).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: "LLM idle timeout (0s): no model progress" }),
+        );
+        expect(requestSignal?.aborted).toBe(true);
+        expect(await next).toBe(onTimeout.mock.calls[0]?.[0]);
+      } finally {
+        source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
+        await next;
+        await iterator.return?.();
+      }
+    },
+  );
 
   it("gives full idle budget to subsequent chunks after consuming the pre-stream tool timestamp", async () => {
     // A stale pre-stream timestamp must not shorten later chunk budgets.

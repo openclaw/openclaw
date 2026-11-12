@@ -514,7 +514,11 @@ async function runVmExecution(params: {
         const requiredPendingRequestIds = params.bridge.pendingRequests.map(
           (request) => request.id,
         );
-        if (promisePending || requiredPendingRequestIds.length > 0) {
+        // A rejected program cannot consume sibling replies; its owner cancels them.
+        if (
+          promisePending ||
+          (resultHandle.promiseState !== 2 && requiredPendingRequestIds.length > 0)
+        ) {
           // Native await does not expose Promise ownership. Every dispatched
           // call remains required, including detached calls and race branches.
           const settlementMode = promisePending

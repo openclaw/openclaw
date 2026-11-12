@@ -382,7 +382,7 @@ export function streamWithIdleTimeout(
           clearTimers();
           rejectIdleTimeout?.(error);
         };
-        const armTimer = (progress = true) => {
+        const armTimer = (progress = false) => {
           clearTimeout(idleTimer);
           if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
             clearTimers();
@@ -463,7 +463,7 @@ export function streamWithIdleTimeout(
               rejectIdleTimeout = undefined;
               // Native producer completion lets us safely police parked consumers.
               // Structural streams retain their pending-next-only guard.
-              armTimer();
+              armTimer(true);
               return result;
             } catch (error) {
               settle();

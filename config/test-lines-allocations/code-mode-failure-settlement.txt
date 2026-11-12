@@ -1,0 +1,2 @@
+103
+# Rejected Node/QuickJS cells settle despite held siblings; queued input resumes. Tool heartbeats do not reset progress; actual yielded progress does. Budgets unchanged.

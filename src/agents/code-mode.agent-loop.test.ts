@@ -8,7 +8,7 @@ import {
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -67,6 +67,8 @@ type RecoveryProgram = string | { wait: true; runId?: string };
 async function runCodeModeAgent(params: {
   programs: Array<RecoveryProgram | ((context: Context) => RecoveryProgram)>;
   hiddenTools: AnyAgentTool[];
+  executor?: "node" | "quickjs";
+  execInput?: Record<string, unknown>;
   harness?:
     | ReturnType<typeof createCodeModeHarness>
     | ReturnType<typeof createSubscribedCodeModeHarness>;
@@ -76,7 +78,11 @@ async function runCodeModeAgent(params: {
     harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
   ) => void;
 }) {
-  const harness = params.harness ?? createCodeModeHarness();
+  const harness =
+    params.harness ??
+    createCodeModeHarness({
+      codeMode: params.executor ? { executor: params.executor } : undefined,
+    });
   const { config, catalogRef } = harness;
   const ctx = "ctx" in harness ? harness.ctx : harness;
   const tools = params.abortSignal
@@ -111,7 +117,7 @@ async function runCodeModeAgent(params: {
                 name: waiting ? "wait" : "exec",
                 arguments: waiting
                   ? { runId: code.runId ?? readToolResultDetails(context.messages.at(-1))?.runId }
-                  : { title: "Run the recovery step", code },
+                  : { title: "Run the recovery step", code, ...params.execInput },
               },
             ],
       );
@@ -232,6 +238,52 @@ async function runParkedReadFailure() {
 }
 
 describe("Code Mode agent-loop error recovery", () => {
+  it.for(["node", "quickjs"] as const)(
+    "%s settles a rejected cell and drains queued input with an unresolved sibling",
+    async (executor, { signal }) => {
+      const started = createDeferred();
+      let enqueueFollowUp!: () => void;
+      const held = pluginToolWithExecute("held_action", "Held sibling", async (_id, _args, abort) => {
+        enqueueFollowUp();
+        started.resolve();
+        if (!abort) {
+          throw new Error("Expected bridge cancellation signal");
+        }
+        return await withinTest(createDeferred<never>().promise, abort);
+      });
+      const failing = pluginToolWithExecute("failing_action", "Rejected sibling", async () => {
+        await started.promise;
+        throw new Error("bridge unavailable");
+      });
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [held, failing],
+        executor,
+        programs: ["await Promise.all([held_action({}), failing_action({})]);"],
+        execInput: { awaitResults: true },
+        abortSignal: signal,
+        configureAgent: (loop) => {
+          enqueueFollowUp = () =>
+            loop.followUp({ role: "user", content: "queued follow-up", timestamp: Date.now() });
+        },
+      });
+      expect(agent.state.errorMessage).toBeUndefined();
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        details: { status: "failed", error: expect.stringContaining("bridge unavailable") },
+      });
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+      expect(
+        agent.state.messages.filter((message) => message.role === "assistant").slice(-2),
+      ).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
+      ]);
+      expect(held.execute).toHaveBeenCalledOnce();
+      expect(failing.execute).toHaveBeenCalledOnce();
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
   it("recovers from a sole wait on a shell session without relaunching", async ({
     onTestFinished,
   }) => {

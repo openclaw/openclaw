@@ -283,6 +283,8 @@ For Chat Completions streams, repeated or decreasing usage snapshots keep the
 connection active but do not reset the model-progress deadline. Only advancing
 prompt, completion, total, or reasoning token counts count as usage progress;
 changing billing metadata does not keep a stalled request alive.
+Tool activity and periodic tool heartbeats can keep the connection active, but
+they do not reset the model-progress deadline while a model stream remains open.
 
 The built-in OpenClaw harness publishes the current model attempt's execution
 deadline to the queue. When an attempt times out, configured fallback can start
