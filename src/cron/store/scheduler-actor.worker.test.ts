@@ -90,7 +90,7 @@ function withinWorker<T>(run: () => T): T {
 
 function finishRun(
   storeKey: string,
-  launch: Pick<CronRunFinalizationOutcome, "job" | "runReceipt">,
+  launch: Required<Pick<CronRunFinalizationOutcome, "job" | "runReceipt">>,
   endedAt: number,
   outcome: Partial<CronRunFinalizationOutcome> = {},
 ) {
@@ -539,8 +539,8 @@ it("observes future deadlines without SQL wakes and retries an unacknowledged du
 });
 
 it.each([
-  { name: "on-time long deadline", due: 10, elapsed: 10, accepted: 7 },
-  { name: "missed work after sleep", due: 1, elapsed: 60, accepted: 5 },
+  { name: "on-time long deadline", due: 10, elapsed: 10, skip: undefined, accepted: 7 },
+  { name: "missed work after sleep", due: 1, elapsed: 60, skip: undefined, accepted: 5 },
   { name: "a late wake", due: 1, elapsed: 1.05, skip: "late", accepted: 5 },
   { name: "a clock jump", due: 1, elapsed: 1.05, skip: "jump", accepted: 0 },
   { name: "a refreshed clock jump", due: 1, elapsed: 1.05, skip: "refreshed jump", accepted: 0 },
