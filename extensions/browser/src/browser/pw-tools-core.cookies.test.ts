@@ -6,7 +6,8 @@ const fixture = vi.hoisted(() => ({
   send: vi.fn(),
   detach: vi.fn(async () => {}),
 }));
-vi.mock("./pw-session.js", () => ({
+vi.mock("./pw-session.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-session.js")>()),
   getPageForTargetId: vi.fn(async () => ({
     context: () => ({
       cookies: fixture.cookies,
