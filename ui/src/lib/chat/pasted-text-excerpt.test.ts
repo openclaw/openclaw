@@ -9,6 +9,8 @@ describe("derivePastedTextExcerpt", () => {
       "Hello world & friends",
     ],
     ["HTML breaks", "one<br>two", "one two"],
+    ["inline math", "Solve $x^2$ today", "Solve x^2 today"],
+    ["display math", "$$\nx^2\n$$", "x^2"],
     ["inert HTML", "<script>hidden()</script><style>.hidden {}</style><p>Visible</p>", "Visible"],
     ["headings and emphasis", "# **Heading**\n_italic_ ~~old~~", "Heading italic old"],
     ["links and images", "[Guide](https://example.com) ![logo](image.png)", "Guide logo"],
