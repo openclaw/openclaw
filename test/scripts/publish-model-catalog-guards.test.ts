@@ -261,19 +261,20 @@ describe("task facts", () => {
     const v3 = await assembleVersionedModelCatalogBundle(v1, new WeakMap(), undefined, [], {}, 3);
     const { models } = catalog.parseRemoteModelCatalogBundleV3(v3);
     const hosted = new Set(models.flatMap((m) => (m.inference?.decision ? [m.provider] : [])));
-    // Gateways take runtime/refreshable providers' rows from live listing, never the hosted feed.
+    // Runtime/refreshable providers (Levanto too, out of scope) list live, never from hosted rows.
+    // ONNX presets are local artifacts, Rerank has no fixed list, SubQ retired its only model.
+    const exempt = new Set(["onnx", "rerank", "subq"]);
     const unhosted = manifests.flatMap(({ manifestPath }) => {
       const loaded = loadPluginManifest(path.dirname(manifestPath));
       if (!loaded.ok) {
         throw new Error(loaded.error);
       }
-      return (loaded.manifest.contracts?.decisionProviders ?? []).filter((provider) => {
-        const discovery = loaded.manifest.modelCatalog?.discovery?.[provider];
-        return !hosted.has(provider) || discovery === "runtime" || discovery === "refreshable";
-      });
+      const { contracts, modelCatalog } = loaded.manifest;
+      return (contracts?.decisionProviders ?? []).filter(
+        (id) => !modelCatalog?.discovery?.[id] && !exempt.has(id) && !hosted.has(id),
+      );
     });
-    // Five list at runtime; ONNX is local, Rerank has no fixed list, SubQ retired its only model.
-    expect(String(unhosted)).toBe("baseten,clawrouter,levanto,onnx,openai,openrouter,rerank,subq");
+    expect(unhosted).toEqual([]);
   });
 
   it("does not use native-only rows to satisfy the released chat catalog floor", async () => {
