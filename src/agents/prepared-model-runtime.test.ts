@@ -12,7 +12,11 @@ import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
-import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import {
+  getPreparedModelRuntimeAuthStore,
+  setPreparedModelFullCatalogAuth,
+} from "./prepared-model-runtime-auth.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquireRun,
@@ -167,6 +171,62 @@ describe("prepared model runtime snapshots", () => {
     expect(lease.snapshot.pluginRegistry?.agentHarnesses.map((entry) => entry.harness.id)).toEqual([
       "codex",
     ]);
+  });
+
+  it("captures the configured agent's published catalog for a read-only setup probe", async () => {
+    mocks.configuredAgentIds = ["pro"];
+    mocks.preparedAuthStore = { version: 1, profiles: {} };
+    const config = { agents: { entries: { pro: {} } } } as unknown as OpenClawConfig;
+    const catalog = {
+      entries: [
+        {
+          provider: "openai",
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          api: "openai-chatgpt-responses",
+          authMode: "oauth",
+        },
+      ],
+      routeVariants: [
+        {
+          provider: "openai",
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          api: "openai-chatgpt-responses",
+          authMode: "oauth",
+        },
+      ],
+    };
+    setPreparedModelFullCatalogAuth(catalog, {
+      authStore: mocks.preparedAuthStore,
+      credentials: mocks.authStorage.getAll(),
+      authModes: { openai: "oauth" },
+      providerAuthLabels: new Map(),
+    });
+    mocks.runPreparedModelCatalogWorker.mockResolvedValue(catalog);
+    await refresh(config, {
+      gatewayLifecycle: true,
+      catalogMode: "static",
+      allowGatewaySubagentBinding: true,
+    });
+    // Materialize the configured agent's published catalog rows before the probe runs.
+    await readSnapshot({
+      config,
+      agentId: "pro",
+      agentDir: fixture.state.agentDir("pro"),
+    })!.loadFullModelCatalog!({ refresh: true });
+    const input = inputFor("pro", config, {
+      agentId: "pro",
+      workspaceDir: "/tmp/setup-probe-scratch",
+      inheritedAuthDir: fixture.state.agentDir("default"),
+    });
+    await using lease = await acquireReadOnly(input);
+    // The read-only setup probe keeps its own execution owner...
+    expect(lease.snapshot.workspaceDir).toBe("/tmp/setup-probe-scratch");
+    // ...but captures the configured agent's published catalog (the OAuth subscription rows).
+    const captured = readCapturedPreparedModelRuntimeCatalog(lease.snapshot);
+    const entries = (captured ?? lease.snapshot.modelCatalog)?.entries ?? [];
+    expect(entries.map(({ provider, id }) => `${provider}/${id}`)).toContain("openai/gpt-5.5");
   });
 
   it("never returns a standalone generation invalidated while it is building", async () => {
