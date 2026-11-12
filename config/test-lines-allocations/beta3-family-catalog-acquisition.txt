@@ -1,0 +1,3 @@
+# Retain the real requester-family E2E while explicitly acquiring its catalog
+# through the Gateway owner before invoking the passive plugin reader.
+1

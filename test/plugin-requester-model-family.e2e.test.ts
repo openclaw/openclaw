@@ -136,6 +136,8 @@ it(
           },
           { expectFinal: true, timeoutMs: 120_000 },
         );
+        // The plugin reader is passive; the Gateway catalog owner must acquire inventory first.
+        await client.request("models.list", { sessionKey: SESSION_KEY });
         const readCatalog = async () => {
           const runId = randomUUID();
           await client.request("chat.send", {
@@ -166,7 +168,6 @@ it(
             extractFirstTextBlock(message) ?? "null",
           ) as PluginRequesterModelCatalog;
         };
-        // Read until the prepared inventory is published for the requester's session.
         let catalog: PluginRequesterModelCatalog | undefined;
         await vi.waitFor(
           async () => {
