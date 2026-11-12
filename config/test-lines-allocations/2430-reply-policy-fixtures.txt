@@ -1,0 +1,2 @@
+# Net fixture growth: explicit internal provenance and reply payloads preserve existing assertions after the WebChat silence policy change.
+7
