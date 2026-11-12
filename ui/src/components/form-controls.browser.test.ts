@@ -37,7 +37,10 @@ function readUiCss(): string {
     "chat/sidebar-panels",
     "plugins",
   ];
-  return files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)).join("\n");
+  return [
+    ...files.map((file) => readStyleSheet(`ui/src/styles/${file}.css`)),
+    readStyleSheet("ui/src/pages/chat/components/chat-session-workspace-desktop.css"),
+  ].join("\n");
 }
 
 function readStyles(

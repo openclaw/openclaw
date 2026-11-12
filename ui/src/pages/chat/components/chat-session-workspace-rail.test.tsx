@@ -251,7 +251,10 @@ describe("session workspace path actions", () => {
     expect(state.sessionWorkspaceState?.previews[0]).toBe(opened);
     expect(opened.content.kind).toBe("file");
     expect(opened.pinned).toBe(true);
-    expect(opened.catalogNavigation).toBeUndefined();
+    expect(opened.catalogNavigation).toEqual(
+      captureSessionWorkspaceNavigation(getSessionWorkspace(state)),
+    );
+    expect(opened.catalogVisible).toBeUndefined();
     expect(state.sessions.getFile).toHaveBeenCalledOnce();
     renderRows();
     expect(container.querySelector(".workspace-desktop__row.is-active")?.textContent).toContain(
