@@ -160,7 +160,8 @@ const emptyManifest: TemplateManifest = {
   schemaVersion: 1,
   agent: { id: "research-briefing", name: "Research Briefing" },
   workspace: { bootstrapFiles: {}, files: [] },
-  packages: [],
+  skills: [],
+  plugins: [],
   mcpServers: {},
   automations: [],
 };
@@ -206,10 +207,17 @@ async function useRealTrust(security = matchingSecurity) {
   mocks.security.mockResolvedValue(security);
 }
 
-async function prepareResolverFixture(packages: TemplateManifest["packages"] = []) {
+async function prepareResolverFixture(
+  packages: Array<{
+    kind: "skill" | "plugin";
+    source: "clawhub";
+    ref: string;
+    version: string;
+  }> = [],
+) {
   await fs.writeFile(
     path.join(fixtureRoot, "CLAW.md"),
-    `---\n${JSON.stringify({ ...emptyManifest, packages })}\n---\n`,
+    `---\n${JSON.stringify({ ...emptyManifest, skills: packages.filter((pkg) => pkg.kind === "skill").map((entry) => ({ ref: entry.ref, version: entry.version })), plugins: packages.filter((pkg) => pkg.kind === "plugin").map((entry) => ({ ref: entry.ref, version: entry.version })) })}\n---\n`,
   );
   return { stateDir: fixtureStateDir };
 }
@@ -232,15 +240,14 @@ beforeEach(async () => {
       bootstrapFiles: { "SOUL.md": { source: "SOUL.md" } },
       files: [{ source: "USER.md", path: "USER.md" }],
     },
-    packages: [
-      { kind: "skill", source: "clawhub", ref: "@openclaw/citation-check", version: "1.1.0" },
-      { kind: "plugin", source: "clawhub", ref: "@openclaw/source-plugin", version: "2.0.0" },
-    ],
+    skills: [{ ref: "@openclaw/citation-check", version: "1.1.0" }],
+    plugins: [{ ref: "@openclaw/source-plugin", version: "2.0.0" }],
     mcpServers: { sources: { command: "source-tool" } },
     automations: [
       {
         id: "daily-briefing",
         name: "Daily briefing",
+        enabled: false,
         schedule: { cron: "0 9 * * *", timezone: "UTC" },
         session: "isolated",
         message: "Prepare the briefing",
@@ -426,8 +433,43 @@ describe("public ClawHub Template catalog", () => {
       plugins: 1,
       mcpServers: 1,
       scheduledJobs: 1,
-      contents: { skills: [{ excerpt: "Citation check" }] },
+      contents: {
+        skills: [{ excerpt: "Citation check" }],
+        automations: [{ name: "Daily briefing", enabled: false }],
+      },
     });
+  });
+
+  it("discloses and previews bundled skills only from the verified artifact", async () => {
+    const skill = path.join(fixtureRoot, "skills", "local-checklist");
+    await fs.mkdir(skill, { recursive: true });
+    const content =
+      "---\nname: local-checklist\ndescription: Follow the local checklist.\n---\n# Local checklist\nRead references/checklist.bin.\n";
+    await fs.writeFile(path.join(skill, "SKILL.md"), content);
+    await fs.mkdir(path.join(skill, "references"));
+    await fs.writeFile(path.join(skill, "references", "checklist.bin"), Buffer.from([0, 255, 128]));
+    await fs.mkdir(path.join(fixtureRoot, "undeclared"));
+    await fs.writeFile(
+      path.join(fixtureRoot, "undeclared", "SKILL.md"),
+      "---\nname: undeclared\ndescription: Not a dependency.\n---\n",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      `---\n${JSON.stringify({ ...emptyManifest, skills: [{ path: "skills/local-checklist" }] })}\n---\n`,
+    );
+    const detail = await readClawHubTemplateDetail({ packageName });
+    expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    expect(detail.skills).toBe(1);
+    expect(detail.contents.skills).toEqual([
+      {
+        name: "local-checklist",
+        source: "bundled",
+        path: "skills/local-checklist",
+        excerpt: "Local checklist Read references/checklist.bin.",
+      },
+    ]);
+    await expectPreview("skill", "local-checklist", content);
+    expect(mocks.skillCard).not.toHaveBeenCalled();
   });
 
   it("keeps the detail available when a skill card cannot be fetched", async () => {

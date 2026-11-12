@@ -171,7 +171,8 @@ export async function prepareLocalWorkspaceCheckout(params: {
       // Template metadata is host-owned; every imported object lives in a pack.
       phases.mark(`${RECONCILE_PHASE}.checkout.repack`);
       await git(["reflog", "expire", "--expire=all", "--all"]);
-      await git(["repack", "-ad"]);
+      // Reuse compressed objects without searching the entire snapshot for new deltas.
+      await git(["repack", "-ad", "--window=0"]);
       current();
       await fs.writeFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n");
     }

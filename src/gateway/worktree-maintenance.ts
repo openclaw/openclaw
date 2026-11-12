@@ -345,6 +345,30 @@ export function startWorktreeMaintenance(params: {
     },
   };
   owners.set(params.getRuntimeConfig, owner);
+  // Cleanup can wait hours for paced removals or host pressure. Git owns its own
+  // lease, hourly deadline, and bounded backlog policy independently of that sweep.
+  scheduler.schedule({
+    id: "maintenance:worktrees:git",
+    delayMs: PRESSURE_BACKOFF_MS,
+    everyMs: PRESSURE_BACKOFF_MS,
+    phase: "maintenance",
+    run: () =>
+      runWithGatewayIndependentRootWorkAdmission(
+        async () => {
+          await previousDrain;
+          assertActive();
+          await managedWorktrees.maintainGit({
+            signal: scheduler.signal,
+            commitGuard: assertActive,
+            checkBacklog: true,
+          });
+        },
+        "runtime:worktree-git-maintenance",
+        scheduler.signal,
+      ).catch((error: unknown) =>
+        params.onError(`Worktree Git maintenance failed: ${String(error)}`),
+      ),
+  });
   scheduler.schedule({
     id: "maintenance:worktrees",
     delayMs: WORKTREE_GC_INTERVAL_MS,

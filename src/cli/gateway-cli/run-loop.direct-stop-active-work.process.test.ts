@@ -80,11 +80,11 @@ const childScript = `
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 
-posixIt.for(["SIGTERM", "SIGUSR2", "sticky-SIGTERM"] as const)(
-  "terminates with retained child cleanup after %s without reusing the runtime",
+posixIt.for(["SIGTERM", "SIGUSR2", "historical-SIGTERM"] as const)(
+  "settles child cleanup custody after %s without reusing the runtime",
   { timeout: 60_000 },
   async (stopSignal, { signal }) => {
-    const sticky = stopSignal === "sticky-SIGTERM";
+    const historical = stopSignal === "historical-SIGTERM";
     const fixtureDir = fixtures.make("openclaw-retained-shutdown-");
     const stateDir = path.join(fixtureDir, "state");
     const homeDir = path.join(fixtureDir, "home");
@@ -100,7 +100,7 @@ posixIt.for(["SIGTERM", "SIGUSR2", "sticky-SIGTERM"] as const)(
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_NO_RESPAWN: "1",
       VITEST: undefined,
-      ...(sticky
+      ...(historical
         ? {
             ESBUILD_BINARY_PATH: createRequire(import.meta.resolve("esbuild")).resolve(
               `@esbuild/${process.platform}-${process.arch}/bin/esbuild`,
@@ -113,8 +113,8 @@ posixIt.for(["SIGTERM", "SIGUSR2", "sticky-SIGTERM"] as const)(
       await closeOpenClawStateDatabaseByPathAsync(database.path);
     }
     const child = spawn(
-      sticky ? resolveTestNodeExecPath() : process.execPath,
-      sticky
+      historical ? resolveTestNodeExecPath() : process.execPath,
+      historical
         ? [
             "--import",
             "tsx",
@@ -135,7 +135,7 @@ posixIt.for(["SIGTERM", "SIGUSR2", "sticky-SIGTERM"] as const)(
     });
     await waitForFixture(ready.promise, tracked, signal);
     const stoppedAt = Date.now();
-    expect(child.kill(sticky ? "SIGTERM" : stopSignal)).toBe(true);
+    expect(child.kill(historical ? "SIGTERM" : stopSignal)).toBe(true);
     const exit = await withinTest(tracked.closed, signal).catch((cause: unknown) => {
       throw new Error(formatCliProcessFailure({ reason: String(cause), ...tracked.output }), {
         cause,
@@ -148,21 +148,22 @@ posixIt.for(["SIGTERM", "SIGUSR2", "sticky-SIGTERM"] as const)(
     }
     expect(Date.now() - stoppedAt, diagnostics).toBeLessThan(10_000);
     expect(tracked.output.stdout).toContain("process proof: service-child-cleanup-deadline");
-    expect(tracked.output.stdout).toContain("process proof: custody:retained");
+    expect(tracked.output.stdout.match(/process proof: custody:\w+/g), diagnostics).toEqual([
+      `process proof: custody:${historical ? "drained" : "retained"}`,
+    ]);
     expect(tracked.output.stdout).not.toContain("process proof: start:2");
-    if (sticky) {
+    if (historical) {
       expect(diagnostics).not.toMatch(
-        /hard-exit watchdog deadline|gateway\.(?:restart|stop)_close_failed/,
+        /hard-exit watchdog deadline|gateway\.(?:restart|stop)_close_failed|; resources remain/,
       );
       const broker = /spawn broker ready pid=(\d+)/.exec(diagnostics);
       expect(broker, diagnostics).not.toBeNull();
       expect(() => process.kill(Number(broker![1]), 0)).toThrow();
       const warnings = diagnostics
         .split("\n")
-        .filter((line) => line.includes("; resources remain"));
+        .filter((line) => line.includes("Earlier cleanup failed:"));
       expect(warnings, diagnostics).toHaveLength(1);
-      expect(warnings[0]).toMatch(/generation.*relayPid.*commandPid/);
-      expect(warnings[0]).toContain("hard deadline");
+      expect(warnings[0]).toMatch(/service child cleanup.*hard deadline; pending:/);
     }
     if (stopSignal === "SIGUSR2") {
       expect(diagnostics).toContain("refusing in-process restart");

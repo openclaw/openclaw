@@ -216,13 +216,155 @@ EOF
       # A path consumes the marker too; a valid revision leaves it as the last ID.
       [ "\${resolved##*
 }" = "$revision_marker" ] ;;
-    fetch)
-      GIT_NO_LAZY_FETCH=1 git "$@" -c fetch.negotiationAlgorithm=consecutive fetch --filter=blob:none --no-tags --no-write-fetch-head --no-auto-maintenance --recurse-submodules=no origin --stdin <<EOF
+    fetch|fetch_blobs)
+      negotiation=consecutive
+      # A have commit implies its blobs exist. For known missing blobs that can
+      # suppress explicit wants; blob-only roots need no history negotiation.
+      [ "$query" != fetch_blobs ] || negotiation=noop
+      GIT_NO_LAZY_FETCH=1 git "$@" -c fetch.negotiationAlgorithm=$negotiation fetch --quiet --filter=blob:none --no-tags --no-write-fetch-head --no-auto-maintenance --recurse-submodules=no origin --stdin <<EOF
 $missing
 EOF
       ;;
+    history_blobs)
+      # Raw changes include both sides of range/limit boundaries without opening blobs.
+      [ "$blob_literal" != 1 ] || set -- "$@" --no-literal-pathspecs
+      set -- "$@" log
+      while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
+$blob_args
+EOF
+      set -- "$@" --format= -m --no-patch --raw --no-abbrev --no-renames --no-ext-diff --no-textconv --color=never --
+      while IFS= read -r arg; do [ -z "$arg" ] || set -- "$@" "$arg"; done <<EOF
+$blob_paths
+EOF
+      { GIT_NO_LAZY_FETCH=1 GIT_ALLOW_PROTOCOL= git "$@" 2>/dev/null && echo complete; } | LC_ALL=C awk '
+        function add(oid, mode) {
+          if (mode == "160000" || oid ~ /^0+$/ || seen[oid]++) return
+          if (++count > 2048 || (bytes += length(oid) + 1) > 131072) exit
+        }
+        { if ((scanned += length($0) + 1) > 8388608) exit }
+        /^:[0-7]+ [0-7]+ [0-9a-f]+ [0-9a-f]+ / {
+          add($3, substr($1, 2)); add($4, $2)
+        }
+        /^complete$/ { complete=1 }
+        END { if (!complete) print "skip"; else for (oid in seen) print oid }
+      '
+      ;;
   esac
 }
+blob_arguments() {
+  blob_args=
+  blob_paths=
+  blob_literal=
+  blob_expression=
+  blob_patch=
+  blob_separator=
+  shift "$global_count"
+  blob_verb=$1; shift
+  case $blob_verb in
+    show)
+      # A path-history batch also serves repeated show rev:path reads from loops.
+      [ "$#" = 1 ] || return 1
+      case $1 in -*|:*) return 1 ;; *:*) ;; *) return 1 ;; esac
+      blob_expression=$1
+      blob_args="HEAD
+\${1%%:*}"
+      blob_paths=\${1#*:}
+      case $blob_paths in
+        ./*|../*) blob_paths=":(literal)$blob_paths" ;;
+        *) blob_paths=":(top,literal)$blob_paths" ;;
+      esac
+      blob_literal=1
+      return 0 ;;
+    blame) blob_patch=1 ;;
+    log) ;;
+    *) return 1 ;;
+  esac
+  while [ "$#" -gt 0 ]; do
+    arg=$1; shift
+    if [ "$blob_separator" = 1 ]; then
+      blob_paths="$blob_paths$arg
+"
+      continue
+    fi
+    if [ "$blob_verb" = blame ]; then
+      case $arg in --porcelain|--line-porcelain|--incremental|--show-name|--show-number|--show-email|-p|-t|-l|-s|-n|-f|-e) continue ;; esac
+    fi
+    case $arg in
+      --) blob_separator=1; continue ;;
+      -p|--patch|--stat|--stat=*|--numstat|--patch-with-stat) blob_patch=1; continue ;;
+      --no-patch|-s) blob_patch=; continue ;;
+      --format=*|--pretty=*|--oneline|--color=*|--no-color) continue ;;
+      -n|--max-count|--skip|--since|--until|--after|--before)
+        [ "$blob_verb" = log ] && [ "$#" -gt 0 ] || return 1
+        blob_args="$blob_args$arg
+$1
+"; shift; continue ;;
+      -L)
+        [ "$blob_verb" = blame ] && [ "$#" -gt 0 ] || return 1
+        shift; continue ;;
+      --max-count=*|--skip=*|--since=*|--until=*|--after=*|--before=*|--first-parent|--all|--branches|--tags|--remotes|--not|--reverse|--no-merges|--merges|-[0-9]*)
+        [ "$blob_verb" = log ] || return 1 ;;
+      -*) return 1 ;;
+    esac
+    if [ "$blob_verb" = blame ] && [ "$#" = 0 ]; then
+      blob_paths=$arg
+    else
+      blob_args="$blob_args$arg
+"
+    fi
+  done
+  [ "$blob_patch" = 1 ] || return 1
+  [ -n "$blob_paths" ]
+}
+prepare_blobs() (
+  [ "$no_lazy_fetch" != 1 ] || return 0
+  case \${GIT_NO_LAZY_FETCH:-} in 1|true|yes|on) return 0 ;; esac
+  # This portable shell helper uses line-delimited arguments and object IDs.
+  for arg do case $arg in *'
+'*) return 0 ;; esac; done
+  blob_arguments "$@" || return 0
+  if [ -n "$blob_expression" ]; then
+    object=$(query_repository objects "$@" <<EOF
+$blob_expression
+EOF
+    )
+    case $object in *' missing') ;; *) return 0 ;; esac
+  fi
+  query_repository blobless "$@" || return 0
+  candidates=$(query_repository history_blobs "$@")
+  case $candidates in ''|skip) return 0 ;; esac
+  missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
+$candidates
+EOF
+  )
+  [ -n "$missing" ] || return 0
+  query_repository shared "$@" || return 0
+  # Serialize across linked worktrees, then inspect the objects under the lock:
+  # overlapping callers fetch only the part not already supplied by the leader.
+  lock=$common/openclaw-history-blobs.lock
+  attempts=0
+  until mkdir "$lock" 2>/dev/null; do
+    attempts=$((attempts + 1))
+    [ "$attempts" -lt 300 ] || return 0
+    # Reclaim a lock left by a killed shell. An ownerless lock is left alone;
+    # the bounded wait still lets the requested Git command proceed normally.
+    if read -r owner 2>/dev/null < "$lock/pid" && ! kill -0 "$owner" 2>/dev/null; then
+      rm -f "$lock/pid"
+      rmdir "$lock" 2>/dev/null && continue
+    fi
+    sleep 0.1
+  done
+  trap 'rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null' 0
+  trap 'exit 1' HUP INT TERM
+  echo $$ > "$lock/pid"
+  missing=$(query_repository objects "$@" <<EOF | awk '$2 == "missing" { print $1 }'
+$missing
+EOF
+  )
+  [ -n "$missing" ] || return 0
+  # Prefetch is best effort; unsupported shapes/oversized batches retain native hydration.
+  query_repository fetch_blobs "$@" 2>/dev/null || :
+)
 append_revision_roots() {
   arg=$1
   traverse=
@@ -358,7 +500,10 @@ fetch_defaults() {
   fi
 }
 if ! is_probe "$@"; then
-  if [ "$prepare_history" = 1 ]; then prepare_commits "$@" || exit 2; fi
+  if [ "$prepare_history" = 1 ]; then
+    prepare_commits "$@" || exit 2
+    case $verb in log|blame|show) prepare_blobs "$@" ;; esac
+  fi
   if [ "$projection_fetch" = 1 ]; then fetch_defaults "$@" || exit 2; fi
   if [ "$shallow_change" = 1 ] || [ -n "$fetch_depth" ]; then
     check_shared_shallow "$@" || exit 2

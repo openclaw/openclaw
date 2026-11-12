@@ -179,6 +179,7 @@ export function evaluateWorkflowExpression(
       (token: string, property: string | undefined) =>
         property?.includes("-") ? `[${JSON.stringify(property)}]` : token,
     );
+  const effectiveRunnerBackend = (context.runnerBackend ?? context.runnerProfile) || "blacksmith";
   const globals = {
     always: () => true,
     success: () => !context.failed && !context.cancelled,
@@ -293,6 +294,9 @@ export function evaluateWorkflowExpression(
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
+          effective_runner_backend: effectiveRunnerBackend,
+          placement_runner_backend:
+            effectiveRunnerBackend === "boat" ? "hybrid" : effectiveRunnerBackend,
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           // Preflight defaults the Node planner backend to the logical profile.
           node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
@@ -405,8 +409,14 @@ export function runWorkflowShellScript(
     let moduleIndex = 0;
     const rewritten = script
       .replace(
-        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
-        (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
+        /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module( >>? (?:"[^"\n]*"|'[^'\n]*'|[^\s<>|;&]+))? <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\3(?=\n|$)/gu,
+        (
+          _match,
+          nodeOptions: string | undefined,
+          stdoutRedirection: string | undefined,
+          _marker: string,
+          body: string,
+        ) => {
           // Keep scratch outside the checkout's compiler namespace. File-backed stdin
           // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
           const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
@@ -416,7 +426,7 @@ export function runWorkflowShellScript(
             nodeOptions === "--import tsx "
               ? `--import ${quoteShell(TSX_IMPORT)} `
               : (nodeOptions ?? "");
-          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module${stdoutRedirection ?? ""} < ${quoteShell(modulePath)}`;
         },
       )
       .replace(

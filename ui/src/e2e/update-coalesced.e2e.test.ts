@@ -138,7 +138,7 @@ suite.define(() => {
       await page.waitForURL("**/settings/updates");
       await page.locator("openclaw-config-page").waitFor();
       expect(await dialog.count()).toBe(0);
-      expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+      expect(await page.locator(".sidebar-rail openclaw-sidebar-attention").count()).toBe(1);
       await text(page.locator("openclaw-update-run-view"), failureText).first().waitFor();
       expect(pageErrors).toEqual([]);
     });
@@ -302,7 +302,7 @@ suite.define(() => {
 
         await page.keyboard.press("Control+Shift+,");
         await page.locator(".shell--settings").waitFor();
-        expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+        expect(await page.locator(".sidebar-rail openclaw-sidebar-attention").count()).toBe(1);
         await page.evaluate(
           (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
           NATIVE_UPDATE_DECLINED_EVENT,
