@@ -679,6 +679,7 @@ CREATE TABLE IF NOT EXISTS workspace_setup_state (
   updated_at INTEGER,
   attested_at_ms INTEGER,
   attestation_updated_at_ms INTEGER,
+  bootstrap_deferred INTEGER,
   CHECK (version IS NULL OR workspace_path IS NOT NULL)
 ) STRICT;
 

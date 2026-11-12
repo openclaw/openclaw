@@ -55,7 +55,9 @@ function printResult(result: ImportResult, runtime: RuntimeEnv): void {
       .join("/"),
   );
   if (!result.ok) {
-    runtime.error(`Failed ${source || "catalog listing"}: ${sanitizeTerminalText(result.error)}`);
+    // Gateway failures carry remedy lines; sanitize each line and indent it under its source.
+    const detail = result.error.split("\n").map(sanitizeTerminalText).join("\n  ");
+    runtime.error(`Failed ${source || "catalog listing"}: ${detail}`);
   } else if (result.status === "would_import") {
     runtime.log(`[dry-run] Would import ${source}`);
   } else {

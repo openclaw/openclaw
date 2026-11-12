@@ -15,6 +15,7 @@ import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   loadModelCatalog,
@@ -359,10 +360,10 @@ function renderNativeModelSetupSection(content: JSX.Element) {
   return (
     <>
       <section class="settings-section" data-native-model-setup>
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.nativeModels.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.nativeModels.body")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.nativeModels.title")}
+          description={t("modelSetup.nativeModels.body")}
+        />
         {content}
       </section>
     </>

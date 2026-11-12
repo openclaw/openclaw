@@ -10,19 +10,19 @@
 .ocid-access h1 {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(24px * var(--control-ui-text-scale));
+  font-size: 24px;
 }
 
 .ocid-access h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: calc(18px * var(--control-ui-text-scale));
+  font-size: 18px;
 }
 
 .ocid-access h3 {
   margin: 0 0 var(--space-2);
   color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
+  font-size: 16px;
 }
 
 .ocid-access__group {
@@ -131,7 +131,7 @@
 
 .ocid-node-dialog__code {
   font-family: var(--mono);
-  font-size: calc(28px * var(--control-ui-text-scale));
+  font-size: 28px;
   letter-spacing: 0.12em;
 }
 

@@ -85,6 +85,10 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## Appearance preferences
+
+Personal Appearance preferences remain available when you cannot read Gateway-wide settings. Session observer and session-source settings require Gateway read access; unavailable reads do not stay marked as loading. A missing observer status does not mean that no utility model is configured.
+
 ## Browser tab icon
 
 In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Lobsterdex**. Default keeps the theme and Gateway environment icon. Agent avatar follows the explicitly selected agent, fitting its image without cropping and falling back to Default when it is unavailable. Lobsterdex lets you choose a fixed lobster from those already unlocked in this browser. Activity and attention dots remain visible in every mode.
@@ -176,7 +180,12 @@ times in milliseconds. It samples every ten seconds while the page is visible
 and summarizes the last 100 successful samples from the current connection.
 The sample count makes small sets visible; p95 and p99 become more useful as
 samples accumulate. Reconnecting, switching Gateways, or leaving the page resets
-the readings. Failed requests are excluded and shown as a retry notice.
+the readings. Transient failures are excluded and shown as a retry notice.
+Ping and host activity require `operator.read` and their advertised Gateway
+methods. When either diagnostic is unavailable or denied, it settles as unavailable
+instead of repeatedly requesting access or claiming to retry. The connection can
+remain healthy, and browser-local connection settings remain usable. A fresh
+connection or refreshed capabilities can make the diagnostics available again.
 
 The ping graph shows individual round trips. **Gateway activity** uses the same
 CPU, process memory, and event-loop delay graphs as the debug overlay, with up to
@@ -237,7 +246,7 @@ Selecting a **different theme** in Appearance applies its complete default look,
 
 The mounted UI keeps a live display-preference snapshot for its connected Gateway. Local changes and same-Gateway browser-tab edits update open composers without a reload. Sidebar width, personal rail shortcuts, and pinned agents also update across tabs; collapsing the sidebar stays local to each tab. Resizing the sidebar preserves shortcuts changed in another tab. Selecting a different Gateway in another tab does not retarget the current tab. Credentials remain owned by the connection, separate from this display snapshot.
 
-Personal rail shortcuts start empty and their order syncs across devices for an authenticated Gateway profile with write access. Add shortcuts by dragging sessions, pages, plugins, or people into the rail. After upgrading, older sidebar order and pins are not carried over: the rail uses the new `ui.railShortcuts` preference and browser-local `railShortcuts` field. Old values remain stored but are ignored. Shortcuts saved under the new identity remain unchanged; profiles without a saved list do not import shared navigation or pinned sessions. On read-only connections or connections without a durable profile, navigation changes stay browser-local and never write shared Gateway configuration. The Sessions owner filter is stored in the browser per Gateway and profile; its default is **My sessions** for an identified profile and **All owners** while identity is unresolved or absent. Sidebar width and scroll position remain browser-specific. Agent-switcher pins are a separate browser-profile preference. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
+Personal rail shortcuts start empty and their order syncs across devices for an authenticated Gateway profile with write access. Add shortcuts by dragging sessions, pages, plugins, or people into the rail. After upgrading, older sidebar order and pins are not carried over: the rail uses the new `ui.railShortcuts` preference and browser-local `railShortcuts` field. Old values remain stored but are ignored. Shortcuts saved under the new identity remain unchanged; profiles without a saved list do not import shared navigation or pinned sessions. On read-only connections or connections without a durable profile, navigation changes stay browser-local and never write shared Gateway configuration. The Sessions owner filter is stored in the browser per Gateway and profile; its default is **All owners**, except guests, who start with **Involving me**. Sidebar width and scroll position remain browser-specific. Agent-switcher pins are a separate browser-profile preference. See [Navigation rail](/web/control-ui/sessions-and-sidebar#navigation-rail).
 
 Choose an **Accent color** preset or custom color in Appearance to override the active theme's accent. For an authenticated Gateway profile, the accent precedence is the profile's `ui.accent` preference, the gateway-wide `ui.prefs.accent` setting, the operator-configured `ui.seamColor`, and finally the active theme's default. A theme selection stores the explicit `"theme"` accent preference, which uses the selected theme's complete palette in both light and dark modes instead of inheriting gateway-wide color overrides. **Restore default** clears only that profile's preference, leaving the gateway-wide settings unchanged. Connections without an authenticated profile keep the existing gateway-wide preference behavior.
 
@@ -245,7 +254,7 @@ Existing unset and hex accents keep their meaning; upgrades do not migrate or re
 
 The **Typography** block lets you choose an **Interface** face and a separate **Chat prose** face. **Theme default** for both Interface and Chat prose restore the theme’s typography; Dash and Absolutely keep their own serif chat defaults. **System** uses the system sans-serif stack without loading a webfont. Code keeps its monospace stack. Opening either picker loads the self-hosted specimens on demand; startup loads only the active faces. Font overrides follow an authenticated Gateway profile, with a browser-local mirror for instant boot. Without a profile, they stay in that browser and are never written to `openclaw.json`.
 
-Appearance also has a Text size setting. It applies to interface text across pages, dialogs, panels, bundled plugin views, and chat, including code and tables. Icons, avatars, remote desktop and browser content, and terminal cells retain their own sizing. Text inputs stay at least 16px so mobile Safari does not auto-zoom on focus.
+Appearance also has a Text size setting. It applies to chat text, composer text, tool cards, and chat sidebars, and keeps text inputs at least 16px so mobile Safari does not auto-zoom on focus.
 
 Modal dialogs honor your operating system's reduced-motion preference, opening and closing without entrance or exit animations when it is enabled.
 

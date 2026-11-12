@@ -63,6 +63,15 @@ export async function readOwnerLinkStatus(params: {
     hostname: record?.hostname ?? undefined,
     rootPub: state?.anchor.root_pub,
     seq: state?.seq,
+    // The machine keys the stored binding names, and how far Discovery has caught up.
+    binding: record?.binding
+      ? {
+          bindingSeq: record.binding.body.binding_seq,
+          kSrv: record.binding.body.k_srv,
+          kGw: record.binding.body.k_gw,
+          publishedBindingSeq: record.discovery.published_binding_seq,
+        }
+      : undefined,
     ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
     members: state ? await describeMembers(state.members, record?.member_approved_at) : [],
     invites: listInviteViews(record, Math.floor(Date.now() / 1000)),

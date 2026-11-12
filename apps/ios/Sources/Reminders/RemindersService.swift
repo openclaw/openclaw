@@ -95,8 +95,7 @@ final class RemindersService: RemindersServicing {
         guard let dueISO = rawDueISO?.trimmingCharacters(in: .whitespacesAndNewlines), !dueISO.isEmpty else {
             return
         }
-        let formatter = ISO8601DateFormatter()
-        guard let dueDate = formatter.date(from: dueISO) else {
+        guard let dueDate = OpenClawISO8601.date(from: dueISO) else {
             throw Self.error(4, "REMINDERS_INVALID: dueISO must be ISO-8601")
         }
 

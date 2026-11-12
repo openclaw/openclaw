@@ -17,7 +17,7 @@ openclaw-sidebar-agent-roster {
   border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -181,9 +181,9 @@ openclaw-sidebar-agent-roster {
   flex: 1;
   gap: 1px;
   min-width: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   font-weight: 500;
-  line-height: calc(16px * var(--control-ui-text-scale));
+  line-height: 16px;
 }
 
 .sidebar-agent-roster__copy > span {
@@ -194,18 +194,18 @@ openclaw-sidebar-agent-roster {
 
 .sidebar-agent-roster__preview {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 400;
 }
 
 .sidebar-agent-roster__unread {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 }
 
 .sidebar-agent-roster__link {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .sidebar-agent-roster__row {
