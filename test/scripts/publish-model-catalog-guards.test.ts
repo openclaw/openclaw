@@ -11,6 +11,7 @@ import {
   readModelCatalogManifests,
   runPublishModelCatalog,
 } from "../../scripts/publish-model-catalog.mts";
+import { loadPluginManifest } from "../../src/plugins/manifest.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 
@@ -269,15 +270,23 @@ describe("task facts", () => {
       {},
       3,
     );
-    const hosted = new Set(v3.models.flatMap((m) => (m.inference?.decision ? [m.provider] : [])));
-    // Gateways take runtime/refreshable providers' rows from live listing, never the hosted feed.
-    const unhosted = manifests.flatMap(({ manifest }) =>
-      (manifest.contracts?.decisionProviders ?? []).filter(
-        (provider: string) =>
-          !hosted.has(provider) ||
-          ["runtime", "refreshable"].includes(manifest.modelCatalog?.discovery?.[provider]),
-      ),
+    const hosted = new Set(
+      catalog
+        .parseRemoteModelCatalogBundleV3(v3)
+        .models.flatMap((m) => (m.inference?.decision ? [m.provider] : [])),
     );
+    // Gateways take runtime/refreshable providers' rows from live listing, never the hosted feed.
+    const unhosted = manifests.flatMap(({ manifestPath }) => {
+      const loaded = loadPluginManifest(path.dirname(manifestPath));
+      if (!loaded.ok) {
+        throw new Error(loaded.error);
+      }
+      const { contracts, modelCatalog } = loaded.manifest;
+      return (contracts?.decisionProviders ?? []).filter((provider) => {
+        const discovery = modelCatalog?.discovery?.[provider];
+        return !hosted.has(provider) || discovery === "runtime" || discovery === "refreshable";
+      });
+    });
     // Baseten, ClawRouter, Levanto, OpenAI and OpenRouter declare runtime listing; ONNX
     // presets are local artifacts pinned in plugin code; Rerank has no fixed list.
     expect(unhosted).toEqual([
