@@ -639,11 +639,7 @@ final class DashboardManager {
     func showFailure(_ error: Error) {
         let message = (error as NSError).localizedDescription
         dashboardManagerLogger.error("dashboard setup failed error=\(message, privacy: .public)")
-        let state = AppStateStore.shared
-        let copy = Self.failureCopy(
-            error: error,
-            joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
-                mode: state.connectionMode, remoteUrl: state.remoteUrl))
+        let copy = self.failureCopy(for: error)
         let controller = self.controller ?? makeController(
             configuration: WindowConfiguration(
                 url: Self.failureURL,

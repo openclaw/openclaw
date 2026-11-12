@@ -1,6 +1,14 @@
 import Foundation
 
 extension DashboardManager {
+    func failureCopy(for error: Error) -> (title: String, message: String, detail: String) {
+        let state = AppStateStore.shared
+        return Self.failureCopy(
+            error: error,
+            joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
+                mode: state.connectionMode, remoteUrl: state.remoteUrl))
+    }
+
     /// A route or lease superseded while opening surfaces as CancellationError; the failure page
     /// keeps observing the endpoint and reopens the dashboard, so it reads as reconnecting. The SSH
     /// tunnel reset does not apply to a claw reached over OpenClaw ID.
