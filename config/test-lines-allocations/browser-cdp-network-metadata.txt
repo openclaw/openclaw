@@ -1,0 +1,2 @@
+201
+# CDP metadata bounds/lifecycle plus real Chromium worker and HTTP204 compatibility proof.

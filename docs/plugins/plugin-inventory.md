@@ -60,7 +60,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
-- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Experimental: reviews ongoing agent work on the session's own model and offers one short correction.
+- **[advisor](/plugins/reference/advisor)** (`@openclaw/advisor`) - included in OpenClaw. Reviews ongoing agent work on the session's own model and offers one short correction.
 
 - **[agent-guidance](/plugins/reference/agent-guidance)** (`@openclaw/agent-guidance`) - included in OpenClaw. Shares instruction files across selected agents without editing their workspace files.
 
@@ -214,7 +214,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-102 plugins
+105 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -235,6 +235,8 @@ Each entry lists the package, distribution route, and description.
 - **[buzz](/plugins/reference/buzz)** (`@openclaw/buzz`) - npm or ClawHub: `@openclaw/buzz`. Connect OpenClaw agents to Buzz rooms.
 
 - **[byteplus](/plugins/reference/byteplus)** (`@openclaw/byteplus-provider`) - npm or ClawHub: `@openclaw/byteplus-provider`. Adds BytePlus, BytePlus Plan model provider support to OpenClaw.
+
+- **[celeris](/plugins/reference/celeris)** (`@openclaw/celeris`) - npm or ClawHub: `@openclaw/celeris`. Adds Celeris model provider support to OpenClaw.
 
 - **[cerebras](/plugins/reference/cerebras)** (`@openclaw/cerebras-provider`) - npm or ClawHub: `@openclaw/cerebras-provider`. Adds Cerebras model provider support to OpenClaw.
 
@@ -271,6 +273,8 @@ Each entry lists the package, distribution route, and description.
 - **[exa](/plugins/reference/exa)** (`@openclaw/exa-plugin`) - npm or ClawHub: `@openclaw/exa-plugin`. Adds web search provider support.
 
 - **[facetime](/plugins/reference/facetime)** (`@openclaw/facetime`) - npm or ClawHub: `@openclaw/facetime`. Experimental FaceTime realtime voice carrier for OpenClaw agents.
+
+- **[fastino](/plugins/reference/fastino)** (`@openclaw/fastino-provider`) - npm or ClawHub: `@openclaw/fastino-provider`. Native GLiDE Boolean, Choice and Score decisions.
 
 - **[featherless](/plugins/reference/featherless)** (`@openclaw/featherless-provider`) - npm or ClawHub: `@openclaw/featherless-provider`. OpenClaw Featherless AI provider plugin.
 
@@ -332,6 +336,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[mxc](/plugins/reference/mxc)** (`@openclaw/mxc-sandbox`) - npm or ClawHub: `@openclaw/mxc-sandbox`. OS-level sandboxed tool execution via MXC: runs commands in a Windows ProcessContainer with configured MXC policy files.
 
+- **[nace](/plugins/reference/nace)** (`@openclaw/nace`) - npm or ClawHub: `@openclaw/nace`. Adds Nace model provider support to OpenClaw.
+
 - **[nextcloud-talk](/plugins/reference/nextcloud-talk)** (`@openclaw/nextcloud-talk`) - npm or ClawHub: `@openclaw/nextcloud-talk`. OpenClaw Nextcloud Talk channel plugin for conversations.
 
 - **[nostr](/plugins/reference/nostr)** (`@openclaw/nostr`) - npm or ClawHub: `@openclaw/nostr`. OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.
@@ -348,7 +354,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[particle](/plugins/reference/particle)** (`@openclaw/particle-provider`) - npm or ClawHub: `@openclaw/particle-provider`. Adds Particle model provider support to OpenClaw.
 
-- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `@openclaw/perplexity-plugin`. Adds web search provider support.
+- **[perplexity](/plugins/reference/perplexity)** (`@openclaw/perplexity-plugin`) - npm or ClawHub: `@openclaw/perplexity-plugin`. Adds Perplexity Decisions model provider support to OpenClaw.
 
 - **[pixverse](/plugins/reference/pixverse)** (`@openclaw/pixverse-provider`) - npm or ClawHub: `@openclaw/pixverse-provider`. OpenClaw PixVerse video generation provider plugin.
 

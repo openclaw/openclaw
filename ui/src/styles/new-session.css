@@ -740,7 +740,14 @@ span.new-session-page__select {
 }
 
 div.new-session-page__project-search {
-  padding: 8px 10px;
+  --header-search-icon-slot: 15px;
+  --header-search-gap: 6px;
+
+  padding: 8px 10px 8px 12px;
+}
+
+.new-session-page__environment-picker > .header-search {
+  --header-search-icon-slot: 14px;
 }
 
 .new-session-page__environment-picker {

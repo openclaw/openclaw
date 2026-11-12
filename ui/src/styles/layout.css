@@ -317,7 +317,12 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
    The existing sidebar and route outlet retain their state beneath it. */
 html.openclaw-native-macos.openclaw-native-web-chrome
   .shell:not(.shell--mobile-nav, .shell--embed, .shell--onboarding) {
-  --shell-native-titlebar-controls-inset: var(--openclaw-native-controls-inset, 80px);
+  /* Older apps publish only their toolbar height: compact 40pt uses 80px,
+     unified 52pt needs 87px. Updated apps supply the measured native inset. */
+  --shell-native-titlebar-controls-inset: var(
+    --openclaw-native-controls-inset,
+    clamp(80px, calc(var(--openclaw-native-titlebar-height, 52px) + 40px), 87px)
+  );
   --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
   --shell-native-titlebar-controls-width: 124px;
   --shell-titlebar-inset: max(
