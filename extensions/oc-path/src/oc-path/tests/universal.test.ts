@@ -69,6 +69,28 @@ describe("resolveOcPath", () => {
   });
 
   it.each([
+    ["", 0],
+    ["\n", 1],
+    ["\r\n", 1],
+    ["\n\n", 2],
+  ] as const)("keeps JSONL blank-line addresses and append positions for %j", (raw, lines) => {
+    const ast = parseJsonl(raw);
+    expect(resolve(ast, "oc://log/L1")).toEqual(
+      lines === 0 ? null : { kind: "node", descriptor: "jsonl-line", line: 1 },
+    );
+    expect(resolve(ast, "oc://log/+")).toEqual({
+      kind: "insertion-point",
+      container: "jsonl-file",
+      line: lines + 1,
+    });
+    expect(resolve(ast, "oc://log/$last")).toBeNull();
+    const appended = edit(ast, "oc://log/+", "42");
+    expect(appended.raw).toBe(raw + "42" + (raw.endsWith("\r\n") ? "\r\n" : raw ? "\n" : ""));
+    expect(resolve(appended, `oc://log/L${lines + 1}`)).toMatchObject({ line: lines + 1 });
+    expect(ast.raw).toBe(raw);
+  });
+
+  it.each([
     [parseJsonc('{ "k": 42 }'), "oc://config/k/+"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/absent"],
     [parseMd("---\nname: x\n---\n"), "oc://X.md/[frontmatter]/name/+added"],
