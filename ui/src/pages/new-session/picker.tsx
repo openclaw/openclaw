@@ -9,6 +9,7 @@ import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createScrollStateRef } from "../../lib/reactive/scroll-state.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 export function SessionPicker(props: {
@@ -37,7 +38,11 @@ export function SessionPicker(props: {
       <span
         class={[
           "new-session-page__select",
-          { "new-session-page__select--where": props.kind === "where" },
+          {
+            "new-session-page__select--where": props.kind === "where",
+            "new-session-page__select--project": props.kind === "project",
+            "new-session-page__select--checkout": props.kind === "checkout",
+          },
         ]}
       >
         <button
@@ -57,6 +62,12 @@ export function SessionPicker(props: {
             props.params.pendingPlacement ||
             (props.kind === "where" && props.params.place.suggestedCloudProfile.pending)
           }
+          onFocus={() => {
+            // Returning to the trigger must also uncover its focus indicator.
+            if (popover.overlay.open && matchMedia("(min-width: 769px)").matches) {
+              popover.hide();
+            }
+          }}
           onClick={() => popover.overlay.request(!popover.overlay.open)}
         >
           <span class="new-session-page__target-icon" aria-hidden="true">
@@ -69,18 +80,6 @@ export function SessionPicker(props: {
               <span class="new-session-page__trigger-summary">{props.summary}</span>
             </>
           ) : undefined}
-          <span
-            class="new-session-page__trigger-chevron new-session-page__trigger-chevron--desktop"
-            aria-hidden="true"
-          >
-            <Icon name="chevronDown" />
-          </span>
-          <span
-            class="new-session-page__trigger-chevron new-session-page__trigger-chevron--mobile"
-            aria-hidden="true"
-          >
-            <Icon name="chevronsUpDown" />
-          </span>
         </button>
       </span>
       <Popover
@@ -128,19 +127,21 @@ export function SessionPicker(props: {
           props.ref?.(handle);
         }}
       >
-        <Errored
-          fallback={(error, retry) => (
-            <PickerLoadError
-              error={error()}
-              retry={retry}
-              isOpen={() => props.params.place.browser.popoverOpen(props.kind)}
-            />
-          )}
-        >
-          <Loading fallback={<div role="status">{t("common.loading")}</div>}>
-            {props.children}
-          </Loading>
-        </Errored>
+        <div class="new-session-page__picker-panel">
+          <Errored
+            fallback={(error, retry) => (
+              <PickerLoadError
+                error={error()}
+                retry={retry}
+                isOpen={() => props.params.place.browser.popoverOpen(props.kind)}
+              />
+            )}
+          >
+            <Loading fallback={<div role="status">{t("common.loading")}</div>}>
+              {props.children}
+            </Loading>
+          </Errored>
+        </div>
       </Popover>
     </>
   );
@@ -169,5 +170,28 @@ function PickerLoadError(props: { error: unknown; retry: () => void; isOpen: () 
       onRetry={() => void retry()}
       inline
     />
+  );
+}
+
+export function PickerBack(props: { onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      class="new-session-page__picker-back"
+      aria-label={t("common.back")}
+      onClick={() => props.onBack()}
+    >
+      <Icon name="arrowLeft" />
+    </button>
+  );
+}
+
+export function createPickerScrollRef(presented: () => boolean, content: () => unknown) {
+  return createScrollStateRef(
+    (element, state) => {
+      element.toggleAttribute("data-fade-start", !state.atStart);
+      element.toggleAttribute("data-fade-end", !state.atEnd);
+    },
+    { presented, content },
   );
 }

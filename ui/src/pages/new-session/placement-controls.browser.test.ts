@@ -1,7 +1,8 @@
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
+import { CheckoutChip } from "./checkout-chip.tsx";
 import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
 import { pickerParams } from "./where-chip.test-support.ts";
@@ -21,7 +22,10 @@ beforeEach(() => {
   styles.textContent = baseStyles + componentStyles + placementStyles;
   document.head.append(styles);
   controls = document.createElement("div");
-  controls.className = "new-session-page__triggers";
+  controls.className = "new-session-page__context-tray";
+  const row = document.createElement("div");
+  row.className = "new-session-page__triggers";
+  controls.append(row);
   document.body.append(controls);
 });
 afterEach(() => {
@@ -77,15 +81,25 @@ it.each([
       }),
       nativeTerminal: false,
     };
-    mountSolid(() => [createComponent(WhereChip, where), createComponent(ProjectChip, project)], {
-      container: controls,
-    });
+    const row = query(".new-session-page__triggers");
+    mountSolid(() => createComponent(WhereChip, where), { container: row });
+    const workspaceGroup = document.createElement("div");
+    workspaceGroup.className = "new-session-page__workspace";
+    row.append(workspaceGroup);
+    mountSolid(
+      () => [
+        createComponent(ProjectChip, project),
+        createComponent(CheckoutChip, { params: where.params, folderLabel: workspaceLabel }),
+      ],
+      { container: workspaceGroup },
+    );
     await document.fonts.ready;
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
     const environment = query("#new-session-where-trigger");
     const workspaceTrigger = query("#new-session-project-trigger");
+    const checkout = query("#new-session-checkout-trigger");
     const envBox = bounds(environment);
     const workspaceBox = bounds(workspaceTrigger);
     // Flex aligns the slots; inline button baselines can differ inside them.
@@ -103,41 +117,38 @@ it.each([
     const summary = query(".new-session-page__trigger-summary", environment);
     expect(summary.textContent).toBe("Windows (WSL2) · Large");
     expect(summary.checkVisibility()).toBe(width > 560);
-    for (const trigger of [environment, workspaceTrigger]) {
+    for (const trigger of [environment, workspaceTrigger, checkout]) {
       const box = bounds(trigger);
       const mobile = width <= 560;
       expect(box.left).toBeGreaterThanOrEqual(0);
       expect(box.right).toBeLessThanOrEqual(width);
-      expect(box.height).toBeGreaterThanOrEqual(mobile ? 44 : 26);
+      expect(box.height).toBe(26);
       if (mobile) {
         const slot = trigger.closest<HTMLElement>(".new-session-page__select")!;
         expect(box.width).toBeCloseTo(slot.clientWidth, 0);
         expect(box.width).toBeGreaterThanOrEqual(44);
       }
-      const chevron = bounds(
-        query(`.new-session-page__trigger-chevron--${mobile ? "mobile" : "desktop"}`, trigger),
-      );
       const labels = [
         ...trigger.querySelectorAll<HTMLElement>(
           ".new-session-page__trigger-label, .new-session-page__trigger-summary",
         ),
       ].filter((label) => label.checkVisibility());
-      const boxes = labels.map(bounds);
-      const gap =
-        direction === "rtl"
-          ? Math.min(...boxes.map((label) => label.left)) - chevron.right
-          : chevron.left - Math.max(...boxes.map((label) => label.right));
-      expect(gap).toBeGreaterThanOrEqual(mobile ? 3 : 8);
       for (const label of labels) {
         const style = getComputedStyle(label);
         expect(style.whiteSpace).toBe("nowrap");
         expect(style.textOverflow).toBe("ellipsis");
         expect(style.maskImage).toBe("none");
         expect(label.scrollHeight).toBeLessThanOrEqual(label.clientHeight + 1);
-        if (shortLabels || width > 560) {
+        if ((shortLabels && trigger !== checkout) || width > 560) {
           expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth + 1);
         }
       }
+    }
+    if (width <= 560) {
+      expect(envBox.width).toBeLessThanOrEqual(row.clientWidth * 0.34 + 1);
+      expect(
+        query(".new-session-page__trigger-label", workspaceTrigger).clientWidth,
+      ).toBeGreaterThan(0);
     }
     expect(controls.scrollWidth).toBeLessThanOrEqual(controls.clientWidth);
     await expect
@@ -145,6 +156,17 @@ it.each([
       .toHaveAccessibleDescription("Cloud provider: AWS");
     // Exercise the real workspace popover after reflow, not a static label facsimile.
     await button(`What: ${workspaceLabel}`).click();
+    if (width > 768) {
+      const search = page.getByRole("searchbox", { name: "Search projects or paste a Git URL" });
+      await expect.element(search).toHaveFocus();
+      await userEvent.tab({ shift: true });
+      await userEvent.tab({ shift: true });
+      await expect
+        .poll(() => query("#new-session-project-popover").matches(":popover-open"))
+        .toBe(false);
+      await expect.element(button(`What: ${workspaceLabel}`)).toHaveFocus();
+      await button(`What: ${workspaceLabel}`).click();
+    }
     await button(workspaceLabel).click();
     expect(onApplyFolder).toHaveBeenCalledExactlyOnceWith(workspace);
   },

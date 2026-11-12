@@ -240,14 +240,7 @@ function DraftBlock(props: {
             />
           </Show>
         }
-        placeSelect={
-          <NewSessionPlaceControls
-            params={placeOptions()}
-            ref={(read) => {
-              placeElements = read;
-            }}
-          />
-        }
+        placeSelect={null}
       />
       <Show when={place().worktree && !isWorktreeNameValid(place().worktreeName)}>
         <DraftError message={t("newSession.worktreeNameInvalid")} />
@@ -279,6 +272,16 @@ function DraftBlock(props: {
         />
       </Show>
       <NewSessionComposer
+        contextControls={
+          <div class="new-session-page__triggers">
+            <NewSessionPlaceControls
+              params={placeOptions()}
+              ref={(read) => {
+                placeElements = read;
+              }}
+            />
+          </div>
+        }
         surroundings={surroundings}
         options={Object.assign(props.options(), {
           permissionControl,

@@ -344,6 +344,7 @@ const LobsterPet = lazy(() => import("../../components/lobster-pet.tsx"), {
 });
 
 export function NewSessionComposer(props: {
+  contextControls?: JSX.Element;
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
 }) {
@@ -686,6 +687,7 @@ export function NewSessionComposer(props: {
         </div>
       </div>
       <ComposerWidthEdge options={options} />
+      <div class="new-session-page__context-tray">{props.contextControls}</div>
     </div>
   );
 }

@@ -189,14 +189,7 @@ export function NewSessionPlaceControls(props: {
             ref={(element) => {
               workspace = element;
             }}
-            class={[
-              "new-session-page__workspace",
-              {
-                "new-session-page__workspace--checkout":
-                  props.params.place.checkoutVisible &&
-                  !(view().nativeTerminal && props.params.place.terminalOnNode),
-              },
-            ]}
+            class="new-session-page__workspace"
           >
             {props.params.place.hostedEnvironment ? (
               <span

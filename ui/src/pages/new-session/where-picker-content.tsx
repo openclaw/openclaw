@@ -14,6 +14,7 @@ import {
   environmentPlacementRuntime,
   environmentCloudDisabledReason,
 } from "./hosted-environments.ts";
+import { createPickerScrollRef, PickerBack } from "./picker.tsx";
 import { environmentCapabilityLabels } from "./place-facts.ts";
 import { DevicePoolIcon, EnvironmentDeviceIcon } from "./where-chip-icons.tsx";
 import type { WhereChipProps } from "./where-chip.tsx";
@@ -55,7 +56,7 @@ function EnvironmentHeading(props: {
         <Show when={props.onAction}>
           <button
             type="button"
-            class="new-session-page__connect-device"
+            class="oc-menu-heading__action"
             data-action={props.action}
             aria-label={t(
               props.action === "connect-machine"
@@ -200,6 +201,10 @@ export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
       busy,
     };
   });
+  const scrollRef = createPickerScrollRef(
+    () => props.params.place.browser.popoverOpen("where"),
+    view,
+  );
   const busy = () => saving() || view().busy;
   function CloudHeading(heading: { pending?: boolean }) {
     return (
@@ -222,13 +227,17 @@ export function WherePickerContent(props: Omit<WhereChipProps, "ref">) {
     <div class="new-session-page__environment-layout">
       <div class="new-session-page__picker-root new-session-page__environment-picker">
         <HeaderSearch
+          leading={<PickerBack onBack={() => props.params.place.browser.close()} />}
           label={t("newSession.environmentSearchPlaceholder")}
           query={props.params.place.browser.environmentQuery}
           autofocus="popover"
           disabled={busy()}
           onQueryChange={(query) => props.params.place.browser.changeEnvironmentQuery(query)}
         />
-        <div class="new-session-page__environment-list">
+        <div
+          class="new-session-page__environment-list new-session-page__picker-scroll"
+          ref={scrollRef}
+        >
           <Show when={view().showLocal || view().devices.length || view().showAuto}>
             <EnvironmentHeading
               label={t("newSession.yourDevices")}
