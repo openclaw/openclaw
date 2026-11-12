@@ -36,6 +36,7 @@ function idToken(claims: Record<string, unknown>) {
 }
 
 const personal = {
+  connId: "conn-josh",
   connect: { role: "operator", scopes: ["operator.read"] },
   internal: { authenticatedOperator: true },
   authenticatedUserProfile: { profileId: "profile-josh" },
@@ -95,7 +96,12 @@ async function call(client: unknown, params: Record<string, unknown>) {
     respond: (ok: boolean, payload?: unknown, error?: { details?: { code?: string } }) => {
       reply = { ok, payload, code: error?.details?.code };
     },
-    context: { getRuntimeConfig: () => config },
+    context: {
+      getRuntimeConfig: () => config,
+      // The caller is a live connection, as the device sign-in's custody check requires.
+      getClientConnIds: (match: (candidate: unknown) => boolean) =>
+        new Set(match(personal) ? [personal.connId] : []),
+    },
   } as unknown as GatewayRequestHandlerOptions);
   return reply!;
 }
