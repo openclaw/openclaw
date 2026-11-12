@@ -17,6 +17,16 @@ export function registerTestNativeHookRelay(
   });
 }
 
+export function registerAgentTestNativeHookRelay(
+  overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {},
+) {
+  return registerTestNativeHookRelay({
+    agentId: "agent-1",
+    sessionKey: "agent:main:session-1",
+    ...overrides,
+  });
+}
+
 export function registerOwnedTestNativeHookRelay(
   overrides: Partial<Parameters<typeof registerOwnedNativeHookRelay>[0]> = {},
 ) {

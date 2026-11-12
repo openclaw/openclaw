@@ -33,6 +33,7 @@ import {
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 import * as nativeHookRelayBridge from "./native-hook-relay-bridge.js";
 import { invokeNativeHookRelayBridge } from "./native-hook-relay-client.js";
+import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import * as nativeHookRelayStore from "./native-hook-relay-store.js";
 import type { NativeHookRelayBridgeRecord } from "./native-hook-relay-store.js";
 import {
@@ -46,6 +47,7 @@ import {
 import {
   clearNativeHookRelaysForTests,
   createNativeHookRelayPermissionRequestFixture as createPermissionRequestFixture,
+  registerAgentTestNativeHookRelay as registerAgentRelay,
   registerTestNativeHookRelay as registerRelay,
   registerOwnedTestNativeHookRelay as registerOwnedRelay,
 } from "./native-hook-relay.test-support.js";
@@ -103,16 +105,6 @@ async function rewriteMcpThroughCli(
     },
   );
   return JSON.parse(String(stdout.read())).hookSpecificOutput;
-}
-
-function registerAgentRelay(
-  overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {},
-) {
-  return registerRelay({
-    agentId: "agent-1",
-    sessionKey: "agent:main:session-1",
-    ...overrides,
-  });
 }
 
 function readTestNativeAgentId(rawPayload: unknown): string | undefined {
@@ -2392,6 +2384,7 @@ describe("native hook relay registry", () => {
   });
 
   it("keeps replacement pending PermissionRequest approvals when stale approvals settle", async () => {
+    const { pendingPermissionApprovals } = nativeHookRelayState;
     const relayId = "codex-stale-pending-permission";
     const firstRelay = registerRelay({ relayId });
     const resolvers: Array<(decision: "allow") => void> = [];
@@ -2411,30 +2404,34 @@ describe("native hook relay registry", () => {
 
     const firstApproval = invokeRelay(relayId, "permission_request", payload);
     await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
+    expect(pendingPermissionApprovals.size).toBe(1);
 
     firstRelay.unregister();
     await expect(firstApproval).rejects.toThrow("registration is inactive");
     registerRelay({ relayId });
     const secondApproval = invokeRelay(relayId, "permission_request", payload);
     await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
+    expect(pendingPermissionApprovals.size).toBe(1);
+    const successorApproval = pendingPermissionApprovals.values().next().value;
 
     resolvers[0]?.("allow");
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(1);
+    expect(pendingPermissionApprovals.size).toBe(1);
+    expect(pendingPermissionApprovals.values().next().value).toBe(successorApproval);
 
     const duplicateSecondApproval = invokeRelay(relayId, "permission_request", payload);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+    // File preparation must finish before the duplicate can join the successor approval.
+    await vi.waitFor(() => {
+      expect(successorApproval?.waiters).toBe(2);
+      expect(pendingPermissionApprovals.values().next().value).toBe(successorApproval);
     });
-    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(2));
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
 
     resolvers[1]?.("allow");
     await expect(Promise.all([secondApproval, duplicateSecondApproval])).resolves.toHaveLength(2);
-    expect(getNativeHookRelaySharedStateForTests().pendingPermissionApprovals.size).toBe(0);
+    expect(pendingPermissionApprovals.size).toBe(0);
   });
 
   it("does not reuse pending PermissionRequest approvals when a tool call id is reused with different input", async () => {
