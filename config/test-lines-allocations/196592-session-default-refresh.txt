@@ -1,3 +1,0 @@
-# PR #196592: exact regression growth for default-vs-user model selection,
-# prepared picker cache provenance, and isolated Gateway config/dispatch continuity.
-227

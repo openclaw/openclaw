@@ -138,6 +138,36 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(boundary.spawn).not.toHaveBeenCalled();
   });
 
+  it("executes a safe-bin pipeline without synchronous trust probes", async () => {
+    const statSync = fs.statSync;
+    let safeBinStats = 0;
+    using _ = vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+      if (new Error().stack?.includes("exec-safe-bin-trust")) {
+        safeBinStats += 1;
+      }
+      return statSync(file, options);
+    });
+    const exec = createExecTool({
+      agentId: "main",
+      host: "gateway",
+      mode: "allowlist",
+      safeBins: ["wc"],
+      cwd: root,
+      notifyOnExit: false,
+    });
+    const result = await exec.execute("safe-bin-pipeline", {
+      command: "pwd | wc -l",
+    });
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: expect.stringMatching(/^\s*1\s*$/),
+    });
+    expect(boundary.spawn).toHaveBeenCalledTimes(1);
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(safeBinStats).toBe(0);
+  });
+
   it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
     saveExecApprovals({
       version: 1,

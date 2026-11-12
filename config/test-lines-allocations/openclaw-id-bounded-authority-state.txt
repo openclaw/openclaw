@@ -1,2 +1,0 @@
-279
-# OpenClaw ID bounded authority state: revocation replay-after-reapproval, per-key listing seq, cascade and wrong-claw/ahead-seq regressions (including a key copied into another record while listed), and invite lifetime, cap, spent-record and removed-device retention regressions.

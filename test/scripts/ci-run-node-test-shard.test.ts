@@ -518,7 +518,10 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       files: ["src/commands/doctor-maintenance.stopped-systemd.test.ts"],
       sibling: {
         configs: ["test/vitest/vitest.infra.config.ts"],
-        includePatterns: ["src/flows/doctor-health.update-schema.test.ts"],
+        includePatterns: [
+          "src/flows/doctor-health.update-schema.test.ts",
+          "src/flows/doctor-health.managed-settlement.test.ts",
+        ],
       },
       preset: "runtime",
     },
@@ -601,6 +604,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       targets: [
         "src/flows/doctor-health.update-schema.test.ts",
+        "src/flows/doctor-health.managed-settlement.test.ts",
         "src/commands/doctor-config-preflight.container-upgrade.test.ts",
         "src/commands/doctor-maintenance.schema-preflight.test.ts",
         "src/commands/doctor-maintenance.stopped-systemd.test.ts",
