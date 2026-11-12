@@ -16,7 +16,7 @@ import {
 import type { AgentToolUsageImportReadInput, AgentToolUsageReadInput } from "./tool-usage.types.js";
 import { readTranscriptPayload } from "./transcript-payload-read.js";
 
-export function scanAgentToolUsageInDatabase(
+function scanAgentToolUsageInDatabase(
   { db, path }: OpenClawAgentReadOnlyDatabase,
   input: Pick<
     AgentToolUsageImportReadInput,

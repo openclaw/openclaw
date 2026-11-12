@@ -14,6 +14,7 @@ vi.mock("../../config/sessions/tool-usage.js", () => ({
   importAgentToolUsage: mocks.import,
   resetAgentToolUsage: mocks.reset,
 }));
+// mock-isolation: Catalog contents are fixture input; building real tool factories needs plugin runtime state.
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: mocks.inventory,
 }));

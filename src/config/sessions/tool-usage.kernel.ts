@@ -18,7 +18,7 @@ export function emptyAgentToolUsageState(): AgentToolUsageState {
   return { generation: 0, liveSince: null, importedWindows: [], lastImportAt: null };
 }
 
-export function readAgentToolUsageStateInDatabase(db: EngineConnection): AgentToolUsageState {
+function readAgentToolUsageStateInDatabase(db: EngineConnection): AgentToolUsageState {
   const query = getNodeSqliteKysely<DB>(db)
     .selectFrom("cache_entries")
     .select("value_json")
