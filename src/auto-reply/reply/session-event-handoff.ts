@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
@@ -62,6 +61,10 @@ import {
   narrowSessionEventSettings,
 } from "./session-event-policy.js";
 import {
+  createSessionEventReadmission,
+  MAX_READMISSION_ATTEMPTS,
+} from "./session-event-readmission.js";
+import {
   assertSessionEventTargetCurrent,
   assertSessionEventSettingsCurrent,
   captureSessionEventTargetForHost,
@@ -82,9 +85,6 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
   () => import("./queue/drain-admission-scope.js"),
   "runOutsideAdmittedGenerationScopes",
 );
-
-/** Policy publications an accepted occurrence may outlive before it settles as failed. */
-const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
 
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
@@ -152,6 +152,7 @@ function enqueueSessionEventAttempt(
     agentId,
     options.scheduledAutomation?.job,
   );
+  const readmission = createSessionEventReadmission(configPolicy, readmissionAttempt);
   // Queue-owner abandonment (lifecycle cleanup) stays terminal.
   let abandoned = false;
   // The live re-admission attempt; receipt.cancel forwards to it once it exists.
@@ -325,24 +326,17 @@ function enqueueSessionEventAttempt(
       // carries the still-live assertion so revoked ingress rejects the retry.
       const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
       acceptanceAssertion = undefined;
-      // Producers never retry, so a policy publication that rejected an unstarted
-      // occurrence re-admits it under the current policy instead of destroying it.
-      // Stop, abort and abandonment still settle terminally.
-      const retainForConfigChange = () =>
-        configPolicy.changed && !started && !deliveryAttempted && !signal.aborted && !abandoned;
+      // Re-admission covers only unstarted work (session-event-readmission.ts). A failed
+      // operation result carries its error as the cause the refusal check walks.
+      readmission.rejects(failure, operation?.result);
+      const retainUnstarted = () =>
+        readmission.rejects() && !started && !deliveryAttempted && !signal.aborted && !abandoned;
       const attempt = readmissionAttempt;
-      if (retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS) {
-        // Reuse this occurrence's bounded readmission, yielding before fresh authority.
-        await delay(100 * 2 ** readmissionAttempt, undefined, { signal }).catch(
-          (error: unknown) => {
-            if (!signal.aborted) {
-              throw error;
-            }
-          },
-        );
+      if (retainUnstarted() && attempt < MAX_READMISSION_ATTEMPTS) {
+        await readmission.backoff(signal);
       }
       settlement = "finished";
-      const canReadmit = retainForConfigChange() && attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
+      const canReadmit = retainUnstarted() && attempt < MAX_READMISSION_ATTEMPTS;
       const result = operation?.result;
       const failed = result?.kind === "failed";
       const aborted = result?.kind === "aborted";
@@ -745,41 +739,42 @@ function enqueueSessionEventAttempt(
             options.scheduledAutomation?.onLaneWait?.({ waiting: true });
             return true;
           },
-          onAdopted: async () => {
-            adopted = true;
-            options.scheduledAutomation?.onLaneWait?.({ waiting: false });
-            if (!operation) {
-              throw new Error("Session event has no admitted reply owner");
-            }
-            // The normal owner may create a previously absent session or
-            // rotate through compaction during admission. Adopt only its
-            // published binding while that exact reply operation is live.
-            if (
-              preparedBinding &&
-              !generationLease?.isCreationAdopted() &&
-              preparedBinding.sessionId === operation.sessionId &&
-              (target?.sessionId !== preparedBinding.sessionId ||
-                target?.lifecycleRevision !== preparedBinding.lifecycleRevision)
-            ) {
-              generationLease?.release();
-              generationLease = undefined;
-              generationLease = await prepareSessionGenerationFacts({
-                agentId,
-                storePath,
-                sessionKey,
-                sessionId: preparedBinding.sessionId,
-                lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
-              });
-            }
-            await prepareCurrent();
-            await options.onAdopted?.();
-            assertCurrent();
-            accept();
-          },
+          onAdopted: () =>
+            readmission.adopt(async () => {
+              adopted = true;
+              options.scheduledAutomation?.onLaneWait?.({ waiting: false });
+              if (!operation) {
+                throw new Error("Session event has no admitted reply owner");
+              }
+              // The normal owner may create a previously absent session or
+              // rotate through compaction during admission. Adopt only its
+              // published binding while that exact reply operation is live.
+              if (
+                preparedBinding &&
+                !generationLease?.isCreationAdopted() &&
+                preparedBinding.sessionId === operation.sessionId &&
+                (target?.sessionId !== preparedBinding.sessionId ||
+                  target?.lifecycleRevision !== preparedBinding.lifecycleRevision)
+              ) {
+                generationLease?.release();
+                generationLease = undefined;
+                generationLease = await prepareSessionGenerationFacts({
+                  agentId,
+                  storePath,
+                  sessionKey,
+                  sessionId: preparedBinding.sessionId,
+                  lifecycleRevision: preparedBinding.lifecycleRevision ?? null,
+                });
+              }
+              await prepareCurrent();
+              await options.onAdopted?.();
+              assertCurrent();
+              accept();
+            }),
           onAbandoned: () => {
-            // A stale-policy rejection before adoption also ends as abandonment;
-            // only abandonment without that rejection (Stop, cleanup) is terminal.
-            abandoned ||= !configPolicy.changed;
+            // A stale-policy or unavailable-lease rejection before adoption also ends as
+            // abandonment; only abandonment without either (Stop, cleanup) is terminal.
+            abandoned ||= !readmission.rejects(failure);
             failure ??= "Session event was abandoned before execution";
           },
           onSettled: () => {

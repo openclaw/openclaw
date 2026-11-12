@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SessionDeliveryGenerationRevokedError,
+  SessionDeliveryGenerationUnavailableError,
+} from "../config/sessions/session-delivery-generation-errors.js";
 import { SessionEntryChangedDuringReadError } from "../config/sessions/session-entry-read-errors.js";
 import {
   decodeSessionTranscriptWorkerReadError,
@@ -149,6 +153,15 @@ it.each([
       }),
     false,
   ],
+  [
+    "unavailable session lease behind latched source authority",
+    () =>
+      new Error("source execution authority is no longer active", {
+        cause: new SessionDeliveryGenerationUnavailableError(),
+      }),
+    false,
+  ],
+  ["revoked session generation", () => new SessionDeliveryGenerationRevokedError(), false],
   [
     "wrapped transcript conflict",
     () => new Error("worker operation failed", { cause: transcriptConflict() }),
