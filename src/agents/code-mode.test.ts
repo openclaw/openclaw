@@ -24,6 +24,7 @@ import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { bindCodeModeSessionStore } from "./code-mode-session-store.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
+import { resolveCodeModeWaitRun } from "./code-mode-wait-errors.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
@@ -207,6 +208,22 @@ describe("Code Mode catalog and model-visible surface", () => {
     );
     expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait", ...visible]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(indexed);
+  });
+
+  it("does not compact MCP schemas for the prompt or expired-run recovery", () => {
+    const { catalogRef, catalogPrompt, ctx } = catalog([
+      mcpTool({ name: "remote", serverName: "test", toolName: "remote" }),
+    ]);
+    const entry = catalogRef.current!.entries.find((tool) => tool.source === "mcp")!;
+    Object.defineProperty(entry, "parameters", {
+      get() {
+        throw new Error("MCP schema must not be read");
+      },
+    });
+    expect(catalogPrompt()).not.toContain("remote");
+    expect(() => resolveCodeModeWaitRun("missing-mcp-run", ctx)).toThrow(
+      "code mode run is unavailable or expired",
+    );
   });
 
   it("includes resolvable callable contracts in the catalog prompt", async () => {
