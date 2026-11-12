@@ -28,7 +28,12 @@ import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-sett
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelDefaultsSaveField, ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
-import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import {
+  modelCatalogRef,
+  type AgentUtilityOverride,
+  type DefaultModelSelection,
+  type ModelPickerEntry,
+} from "./data.ts";
 import { renderMutationMessage } from "./view-status.tsx";
 
 export type DefaultModelsViewProps = {
@@ -37,6 +42,9 @@ export type DefaultModelsViewProps = {
   selection: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
+  /** Agents with their own utility model settings; the rest use this default. */
+  utilityOverrides?: AgentUtilityOverride[];
+  onOpenAgent: (agentId: string) => void;
   /** Route the utility model in effect (automatic or explicit) runs on. */
   utilityRuntime?: CompletionRoute;
   thinkingLevel: string | undefined;
@@ -516,6 +524,11 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               ]}
             />
           }
+          description={
+            props.utilityOverrides?.length ? (
+              <UtilityOverrides overrides={props.utilityOverrides} onOpen={props.onOpenAgent} />
+            ) : undefined
+          }
           control={
             <ModelPicker
               windowed
@@ -563,5 +576,46 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>
+  );
+}
+
+function UtilityOverrides(props: {
+  overrides: AgentUtilityOverride[];
+  onOpen: (agentId: string) => void;
+}) {
+  const selection = (entry: AgentUtilityOverride) =>
+    [
+      entry.model === undefined
+        ? t("modelProviders.defaults.utilityOverrideDefaultModel")
+        : entry.model || t("modelProviders.defaults.disabled"),
+      ...(entry.fallbacks.length
+        ? [
+            t("modelProviders.defaults.utilityOverrideFallbacks", {
+              models: entry.fallbacks.join(", "),
+            }),
+          ]
+        : []),
+    ].join(" · ");
+  return (
+    <span>
+      {t("modelProviders.defaults.utilityOverridesTitle")}
+      <For each={props.overrides}>
+        {(entry) => (
+          <span data-agent-id={entry.agentId}>
+            <br />
+            <button
+              type="button"
+              class="model-providers__agent-link"
+              onClick={() => props.onOpen(entry.agentId)}
+            >
+              {entry.label}
+            </button>
+            {`: ${selection(entry)}`}
+          </span>
+        )}
+      </For>
+      <br />
+      {t("modelProviders.defaults.utilityOverridesOthers")}
+    </span>
   );
 }
