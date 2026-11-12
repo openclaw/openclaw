@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ import {
   getNodeSqliteKysely,
 } from "../../../../src/infra/kysely-sync.js";
 import {
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
@@ -22,7 +24,7 @@ import type { DB as StateDatabase } from "../../../../src/state/openclaw-state-d
 import { createDeferred } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-import { PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
+import { BASELINE_REPLY, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import { startPairedNodeWorkerLifecycleProvider } from "./paired-node-worker-lifecycle-provider.js";
 import {
   bundleInstallFrames,
@@ -379,6 +381,122 @@ describe("paired node worker lifecycle wire", () => {
       throw new AggregateError(failures, "paired node lifecycle Gateway cleanup failed");
     }
   });
+
+  it(
+    "negotiates legacy capability and reconnects the same device before worker execution",
+    { timeout: TEST_TIMEOUT_MS },
+    async ({ signal }) => {
+      const root = tempDirs.make("openclaw-paired-node-worker-legacy-capability-");
+      const published = await createPublishedWireWorkspace(root);
+      const caseSettlement = createWireWorkspaceSettlementWaiter();
+      let caseOperator: GatewayClient | undefined;
+      let modernNode: PairedNodeWorkerHost | undefined;
+      let legacyNode: PairedNodeWorkerHost | undefined;
+      let legacyBundlePrewarm: unknown;
+      let testFailure: { error: unknown } | undefined;
+      let cleanupFailures: unknown[];
+      try {
+        caseOperator = await connectWireClient({
+          gateway,
+          role: "operator",
+          identity: null,
+          onEvent: (event) => {
+            if (event.event === "sessions.changed" && isRecord(event.payload)) {
+              // Refresh the placement; an earlier embedded snapshot cannot prove settlement.
+              caseSettlement.onEvent({
+                event: event.event,
+                payload: { sessionKey: event.payload.sessionKey },
+              });
+            }
+          },
+        });
+        await caseOperator.request("sessions.subscribe", {});
+        modernNode = await createPairedNodeWorkerHost({
+          gateway,
+          operator: caseOperator,
+          root,
+          label: "capability-modern",
+        });
+        // Current supervisor, old capability declaration: negotiation, not an old binary upgrade.
+        legacyNode = await createPairedNodeWorkerHost({
+          gateway,
+          operator: caseOperator,
+          root,
+          label: "capability-legacy",
+          environmentSession: false,
+          onInvoke: (frame) => {
+            if (frame.command === NODE_WORKER_BUNDLE_INSTALL_COMMAND && frame.paramsJSON) {
+              legacyBundlePrewarm = (JSON.parse(frame.paramsJSON) as { bundlePrewarm?: unknown })
+                .bundlePrewarm;
+            }
+          },
+        });
+        const legacyDeviceId = legacyNode.identity.deviceId;
+        expect(legacyDeviceId).not.toBe(modernNode.identity.deviceId);
+        const key = await createSession(caseOperator, published, "legacy-capability");
+        await dispatchNodeSession(gateway, key, legacyDeviceId);
+        const unsupportedRunId = await startTurn(caseOperator, key, BASELINE_REPLY);
+        await expect(waitForTurn(caseOperator, unsupportedRunId)).resolves.toMatchObject({
+          status: "error",
+          error: expect.stringMatching(
+            /requires an update.*openclaw update.*reconnect.*openclaw node restart/su,
+          ),
+        });
+        await legacyNode.waitForInvokes();
+        expect(legacyNode.commands).not.toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
+        await expect(gateway.call("sessions.describe", { key })).resolves.toMatchObject({
+          session: { placement: { state: "active" } },
+        });
+
+        await legacyNode.disconnect();
+        await legacyNode.connect({ environmentSession: true });
+        expect(legacyNode.identity.deviceId).toBe(legacyDeviceId);
+        const supportedRunId = await startTurn(caseOperator, key, BASELINE_REPLY);
+        await expect(waitForTurn(caseOperator, supportedRunId)).resolves.toMatchObject({
+          status: "ok",
+        });
+        await legacyNode.waitForInvokes();
+        expect(legacyNode.invokeErrors).toEqual([]);
+        expect(legacyNode.commands).toContain(NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND);
+        expect(legacyBundlePrewarm).toBeUndefined();
+        const history = await caseOperator.request<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: key,
+          limit: 20,
+        });
+        expect(
+          history.messages?.filter(
+            (message) =>
+              isRecord(message) &&
+              message.role === "assistant" &&
+              wireMessageText(message).includes(BASELINE_REPLY),
+          ),
+        ).toHaveLength(1);
+        await caseSettlement.wait(caseOperator, key, signal);
+      } catch (error) {
+        testFailure = { error };
+        process.stderr.write(
+          `Paired node legacy capability failed; Gateway log tail:\n${redactSensitiveText(gateway.logs().slice(-8_000))}\n`,
+        );
+      } finally {
+        const cleanup = await Promise.allSettled([
+          legacyNode?.stop() ?? Promise.resolve(),
+          modernNode?.stop() ?? Promise.resolve(),
+          caseOperator?.stopAndWait({ timeoutMs: 2_000 }) ?? Promise.resolve(),
+          closeWireServer(published.server),
+        ]);
+        cleanupFailures = cleanup.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+      }
+      const failures = [...(testFailure ? [testFailure.error] : []), ...cleanupFailures];
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "paired node legacy capability test failed");
+      }
+    },
+  );
   it(
     "fences revoked and unconfirmed turns before real node successor I/O",
     { timeout: TEST_TIMEOUT_MS },
