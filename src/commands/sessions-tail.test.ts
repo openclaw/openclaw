@@ -367,7 +367,7 @@ describe("sessionsTailCommand", () => {
     for (const entry of entries) {
       expect(output.includes(`${entry.label} ok`)).toBe(expected.includes(entry.label));
     }
-    const notices = output.split("\n").filter((line) => /^(Gateway unreachable|explicit store):/.test(line));
+    const notices = output.match(/^(Gateway unreachable|explicit store):.*$/gm) ?? [];
     expect(notices).toEqual(notice ? [notice] : []);
     if (mode === "explicit store" || mode === "explicit key") {
       expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
