@@ -303,6 +303,7 @@ jobs:
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
           let resolveExtensionRuntime = () => ({ test_runtime_policy: "node", requires_bun: false });
+          let resolveExtensionRuntimes;
           let extensionShards = [];
           let nodeShards = [];
 
@@ -324,6 +325,9 @@ jobs:
             pluginPrereleasePlan = planner.assertPluginPrereleaseTestPlanComplete();
             if (typeof planner.resolvePluginPrereleaseExtensionRuntime === "function") {
               resolveExtensionRuntime = planner.resolvePluginPrereleaseExtensionRuntime;
+            }
+            if (typeof planner.resolvePluginPrereleaseExtensionRuntimes === "function") {
+              resolveExtensionRuntimes = planner.resolvePluginPrereleaseExtensionRuntimes;
             }
           } catch (error) {
             const errorCode =
@@ -391,7 +395,7 @@ jobs:
                   .flatMap((shard) => shard.extensionIds)
                   .filter((extensionId) => !fileSplitExtensionIds.includes(extensionId))
               : [];
-            const batchShards = await Promise.all((
+            const batchShards = (await Promise.all((
               hasJobSplitter
                 ? planner.createExtensionTestShards({
                     extensionIds: genericExtensionIds,
@@ -407,8 +411,17 @@ jobs:
               if (runtimePolicy && (runtime.test_runtime_policy !== runtimePolicy || runtime.requires_bun !== (runtimePolicy !== "node"))) {
                 throw new Error(`Target ref does not support requested test_runtime_policy: ${runtimePolicy}`);
               }
-              return {
-                check_name: shard.checkName,
+              const runtimes = resolveExtensionRuntimes
+                ? await resolveExtensionRuntimes({
+                    planGroups: shard.planGroups,
+                    fullReleaseValidation,
+                    vitestArgs: extensionVitestArgs,
+                  })
+                : [runtime];
+              return runtimes.map((selectedRuntime) => ({
+                check_name: selectedRuntime.test_runtime
+                  ? `${shard.checkName} (${selectedRuntime.test_runtime})`
+                  : shard.checkName,
                 extensions_csv: shard.extensionIds.join(","),
                 exclusion_configs: shard.planGroups.map((group) => ({
                   config: group.config,
@@ -427,9 +440,9 @@ jobs:
                       : "blacksmith-4vcpu-ubuntu-2404",
                 shard_index: shard.index + 1,
                 task: "extensions-batch",
-                ...runtime,
-              };
-            }));
+                ...selectedRuntime,
+              }));
+            }))).flat();
             const telegramShards = [];
             for (const group of [
               ...fileSplitPlanGroups,
@@ -711,7 +724,7 @@ jobs:
     needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)))) || (github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner_label || matrix.runner)) }}
-    timeout-minutes: ${{ matrix.test_runtime_policy == 'dual-all' && 120 || 60 }}
+    timeout-minutes: ${{ !matrix.test_runtime && matrix.test_runtime_policy == 'dual-all' && 120 || 60 }}
     strategy:
       fail-fast: false
       max-parallel: 12
@@ -748,6 +761,7 @@ jobs:
           OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_EXTENSION_TASK: ${{ matrix.task }}
           OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
+          OPENCLAW_CI_TEST_RUNTIME: ${{ matrix.test_runtime }}
           FRV_TEST_EXCLUDE_PATHS_JSON: ${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}
           FRV_TEST_EXCLUDE_SCOPE: extensions
           FRV_TEST_CONFIGS_JSON: ${{ toJson(matrix.exclusion_configs) }}

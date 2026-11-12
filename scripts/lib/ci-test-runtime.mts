@@ -502,17 +502,33 @@ export function resolveCiTestRuntimeSelections(
     : resolveAllRuntimeSelections(selection, policy, cwd);
 }
 
+/** Restrict execution, not policy: Node exceptions and native Bun keep their original membership. */
+export function filterCiTestRuntimeSelections(
+  selections: CiTestRuntimeSelection[],
+  env: NodeJS.ProcessEnv,
+): CiTestRuntimeSelection[] {
+  const runtime = env.OPENCLAW_CI_TEST_RUNTIME?.trim();
+  if (!runtime) {
+    return selections;
+  }
+  if (runtime !== "node" && runtime !== "bun") {
+    throw new Error(`Invalid OPENCLAW_CI_TEST_RUNTIME: ${runtime}; expected node or bun`);
+  }
+  return selections.filter((selection) => selection.runtime === runtime);
+}
+
 /** Match the shard runner's original process envelopes without splitting or dropping coverage. */
-export function ciTestShardRequiresBun(
+export function ciTestShardRuntimes(
   shard: TestShard,
   policy: CiTestRuntimePolicy,
   cwd = process.cwd(),
-): boolean {
+): TestRuntime[] {
   const selections = shard.targets?.length
     ? shard.targets.map((target) => ({ ...shard, targets: [target] }))
     : shard.groups?.length
       ? shard.groups.map((group) => ({
           ...group,
+          vitestArgs: group.vitestArgs ?? shard.vitestArgs,
           env: {
             ...shard.env,
             ...group.env,
@@ -524,7 +540,18 @@ export function ciTestShardRequiresBun(
           },
         }))
       : [shard];
-  return selections.some((selection) =>
-    resolveCiTestRuntimeSelections(selection, policy, cwd).some(({ runtime }) => runtime === "bun"),
+  const runtimes = new Set(
+    selections.flatMap((selection) =>
+      resolveCiTestRuntimeSelections(selection, policy, cwd).map(({ runtime }) => runtime),
+    ),
   );
+  return (["node", "bun"] as const).filter((runtime) => runtimes.has(runtime));
+}
+
+export function ciTestShardRequiresBun(
+  shard: TestShard,
+  policy: CiTestRuntimePolicy,
+  cwd = process.cwd(),
+): boolean {
+  return ciTestShardRuntimes(shard, policy, cwd).includes("bun");
 }

@@ -153,6 +153,38 @@ export async function resolvePluginPrereleaseExtensionRuntime({
   return { test_runtime_policy: policy, requires_bun: policy !== "node" };
 }
 
+/** Expand only runtimes with selected tests; policy continues to own coverage. */
+export async function resolvePluginPrereleaseExtensionRuntimes({
+  planGroups,
+  vitestArgs = [],
+  cwd = process.cwd(),
+  ...options
+}: Parameters<typeof resolvePluginPrereleaseExtensionRuntime>[0] & {
+  planGroups: readonly { config: string; roots: readonly string[] }[];
+  vitestArgs?: readonly string[];
+  cwd?: string;
+}) {
+  const { test_runtime_policy } = await resolvePluginPrereleaseExtensionRuntime(options);
+  const { ciTestShardRuntimes } = await import("./ci-test-runtime.mts");
+  return ciTestShardRuntimes(
+    {
+      groups: planGroups.map((group) => ({
+        configs: [group.config],
+        includePatterns: group.roots.map((root) =>
+          root.endsWith(".test.ts") ? root : `${root}/**/*.test.ts`,
+        ),
+        vitestArgs,
+      })),
+    },
+    test_runtime_policy,
+    cwd,
+  ).map((test_runtime) => ({
+    test_runtime_policy,
+    test_runtime,
+    requires_bun: test_runtime === "bun",
+  }));
+}
+
 /** Build the plugin prerelease plan from Docker lanes and static checks. */
 export function createPluginPrereleaseTestPlan() {
   const dockerLanes = pluginPrereleaseDockerLanes.map((entry) => entry.lane);

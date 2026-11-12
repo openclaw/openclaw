@@ -882,8 +882,8 @@ const publishedDriverUpdate =
     : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
-// main have no branch-protection consumers. Dispatch (release
-// validation) keeps the full named matrix.
+// main have no branch-protection consumers. Dispatch keeps the complete
+// inventory; runtime-capable targets pack each runtime independently below.
 const compactPlanMode = !isCanonicalRepository
   ? undefined
   : runtimePullRequest
@@ -1275,6 +1275,7 @@ const rawNodeTestShards = runNodeFull
           compact: compactPlanMode !== undefined,
           compactMode: mainValidation ? "pull-request" : compactPlanMode,
           mainValidation,
+          runtimePolicy: testRuntimePolicy?.ciTestShardRuntimes ? testRuntimeMode : undefined,
           compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
@@ -1399,6 +1400,17 @@ const uiTestRuntimePolicy =
   )
     ? testRuntimeMode
     : "node";
+const splitRuntimeJobs = typeof testRuntimePolicy?.ciTestShardRuntimes === "function";
+const uiRuntimeJobs = splitRuntimeJobs
+  ? testRuntimePolicy.ciTestShardRuntimes(
+      {
+        configs: ["ui/vitest.config.ts"],
+        groups: uiTestGroups?.ui,
+        vitestArgs: ["--maxWorkers=3", `--shard=1/${uiTestShardCount}`],
+      },
+      uiTestRuntimePolicy,
+    )
+  : null;
 const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
 const knownToolingConfigs = new Set([
   goToolingConfig,
@@ -1454,7 +1466,7 @@ const nodeTestShards = targetNodeTestShards
       Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
-  .map((shard) => {
+  .flatMap((shard) => {
     const minTotalMemoryBytes = Math.max(
       0,
       ...(shard.groups ?? []).map((group) => group.minTotalMemoryBytes ?? 0),
@@ -1508,7 +1520,9 @@ const nodeTestShards = targetNodeTestShards
       runner: capacity?.runner ?? shard.runner,
       runner_label: capacity?.runner ?? blacksmithRunnerLabel(shard.runner, minTotalMemoryBytes),
       timeout_minutes:
-        !shard.requiresDist && testRuntimeMode === "dual-all"
+        !shard.requiresDist &&
+        testRuntimeMode === "dual-all" &&
+        typeof testRuntimePolicy?.ciTestShardRuntimes !== "function"
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
@@ -1580,10 +1594,32 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    const runtimes =
+      !shard.requiresDist && typeof testRuntimePolicy?.ciTestShardRuntimes === "function"
+        ? shard.testRuntime
+          ? [shard.testRuntime]
+          : testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
+        : null;
+    const rows = runtimes
+      ? runtimes.map((runtime) =>
+          Object.assign({}, row, {
+            base_check_name: shard.testRuntime
+              ? row.check_name.replace(/ \((?:node|bun)\)$/u, "")
+              : row.check_name,
+            check_name: shard.testRuntime ? row.check_name : `${row.check_name} (${runtime})`,
+            test_runtime: runtime,
+            requires_bun:
+              runtime === "bun" ||
+              shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
+                plan.configs?.includes(goToolingConfig),
+              ),
+          }),
+        )
+      : [row];
     if (packedGroups) {
-      packedNodeTestRows.push({ row, groups });
+      packedNodeTestRows.push(...rows.map((runtimeRow) => ({ row: runtimeRow, groups })));
     }
-    return row;
+    return rows;
   });
 const nodeTestGroupPools = {};
 if (
@@ -1914,7 +1950,16 @@ const manifest = {
   ui_test_runtime_policy: uiTestRuntimePolicy,
   ui_test_shard_count: uiTestShardCount,
   ui_test_matrix: createMatrix(
-    Array.from({ length: runUiTests ? uiTestShardCount : 0 }, (_, index) => ({ shard: index + 1 })),
+    Array.from({ length: runUiTests ? uiTestShardCount : 0 }, (_, index) =>
+      uiRuntimeJobs
+        ? uiRuntimeJobs.map((runtime, runtimeIndex) => ({
+            shard: index + 1,
+            check_name: `checks-ui (${index + 1}/${uiTestShardCount}, ${runtime})`,
+            test_runtime: runtime,
+            run_auxiliary: runtimeIndex === 0,
+          }))
+        : [{ shard: index + 1 }],
+    ).flat(),
   ),
   ui_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.ui) : "",
   ui_e2e_test_groups_gzip_base64: uiTestGroups ? encodeNodeTestGroups(uiTestGroups.e2e) : "",

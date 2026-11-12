@@ -1450,48 +1450,67 @@ describe("release decision policy", () => {
     expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
   });
 
-  it("accepts a human child rerun with retained earlier jobs in a reused plan", async () => {
-    const original = child("normalCi");
-    const planned = hydrateReusedPlan([original], {
-      children: [
-        {
-          ...reusedEvidenceChildren()[0],
-          displayTitle: original.displayTitle,
-          runAttempt: 2,
-        },
-      ],
-      manifest: { childEvidence: { normalCi: { plannedRunAttempt: 1 } } },
-    })[0];
-    assert(planned, "selected child remains present in the reused plan");
-    const result = await readChild(planned, undefined, undefined, {
-      readRun: async () =>
-        githubRun(original, {
-          conclusion: "success",
-          html_url: original.url,
-          path: ".github/workflows/ci.yml@refs/heads/release-ci/tooling",
-          run_attempt: 2,
-          triggering_actor: { login: "release-operator" },
-        }),
-      readAttemptJobs: async (_runId, attempt) =>
-        attempt === 1
-          ? [
-              { name: "lint", status: "completed", conclusion: "success" },
-              { name: "test", status: "completed", conclusion: "failure" },
-            ]
-          : [{ name: "test", status: "completed", conclusion: "success" }],
-    });
-    expect(result.errors).toEqual([]);
-    expect(result).toMatchObject({
-      observedRunAttempts: [1, 2],
-      plannedRunAttempt: 1,
-      runAttempt: 2,
-      triggeringActor: "release-operator",
-    });
-    expect(result.jobs).toEqual([
-      expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
-      expect.objectContaining({ name: "test", acceptedRunAttempt: 2, conclusion: "success" }),
-    ]);
-  });
+  it.each(["node", "bun"])(
+    "accepts a targeted %s child rerun with retained sibling evidence",
+    async (runtime) => {
+      const sibling = runtime === "node" ? "bun" : "node";
+      const failedName = `checks-node-core-fast-isolated (${runtime})`;
+      const siblingName = `checks-node-core-fast-isolated (${sibling})`;
+      const original = child("normalCi");
+      const planned = hydrateReusedPlan([original], {
+        children: [
+          {
+            ...reusedEvidenceChildren()[0],
+            displayTitle: original.displayTitle,
+            runAttempt: 2,
+          },
+        ],
+        manifest: { childEvidence: { normalCi: { plannedRunAttempt: 1 } } },
+      })[0];
+      assert(planned, "selected child remains present in the reused plan");
+      const result = await readChild(planned, undefined, undefined, {
+        readRun: async () =>
+          githubRun(original, {
+            conclusion: "success",
+            html_url: original.url,
+            path: ".github/workflows/ci.yml@refs/heads/release-ci/tooling",
+            run_attempt: 2,
+            triggering_actor: { login: "release-operator" },
+          }),
+        readAttemptJobs: async (_runId, attempt) =>
+          attempt === 1
+            ? [
+                { name: siblingName, status: "completed", conclusion: "success" },
+                { name: failedName, status: "completed", conclusion: "failure" },
+              ]
+            : [{ name: failedName, status: "completed", conclusion: "success" }],
+      });
+      expect(result.errors).toEqual([]);
+      expect(terminalPolicyPass(result)).toBe(true);
+      expect(classifyReleaseSnapshot({ children: [result] }).state).toBe("passed");
+      expect(result).toMatchObject({
+        observedRunAttempts: [1, 2],
+        plannedRunAttempt: 1,
+        runAttempt: 2,
+        triggeringActor: "release-operator",
+      });
+      expect(result.jobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: siblingName,
+            acceptedRunAttempt: 1,
+            conclusion: "success",
+          }),
+          expect.objectContaining({
+            name: failedName,
+            acceptedRunAttempt: 2,
+            conclusion: "success",
+          }),
+        ]),
+      );
+      expect(result.jobs).toHaveLength(2);
+    },
+  );
 
   it.each(["queued", "in_progress"])(
     "marks a %s rerun with runnerless duplicate copies unsealable",
