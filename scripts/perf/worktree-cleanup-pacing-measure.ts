@@ -29,7 +29,7 @@
  * synthetic background IO workload to measure deletion impact; trace admission alone
  * is not a physical pressure experiment. Acceptance: baseline near-zero scratch progress,
  * candidate positive progress, no commit/loop latency regression beyond A/A spread.
- * Seed a large isolated DB once with --seed-transcript-gib 48, close the process, then
+ * Seed a large isolated DB once with --seed-transcript-gib <logical-gib>, close the process, then
  * reuse its reported agentDatabasePath with --agent-db-fixture for every measured arm.
  * The transcript owner compresses synthetic content; report physical DB bytes, not
  * the requested logical size. COPYFILE_EXCL refuses replacing an already opened DB.
@@ -326,6 +326,7 @@ managedWorktrees.remove = async (input) => {
   }
 };
 const inspector = new Session();
+const maintenanceErrors: string[] = [];
 const kernelSamples: Array<{ atMs: number; psi: string; commits: string[] }> = [];
 const pressureFile = path.join(output, "synthetic-psi");
 const open = fsPromises.open;
@@ -384,7 +385,12 @@ try {
       scheduler,
       getRuntimeConfig: () => config,
       onComplete: resolve,
-      onError: (message) => reject(new Error(message)),
+      onError: (message) => {
+        maintenanceErrors.push(message);
+        if (!observeMs) {
+          reject(new Error(message));
+        }
+      },
     });
     const receipt = owner.request();
     if (observeMs) {
@@ -463,6 +469,7 @@ try {
       scratchClones && fs.existsSync(scratchRoot) ? fs.readdirSync(scratchRoot).length : 0,
     injectedPsiTrace: values["psi-trace"],
     pressureProbeReads,
+    maintenanceErrors,
     kernelSamples,
     eventLoopP99Ms: loop.percentile(99) / 1e6,
     eventLoopMaxMs: loop.max / 1e6,
