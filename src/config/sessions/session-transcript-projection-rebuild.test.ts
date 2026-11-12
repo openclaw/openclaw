@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
+import { rebuildAgentPortProjections } from "../../infra/database-engine/agent-port-projections.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
@@ -22,10 +23,16 @@ import {
   claimPreparedSessionTranscriptProjectionInTransaction as claimProjection,
   deletePreparedSessionTranscriptProjectionChunkInTransaction as deleteProjectionChunk,
   finalizePreparedSessionTranscriptProjectionInTransaction as finalizeProjection,
-  prepareSessionTranscriptProjection as prepareProjection,
+  prepareProjectionSource,
+  prepareSessionTranscriptProjection as prepareStreamingProjection,
 } from "./session-transcript-projection-rebuild.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
+
+function prepareProjection(...args: Parameters<typeof prepareStreamingProjection>) {
+  const plan = prepareStreamingProjection(...args);
+  return plan ? { ...plan, ftsRows: [...plan.ftsRows] } : undefined;
+}
 
 const projectionDatabases: DatabaseSync[] = [];
 afterEach(() => {
@@ -345,4 +352,76 @@ it.each([
   );
   const result = prepareProjection(db, "target");
   expect(result).toEqual(expect.objectContaining(expected));
+});
+
+it("reads prepared FTS payloads only as the consumer advances", () => {
+  const events = ["first", "second", "third"].map((id, index) => ({
+    seq: index + 1,
+    created_at: index + 10,
+    event_json: JSON.stringify(
+      messageEvent(id, index === 0 ? null : ["first", "second"][index - 1], {
+        role: "user",
+        content: [{ type: "text", text: id.repeat(10_000) }],
+      }),
+    ),
+  }));
+  let pointReads = 0;
+  const plan = prepareProjectionSource({
+    sessionId: "stream",
+    transcriptGeneration: "generation",
+    transcriptUpdatedAt: 1,
+    rows: () => events,
+    row: (seq) => {
+      pointReads += 1;
+      return events.find((event) => event.seq === seq);
+    },
+  });
+  expect(plan).toMatchObject({ activeEventCount: 3, activeMessageCount: 3, sourceIndexedSeq: 3 });
+  const planningReads = pointReads;
+  const iterator = plan!.ftsRows[Symbol.iterator]();
+  expect(pointReads).toBe(planningReads);
+  for (const [index, id] of ["first", "second", "third"].entries()) {
+    expect(iterator.next().value).toMatchObject({ messageId: id, text: id.repeat(10_000) });
+    expect(pointReads).toBe(planningReads + index + 1);
+  }
+  expect(iterator.next().done).toBe(true);
+  expect(pointReads).toBe(planningReads + 3);
+});
+
+it("rebuilds active rows, FTS and index state together for an offline SQLite port", async () => {
+  const db = projectionFixture();
+  const expectedHits = hits(db);
+  const expectedActive = rows(
+    db,
+    "SELECT * FROM session_transcript_active_events ORDER BY session_id, active_position",
+  );
+  db.exec(
+    "DELETE FROM session_transcript_active_events; DELETE FROM session_transcript_fts_rows; DELETE FROM session_transcript_index_state",
+  );
+  await rebuildAgentPortProjections({ engine: "sqlite", db });
+  expect(hits(db)).toEqual(expectedHits);
+  expect(
+    rows(db, "SELECT * FROM session_transcript_active_events ORDER BY session_id, active_position"),
+  ).toEqual(expectedActive);
+  expect(
+    rows(
+      db,
+      "SELECT session_id, indexed_seq, needs_rebuild, active_event_count, active_message_count FROM session_transcript_index_state ORDER BY session_id",
+    ),
+  ).toEqual([
+    {
+      session_id: "sibling",
+      indexed_seq: 3,
+      needs_rebuild: 0,
+      active_event_count: 4,
+      active_message_count: 4,
+    },
+    {
+      session_id: "target",
+      indexed_seq: 3,
+      needs_rebuild: 0,
+      active_event_count: 4,
+      active_message_count: 4,
+    },
+  ]);
 });

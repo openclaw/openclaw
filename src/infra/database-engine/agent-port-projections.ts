@@ -3,6 +3,7 @@ import {
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_META_TABLE,
 } from "../../../packages/memory-host-sdk/src/host/memory-schema-base.js";
+import { createSessionTranscriptFtsInserter } from "../../config/sessions/session-transcript-fts.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   prepareProjectionSource,
@@ -70,7 +71,14 @@ export async function rebuildAgentPortProjections(target: PortEndpoint): Promise
       continue;
     }
     if (target.engine === "sqlite") {
-      appendPreparedSessionTranscriptProjectionChunkInTransaction(target.db, plan);
+      appendPreparedSessionTranscriptProjectionChunkInTransaction(target.db, {
+        sessionId,
+        activeRows: plan.activeRows,
+      });
+      const insertFts = createSessionTranscriptFtsInserter(target.db, sessionId);
+      for (const row of plan.ftsRows) {
+        insertFts([row]);
+      }
     } else {
       for (const row of plan.activeRows) {
         await target.db.query(

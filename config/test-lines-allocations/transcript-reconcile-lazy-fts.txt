@@ -1,0 +1,4 @@
+# Regression for bounded lazy FTS planning and consumer advancement.
+# Retain offline-port active/index-state projections while streaming payloads,
+# and materialize only the existing small planner fixtures.
+84

@@ -58,7 +58,7 @@ export type PreparedSessionTranscriptProjectionMetadata = {
 
 export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProjectionMetadata & {
   activeRows: NonNullable<PreparedSessionTranscriptProjectionAppend["activeRow"]>[];
-  ftsRows: TranscriptIndexEntry[];
+  ftsRows: Iterable<TranscriptIndexEntry>;
 };
 
 type ProjectionDeleteChunkResult = {
@@ -105,7 +105,7 @@ export function visitSessionTranscriptProjection(
   sessionId: string,
   visitor: {
     activeRow: (row: PreparedSessionTranscriptProjection["activeRows"][number]) => void;
-    ftsRow: (row: TranscriptIndexEntry) => void;
+    ftsRow: (row: TranscriptIndexEntry, eventSeq: number) => void;
   },
 ): PreparedSessionTranscriptProjectionMetadata | undefined {
   const source = readProjectionSource(db, sessionId);
@@ -205,7 +205,7 @@ function visitProjectionSource(
     const event: unknown = JSON.parse(row.event_json);
     const indexed = extractTranscriptIndexEntry(event, row.created_at);
     if (indexed) {
-      visitor.ftsRow(indexed);
+      visitor.ftsRow(indexed, row.seq);
     }
     if (!shouldProjectActiveEvent(event)) {
       continue;
@@ -234,12 +234,33 @@ export function prepareProjectionSource(
   source: SessionTranscriptProjectionSource,
 ): PreparedSessionTranscriptProjection | undefined {
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-  const ftsRows: TranscriptIndexEntry[] = [];
+  const ftsEventSeqs: number[] = [];
   const metadata = visitProjectionSource(source, {
     activeRow: (row) => activeRows.push(row),
-    ftsRow: (row) => ftsRows.push(row),
+    ftsRow: (_row, seq) => ftsEventSeqs.push(seq),
   });
-  return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
+  if (!metadata) {
+    return undefined;
+  }
+  return {
+    ...metadata,
+    activeRows,
+    // Keep only source positions through planning. Each point read finishes before
+    // yielding, so backpressure retains neither decoded history nor a WAL snapshot.
+    // A rewrite during streaming is rejected by the existing final source guard;
+    // incomplete derived rows remain dirty and are rebuilt on the next attempt.
+    ftsRows: (function* () {
+      for (const seq of ftsEventSeqs) {
+        const row = source.row(seq);
+        if (row) {
+          const indexed = extractTranscriptIndexEntry(JSON.parse(row.event_json), row.created_at);
+          if (indexed) {
+            yield indexed;
+          }
+        }
+      }
+    })(),
+  };
 }
 
 /** Reads and resolves one projection on a worker-owned SQLite snapshot. */
@@ -414,7 +435,7 @@ export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
   db: EngineConnection,
   params: {
     activeRows?: PreparedSessionTranscriptProjection["activeRows"];
-    ftsRows?: PreparedSessionTranscriptProjection["ftsRows"];
+    ftsRows?: TranscriptIndexEntry[];
     sessionId: string;
   },
 ): void {
@@ -425,7 +446,7 @@ function insertPreparedSessionTranscriptProjectionRows(
   db: EngineConnection,
   params: {
     activeRows?: PreparedSessionTranscriptProjection["activeRows"];
-    ftsRows?: PreparedSessionTranscriptProjection["ftsRows"];
+    ftsRows?: TranscriptIndexEntry[];
     sessionId: string;
   },
 ): void {
@@ -454,7 +475,7 @@ function prepareProjectionTailCatchUp(
   db: EngineConnection,
   plan: PreparedSessionTranscriptProjectionMetadata,
   snapshot: TranscriptProjectionSourceSnapshot,
-): PreparedSessionTranscriptProjection | undefined {
+) {
   const latestSeq = snapshot.latestSeq;
   if (
     plan.sourceHasInvalidLeafControl ||
@@ -474,7 +495,7 @@ function prepareProjectionTailCatchUp(
       .orderBy("seq", "asc"),
   ).rows;
   const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-  const ftsRows: PreparedSessionTranscriptProjection["ftsRows"] = [];
+  const ftsRows: TranscriptIndexEntry[] = [];
   let cursor: SessionTranscriptProjectionCursor = {
     activeEventCount: plan.activeEventCount,
     activeMessageCount: plan.activeMessageCount,
