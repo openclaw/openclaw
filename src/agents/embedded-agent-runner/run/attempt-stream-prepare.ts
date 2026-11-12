@@ -28,6 +28,7 @@ import {
 } from "../../run-termination.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
+import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -633,6 +634,7 @@ function prepareStream(
         sessionVersion: activeSession.sessionManager.getHeader()?.version,
         boundary: input.readSessionForkBoundary?.(),
         blockImages: activeSession.settingsManager.getBlockImages(),
+        preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },
     isAborted: () => input.getRunState().aborted,

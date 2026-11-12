@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -68,14 +68,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     trigger.click();
     await picker.updateComplete;
   };
-  const openSearch = async () => {
-    if (!picker.querySelector("input")) {
-      picker.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
-      await picker.updateComplete;
-    }
-  };
   const search = async (value: string) => {
-    await openSearch();
     const input = picker.querySelector<HTMLInputElement>("input")!;
     input.value = value;
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -95,7 +88,7 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
     await picker.updateComplete;
     return event;
   };
-  return { params, picker, trigger, open, openSearch, search, rows, key, update, container };
+  return { params, picker, trigger, open, search, rows, key, update, container };
 }
 
 describe("Picker", () => {
@@ -209,7 +202,6 @@ describe("Picker", () => {
       searchable: "always",
     });
     await p.open();
-    await p.openSearch();
     const search = p.picker.querySelector<HTMLInputElement>("input")!;
     for (const value of ["content", "trigger"]) {
       const row = p.rows().find((option) => option.dataset.value === value)!;
@@ -314,7 +306,6 @@ describe("Picker", () => {
     });
     p.container.style.width = "420px";
     await p.open();
-    await p.openSearch();
     const input = p.picker.querySelector<HTMLInputElement>("input")!;
     const viewport = p.picker.querySelector<HTMLElement>(".picker-select__options")!;
     const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
@@ -349,8 +340,11 @@ describe("Picker", () => {
     await expectActive("model-999", 1000);
     await listKey("Home");
     await expectActive("model-0", 1);
+    // A printable key on the list moves into the search field instead of row typeahead.
+    viewport.focus();
     await listKey("z");
-    await expectActive("model-999", 1000);
+    expect(document.activeElement).toBe(input);
+    await expectActive("model-0", 1);
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.search("Model 0998");
     await expectActive("model-998", 1, 1);
@@ -475,16 +469,16 @@ describe("Picker", () => {
     expect(p.rows().map((row) => row.dataset.value)).toEqual(["fixture/aurora-large"]);
     expect(p.trigger.textContent).toContain("Anchor");
     expect(p.params.onChange).not.toHaveBeenCalled();
-    await p.search("");
+    // Escape clears the query first and keeps the field; an empty field leaves Escape to the picker.
+    p.picker.querySelector<HTMLInputElement>("input")!.focus();
+    await p.key("Escape");
+    expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(p.rows()).toHaveLength(9);
     expect(p.rows()[0]?.textContent).toContain("Fixture provider");
-    await p.key("Escape");
-    expect(p.picker.querySelector("input")).toBeNull();
     await p.key("Escape");
     expect(document.activeElement).toBe(p.trigger);
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.open();
-    await p.openSearch();
     expect(p.picker.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(p.rows()).toHaveLength(9);
   });
@@ -556,22 +550,57 @@ describe("Picker", () => {
     expect(p.rows()).toHaveLength(8);
   });
 
-  it("announces no matches and leaves composition and text editing keys alone", async () => {
-    const p = await mount();
-    await p.open();
-    await p.search("not-present");
-    expect(p.rows()).toHaveLength(0);
-    expect(p.picker.querySelector<HTMLElement>('[role="status"]')!.hidden).toBe(false);
-    expect(p.picker.querySelector('[role="status"]')!.textContent?.trim()).toBe("No matches");
-    expect((await p.key(" ")).defaultPrevented).toBe(false);
-    expect((await p.key("Home")).defaultPrevented).toBe(false);
-    expect((await p.key("Enter", { isComposing: true })).defaultPrevented).toBe(false);
-    expect(p.params.onChange).not.toHaveBeenCalled();
-    const shortcut = vi.fn();
-    p.container.addEventListener("keydown", shortcut);
-    await p.key("x");
-    expect(shortcut).not.toHaveBeenCalled();
-  });
+  it.each(["flat", "grouped", "windowed", "page"])(
+    "keeps no-match feedback at the list origin and leaves editing keys alone (%s)",
+    async (presentation) => {
+      const { page } = await import("vitest/browser");
+      const initialViewport = { width: innerWidth, height: innerHeight };
+      onTestFinished(() => page.viewport(initialViewport.width, initialViewport.height));
+      await page.viewport(390, 844);
+      const p = await mount({
+        sheet: presentation === "page",
+        groupBy: presentation === "grouped" ? () => ({ id: "models", label: "Models" }) : undefined,
+        options:
+          presentation === "windowed"
+            ? [
+                ...options,
+                ...Array.from({ length: 101 }, (_, i) => ({
+                  value: `extra-${i}`,
+                  label: `Extra ${i}`,
+                })),
+              ]
+            : options,
+        windowed: presentation === "windowed" ? () => "" : undefined,
+      });
+      p.container.style.cssText = "position:relative;height:700px";
+      await p.open();
+      const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
+      await expect.element(menu).toBeVisible();
+      await Promise.all(menu.getAnimations().map((animation) => animation.finished));
+      await p.search("Aurora Large");
+      await expect.poll(() => p.rows().length).toBe(1);
+      const resultTop = p.picker
+        .querySelector(".picker-select__options")!
+        .getBoundingClientRect().top;
+      const sheetHeight = menu.getBoundingClientRect().height;
+      await p.search("not-present");
+      expect(p.rows()).toHaveLength(0);
+      expect(p.picker.querySelector<HTMLElement>('[role="status"]')!.hidden).toBe(false);
+      expect(p.picker.querySelector('[role="status"]')!.textContent?.trim()).toBe("No matches");
+      await expect
+        .poll(() => p.picker.querySelector('[role="status"]')!.getBoundingClientRect().top)
+        .toBeCloseTo(resultTop, 0);
+      expect(menu.getBoundingClientRect().height).toBeCloseTo(sheetHeight, 0);
+      expect((await p.key(" ")).defaultPrevented).toBe(false);
+      expect((await p.key("Home")).defaultPrevented).toBe(false);
+      expect((await p.key("Enter", { isComposing: true })).defaultPrevented).toBe(false);
+      expect(p.params.onChange).not.toHaveBeenCalled();
+      const shortcut = vi.fn();
+      p.container.addEventListener("keydown", shortcut);
+      await p.key("x");
+      expect(shortcut).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps short menus compact, supports typeahead, and retains empty/unknown values", async () => {
     const p = await mount({

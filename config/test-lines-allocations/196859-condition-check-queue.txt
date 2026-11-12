@@ -1,0 +1,5 @@
+# Queue rows proving a quiet check ends its waiting episode and that condition checks beyond three stay
+# queued in due order, plus scheduler regressions that take a queued check through graceful shutdown
+# and restart without losing its occurrence, and that keep other checks running while a job waits
+# for its busy conversation. Exact net growth for #196859.
+138
