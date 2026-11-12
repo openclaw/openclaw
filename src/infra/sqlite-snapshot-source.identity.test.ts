@@ -3,11 +3,17 @@ import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import type { RetainedSqliteSnapshotPreparation } from "./sqlite-readonly-location.types.js";
-import { startSqliteReadOnlyLocationAsync } from "./sqlite-snapshot-source.js";
+import {
+  openSqliteReadOnlyDatabase,
+  startSqliteReadOnlyLocationAsync,
+} from "./sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 let cleanupJoined = true;
@@ -113,3 +119,116 @@ it("keeps queued stale and current source admissions independent through the rea
   expect(fs.readFileSync(source)).toEqual(successorBytes);
   expect(readDatabasePathIdentitySync(source)).toEqual(currentIdentity);
 });
+
+function inspectionFixture() {
+  const root = directories.make("sqlite-custodied-inspection-");
+  const source = path.join(root, "source.sqlite");
+  const cache = path.join(root, "cache");
+  fs.mkdirSync(cache);
+  vi.stubEnv("XDG_CACHE_HOME", cache);
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(source);
+  db.exec(
+    "PRAGMA journal_mode=DELETE; CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('preserved')",
+  );
+  db.close();
+  return { root, source, DatabaseSync };
+}
+
+it.each(["no custody", "live authority", "WAL", "journal"])(
+  "keeps a private inspection snapshot with %s",
+  async (condition) => {
+    const { source, DatabaseSync } = inspectionFixture();
+    const writer = condition === "WAL" ? new DatabaseSync(source) : undefined;
+    writer?.exec("PRAGMA journal_mode=WAL; UPDATE probe SET value = 'committed in WAL'");
+    if (condition === "journal") {
+      fs.writeFileSync(source + "-journal", "");
+    }
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+      assertDatabaseAccess(databasePath) {
+        expect(databasePath).toBe(source);
+      },
+    });
+    let location: string | null = null;
+    const inspect = () =>
+      withArtifactPreservingStateReads(
+        () => {
+          const db = openSqliteReadOnlyDatabase(source);
+          try {
+            location = db.location();
+            expect(location).not.toBe(source);
+            expect(db.prepare("SELECT value FROM probe").get()).toEqual({
+              value: condition === "WAL" ? "committed in WAL" : "preserved",
+            });
+          } finally {
+            db.close();
+          }
+        },
+        { agentDatabases: true },
+      );
+    try {
+      if (condition === "no custody") {
+        inspect();
+      } else {
+        scope.run(() => {
+          if (condition === "live authority") {
+            admitOpenClawMaintenanceLiveAuthorityReads(source);
+          }
+          inspect();
+        });
+      }
+      expect(location).not.toBeNull();
+      expect(fs.existsSync(location!)).toBe(false);
+    } finally {
+      writer?.close();
+      await scope.close();
+    }
+  },
+);
+
+it.each(["inode", "size", "mtime", "WAL", "journal", "custody"])(
+  "rejects a changed %s when the in-place inspection closes",
+  async (changed) => {
+    const { source, root } = inspectionFixture();
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+      assertDatabaseAccess(databasePath) {
+        expect(databasePath).toBe(source);
+      },
+    });
+    try {
+      expect(() =>
+        scope.run(() =>
+          withArtifactPreservingStateReads(
+            () => {
+              const db = openSqliteReadOnlyDatabase(source);
+              expect(db.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
+              if (changed === "inode") {
+                const successor = path.join(root, "successor.sqlite");
+                fs.copyFileSync(source, successor);
+                fs.renameSync(source, path.join(root, "original.sqlite"));
+                fs.renameSync(successor, source);
+              } else if (changed === "size") {
+                fs.appendFileSync(source, "changed");
+              } else if (changed === "mtime") {
+                const changedTime = new Date(Date.now() + 60_000);
+                fs.utimesSync(source, changedTime, changedTime);
+              } else if (changed === "custody") {
+                admitOpenClawMaintenanceLiveAuthorityReads(source);
+              } else {
+                fs.writeFileSync(source + (changed === "WAL" ? "-wal" : "-journal"), "changed");
+              }
+              db.close();
+            },
+            { agentDatabases: true },
+          ),
+        ),
+      ).toThrow(/source changed during in-place inspection/);
+    } finally {
+      await scope.close();
+    }
+  },
+);

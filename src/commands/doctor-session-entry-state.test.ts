@@ -12,12 +12,15 @@ import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import * as quarantine from "../state/openclaw-quarantine-store.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -73,6 +76,51 @@ function seedEntry(key: string, fields: Record<string, unknown>) {
     scope: { agentId: "main", env, sessionKey, storePath: database.path },
   };
 }
+
+it("inspects a drained Doctor database in place without changing its artifacts", async () => {
+  state = await createOpenClawTestState({ scenario: "minimal" });
+  const legacy = seedEntry("drained-inspection", { pendingFinalDelivery: true });
+  await closeOpenClawAgentDatabasesAsync();
+  const directory = path.dirname(legacy.databasePath);
+  expect(fs.existsSync(`${legacy.databasePath}-journal`)).toBe(false);
+  expect(fs.statSync(`${legacy.databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
+  const bytes = fs.readFileSync(legacy.databasePath);
+  const entries = fs.readdirSync(directory).toSorted();
+  const locations: (string | null)[] = [];
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const db = open(...args);
+    if (args[1]?.readOnly && args[0].includes("agent.sqlite")) {
+      locations.push(db.location());
+    }
+    return db;
+  });
+  await withDoctorSqliteMaintenanceLock({
+    env: state.env,
+    operation: "drained session inspection",
+    run: async (authority) => {
+      const scope = createOpenClawDatabaseMaintenanceScope({
+        schemaMaintenance: true,
+        assertOwnerCurrent: () => authority.assertCurrent(),
+      });
+      try {
+        const result = await scope.run(() =>
+          withArtifactPreservingStateReads(
+            () => repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state!.env }),
+            { agentDatabases: true },
+          ),
+        );
+        expect(result).toEqual({ found: 1, repaired: 0, scannedStores: 1 });
+      } finally {
+        await scope.close();
+      }
+    },
+  });
+  expect(locations).toContain(legacy.databasePath);
+  expect(locations.every((location) => location === legacy.databasePath)).toBe(true);
+  expect(fs.readFileSync(legacy.databasePath)).toEqual(bytes);
+  expect(fs.readdirSync(directory).toSorted()).toEqual(entries);
+});
 
 it("backs up original rows and migrates pending delivery state before canonical reads", async () => {
   state = await createOpenClawTestState({
