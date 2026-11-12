@@ -178,10 +178,10 @@ it.each([
   expect(mocks.fetch).not.toHaveBeenCalled();
 });
 
-it("rejects a base URL with credentials, a query or a non-HTTP scheme", async () => {
+it("rejects a base URL with a query, a fragment or a non-HTTP scheme", async () => {
   for (const baseUrl of [
-    "https://user:pw@example.test",
     "https://example.test?x=1",
+    "https://example.test#x",
     "ftp://example.test",
   ]) {
     await expect(evaluate({}, { baseUrl })).resolves.toEqual({

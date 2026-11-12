@@ -47,6 +47,7 @@ async function setup() {
     await release.promise;
     return { evaluateTypeSafeDecision: evaluate };
   });
+  // mock-isolation: a held import proves registration stays cold and callers share one load.
   vi.doMock("./client.js", initialize);
   const { registeredPreparedDecisionProvider } = await import("./transport.test-support.js");
   const config: { baseUrl?: string } = { baseUrl: "http://127.0.0.1:1234" };

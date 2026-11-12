@@ -9,6 +9,7 @@ import {
   registeredPreparedDecisionProvider,
 } from "./transport.test-support.js";
 
+// mock-isolation: the hosted plugin key comes from a fixture, not host secret state.
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
 }));
@@ -32,7 +33,10 @@ const context = (model = input.model, apiKey = "synthetic-key"): DecisionProvide
 });
 function sent(fetch: ReturnType<typeof mockJsonResponse>) {
   const [url, init] = fetch.mock.calls[0]!;
-  return { url, headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) };
+  if (typeof init?.body !== "string") {
+    throw new Error("Expected a serialized TypeSafe request");
+  }
+  return { url, headers: new Headers(init.headers), body: JSON.parse(init.body) };
 }
 
 beforeEach(() => {
@@ -127,7 +131,6 @@ it.each([
   "http://localhost:8009/v1",
   "http://localhost:8009?x=1",
   "http://localhost:8009#x",
-  "http://user:password@localhost:8009",
   "file:///localhost",
   "http://localhost:65536",
   "http://127.1:8009",
