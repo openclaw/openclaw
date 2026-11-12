@@ -299,3 +299,24 @@ describe("telegram webhook schema", () => {
     );
   });
 });
+
+describe("telegram transcript echo policy", () => {
+  it.each([true, false])("accepts boolean %s in groups, DMs and topics", (value) => {
+    const policy = { echoTranscript: value, topics: { "42": { echoTranscript: value } } };
+    expectTelegramConfigValid({ groups: { "-100123": policy }, direct: { "123": policy } });
+  });
+  it.each(["groups.-100123", "groups.-100123.topics.42", "direct.123", "direct.123.topics.42"])(
+    "rejects non-boolean in %s",
+    (path) => {
+      const invalid: Record<string, unknown> = {};
+      let entry = invalid;
+      for (const segment of path.split(".")) {
+        const child: Record<string, unknown> = {};
+        entry[segment] = child;
+        entry = child;
+      }
+      entry.echoTranscript = "false";
+      expectTelegramConfigIssue(invalid, `${path}.echoTranscript`);
+    },
+  );
+});

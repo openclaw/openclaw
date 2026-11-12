@@ -254,6 +254,7 @@ export async function resolveTelegramInboundBody(params: {
         MessageSid: String(msg.message_id),
         ChatType: isGroup ? "group" : "direct",
         MessageThreadId: replyThreadId,
+        AudioTranscriptEchoEnabled: topicConfig?.echoTranscript ?? groupConfig?.echoTranscript,
         media: materializedMedia,
       };
       preflightTranscript = await transcribeFirstAudio({

@@ -52,6 +52,21 @@ describe("sendTranscriptEcho", () => {
     );
   });
 
+  it("honors the channel turn policy without suppressing other turns", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx({ AudioTranscriptEchoEnabled: false }),
+      cfg: EMPTY_CONFIG,
+      transcript: "private",
+    });
+    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
+    await sendTranscriptEcho({
+      ctx: createCtx({ AudioTranscriptEchoEnabled: true }),
+      cfg: EMPTY_CONFIG,
+      transcript: "allowed",
+    });
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
+  });
+
   it("skips non-deliverable channels", async () => {
     await sendTranscriptEcho({
       ctx: createCtx({ Provider: "internal-system", From: "some-source" }),

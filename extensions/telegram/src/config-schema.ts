@@ -87,6 +87,7 @@ const TelegramTopicSchema = z
     requireMentionInBotThreads: z.boolean().optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
+    echoTranscript: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
@@ -101,6 +102,7 @@ const TelegramGroupSchema = buildGroupEntrySchema({
   requireMentionInBotThreads: z.boolean().optional(),
   ingest: z.boolean().optional(),
   disableAudioPreflight: z.boolean().optional(),
+  echoTranscript: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional(),
   topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
   errorPolicy: TelegramErrorPolicySchema,
@@ -120,6 +122,7 @@ const AutoTopicLabelSchema = z
 
 const TelegramDirectSchema = z
   .object({
+    echoTranscript: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
