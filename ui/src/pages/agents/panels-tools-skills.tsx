@@ -7,6 +7,7 @@ import {
   createMemo,
   createSignal,
   isPending,
+  latest,
   onSettled,
 } from "solid-js";
 import {
@@ -152,13 +153,28 @@ export function AgentTools(
       denied,
     };
   };
-  const effectivePreviewTools = createMemo(() => resolvePreviewTools(params.readEffective()));
+  // Admission and retirement must not wait behind the async preview they replace.
+  const effectiveScope = createMemo(() =>
+    latest(() => params.effectiveRequest?.scope ?? params.agentId),
+  );
+  const effectivePreviewTools = createMemo(() =>
+    resolvePreviewTools(latest(() => params.effectivePreview)),
+  );
 
-  function EffectiveBoundary(props: { children: (preview: EffectivePreview) => JSX.Element }) {
-    const ready = (): EffectivePreview => {
-      const result = params.readEffective();
-      if (isPending(() => params.readEffective())) {
-        return { result: null, status: "previewLoading", empty: "loadingPreview" };
+  function EffectiveBoundary(props: {
+    children: (preview: () => EffectivePreview) => JSX.Element;
+  }) {
+    const ready = createMemo((): EffectivePreview => {
+      const readEffective = params.readEffective.bind(params);
+      readEffective();
+      const result = latest(() => params.effectivePreview);
+      if (isPending(readEffective)) {
+        return {
+          result,
+          facts: effectivePreviewTools(),
+          status: "previewLoading",
+          empty: "loadingPreview",
+        };
       }
       return {
         result,
@@ -166,31 +182,35 @@ export function AgentTools(
         status: result ? null : "previewNotLoaded",
         empty: result ? null : "previewNotLoaded",
       };
-    };
+    });
     return (
       <Show
         when={params.runtimeSessionMatchesSelectedAgent}
-        fallback={props.children({ status: "otherAgent", empty: "switchAgent", result: null })}
+        fallback={props.children(() => ({
+          status: "otherAgent",
+          empty: "switchAgent",
+          result: null,
+        }))}
       >
-        <Show when={params.effectiveRequest ?? params.agentId} keyed>
+        <Show when={effectiveScope()} keyed>
           <Errored
             fallback={(_error) =>
-              props.children({
+              props.children(() => ({
                 status: "previewUnavailable",
                 empty: "previewError",
                 result: null,
-              })
+              }))
             }
           >
             <Loading
-              on={params.effectiveRequest}
-              fallback={props.children({
+              on={effectiveScope()}
+              fallback={props.children(() => ({
                 status: "previewLoading",
                 empty: "loadingPreview",
                 result: null,
-              })}
+              }))}
             >
-              {props.children(ready())}
+              {props.children(ready)}
             </Loading>
           </Errored>
         </Show>
@@ -311,7 +331,7 @@ export function AgentTools(
             [
               "agentTools.listed",
               <EffectiveBoundary>
-                {(preview) => <ToolListed preview={preview} />}
+                {(preview) => <ToolListed preview={preview()} />}
               </EffectiveBoundary>,
             ],
           ])}
@@ -478,7 +498,7 @@ export function AgentTools(
                               <EffectiveBoundary>
                                 {(preview) => (
                                   <ToolPreview
-                                    preview={preview}
+                                    preview={preview()}
                                     tool={tool()}
                                     configDirty={params.configDirty}
                                     part={partProps.part}
@@ -584,7 +604,7 @@ export function AgentTools(
       <EffectiveBoundary>
         {(preview) => (
           <ToolRuntime
-            preview={preview}
+            preview={preview()}
             sessionKey={params.runtimeSessionKey}
             onJump={hasConfig() ? jumpToTool : undefined}
           />

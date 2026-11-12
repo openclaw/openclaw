@@ -115,7 +115,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   // scroll parent lazily or a stable ref can permanently capture null.
   get scrollElement(): HTMLDivElement | null {
     const parent = this.threadInnerElement?.parentElement;
-    return this.connected && parent instanceof HTMLDivElement && parent.isConnected ? parent : null;
+    const viewport = parent?.classList.contains("chat-thread-content")
+      ? parent.parentElement
+      : parent;
+    return this.connected && viewport instanceof HTMLDivElement && viewport.isConnected
+      ? viewport
+      : null;
   }
   get contentElement(): HTMLDivElement | null {
     return this.threadInnerElement;
