@@ -562,7 +562,7 @@ At `7814aa8d127a93d136cda3445d109b79c9edb43b`, three capture-disabled rows
 accepted missing span attributes as an empty object. One shared outcome
 assertion now requires terminal telemetry before checking private-content
 absence. It also rejects unfinished run/harness spans exported during shutdown.
-All two declarations and nine cases remain, including multiline redaction;
+Both declarations and all nine cases remain, including multiline redaction;
 production and shared helpers are unchanged. One test line is allocated.
 
 The unchanged nine-case file passed in 38.55 seconds wall time, including a cold
@@ -571,7 +571,10 @@ was disabled made each original message, run and harness row pass; each repaired
 row failed on the absent completed outcome. All three producer mutations were
 restored byte for byte. The repaired nine-case file passed in 37.33 seconds wall
 time (32.40 seconds Vitest duration; assertions took 27 ms). Independent
-preservation review found no lost contract. Targeted checks and CI remain pending.
+preservation review and full local ClawSweeper review found no actionable issues.
+Extension-test typecheck, typed lint, formatting, diff and both line-budget checks
+passed. Hosted CI and landing remain pending. These are correctness timings,
+not a speedup claim; real recorder/SDK export proof retains its existing compiler setup.
 
 ## Pending qualification and proof repairs
 
