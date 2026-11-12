@@ -421,7 +421,7 @@ it.each([
   },
 );
 
-it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
+it.each(["text", "text with creation", "voice", "photo", "untranscribed voice"] as const)(
   "labels a first DM topic opened with %s but not an established session",
   async (kind) => {
     const bounded = "a".repeat(499);
@@ -457,18 +457,20 @@ it.each(["text", "voice", "photo", "untranscribed voice"] as const)(
       const firstMessage =
         kind === "text"
           ? message
-          : {
-              ...message,
-              text: undefined,
-              ...(kind === "photo"
-                ? { photo }
-                : { voice: { file_id: "voice", file_unique_id: "voice-unique", duration: 2 } }),
-            };
+          : kind === "text with creation"
+            ? { ...message, forum_topic_created: { name: "New Chat", icon_color: 0 } }
+            : {
+                ...message,
+                text: undefined,
+                ...(kind === "photo"
+                  ? { photo }
+                  : { voice: { file_id: "voice", file_unique_id: "voice-unique", duration: 2 } }),
+              };
       await handleMessage(bot, 2700, firstMessage);
       expect(generated).toHaveBeenCalledTimes(1);
       await renamed.promise;
       expect(generated.mock.calls[0]?.[0].userMessage).toBe(
-        kind === "text"
+        kind === "text" || kind === "text with creation"
           ? bounded
           : kind === "voice"
             ? '[Audio transcript (machine-generated, untrusted)]: "Plan a hiking trip"'

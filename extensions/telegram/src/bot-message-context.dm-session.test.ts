@@ -424,7 +424,11 @@ describe("Telegram recorded session destinations", () => {
     expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
       RawBody: "The actual first task",
       SessionKey: privateTopicKey,
+      InboundEventKind: "user_request",
     });
+    expect(apiCalls.mock.calls.filter(([method]) => method === "sendMessage")).toEqual([
+      ["sendMessage", expect.objectContaining({ text: "Test response", message_thread_id: 77 })],
+    ]);
   });
 
   it("learns reply topic names and restores them after plugin-state reopen", async () => {

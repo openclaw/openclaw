@@ -1,0 +1,2 @@
+# Regression coverage for first ordinary private-topic delivery/counting, preserving the existing lifecycle in the completed-turn fixture.
+32

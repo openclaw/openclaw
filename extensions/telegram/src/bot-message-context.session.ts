@@ -15,6 +15,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
+import { telegramBufferedUserMessageIds } from "./bot-message-context.message-ids.js";
 import { resolveReplyChainMediaType } from "./bot-message-context.reply-media.js";
 import type { BuildTelegramInboundContextPayloadParams } from "./bot-message-context.session.types.js";
 import type {
@@ -598,7 +599,7 @@ export async function buildTelegramInboundContextPayload(
     contextVisibility: contextVisibilityMode,
     extra: {
       MessageSids: hasMultiMessageBatch
-        ? bufferedMessages.map((message) => String(message.message_id))
+        ? telegramBufferedUserMessageIds(bufferedMessages)
         : undefined,
       GroupThread: groupThread,
       BotUsername: primaryCtx.me?.username ?? undefined,
