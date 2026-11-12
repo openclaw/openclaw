@@ -5,6 +5,7 @@ import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { escapeMarkdownText } from "../shared/text/escape-markdown.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatDocsHelp } from "./help-format.js";
@@ -19,10 +20,6 @@ type DocResult = {
   link: string;
   snippet?: string;
 };
-
-function escapeMarkdown(text: string): string {
-  return text.replace(/[()[\]]/g, "\\$&");
-}
 
 async function fetchDocsSearch(query: string, signal?: AbortSignal): Promise<DocResult[]> {
   const url = new URL(SEARCH_API);
@@ -154,13 +151,13 @@ export function registerDocsCli(program: Command) {
           }
           return;
         }
-        const lines: string[] = [`# Docs search: ${escapeMarkdown(query)}`, ""];
+        const lines: string[] = [`# Docs search: ${escapeMarkdownText(query)}`, ""];
         if (results.length === 0) {
           lines.push("_No results._");
         }
         for (const item of results) {
-          const title = escapeMarkdown(item.title);
-          const snippet = item.snippet ? escapeMarkdown(item.snippet) : "";
+          const title = escapeMarkdownText(item.title);
+          const snippet = item.snippet ? escapeMarkdownText(item.snippet) : "";
           const suffix = snippet ? ` - ${snippet}` : "";
           lines.push(`- [${title}](${item.link})${suffix}`);
         }

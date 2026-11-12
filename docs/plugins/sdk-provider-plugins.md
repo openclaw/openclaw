@@ -29,13 +29,13 @@ API calls, not exported OpenClaw functions.
 </Tip>
 
 Auth methods can return `agentRuntimeId` with `defaultModel` when sign-in belongs
-to a native harness. Model Setup applies that runtime to the selected agent's
+to a native harness. Models applies that runtime to the selected agent's
 model entry, not to global model defaults.
 
 `ProviderAuthContext.agentId` identifies the target agent when the caller has one.
 Native sign-in methods may use it to check previously remembered permissions.
 After explicit user consent, return `ProviderAuthResult.nativeRuntimeConsent`
-with the accepted harness IDs. Model Setup stages those permissions on that
+with the accepted harness IDs. Models stages those permissions on that
 agent in the same verified config commit as the runtime routing and plugin enable.
 Do not write a separate permission store or infer consent from successful login.
 
@@ -159,6 +159,9 @@ token requests and persistence; the listener deadline does not cancel that work.
 By default, the listener binds every loopback address resolved for the redirect
 hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
 preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+Port `0` in `redirectUrl` asks for a free port; read the bound redirect from the
+returned `redirectUrl` and use it in both the authorization URL and the token
+exchange.
 
 ## Declare physical credential ownership
 
@@ -185,51 +188,21 @@ plugin auth also exclude agent-credential fallback for plugin-scoped providers.
 
 ## Handle model access after sign-in
 
-Existing consumers of `runModelsAuthLoginFlow` from
-`openclaw/plugin-sdk/provider-auth-login-flow-runtime` must handle a selection
-after credentials are saved. When effective restrictions can hide the provider's
-models, the existing `prompter.select` receives these options:
+Consumers of `runModelsAuthLoginFlow` from
+`openclaw/plugin-sdk/provider-auth-login-flow-runtime` get no model-access
+prompt. When restrictions hide every model of the provider, the flow adds
+`<provider>/*` to the restriction that governs the agent after credentials are
+saved, and returns `modelAccess: { message, applied }`. Show `message` with the
+completion text. `applied: false` means the policy was saved but the running
+Gateway has not confirmed it. Restrictions that already name some of the
+provider's models, and configurations without restrictions, stay unchanged.
 
-| Value  | Label                        | Effect                                                      |
-| ------ | ---------------------------- | ----------------------------------------------------------- |
-| `all`  | `Show all <Provider> models` | Adds that provider's wildcard to the existing policy owner. |
-| `keep` | `Keep current restrictions`  | Leaves restrictions unchanged.                              |
-
-Render the supplied message and options, and return the selected option's value.
-Do not assume that every `select` call chooses a provider or auth method. Neither
-choice activates a new default model. No choice is requested when restrictions
-are absent or already allow the whole provider.
-
-Canceling or rejecting this post-save selection does not undo saved credentials.
-The flow throws `ProviderAuthConfigApplyError`, which extends
-`ProviderCredentialsSavedError`; report that credentials were saved instead of
-treating it as a failed credential exchange. Cancellation at the selection leaves
-restrictions unchanged. A later application failure can leave the policy saved
-but not active in the running Gateway. Keep credential persistence and model
-visibility outcomes distinct.
-
-### Defer the choice to a later reply
-
-For chat buttons, pass the synchronous `onModelAccessRequested` callback. It
-receives a `PreparedProviderModelAccess` request and replaces the post-save
-`select` call; it does not apply the choice. Retain the prepared request until
-login finishes. Use `createProviderLoginFlowRegistry` and
-`reserveProviderLoginFlow` to reserve only the credential exchange.
-
-After login finishes, call `offerProviderLoginModelAccess` with `flows`, `flowKey`,
-`prepared`, and `terminalMessage`. Deliver its structured reply. Always release
-the login in `finally` with `releaseProviderLoginFlow({ flows, flowKey, record })`.
-The pending model-access question has its own lifetime and remains answerable
-after that release; it does not block another login.
-
-Pass the later command to `answerProviderLoginModelAccess` with `flows`, `flowKey`,
-`agentId`, `command`, `runtime`, `readConfig`, and `assertCurrent`; `signal` is
-optional. `readConfig` must return the host's current config. The owner validates
-the answer, applies the choice, and consumes that question. Expired or conflicting
-choices receive a fresh question based on current restrictions.
-Use `cancelProviderLoginFlow({ flows, flowKey })` to cancel either pending phase.
-Do not reconstruct a wildcard write from button text or reuse a prepared request
-for a new login.
+A failed policy write does not undo saved credentials. The flow throws
+`ProviderAuthConfigApplyError`, which extends `ProviderCredentialsSavedError`;
+report that credentials were saved instead of treating it as a failed credential
+exchange. Use `createProviderLoginFlowRegistry` and `reserveProviderLoginFlow` to
+reserve the credential exchange, and release it in `finally` with
+`releaseProviderLoginFlow({ flows, flowKey, record })`.
 
 ### Keep hosted writes authorized
 
@@ -237,15 +210,8 @@ Hosted callers supply `signal` and `assertCurrent` to check the current login,
 sender authority, and selected provider/method before effects and after awaited
 work. An abort signal or matching login identifier alone is not current
 authorization. `beforePersistentEffect` remains the credential-persistence
-preparation callback. Browser authorization ends after the credential phase;
-the later model choice uses the current conversation or wizard authority.
-
-For a deferred choice, pass the answering command's current authority check as
-`answerProviderLoginModelAccess.assertCurrent`. Use its config argument when
-supplied: it is the policy writer's current config. Otherwise read the host's
-current config. The original login callback does not authorize a later command.
-Let the shared owner report the visibility outcome:
-a saved policy is not proof that the running Gateway applied it.
+preparation callback. The model-access write after sign-in uses the same
+`assertCurrent` check.
 
 ## Submit JSON requests
 
@@ -762,6 +728,14 @@ each adapter keeps its own replacement/null policy. The stream mapper preserves
 synchronous returns without importing the embedded runner. These are bundled
 implementation helpers, not new third-party SDK contracts.
 
+The optional fourth argument to `wrapProviderPayloadHook`, `inputObserver`,
+defaults to `false`. Set it to `true` only when both policy callbacks preserve
+retained input items and their nested content. Settings-only policies can then
+reuse prepared input instead of cloning history. The wrapped caller hook still
+receives editable input when needed; its current requirements are checked per
+request, including live extension-handler registration and removal. This flag
+does not change callback order or the adapter's replacement/null policy.
+
 `applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
 policy with pass-through adapters through that private seam. Callers qualify
 the endpoint and normalize vendor-prefixed model IDs before applying it.
@@ -790,6 +764,12 @@ the generic response wait after one second and clears it on cancellation or
 `stop()`. It creates no timer when the caller does not observe waits. A provider
 with request-correlated evidence can call `report("slot")`. Any backend probes
 must be bounded by that request's lifetime; do not add an always-on polling loop.
+
+A native transport that runs `onPayload` itself should call
+`applyProviderPayloadHook(options, payload, model)` from
+`openclaw/plugin-sdk/provider-stream-shared`. It returns the hook's replacement, or the
+original payload when the hook returns `undefined`, and stops waiting when the request
+signal aborts, so a cancelled turn settles without dispatching the request.
 
 ## Next steps
 
@@ -878,3 +858,13 @@ A rejected or lost deletion reply retains cleanup custody. The host can retry
 that exact deletion after restart even when live inspection labels are gone.
 Legacy providers and persisted rows with no receipt keep their existing contract;
 receipt-bearing rows refuse providers that no longer advertise this capability.
+
+### Native web search codecs
+
+`openclaw/plugin-sdk/provider-web-search` exports `nativeWebSearchCodecs` for
+Brave web search, Exa search, Parallel REST search and SearXNG JSON search.
+Each format declares its HTTP method, builds its native query/body, and projects
+results with the native plugin's untrusted-content marking and result metadata.
+The native plugins and ClawRouter use the same codecs. Callers own credentials,
+endpoint admission, SSRF policy, cancellation, response limits and caching; a
+codec does not grant permission to execute an offer or establish its billing.

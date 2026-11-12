@@ -30,6 +30,7 @@ import {
   recordDeferredPluginMigrations,
   restorePluginCohortMigrationPublications,
 } from "./deferred-plugin-migrations.js";
+import { readUpdateDatabaseGenerationPair } from "./update-database-generations.js";
 import {
   decodePluginCohortRecovery,
   type PluginCohortRecovery,
@@ -97,6 +98,24 @@ function setup() {
     readPluginCohortRecoveryPairRows(openOpenClawStateDatabase(options).db, cohort);
   return { options, reservation, cohort, rows };
 }
+
+it("preserves a released updater's SQLite capture before Doctor starts", async () => {
+  const f = setup();
+  await closeOpenClawStateDatabaseAsync();
+  const pathname = resolveOpenClawStateSqlitePath(f.options.env);
+  const before = readUpdateDatabaseGenerationPair([pathname]).physical;
+  await withPluginCohortConfigCapture(
+    {
+      ...f.options,
+      ...fence,
+      runId: f.cohort.runId,
+      installKey: f.cohort.installKey,
+    },
+    async () => {
+      expect(readUpdateDatabaseGenerationPair([pathname]).physical).toEqual(before);
+    },
+  );
+});
 
 it("reopens the paired intent, retains old-reader refusal and settles only its own rows", async () => {
   const f = setup();
@@ -320,9 +339,10 @@ it.each([false, true])(
         ],
       });
       const laterOriginal = row(original.pluginId);
+      // The later decision survives and is reported; nothing else needs restoring.
       await expect(
         restorePluginCohortMigrationPublications(publications, authority),
-      ).rejects.toThrow("Plugin migration obligation changed after update publication");
+      ).resolves.toEqual([original.pluginId]);
       expect(row(original.pluginId)).toEqual(laterOriginal);
       expect(row(unrelated.pluginId)).toEqual(laterUnrelated);
     } finally {
@@ -403,14 +423,13 @@ it.each(["present", "originally absent", "originally present"] as const)(
         env: f.options.env,
         assertCurrent: () => fence.assertCurrent(),
       });
-    if (table === "originally present") {
-      await expect(restore()).rejects.toThrow("missing its original obligations");
-    } else {
-      await restore();
-      await restore();
-      if (table === "present") {
-        expect(readDeferredPluginMigrations(f.options)).toEqual([obligation]);
-      }
+    // An older backup without the obligation table keeps that state rather than
+    // initializing the candidate schema; its original obligation is reported as kept.
+    const kept = table === "originally present" ? [obligation.pluginId] : [];
+    await expect(restore()).resolves.toEqual(kept);
+    await expect(restore()).resolves.toEqual(kept);
+    if (table === "present") {
+      expect(readDeferredPluginMigrations(f.options)).toEqual([obligation]);
     }
     expect(inspect()).toEqual(before);
   },
@@ -520,6 +539,7 @@ it.each([
         }
         intent = reopenedPublication.file;
         if (pathCase !== "root device changed") {
+          // Path identity guards the write target itself; it stays a refusal.
           await expect(
             restorePluginCohortConfigPublication(intent, authority),
           ).rejects.toBeInstanceOf(ConfigMutationConflictError);
@@ -530,7 +550,7 @@ it.each([
       }
       const historicalPathSnapshot = structuredClone(intent.pathSnapshot);
 
-      await restorePluginCohortConfigPublication(intent, authority);
+      await expect(restorePluginCohortConfigPublication(intent, authority)).resolves.toBe(true);
       expect(await fs.readFile(filePath, "utf8")).toBe(beforeRaw);
       await fs.writeFile(filePath, intent.afterRaw);
 
@@ -575,9 +595,8 @@ it.each([
       restoredGateway.port = 18791;
       const conflictingRaw = json(restored);
       await fs.writeFile(filePath, conflictingRaw);
-      await expect(restorePluginCohortConfigPublication(intent, authority)).rejects.toThrow(
-        "Configuration changed after update publication",
-      );
+      // The later writer changed this publication's own leaf; recovery keeps the file.
+      await expect(restorePluginCohortConfigPublication(intent, authority)).resolves.toBe(false);
       expect(await fs.readFile(filePath, "utf8")).toBe(conflictingRaw);
       const retainedPublication = loadPluginCohortRecovery(f.cohort.runId, f.options)!.cohort
         .publications[0];
@@ -591,3 +610,43 @@ it.each([
     }
   },
 );
+
+it("refuses a malformed included file instead of keeping it as a later edit", async () => {
+  const f = setup();
+  const configPath = f.reservation.source!.configPath;
+  const filePath = path.join(path.dirname(configPath), "gateway.json5");
+  const env = { ...f.options.env, NODE_ENV: "test" };
+  const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
+  await fs.writeFile(filePath, json({ mode: "local", port: 18789 }));
+  await fs.writeFile(configPath, json({ gateway: { $include: "./gateway.json5" } }));
+  beginPluginCohortRecovery(f.reservation, { ...f.cohort, publications: [] }, fence, f.options);
+  const authority = { env, assertCurrent: () => fence.assertCurrent() };
+  const io = createConfigIO({ env, configPath, observe: false, pluginValidation: "skip" });
+  await withPluginCohortConfigCapture(
+    { ...authority, runId: f.cohort.runId, installKey: f.cohort.installKey },
+    async () => {
+      const prepared = await io.readConfigFileSnapshotForWrite();
+      await replaceConfigFile({
+        snapshot: prepared.snapshot,
+        sourceConfig: { ...prepared.snapshot.sourceConfig, gateway: { mode: "local", port: 1 } },
+        writeOptions: { ...prepared.writeOptions, skipPluginValidation: true },
+        io: {
+          env,
+          readConfigFileSnapshotForWrite: io.readConfigFileSnapshotForWrite,
+          writeConfigFile: io.writeConfigFile,
+        },
+      });
+    },
+  );
+  await closeOpenClawStateDatabaseAsync();
+  const publication = loadPluginCohortRecovery(f.cohort.runId, f.options)!.cohort.publications[0];
+  if (!publication || publication.kind !== "config" || !publication.file.include) {
+    throw new Error("Expected an included config publication");
+  }
+  // A later in-place edit leaves the included file unparseable, so ownership is unknown.
+  await fs.writeFile(filePath, "{ mode: 'local', port: ");
+  await expect(restorePluginCohortConfigPublication(publication.file, authority)).rejects.toThrow(
+    "Configuration is invalid after update publication",
+  );
+  expect(await fs.readFile(filePath, "utf8")).toBe("{ mode: 'local', port: ");
+});

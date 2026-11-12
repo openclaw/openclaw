@@ -131,6 +131,12 @@ openclaw-chat-camera-capture {
   }
   .primary:hover:not(:disabled) {
     background: var(--primary-hover);
+    color: var(--primary-foreground);
+  }
+
+  .primary:active:not(:disabled) {
+    background: var(--primary-active);
+    color: var(--primary-foreground);
   }
   .icon-button {
     width: 32px;

@@ -403,7 +403,7 @@ export async function createWorkerSessionToolTestFixture(
   function createToolRuntime(
     runtimeOptions: Pick<
       Parameters<typeof createWorkerGatewayTools>[0],
-      "prepareTools" | "skillWorkshop"
+      "prepareTools" | "skillLibrary"
     > & {
       identity?: WorkerConnectionIdentity;
       additionalInheritedToolNamesRef?: string[];
@@ -489,9 +489,8 @@ export async function createWorkerSessionToolTestFixture(
     identity,
     execute,
     createToolRuntime,
-    createTools: (
-      skillWorkshop?: Parameters<typeof createWorkerGatewayTools>[0]["skillWorkshop"],
-    ) => createWorkerGatewayTools({ ...executorParams, identity, skillWorkshop }),
+    createTools: (skillLibrary?: Parameters<typeof createWorkerGatewayTools>[0]["skillLibrary"]) =>
+      createWorkerGatewayTools({ ...executorParams, identity, skillLibrary }),
     sourceClaim,
     delegatedAuthorities,
     closeSourceRun: () => {

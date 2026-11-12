@@ -1,6 +1,5 @@
 .session-title-placeholder {
   --skeleton-base: color-mix(in srgb, var(--text) 9%, transparent);
-  --skeleton-highlight: color-mix(in srgb, var(--text) 10%, transparent);
 
   display: inline-flex;
   align-items: center;

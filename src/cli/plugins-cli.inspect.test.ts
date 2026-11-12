@@ -20,6 +20,7 @@ import {
   expectNoPluginCliCalls as expectNoCalls,
   pluginsCliRuntimeLogs as logs,
   resetPluginsCliTestState,
+  resolvePluginLifecycleGatewayMock,
   retirePluginDiagnosticsMock,
   runPluginsCommand,
   runPluginCli as plugins,
@@ -88,6 +89,33 @@ describe("plugins cli inspect", () => {
   });
   afterEach(() => {
     process.exitCode = originalExitCode;
+  });
+
+  it.each([false, true])("distinguishes CLI loading from Gateway state (all: %s)", async (all) => {
+    const plugin = createPluginRecord({ id: "cli-only", status: "loaded" });
+    mockInspection(plugin);
+    const query = vi.fn().mockResolvedValue({
+      plugins: [{ id: plugin.id, runtime: { state: "unloaded" } }],
+    });
+    resolvePluginLifecycleGatewayMock.mockResolvedValue(query);
+    const selector = all ? "--all" : plugin.id;
+    await plugins("inspect", selector, "--runtime", "--json");
+    const result = JSON.parse(logs.at(-1) ?? "null");
+    expect(all ? result[0] : result).toMatchObject({
+      inspectionScope: "cli",
+      plugin: { status: "loaded" },
+      gatewayRuntime: { state: "unloaded" },
+    });
+    await plugins("inspect", selector, "--runtime");
+    const output = stripVTControlCharacters(logs.at(-1) ?? "");
+    expect(output).toContain("CLI status");
+    expect(output).toContain("Gateway");
+    expect(output).toContain("unloaded");
+
+    query.mockRejectedValue(new Error("Gateway unavailable"));
+    await plugins("inspect", selector, "--runtime", "--json");
+    const unavailable = JSON.parse(logs.at(-1) ?? "null");
+    expect((all ? unavailable[0] : unavailable).gatewayRuntime).toBeNull();
   });
 
   it.each([false, true])(
@@ -330,22 +358,21 @@ describe("plugins cli inspect", () => {
 
   it("runtime-inspects exact plugin ids and display names without repairing deps", async () => {
     const plugin = createPluginRecord({ id: "openclaw-mem0", name: "Mem0" });
-    mockInspection(
-      plugin,
-      {
-        gatewayDiscoveryServices: ["mem0-runtime-discovery"],
-      },
-      [createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }), plugin],
+    loadPluginMetadataSnapshotMock.mockReturnValue(
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ id: plugin.id, legacyPluginIds: ["mem0-old"] }],
+      }),
     );
+    mockInspection(plugin, { gatewayDiscoveryServices: ["mem0-runtime-discovery"] }, [
+      createPluginRecord({ id: "unrelated-plugin", name: "openclaw-mem0" }),
+      plugin,
+    ]);
+    const selection = { config: {}, onlyPluginIds: [plugin.id], runtimeInspection: true };
 
-    for (const selector of ["openclaw-mem0", "Mem0"]) {
+    for (const selector of ["openclaw-mem0", "Mem0", "OPENCLAW-MEM0", "mem0-old"]) {
       await plugins("inspect", selector, "--runtime");
       expect(withDiagnostics).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          config: {},
-          onlyPluginIds: ["openclaw-mem0"],
-          runtimeInspection: true,
-        }),
+        expect.objectContaining(selection),
         expect.any(Function),
       );
       expect(logs.at(-1)).toContain("Gateway discovery:\nmem0-runtime-discovery");

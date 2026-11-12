@@ -585,7 +585,7 @@ async function executeAgentTurnOutcome(
   // Keep committed facts outside cleanup so a restart cannot erase them.
   const compaction: AgentTurnCompaction = { count: 0, durable: [] };
   const completedCompaction = () =>
-    compaction.count > 0
+    compaction.count > 0 || compaction.durable.length > 0
       ? { compaction: { count: compaction.count, durable: [...compaction.durable] } }
       : {};
   let terminalOutcomeCommitted = false;

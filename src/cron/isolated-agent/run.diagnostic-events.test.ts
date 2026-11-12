@@ -111,15 +111,15 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       parentSpanId: harnessTrace?.spanId,
     });
     expect(trace.getActiveDiagnosticTraceContext()).toBeUndefined();
-    expect(
-      published.filter(({ type }) =>
-        ["message.queued", "session.state", "message.processed"].includes(type),
-      ),
-    ).toMatchObject([
+    const lifecycleTypes = new Set(["message.queued", "session.state", "message.processed"]);
+    const finalSession = { sessionId: "persisted-run-session", queueDepth: 0 };
+    expect(published.filter(({ type }) => lifecycleTypes.has(type))).toMatchObject([
       { type: "message.queued", sessionId: "test-session-id" },
       { type: "session.state", state: "processing", sessionId: "test-session-id" },
-      { type: "session.state", state: "idle", sessionId: "persisted-run-session" },
+      // Message completion consumes the input while the controller still owns cleanup.
+      { type: "session.state", state: "processing", ...finalSession },
       { type: "message.processed", sessionId: "persisted-run-session" },
+      { type: "session.state", state: "idle", ...finalSession, reason: "reply_operation_ended" },
     ]);
   });
 

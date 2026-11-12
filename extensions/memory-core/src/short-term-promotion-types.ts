@@ -12,7 +12,6 @@ import type {
   ShortTermDreamingStatsEntry,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
-import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT;
@@ -117,44 +116,6 @@ export type RankShortTermPromotionOptions = PromotionThresholdOptions & {
   includePromoted?: boolean;
   recencyHalfLifeDays?: number;
   nowMs?: number;
-};
-
-export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
-  agentId?: string;
-  workspaceAgentIds?: readonly string[];
-  workspaceDir: string;
-  workspaceFileMode?: WorkspaceFileMode;
-  candidates: PromotionCandidate[];
-  limit?: number;
-  nowMs?: number;
-  timezone?: string;
-  /**
-   * Maximum size of MEMORY.md on disk after a promotion write, in
-   * characters. When the post-write size would exceed this budget, the
-   * oldest auto-promotion sections may be compacted out, within
-   * `maxPriorEntryLossFraction`, so the file stays bounded and bootstrap
-   * injection keeps reaching new sessions. Pass `0` to disable compaction. Defaults to
-   * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
-   */
-  memoryFileMaxChars?: number;
-  /**
-   * Maximum visible size of each promoted short-term snippet in MEMORY.md, in
-   * estimated tokens. This keeps daily journal ranges from being copied
-   * wholesale into long-term memory while preserving the candidate's provenance
-   * metadata.
-   */
-  maxPromotedSnippetTokens?: number;
-  /** Maximum fraction of prior entries a promotion write may remove. */
-  maxPriorEntryLossFraction?: number;
-  consolidation?: {
-    subagent?: import("./dreaming-narrative.js").DreamingCompletion;
-    model?: string;
-    timeoutMs?: number;
-    logger: {
-      info: (message: string) => void;
-      warn: (message: string) => void;
-    };
-  };
 };
 
 /** Fixed diagnostic labels; never include candidate identifiers or threshold values. */

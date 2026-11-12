@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   buildHistoryContext,
@@ -24,7 +25,6 @@ import {
 import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveCompactionThreshold,
-  shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
@@ -141,9 +141,9 @@ describe("history helpers", () => {
   });
 });
 
-describe("shouldRunMemoryFlush", () => {
+describe("shouldRunPreflightCompaction", () => {
   it("skips when entry is missing", () => {
-    expect(shouldRunMemoryFlush({ entry: undefined, threshold: 11_000 })).toBe(false);
+    expect(shouldRunPreflightCompaction({ entry: undefined, threshold: 11_000 })).toBe(false);
   });
 
   it("honors the selected reserve in a 32K-token window", () => {
@@ -155,26 +155,15 @@ describe("shouldRunMemoryFlush", () => {
     for (const tokenCount of [12_767, 12_768, 12_769]) {
       expect(
         shouldRunPreflightCompaction({
-          entry: { totalTokens: tokenCount, totalTokensFresh: true, totalTokensVersion: 1 },
+          entry: {
+            totalTokens: tokenCount,
+            totalTokensFresh: true,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+          },
           threshold,
         }),
       ).toBe(tokenCount >= 12_768);
     }
-  });
-
-  it("skips when already flushed for current compaction count", () => {
-    expect(
-      shouldRunMemoryFlush({
-        entry: {
-          totalTokens: 96_000,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
-          compactionCount: 2,
-          memoryFlush: { kind: "succeeded", compactionCount: 2 },
-        },
-        threshold: 93_000,
-      }),
-    ).toBe(false);
   });
 });
 

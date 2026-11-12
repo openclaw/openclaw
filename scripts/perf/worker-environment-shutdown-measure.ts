@@ -50,6 +50,7 @@ const record: WorkerEnvironmentRecord = {
   profileSnapshot: { settings: { device: "synthetic" } },
   provisionOperationId: "synthetic-provision",
   resourceReceipt: null,
+  retention: null,
   nodeSetupId: null,
   nodeDeviceId: "synthetic",
   sharedHost: true,

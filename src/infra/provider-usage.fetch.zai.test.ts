@@ -36,6 +36,7 @@ describe("fetchZaiUsage", () => {
 
   it.each([
     [null, "API error"],
+    [{ success: true, code: "200oops" }, "API error"],
     [{ success: false, code: 500, msg: "quota endpoint disabled" }, "quota endpoint disabled"],
   ])("reports invalid API payloads: %j", async (payload, error) => {
     const result = await fetchUsage(payload);
@@ -68,6 +69,22 @@ describe("fetchZaiUsage", () => {
     );
   });
 
+  it.each([200, "200"])("reports string-encoded quota numbers with code %j", async (code) => {
+    const result = await fetchUsage({
+      success: true,
+      code,
+      data: {
+        level: "lite",
+        limits: [
+          { type: "TOKENS_LIMIT", percentage: "45.6", unit: "3", number: "5" },
+          { type: "TIME_LIMIT", percentage: "123", unit: "5", number: "1" },
+        ],
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toEqual([window("Tokens (5h)", 45.6), window("Monthly", 100)]);
+  });
+
   it.each([
     undefined,
     8_640_000_000_000_001,
@@ -95,6 +112,7 @@ describe("fetchZaiUsage", () => {
         tokens(-5, 99),
         tokens(10, 3),
         limit("TIME_LIMIT", "40"),
+        { type: "TOKENS_LIMIT", percentage: "45.6%", unit: "3hours", number: "123days" },
       ],
       { plan: " Pro " },
     );
@@ -105,7 +123,8 @@ describe("fetchZaiUsage", () => {
       window("Monthly", 100),
       window("Tokens (Limit)", 0),
       window("Tokens (Limit)", 10),
-      window("Monthly", 0),
+      window("Monthly", 40),
+      window("Tokens (Limit)", 0),
     ]);
   });
 });

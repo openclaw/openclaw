@@ -102,7 +102,7 @@ export const msTeamsApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
       await editAdaptiveCardMSTeams({
         cfg,
         accountId: entry.accountId,
-        to: entry.conversationId,
+        to: `conversation:${entry.conversationId}`,
         activityId: entry.activityId,
         card: payload,
       });

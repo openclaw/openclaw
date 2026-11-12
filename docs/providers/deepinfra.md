@@ -91,6 +91,15 @@ deepinfra/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B
 ...and many more
 ```
 
+## Thinking
+
+For `deepinfra/nvidia/NVIDIA-Nemotron-3.5-Super-VL`, explicit thinking `off`
+sends `reasoning: { enabled: false }` on the OpenAI-compatible chat route. This
+requests disabled reasoning using [DeepInfra's documented off control](https://docs.deepinfra.com/chat/reasoning).
+Enabled thinking levels continue to use nested `reasoning.effort`; leaving
+thinking unset preserves the provider default. Off support is model-specific,
+not a capability of every DeepInfra reasoning model.
+
 ## Prompt caching
 
 For the native `https://api.deepinfra.com/v1/openai` endpoint, OpenClaw sends a

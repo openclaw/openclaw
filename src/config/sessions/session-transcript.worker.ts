@@ -26,6 +26,8 @@ import type {
   SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
+type TranscriptReply = SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues>;
+
 const startup:
   | { databaseEngineSelection?: DatabaseEngineSelection; prewarmHistory?: true }
   | undefined = workerData;
@@ -49,13 +51,7 @@ let releaseReadValidation:
 const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
 serveOwnedWorkerTasks(
-  async (
-    input,
-    channel,
-    control,
-  ): Promise<
-    SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
-  > => {
+  async (input, channel, control): Promise<TranscriptReply | UsageCostWorkerReply> => {
     // Pressure stays inside this isolate and drops decoded caches before the next snapshot.
     // Bun's compatibility probe walks the heap instead of describing a V8 allocation limit.
     const heap = process.versions.bun ? undefined : getHeapStatistics();
@@ -111,12 +107,11 @@ serveOwnedWorkerTasks(
           control,
           async (database, read) => {
             closed.delete(JSON.stringify(database));
-            const result = await withHistoryDatabase(database, request.kind, read);
-            if (result.closedHistoryDatabase) {
-              closed.set(
-                JSON.stringify(result.closedHistoryDatabase),
-                result.closedHistoryDatabase,
-              );
+            const operation = `usage.${request.operation.kind}`;
+            const result = await withHistoryDatabase(database, operation, read);
+            const retired = result.closedHistoryDatabase;
+            if (retired) {
+              closed.set(JSON.stringify(retired), retired);
             }
             return result.value;
           },
@@ -344,10 +339,10 @@ serveOwnedWorkerTasks(
         return { kind: request.kind, result: readSessionRetirementInWorker(request) };
       }
       if (request.kind === "session-exact-entries") {
-        const { readExactSessionEntriesWithLifecycle } =
+        const { readExactSessionEntriesWithLifecycleAsync } =
           await import("./session-entry-read.worker.js");
         request.env = cloneEnvWithPlatformSemantics(request.env);
-        return readExactSessionEntriesWithLifecycle(request);
+        return readExactSessionEntriesWithLifecycleAsync(request, control.signal);
       }
       if (request.kind === "session-row-facts") {
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
@@ -391,9 +386,14 @@ serveOwnedWorkerTasks(
             );
         return { kind: "session-identity-evidence" as const, evidence };
       }
-      if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
-        const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");
-        return readSessionEntryWorkerRequest(request);
+      if (request.kind === "session-entry-read") {
+        const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
+        return readSessionEntryResult(request);
+      }
+      if (request.kind === "session-runtime-target") {
+        const { readSessionRuntimeTargetWorkerRequest } =
+          await import("./session-runtime-target-read.worker.js");
+        return readSessionRuntimeTargetWorkerRequest(request);
       }
       if (request.kind === "session-entry-list") {
         const { readSessionEntryList } = await import("./session-entry-list.worker.js");
@@ -636,18 +636,9 @@ serveOwnedWorkerTasks(
               database: request.database,
             });
           }
-          if (request.kind === "session-reset-recall") {
-            const { readSessionResetRecallCutoffInProcess } =
-              await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
-            return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
-          }
-          if (request.mode === "snapshot") {
-            const { readSessionEntrySnapshotRequest } =
-              await import("./session-transcript-hydration-read.worker.js");
-            return readSessionEntrySnapshotRequest(request);
-          }
-          const { prepareSessionMemoryEntry } = await import("./session-memory-entry.worker.js");
-          return prepareSessionMemoryEntry(request);
+          const { readSessionResetRecallCutoffInProcess } =
+            await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
+          return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
         },
       );
     };
@@ -661,7 +652,9 @@ serveOwnedWorkerTasks(
               ? request.request.kind === "summary"
                 ? `history.${request.request.params.query.kind}`
                 : `history.${request.request.kind}`
-              : request.kind,
+              : request.kind === "transcript-hydration"
+                ? `transcript-hydration.${request.caller ?? "session-manager"}`
+                : request.kind,
             () => withSessionTranscriptProjectionReceipt(request.projectionReceipt, readRequest),
             request.validation,
             request.kind === "transcript-match" ? request.request.diagnostics : undefined,

@@ -12,6 +12,7 @@ import type {
 } from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
+import * as sqliteReaderMetrics from "./sqlite-reader-metrics.js";
 import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
 import {
   canObserveWorkerMessages,
@@ -22,8 +23,7 @@ import {
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
 import {
   collectPostgresBridgeCounters,
-  countPostgresBridges,
-  countPostgresPoolSelfRoots,
+  summarizePostgresBridgeCounters,
   readPostgresBridgeCounters,
   type PostgresBridgeCounter,
 } from "./worker-postgres-bridge-census.js";
@@ -179,14 +179,6 @@ function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): vo
   publishPostgresBridgeCounters();
 }
 
-function getTrackedPostgresPoolCounts() {
-  const counters = getTrackedPostgresBridgeCounters();
-  return {
-    postgresBridgeCount: countPostgresBridges(counters),
-    postgresPoolSelfRootCount: countPostgresPoolSelfRoots(counters),
-  };
-}
-
 /** Pool identity follows its live Workers without retaining the pool itself. */
 export function attributeWorkerToPool(
   worker: WorkerCpuHandle,
@@ -244,7 +236,7 @@ export function getTrackedWorkerPoolSnapshot() {
   }
   return {
     workerCount: trackedWorkers.workers.size,
-    ...getTrackedPostgresPoolCounts(),
+    ...summarizePostgresBridgeCounters(getTrackedPostgresBridgeCounters()),
     workerPoolCount: pools.size,
     workerPools: [...pools.values()]
       .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
@@ -264,6 +256,7 @@ function forgetWorker(worker: WorkerCpuHandle): void {
     Atomics.sub(trackedWorkers.postgresBridgeCount, 0, 1);
   }
   source.memoryFlush?.resolve();
+  sqliteReaderMetrics.retire(source);
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
   trackedWorkers.revision++;
@@ -575,8 +568,14 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         | { gc: GcSample[] }
         | { gcStorm: WorkerGcStorm }
         | { postgresBridgeCounters: PostgresBridgeCounter[] }
+        | { sqliteReaderCounter: sqliteReaderMetrics.SqliteReaderCounter }
         | { retireWorkerId: string },
     ) => {
+      if ("sqliteReaderCounter" in record) {
+        sqliteReaderMetrics.receive(source, record.sqliteReaderCounter);
+        recordWorkerMessage("memory", "from_worker", 16);
+        return;
+      }
       if ("postgresBridgeCounters" in record) {
         receivePostgresBridgeCounters(source, record.postgresBridgeCounters);
         recordWorkerMessage("memory", "from_worker");
@@ -674,7 +673,8 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
-    ...getTrackedPostgresPoolCounts(),
+    sqliteReaderMetrics: sqliteReaderMetrics.snapshotSqliteReaderMetrics(),
+    ...summarizePostgresBridgeCounters(getTrackedPostgresBridgeCounters()),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,

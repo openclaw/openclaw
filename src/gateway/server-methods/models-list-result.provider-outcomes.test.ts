@@ -207,13 +207,18 @@ it.each([false, true])("projects cooldown only when unavailable (%s)", async (av
   const evaluateNative = vi.spyOn(projector, "evaluateNative");
   const prepared = await prepareModelsListResult(preloaded(config, snapshot, projector));
 
+  const agentRuntime = expect.objectContaining({ id: "openclaw", source: "implicit" });
   expect(prepared.read().models).toEqual([
-    { ...model, tags: ["configured"], available, ...(available ? {} : cooldown) },
+    { ...model, agentRuntime, tags: ["configured"], available, ...(available ? {} : cooldown) },
   ]);
   const hostEvaluations = evaluateEntry.mock.calls.length;
   evaluateNative.mockReturnValue({ availability: true, routeResolution: null });
-  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: true }]);
+  expect(prepared.read().models).toEqual([
+    { ...model, agentRuntime, tags: ["configured"], available: true },
+  ]);
   evaluateNative.mockReturnValue({ availability: false, routeResolution: null });
-  expect(prepared.read().models).toEqual([{ ...model, tags: ["configured"], available: false }]);
+  expect(prepared.read().models).toEqual([
+    { ...model, agentRuntime, tags: ["configured"], available: false },
+  ]);
   expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
 });

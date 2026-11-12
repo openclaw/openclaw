@@ -9,6 +9,7 @@ export function createAgentExecMatrixConfig(model: string, thinking: string) {
   const provider = model.split("/")[0]!;
   return mergeDeep(
     {
+      meta: { migrations: { skillWorkshopPlugin: true } },
       agents: { entries: { main: {} } },
       plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
       tools: { codeMode: { executor: "node" } },
@@ -111,6 +112,7 @@ export function createGatewayMatrixConfig(params: {
   };
   // Task-specific limits cannot change the selected treatment, runtime, or model settings.
   return mergeDeep(mergeDeep(baseConfig, params.configPatch ?? {}), {
+    meta: { migrations: { skillWorkshopPlugin: true } },
     agents: matrixModelConfig(params.model, params.thinking),
     // An options-only object disables activation, so auto must omit the whole setting.
     ...(params.mode === "auto"

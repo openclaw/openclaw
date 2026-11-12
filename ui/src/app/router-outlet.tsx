@@ -1,5 +1,5 @@
 import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, onSettled, Show } from "solid-js";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { SolidRouteProps } from "../app-route-types.tsx";
 import type { ApplicationRouter } from "../app-routes.ts";
@@ -9,6 +9,7 @@ import { LoadingState } from "../components/solid/loading-state.tsx";
 import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
+import { finishBootFrame } from "./boot-composer.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { RouteElements, type RouteElementEvent } from "./route-elements.ts";
@@ -30,12 +31,20 @@ type RouteErrorProps = {
   error: unknown;
   routeId: ApplicationRouteMatch["routeId"];
   inline?: boolean;
+  hideDetail?: boolean;
+  reset?: () => void;
+};
+
+type RouteRenderBoundary = Pick<RouteErrorProps, "router" | "retryContext" | "routeId"> & {
+  key: string;
 };
 
 function RouteError(props: RouteErrorProps) {
+  onSettled(() => finishBootFrame());
   const staleChunk = () => isStaleChunkImportError(props.error);
   const handleRetry = (event: Event) => {
     if (!staleChunk()) {
+      props.reset?.();
       if (props.retryContext !== undefined) {
         void props.router.revalidate(props.retryContext, props.routeId).catch(() => undefined);
       }
@@ -79,10 +88,50 @@ function RouteError(props: RouteErrorProps) {
           error={props.error}
           onRetry={handleRetry}
           inline={props.inline}
+          hideDetail={props.hideDetail}
           stale={staleChunk()}
         />
       </Show>
     </>
+  );
+}
+
+/** A page that throws while rendering fails alone: the shell around the outlet keeps working. */
+function RouteRenderError(props: {
+  boundary: RouteRenderBoundary;
+  error: unknown;
+  loadFailed: boolean;
+  reset: () => void;
+}) {
+  let failed = false;
+  return (
+    <Show when={props.boundary.key} keyed>
+      {(_key) => {
+        // A page outlives navigation between routes that share it and refetches of its data, so
+        // a new destination or a finished load renders it again.
+        const retryDestination = failed;
+        failed = true;
+        onSettled(() => {
+          if (retryDestination) {
+            props.reset();
+          } else {
+            console.error("[openclaw] route render failed", props.error);
+          }
+        });
+        return (
+          <Show when={!props.loadFailed}>
+            <RouteError
+              router={props.boundary.router}
+              retryContext={props.boundary.retryContext}
+              routeId={props.boundary.routeId}
+              error={props.error}
+              hideDetail
+              reset={props.reset}
+            />
+          </Show>
+        );
+      }}
+    </Show>
   );
 }
 
@@ -110,6 +159,7 @@ function renderRouterOutlet(
       : { state: "loading", composer: renderedMatch.routeId === "chat" };
   }
   const routeModule = renderedMatch.module;
+  const { pathname, search } = renderedMatch.location;
   if (
     error &&
     (routeModule.retainOnNavigate || isAgentDatabaseInspectionPendingError(error.error))
@@ -122,6 +172,14 @@ function renderRouterOutlet(
       data: renderedMatch.data,
       loaderPending: renderedMatch.isFetching === "loader",
       presented,
+    },
+    boundary: {
+      router,
+      retryContext,
+      routeId,
+      key: [routeId, pathname, search, presented, renderedMatch.isFetching, Boolean(error)].join(
+        "\u0000",
+      ),
     },
     error: error ? { ...error, inline: true } : undefined,
   };
@@ -143,6 +201,7 @@ type RouteContent =
   | {
       render: (props: SolidRouteProps) => SolidJSX.Element;
       props: SolidRouteProps;
+      boundary: RouteRenderBoundary;
       error?: RouteErrorProps;
     }
   | { state: "empty" | "startup"; error?: RouteErrorProps }
@@ -181,11 +240,22 @@ function RoutePresentation(props: {
           <ContentPresentation value={() => props.presented !== false}>
             <Show when={current().render} keyed>
               {(View) => (
-                <View
-                  data={current().props.data}
-                  loaderPending={current().props.loaderPending}
-                  presented={current().props.presented}
-                />
+                <Errored
+                  fallback={(failure, reset) => (
+                    <RouteRenderError
+                      boundary={current().boundary}
+                      error={failure()}
+                      loadFailed={Boolean(error())}
+                      reset={reset}
+                    />
+                  )}
+                >
+                  <View
+                    data={current().props.data}
+                    loaderPending={current().props.loaderPending}
+                    presented={current().props.presented}
+                  />
+                </Errored>
               )}
             </Show>
           </ContentPresentation>

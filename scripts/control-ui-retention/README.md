@@ -23,6 +23,23 @@ neither engine's forced-GC samples simulate operating-system memory pressure.
 The mock releases closed transports while preserving connection-history metadata;
 its request history is cleared at each checkpoint.
 
+For a retained-heap owner census, select `--steps memory-owner-census`. It samples
+empty Chat, 400 and 2,000 messages, native route entry and retirement, and twenty
+distinct session switches in one document. `memory-workboard-visit` and
+`memory-mcp-relay-visit` sample plugin entry/retirement with their own fixtures;
+redirects do not represent extra pages.
+Select `--steps memory-transcript-0,memory-transcript-400,memory-transcript-2000`
+for fresh-document transcript measurements with only the requested session in
+the fixture. The cumulative census intentionally keeps earlier panes cached.
+
+Both workloads include browser-resident synthetic Gateway data and injected
+script source. Attribute those separately from decoded product messages, cached
+Markdown, projections, and loaded modules before interpreting total heap. DOM
+windowing bounds mounted rows, not all transcript data. Chromium runtime heap,
+Chromium snapshot self sizes (including external backing), and WebKit snapshot
+self sizes are different measurements; compare each metric within its engine.
+Firefox does not expose forced GC or heap snapshots through this harness.
+
 The bounded dependency probe does not need an application build. It bundles the
 installed runtime in production, development, and observe modes and uses a fresh
 Chromium document for each, so the first-select retention cannot hide behind a

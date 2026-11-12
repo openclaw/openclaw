@@ -13,7 +13,8 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 ## Presence
 
 - `system-presence` returns one row per live operator connection, including
-  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  `deviceId`, `roles`, and `scopes` for operator readers (see
+  [broadcast event scoping](#broadcast-event-scoping) for session-only readers). Separate tabs keep their own watched-session
   facts. Reconnecting removes offline rows for the same identity: device ID,
   then client instance ID, then connection ID. When the last connection closes,
   at most one offline row for that identity remains until the five-minute TTL.
@@ -213,8 +214,15 @@ sessions do not passively receive session content
   `plugin.approval.requested` / `plugin.approval.resolved` use
   `operator.approvals` instead.
 - Presence events require operator read access (`operator.read`, also satisfied
-  by `operator.write` or `operator.admin`). Watched-session references are filtered
-  for each recipient, including in hello snapshots and `system-presence` replies.
+  by `operator.write` or `operator.admin`) or session read access
+  (`operator.sessions.read`, also satisfied by `operator.sessions.write`).
+  Watched-session references are filtered for each recipient, including in hello
+  snapshots and `system-presence` replies.
+- Session-only readers, such as guests, receive a person-only view: `ts`,
+  `lastActivityAt`, the profile's `id`, `identity`, `name`, and `avatarUrl`,
+  a `disconnect` reason, and their visible watched sessions. Device, network,
+  connection, scope, and email fields are omitted, and rows without a resolved
+  profile carry no person. `presence.query` remains `operator.read` only.
 - Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
 - Unknown broadcast event families are blocked unless the caller has the required scope

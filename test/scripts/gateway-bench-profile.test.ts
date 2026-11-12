@@ -106,6 +106,33 @@ function heapBytesUnder(
   );
 }
 
+it("writes synchronous GC marker bytes without normalizing capture identities", async () => {
+  const ownerUrl = new URL("../../scripts/lib/gateway-bench-profile.ts", import.meta.url).href;
+  const { child, closed, stdout, stderr } = spawnFixture(
+    [
+      "--input-type=module",
+      "-e",
+      `
+      import { writeSync } from "node:fs";
+      import { writeGatewayGcTraceMarker } from ${JSON.stringify(ownerUrl)};
+      for (const profilePath of [undefined, "", 'raw/../capture"\\\\name']) {
+        writeGatewayGcTraceMarker("heap-start", profilePath);
+        writeSync(1, "after\\n");
+      }
+      `,
+    ],
+    undefined,
+    false,
+  );
+  expect(await closed).toEqual([0, null]);
+  expect(stderr()).toBe("");
+  expect(stdout()).toBe(
+    `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid}}\nafter\n` +
+      `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid},"profilePath":""}\nafter\n` +
+      `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid},"profilePath":"raw/../capture\\"\\\\name"}\nafter\n`,
+  );
+});
+
 it("enables GC tracing without passing unsupported arguments to default Workers", async () => {
   const { closed, stdout, stderr } = spawnFixture(
     [

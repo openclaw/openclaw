@@ -176,7 +176,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
   const store = piSessionStore(env);
   const key = `${store.root}\0${store.flat}\0${piAcpSessionStoreRoot(env) ?? ""}`;
   const cached = piFileCandidateCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && cached.expiresAt > performance.now()) {
     piFileCandidateCache.delete(key);
     piFileCandidateCache.set(key, cached);
     return await cached.candidates;
@@ -185,7 +185,7 @@ async function piFileCandidates(env: NodeJS.ProcessEnv): Promise<PiFileCandidate
     piFileCandidateCache.delete(key);
   }
   const candidates = scanPiFileCandidates(env);
-  const entry = { expiresAt: Date.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
+  const entry = { expiresAt: performance.now() + PI_FILE_CANDIDATE_CACHE_TTL_MS, candidates };
   piFileCandidateCache.set(key, entry);
   pruneMapToMaxSize(piFileCandidateCache, PI_FILE_CANDIDATE_CACHE_MAX_ENTRIES);
   try {

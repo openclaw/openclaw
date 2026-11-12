@@ -5,6 +5,7 @@ import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { checkTargetDatabaseSchemasForContexts as checkSchemas } from "../cli/update-cli/schema-preflight.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -55,13 +56,30 @@ async function readArtifacts(files: string[]) {
   return Promise.all(
     files.map((file) =>
       Promise.all(
-        ["", "-wal", "-shm"].map(async (suffix) => [
-          suffix,
-          await fs.readFile(file + suffix).catch(ignoreMissingPath),
-        ]),
+        ["", "-wal", "-shm"].map(
+          async (suffix) =>
+            [suffix, await fs.readFile(file + suffix).catch(ignoreMissingPath)] as const,
+        ),
       ),
     ),
   );
+}
+
+function expectArtifactsEqual(
+  actual: Awaited<ReturnType<typeof readArtifacts>>,
+  expected: Awaited<ReturnType<typeof readArtifacts>>,
+) {
+  const shape = (artifacts: typeof actual) =>
+    artifacts.map((file) => file.map(([suffix, bytes]) => [suffix, bytes !== undefined]));
+  expect(shape(actual), "artifact order and presence").toEqual(shape(expected));
+  actual.forEach((file, fileIndex) => {
+    file.forEach(([suffix, bytes], suffixIndex) => {
+      const expectedBytes = expected[fileIndex]![suffixIndex]![1];
+      if (bytes !== undefined && expectedBytes !== undefined) {
+        expectBytesEqual(bytes, expectedBytes, `artifact ${fileIndex}${suffix}`);
+      }
+    });
+  });
 }
 
 describe.skipIf(!connection)("mixed-engine update inventory", () => {
@@ -164,7 +182,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
       contentVersion: STATE_VERSION,
     });
     expect(versions.find((entry) => entry.path === fixture.agent)?.userVersion).toBe(AGENT_VERSION);
-    expect(await readArtifacts(files)).toEqual(before);
+    expectArtifactsEqual(await readArtifacts(files), before);
     for (const kind of ["state", "agent"] as const) {
       const incompatible = [
         {
@@ -178,7 +196,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
       expect(result).toMatchObject({ indeterminate: [], incompatible });
     }
     expect(await admit(fixture)).toMatchObject({ indeterminate: [], incompatible: [] });
-    expect(await readArtifacts(files)).toEqual(before);
+    expectArtifactsEqual(await readArtifacts(files), before);
   });
 
   it.each([AGENT_VERSION - 1, AGENT_VERSION + 1])(
@@ -202,7 +220,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
         const result = await admit(fixture);
         expect(result.indeterminate).toEqual([]);
         expect(result.incompatible).toHaveLength(version > AGENT_VERSION ? 1 : 0);
-        expect(await fs.readFile(fixture.agent)).toEqual(before);
+        expectBytesEqual(await fs.readFile(fixture.agent), before, "selected PostgreSQL anchor");
       } finally {
         await setVersion(AGENT_VERSION);
       }

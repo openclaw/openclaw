@@ -9,16 +9,13 @@ import {
   type SessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ErrorCode } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
-import type {
-  SessionBranchSwitchMutationResult,
-  SessionMessageCutMutationResult,
-} from "../../config/sessions/session-accessor.js";
 import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionMessageCutResult as MessageCutMutationResult } from "../../config/sessions/session-message-cut.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
@@ -53,6 +50,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-sharing.js"
 import { withGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
+import { LocalWorkspaceConflictError } from "../worker-environments/local-workspace-conflict-error.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
@@ -77,10 +75,6 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
-type MessageCutMutationResult =
-  | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult
-  | { status: "conflict" };
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": defineValidatedGatewayHandler(
@@ -586,6 +580,10 @@ async function mutatePreparedSessionAtMessage({
         }
         if (error instanceof ModelSelectionLockedError) {
           reject(error.message);
+          return;
+        }
+        if (error instanceof LocalWorkspaceConflictError) {
+          reject(error.message, ErrorCodes.UNAVAILABLE);
           return;
         }
         reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);

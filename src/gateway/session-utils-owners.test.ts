@@ -57,6 +57,9 @@ const ownerFacet = (id: string, label: string, type: "human" | "agent" = "human"
   id,
   identity: { type: type === "human" ? "profile" : "agent", id },
   label,
+  ...(type === "human"
+    ? { avatarUrl: "/api/users/" + encodeURIComponent(id) + "/avatar?v=42" }
+    : {}),
 });
 const adaOwner = {
   ...ownerFacet("profile-ada", "Ada"),
@@ -320,6 +323,24 @@ it("filters immutable creator and effective owner separately while preserving pr
   }
 });
 
+it("serializes an owner-only row without participant metadata", async () => {
+  const store = {
+    "agent:main:owner-only": ownedSession("session-owner-only", 1, "profile-ada", {
+      participants: [profileParticipant("profile-ada")],
+      participantCount: 1,
+    }),
+  };
+  const query = queryFor("/synthetic/owner-only-wire", store);
+  const result = await listSessionFixture(query);
+  const row = findRow(result, ":owner-only");
+  expect(row?.owner?.actor.identity).toEqual({ type: "profile", id: "profile-ada" });
+  expect(row?.createdActor?.identity).toEqual(row?.owner?.actor.identity);
+  const wire = JSON.stringify(row);
+  expect(wire).not.toContain('"participants":');
+  expect(wire).not.toContain('"expandedParticipants":');
+  expect(wire).not.toContain('"participantCount":');
+});
+
 it("deduplicates participants in order, excludes the owner, and filters sessions involving the viewer", async () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:owned": ownedSession("session-owned", 3, "profile-ada", {
@@ -443,6 +464,7 @@ it("associates a required spawn creator without inventing profile contributions 
     id: "former",
     identity: { type: "profile", id: "current" },
     label: "Current",
+    avatarUrl: "/api/users/current/avatar?v=1",
   };
   expect(all.sessions.find((row) => row.key === childKey)).toMatchObject({
     createdActor: creator,
@@ -460,7 +482,11 @@ it("associates a required spawn creator without inventing profile contributions 
   expect(unqualified?.owner).toBeUndefined();
   const involving = await listSessionFixture({ ...query, involvingActorId: "current" });
   expect(keys(involving)).toEqual(["agent:main:historical", childKey]);
-  const current = { ...profileParticipant("current"), label: "Current" };
+  const current = {
+    ...profileParticipant("current"),
+    label: "Current",
+    avatarUrl: "/api/users/current/avatar?v=1",
+  };
   expect(involving.sessions[0]?.participants).toEqual([current]);
   expect(involving.people).toEqual([{ ...current, sessionCount: 2 }]);
   const ownerFirst = await listSessionFixture({

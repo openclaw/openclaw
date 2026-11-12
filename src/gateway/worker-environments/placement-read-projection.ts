@@ -18,8 +18,8 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readTableColumns, tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
-import { workerPlacementMoveFromRow } from "./placement-move-intent.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
+import { workerPlacementMoveFromRow } from "./placement-move-row-codec.js";
 import type {
   WorkerEnvironmentPlacementFacts,
   WorkerPlacementConflictBinding,
@@ -38,8 +38,8 @@ import { isCurrentJournalOwner } from "./placement-workspace-journal.js";
 import {
   isWorkerWorkspaceResultReconciling,
   matchesWorkspaceResultClaim,
+  pendingResultFromRow,
 } from "./placement-workspace-result-owner.js";
-import { pendingResultFromRow } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { decodeWorkerEnvironmentRow } from "./store-row-codec.js";
 
@@ -147,6 +147,7 @@ function readProjectionRows(
       "recovery_requested_at_ms",
       "workspace_accepted_at_ms",
       "staged_result_ref",
+      "repository_disk_authority_json",
       "created_at_ms",
     ])
     .select((eb) =>
@@ -179,6 +180,7 @@ function readProjectionRows(
       "node_device_id",
       "shared_host",
       "lease_id",
+      "retention_json",
       "ssh_host",
       "ssh_port",
       "ssh_user",
@@ -372,8 +374,9 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
       ),
     );
     const add = (sessionId: string): WorkerPlacementRecoveryCandidate => {
-      const candidate = candidates.get(sessionId) ??
+      const candidate: WorkerPlacementRecoveryCandidate = candidates.get(sessionId) ??
         placements.get(sessionId) ?? { sessionId, environmentId: null };
+      candidate.workspaceRecoveryPending = true;
       candidates.set(sessionId, candidate);
       return candidate;
     };
@@ -403,3 +406,10 @@ export function readWorkerPlacementRecoveryCandidatesInDatabase(
     return [...candidates.values()];
   });
 }
+
+export const workerPlacementReadOperations = {
+  "workers.placementRecoveryCandidates": (_input: undefined, db: EngineConnection) => ({
+    type: "workers.placementRecoveryCandidates" as const,
+    candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
+  }),
+};

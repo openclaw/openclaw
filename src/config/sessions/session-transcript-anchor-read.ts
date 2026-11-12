@@ -49,6 +49,13 @@ export async function readSessionTranscriptAnchorsAsync(
     const facts = memory.missing
       ? {
           anchors: [],
+          // Like the SQLite reader, an absent transcript has only the empty root on its path.
+          ...(selection.activePathEntryId !== undefined
+            ? {
+                activePathRelation:
+                  selection.activePathEntryId === null ? ("exact" as const) : ("off-path" as const),
+              }
+            : {}),
           ...(selection.includeMetadata
             ? { metadata: { present: false, observedAt: null, updatedAt: null } }
             : {}),

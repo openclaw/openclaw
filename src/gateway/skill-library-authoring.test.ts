@@ -6,7 +6,7 @@ import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
 import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/library/service.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -57,7 +57,7 @@ const roles = (name: string, scope: OperatorScope) => ({
   },
 });
 const textResult = (
-  result: Awaited<ReturnType<ReturnType<typeof createLibrarySkillWorkshopTool>["execute"]>>,
+  result: Awaited<ReturnType<ReturnType<typeof createSkillLibraryTool>["execute"]>>,
 ) => JSON.parse(result.content.find((block) => block.type === "text")!.text!);
 async function setup() {
   vi.stubEnv("OPENCLAW_STATE_DIR", temps.make("personal-authoring-"));
@@ -100,7 +100,7 @@ async function admitted(
     invoke: (input: Parameters<typeof capability.invoke>[0]) =>
       withCaller(() => capability.invoke(input)),
     assertWorkspaceCurrent: () => withCaller(() => capability.assertWorkspaceCurrent?.()),
-    execute: (tool: ReturnType<typeof createLibrarySkillWorkshopTool>, input: unknown) =>
+    execute: (tool: ReturnType<typeof createSkillLibraryTool>, input: unknown) =>
       withCaller(() => tool.execute("test", input)),
     context,
   };
@@ -138,7 +138,7 @@ describe("human personal namespace authority", () => {
     });
     const capability = (await prepareTurn(owner))!;
     using run = await admitted(capability);
-    const tool = createLibrarySkillWorkshopTool(capability);
+    const tool = createSkillLibraryTool(capability);
     const read = textResult(
       await run.execute(tool, { action: "read", skill_id: other.entry.skillId }),
     );
@@ -262,7 +262,7 @@ describe("human personal namespace authority", () => {
   });
 });
 
-it("serves worker Workshop through the same Gateway capability and rejects a lost turn claim", async () => {
+it("serves the worker skill library through the same Gateway capability and rejects a lost turn claim", async () => {
   const { alice, request } = await setup();
   const capability = await authoring(request(alice.id));
   const run = await admitted(capability, "worker-personal-turn");
@@ -284,7 +284,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       throw new Error("claim lost");
     }
   };
-  const hostTool = createLibrarySkillWorkshopTool({
+  const hostTool = createSkillLibraryTool({
     ...capability,
     invoke: (input) =>
       withGatewayToolCallerIdentity(

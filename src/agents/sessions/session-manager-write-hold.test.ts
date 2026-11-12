@@ -6,7 +6,10 @@ import {
   resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { prepareTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
+import {
+  prepareTranscriptMessageAppend,
+  prepareTranscriptMessageAppendForWorker,
+} from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -18,6 +21,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import * as transcriptRedact from "../transcript-sanitize.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
+import { canonicalizeSessionEntry } from "./session-manager-persistence-entry.js";
 import { SessionManager } from "./session-manager.js";
 
 async function setup(state: OpenClawTestState) {
@@ -41,6 +45,44 @@ const assistantMessage = (text: string) => ({
   usage: createZeroUsageFixture(),
   stopReason: "stop" as const,
   timestamp: 2,
+});
+
+it.each(["replay", "media"])("retains admitted payloads across %s storage preparation", (kind) => {
+  const message = {
+    ...assistantMessage("output 🦞\ud800"),
+    details: { values: [Number.NaN, -0, undefined] },
+    ...(kind === "replay"
+      ? {
+          providerReplay: {
+            v: 1 as const,
+            type: "openai-responses-compaction",
+            data: "QQ==",
+            provider: "openai",
+            api: "openai-responses" as const,
+            model: "synthetic",
+          },
+        }
+      : { MediaPaths: ["/synthetic/image.png"], MediaTypes: ["image/png"] }),
+  };
+  const expectedJson = JSON.stringify({
+    ...assistantMessage("output 🦞\ud800"),
+    details: { values: [null, 0, null] },
+    ...(kind === "media"
+      ? { __openclaw: { media: [{ path: "/synthetic/image.png", contentType: "image/png" }] } }
+      : {}),
+  });
+  const entry = canonicalizeSessionEntry({
+    type: "message",
+    id: "synthetic",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    message,
+  });
+  const prepared = prepareTranscriptMessageAppendForWorker({ message: entry.message });
+  expect(prepared.messageJson).toBe(expectedJson);
+  expect(prepared.persistedMessage.content).toBe(entry.message.content);
+  expect(prepared.persistedMessage.details).toBe(entry.message.details);
+  expect(Object.isFrozen(prepared.persistedMessage.content[0])).toBe(true);
 });
 
 it.each(["assistant", "toolResult"] as const)(

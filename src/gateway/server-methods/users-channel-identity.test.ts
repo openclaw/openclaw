@@ -2,18 +2,25 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { UsersChannelIdentityResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import * as bundledChannels from "../../channels/plugins/bundled.js";
+import { getLoadedChannelPlugin } from "../../channels/plugins/registry.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { listCanonicalUserChannelIdentities } from "../../state/user-channel-identity-operations.js";
+import {
+  changeCanonicalUserChannelIdentity,
+  listCanonicalUserChannelIdentities,
+} from "../../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -39,7 +46,12 @@ let bob: GatewayClient;
 let context: GatewayRequestContext;
 let config: OpenClawConfig;
 let providerCurrent: boolean;
-const exchange = vi.fn(async () => ({ senderId: "123456789012345678" }));
+type PreparedIdentityLink = NonNullable<
+  Awaited<ReturnType<NonNullable<ChannelPlugin["identityLink"]>["prepare"]>>
+>;
+const exchange = vi.fn<PreparedIdentityLink["exchange"]>(async () => ({
+  senderId: "123456789012345678",
+}));
 const nonce = "11111111-1111-4111-8111-111111111111";
 const cookie = "openclaw-channel-link-" + nonce + "=" + nonce;
 const owner = (client: GatewayClient) => client.authenticatedUserProfile!.profileId;
@@ -158,9 +170,64 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-it("links through the real Discord adapter, rejects replay and conflicts, and disconnects through the canonical store", async () => {
+it("reports and disconnects saved identities without loading an unconfigured channel", async () => {
+  setActivePluginRegistry(createTestRegistry([]));
+  const load = vi.spyOn(bundledChannels, "getBundledChannelPlugin").mockImplementation(() => {
+    throw new Error("Unconfigured channel runtime must remain unloaded");
+  });
+  onTestFinished(() => load.mockRestore());
+  const status = () => rpc(alice, { action: "status", channelId: "discord" });
+  expect((await status()).slice(0, 2)).toEqual([true, { status: "ready", accounts: [] }]);
+  await changeCanonicalUserChannelIdentity("link", owner(alice), {
+    channelId: "discord",
+    accountId: "default",
+    senderId: "123456789012345678",
+  });
+  expect((await status()).slice(0, 2)).toEqual([
+    true,
+    {
+      status: "ready",
+      accounts: [{ accountId: "default", available: false, senderIds: ["123456789012345678"] }],
+    },
+  ]);
+  expect(
+    (await rpc(alice, { action: "disconnect", channelId: "discord", accountId: "default" }))[0],
+  ).toBe(true);
+  expect(await listCanonicalUserChannelIdentities(owner(alice))).toEqual([]);
+  expect(load).not.toHaveBeenCalled();
+});
+
+it("allows a configured bundled adapter to link before its channel runtime is registered", async ({
+  signal,
+}) => {
+  const completed = createDeferred();
+  const exchangeIdentity = exchange.getMockImplementation()!;
+  exchange.mockImplementationOnce(async (params) => {
+    // The authorization owner closes its signal after publishing the terminal result.
+    completed.resolve(waitForAbortSignal(params.signal));
+    return exchangeIdentity(params);
+  });
+  const plugin = getLoadedChannelPlugin("discord")!;
+  setActivePluginRegistry(createTestRegistry([]));
+  config = { channels: { discord: {} } };
+  setRuntimeConfigSnapshot(config);
+  const load = vi.spyOn(bundledChannels, "getBundledChannelPlugin").mockReturnValue(plugin);
+  onTestFinished(() => load.mockRestore());
+  expect((await rpc(alice, { action: "status", channelId: "discord" }))[1]).toMatchObject({
+    accounts: [{ accountId: "default", available: true }],
+  });
+  const flow = await start();
+  expect(callback(flow, cookie)).toBe(200);
+  await withinTest(completed.promise, signal);
+  expect((await terminal(flow)).status).toBe("linked");
+  expect(await listCanonicalUserChannelIdentities(owner(alice))).toHaveLength(1);
+});
+
+it("links through the real Discord adapter, rejects replay and conflicts, and disconnects through the canonical store", async ({
+  signal,
+}) => {
   const requests: string[] = [];
-  let userResponse = Promise.withResolvers<void>();
+  let completed = createDeferred();
   const server = createServer((req, res) => {
     requests.push(`${req.method} ${req.url}`);
     const body =
@@ -170,11 +237,7 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
           ? { id: "123456789012345678" }
           : undefined;
     res.writeHead(body ? 200 : 404, { "content-type": "application/json" });
-    res.end(JSON.stringify(body ?? {}), () => {
-      if (req.method === "GET" && req.url === "/api/v10/users/@me") {
-        userResponse.resolve();
-      }
-    });
+    res.end(JSON.stringify(body ?? {}));
   });
   onTestFinished(() => server[Symbol.asyncDispose]());
   await once(server.listen(0, "127.0.0.1"), "listening");
@@ -195,6 +258,22 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
     pluginId: "discord",
     artifactBasename: "api.js",
   });
+  const identityLink = discordPlugin.identityLink!;
+  const prepare = identityLink.prepare;
+  const observedPrepare = vi.spyOn(identityLink, "prepare").mockImplementation(async (...args) => {
+    const adapter = await prepare(...args);
+    return (
+      adapter && {
+        ...adapter,
+        exchange(params) {
+          // Session close follows terminal publication, including the canonical store write.
+          completed.resolve(waitForAbortSignal(params.signal));
+          return adapter.exchange(params);
+        },
+      }
+    );
+  });
+  onTestFinished(() => observedPrepare.mockRestore());
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
   );
@@ -206,7 +285,7 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
   expect(requests).toEqual([]);
   expect(callback(flow, cookie)).toBe(200);
   expect(callback(flow, cookie)).toBe(410);
-  await userResponse.promise;
+  await withinTest(completed.promise, signal);
   expect((await terminal(flow)).status).toBe("linked");
   expect(requests).toEqual(["POST /api/v10/oauth2/token", "GET /api/v10/users/@me"]);
   expect(await listCanonicalUserChannelIdentities(owner(alice))).toEqual([
@@ -216,10 +295,10 @@ it("links through the real Discord adapter, rejects replay and conflicts, and di
     },
   ]);
   expect(await listCanonicalUserChannelIdentities(owner(bob))).toEqual([]);
-  userResponse = Promise.withResolvers<void>();
+  completed = createDeferred();
   const other = await start(bob);
   expect(callback(other, cookie)).toBe(200);
-  await userResponse.promise;
+  await withinTest(completed.promise, signal);
   expect(await terminal(other, bob)).toMatchObject({
     status: "failed",
     message: expect.stringContaining("another profile"),
@@ -279,13 +358,8 @@ it.each(["connection", "scope", "provider", "cancel"])(
 );
 
 it("rechecks live authority after exchanging proof and before storing the link", async () => {
-  let finish!: (identity: { senderId: string }) => void;
-  exchange.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      }),
-  );
+  const finish = createDeferred<{ senderId: string }>();
+  exchange.mockReturnValueOnce(finish.promise);
   const observer = {
     ...alice,
     connId: "observer",
@@ -296,7 +370,7 @@ it("rechecks live authority after exchanging proof and before storing the link",
   expect(callback(flow, cookie)).toBe(200);
   await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
   clients.delete(alice);
-  finish({ senderId: "123456789012345678" });
+  finish.resolve({ senderId: "123456789012345678" });
   expect((await terminal(flow, observer)).status).toBe("failed");
   expect(await listCanonicalUserChannelIdentities(owner(alice))).toEqual([]);
 });

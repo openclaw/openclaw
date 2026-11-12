@@ -54,13 +54,13 @@ it.each(["profile", "device"] as const)(
         runner: target === "device" ? { kind: "device", status: "available" } : undefined,
       },
     });
-    expect(text(container, "chip")).toBe("Worker · syncing files");
+    expect(text(container, "chip")).toBe("Device · syncing files");
     await openPlacement(container);
-    expect(text(container, "note")).toContain("Finalizing worker workspace");
+    expect(text(container, "note")).toContain("Saving workspace changes");
     expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
     if (target === "device") {
       expect(container.textContent).toContain("Inference");
-      expect(container.textContent).toContain("Direct from worker");
+      expect(container.textContent).toContain("Direct from device");
     } else {
       expect(container.textContent).not.toContain("Inference");
       expect(container.textContent).not.toContain("Through Gateway");
@@ -69,9 +69,23 @@ it.each(["profile", "device"] as const)(
 );
 
 it.each([
-  ["available", "starting", "profile", "Runs on device", "Move session…", "Stop device worker…"],
-  ["offline", "failed", "profile", "Device offline", "Continue on Gateway…", "Stop device worker…"],
-  [undefined, "failed", "device", "Runs on Cloud", "Move session…", "Stop cloud worker…"],
+  [
+    "available",
+    "starting",
+    "profile",
+    "Runs on device",
+    "Move session…",
+    "Stop session on device…",
+  ],
+  [
+    "offline",
+    "failed",
+    "profile",
+    "Device disconnected",
+    "Continue on Gateway…",
+    "Stop session on device…",
+  ],
+  [undefined, "failed", "device", "Cloud device", "Move session…", "Stop cloud device…"],
 ] as const)(
   "renders %s ownership ahead of %s %s startup intent",
   async (status, phase, targetKind, label, moveLabel, stopLabel) => {
@@ -86,7 +100,7 @@ it.each([
         placementStartupStatus: { phase, targetKind },
         placementReclaimDisabledReason:
           status === "offline"
-            ? "Reconnect the device to stop and sync its workspace, or Continue on Gateway."
+            ? "Reconnect the device to stop and sync its workspace, or continue on the Gateway."
             : undefined,
       },
     );
@@ -97,7 +111,7 @@ it.each([
     expect(part(container, "move")?.hasAttribute("disabled")).toBe(false);
     expect(reclaim?.textContent?.trim()).toBe(stopLabel);
     if (status === "offline") {
-      expect(text(container, "note")).toContain("Waiting for device to reconnect");
+      expect(text(container, "note")).toContain("Waiting for the device to reconnect");
       expect(reclaim?.hasAttribute("disabled")).toBe(true);
       expect(reclaim?.title).toContain("Reconnect the device");
     } else {
@@ -118,10 +132,10 @@ it.each(["local", undefined] as const)(
       },
       { onPlacementRecover },
     );
-    expect(text(container, "chip")).toBe("Worker required");
+    expect(text(container, "chip")).toBe("Device required");
     await openPlacement(container);
     const dispatch = part(container, "recovery");
-    expect(dispatch?.textContent?.trim()).toBe("Choose worker…");
+    expect(dispatch?.textContent?.trim()).toBe("Choose device…");
     expect(part(container, "move")).toBeNull();
     dispatch?.click();
     await waitForSolid(() => expect(onPlacementRecover).toHaveBeenCalledOnce());
@@ -130,7 +144,7 @@ it.each(["local", undefined] as const)(
 
 it.each([
   ["restart", "recovery", "Restart session…", "reclaim"],
-  ["stop-first", "reclaim", "Stop worker…", "recovery"],
+  ["stop-first", "reclaim", "Stop session on device…", "recovery"],
 ] as const)(
   "offers only the %s action after worker failure",
   async (recoveryAction, action, label, absent) => {

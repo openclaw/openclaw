@@ -1,4 +1,4 @@
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { McpAppDiscoverResult } from "../../../../src/shared/mcp-app-extensions.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
@@ -101,6 +101,7 @@ it.each([
       expect(platform.getBoundingClientRect().height).toBeGreaterThan(0);
 
       discovery.resolve(catalog);
+      await vi.dynamicImportSettled();
       await waitForSolid(() =>
         expect(mounted.container.querySelectorAll(".mcp-app-catalog__entry")).toHaveLength(100),
       );

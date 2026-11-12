@@ -2,6 +2,7 @@ import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticWorkerRetainedData } from "../infra/diagnostic-process-types.js";
 import { estimateRetainedDataSize } from "../infra/retained-data-size.js";
 import {
@@ -113,12 +114,14 @@ export function measurePreparedCatalogRetainedData(
     >
   >,
   request: PreparedModelCatalogWorkerInput | undefined,
+  generationConfigs: Iterable<OpenClawConfig> = [],
 ): DiagnosticWorkerRetainedData[] {
   const live = [...generations];
   const contexts = live.map((entry) => getPluginRuntimeLoadContext(entry.pluginRegistry));
   const configs = new Set([
     getRuntimeConfigSnapshot(),
     getRuntimeConfigSourceSnapshot(),
+    ...generationConfigs,
     ...contexts.flatMap((context) =>
       context ? [context.rawConfig, context.config, context.activationSourceConfig] : [],
     ),

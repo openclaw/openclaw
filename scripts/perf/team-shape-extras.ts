@@ -33,6 +33,7 @@ type FixtureSession = { sessionKey: string; sessionId: string };
 
 export type TeamShapeExtrasOptions = {
   stateDir: string;
+  agentId?: string;
   sessions: FixtureSession[];
   retainedRuns: number;
   settledRuns?: boolean;
@@ -53,6 +54,7 @@ export type TeamShapeExtrasOptions = {
 };
 
 function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRunRecord {
+  const agentId = options.agentId ?? "main";
   const rootCount = teamShapeRootSessionCount(options.sessions.length);
   const childCount = options.sessions.length - rootCount;
   const childOffset = index % childCount;
@@ -91,10 +93,10 @@ function retainedRun(index: number, options: TeamShapeExtrasOptions): SubagentRu
   return {
     runId,
     childSessionKey: child.sessionKey,
-    childAgentId: "main",
+    childAgentId: agentId,
     childSessionIdentity: { sessionId: child.sessionId },
     requesterSessionKey: parent.sessionKey,
-    requesterAgentId: "main",
+    requesterAgentId: agentId,
     controllerSessionKey: parent.sessionKey,
     requesterDisplayKey: parent.sessionKey,
     task,
@@ -314,6 +316,7 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
 /** Offline generation only: the caller owns a new state directory and binds its environment. */
 export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
   const started = performance.now();
+  const agentId = options.agentId ?? "main";
   if (options.sessions.length === 0 && (options.retainedRuns > 0 || options.approvals > 0)) {
     throw new Error("Retained runs and approvals require at least one fixture session");
   }
@@ -324,7 +327,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
   if (options.localPlacements) {
     runOpenClawStateWriteTransaction(({ db }) => {
       for (const session of options.sessions.slice(0, options.localPlacements)) {
-        ensureLocal(db, { ...session, agentId: "main" }, options.now);
+        ensureLocal(db, { ...session, agentId }, options.now);
       }
     });
   }
@@ -346,7 +349,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
   }
   const childIdentities = new Map<string, NonNullable<SubagentRunRecord["childSessionIdentity"]>>();
   const databaseOptions = {
-    agentId: "main",
+    agentId,
     env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir },
   };
   for (let offset = 0; offset < options.sessions.length; offset += 100) {
@@ -428,10 +431,10 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
           warningText: null,
           host: "gateway",
           nodeId: null,
-          agentId: "main",
+          agentId,
           allowedDecisions: ["allow-once", "deny"],
         },
-        source: { agentId: "main", ...session, toolName: "exec" },
+        source: { agentId, ...session, toolName: "exec" },
         audienceSessionKeys: [session.sessionKey],
         runtimeEpoch: "team-shape-offline-generation",
         createdAtMs: options.now - index * 1_000,
@@ -445,7 +448,7 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
   const jobs: CronStoredJob[] = Array.from({ length: options.cronJobs }, (_, index) => ({
     id: `team-shape-cron-${index}`,
     name: `Synthetic periodic inspection ${index}`,
-    agentId: "main",
+    agentId,
     enabled: false,
     createdAtMs: options.now - DAY_MS,
     updatedAtMs: options.now,

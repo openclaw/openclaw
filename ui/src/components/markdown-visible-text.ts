@@ -15,6 +15,9 @@ import { normalizeMarkdownLineBreaks } from "./markdown-text.ts";
 // `Title: \`fix\`` must match "title: fix". Parse with the transcript's own
 // rules so raw HTML stays literal and disclosure summaries keep their inline text.
 let parser: MarkdownIt | undefined;
+// Letter-led prose lines have no Markdown structure to remove. Keep punctuation
+// narrow: list markers, internal dots, colons, slashes, and markup need the parser.
+const PLAIN_PROSE = /^(?:\p{L}[\p{L}\p{N} ,!?]*\.?(?:\n|$)|\n)*$/u;
 type VisibleTextOptions = Pick<
   MarkdownRenderOptions,
   "mode" | "humanMentions" | "assistantTranscriptRoleHeaders"
@@ -104,7 +107,11 @@ export function markdownVisibleText(
   let text = markdown;
   // Selected mention offsets belong to the same immutable message as this cache.
   // Recovered document-mode messages use the renderer's full parse path.
-  if ((document || markdown.length <= MARKDOWN_PARSE_LIMIT) && !parseMarkdownJson(markdown)) {
+  if (
+    (document || markdown.length <= MARKDOWN_PARSE_LIMIT) &&
+    !PLAIN_PROSE.test(markdown) &&
+    !parseMarkdownJson(markdown)
+  ) {
     const parts: string[] = [];
     try {
       parser ??= createMarkdownParser();
