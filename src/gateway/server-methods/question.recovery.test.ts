@@ -395,7 +395,7 @@ it.each(["signal", "current client"] as const)(
     );
     const result = Promise.allSettled([waiting]);
     try {
-      expect(registered).toHaveBeenCalledExactlyOnceWith(id, undefined, undefined);
+      expect(registered).toHaveBeenCalledExactlyOnceWith(id, undefined, undefined, undefined);
       observer.beginClose();
       if (source === "signal") {
         controller.abort(new Error("Question request source closed"));

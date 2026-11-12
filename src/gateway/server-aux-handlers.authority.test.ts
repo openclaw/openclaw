@@ -62,6 +62,7 @@ function expectQuestionCancelled(
   expect(onResolved).toHaveBeenCalledExactlyOnceWith(
     { id: question.id, status: "cancelled" },
     {
+      incarnation: expect.any(String),
       record: { ...question, status: "cancelled", resolvedBy: "requester-inactive" },
       ordinary: false,
       sessionAccess: undefined,
