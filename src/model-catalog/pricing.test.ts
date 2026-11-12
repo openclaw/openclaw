@@ -519,6 +519,18 @@ describe("hosted model pricing", () => {
     expect(costFor(disabled, "gpt-external", agentDir)).toBeUndefined();
   });
 
+  it("fingerprints vendor ownership of unpriced rows", async () => {
+    const proxy = configFor(hostedUrl, [{ id: "vendor-owned", name: "Vendor owned" }], "proxy");
+    const withVendorRow = async (models: unknown[]) => {
+      await prepareCatalog({ minVersion: "2026.7.0", providers: { anthropic: { models } } });
+      return resolveModelPricingContext(proxy).fingerprint;
+    };
+    // An unpriced vendor row moves no price table, but it decides who prices the proxy row.
+    expect(await withVendorRow([{ id: "vendor-owned", pricing: { status: "unknown" } }])).not.toBe(
+      await withVendorRow([]),
+    );
+  });
+
   it("fingerprints provider overlays without explicit model rows", () => {
     const config = {
       models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },

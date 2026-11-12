@@ -201,7 +201,7 @@ function buildPricingContext(
     upstream: Object.entries(upstream).toSorted(([a], [b]) => a.localeCompare(b)),
     normalizedHosted: [...normalizedHosted.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
     policies: [...policies.entries()].toSorted(([a], [b]) => a.localeCompare(b)),
-    vendors: [...vendors].toSorted(),
+    vendorKeys: [...vendorKeys.entries()],
     normalization: [...(snapshot?.owners.modelIdNormalizationPolicies ?? [])].toSorted(([a], [b]) =>
       a.localeCompare(b),
     ),
