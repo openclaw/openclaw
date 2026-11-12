@@ -803,6 +803,7 @@ async function main() {
       console.error(
         `[installed-terminal] summary-export-error ${JSON.stringify(diagnostic(error))}`,
       );
+      save();
     }
     console.error(
       `[installed-terminal] outcome ${JSON.stringify(

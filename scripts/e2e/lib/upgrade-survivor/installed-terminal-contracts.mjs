@@ -32,76 +32,93 @@ export function readInstalledTerminalReference(role, encoded) {
 const applications = {
   "sqlite-session": {
     entry: "dist/infra/sqlite-readonly-location.worker.js",
-    entrySha256: "013df47d6de2bb67245683908c0dce57e9e994231a4db03591be42cf84673a04",
-    sha256: "80a396c17c1aee8e165e14c2c6e091a5405808f4642a8a872b881caa337419c5",
+    entrySha256: "cc5b8b1224664334efd99d859c6bfb23de3f3078f2a56764758d5a4a3591087c",
+    sha256: "3aaba32291b3a62634df8d3ced331b77e80ea5db085226672b1010930aa44460",
+    // Cleanup warnings launch this manifest-resolved worker outside the import
+    // graph. Admit its static closure with the caller, resolver and manifest.
+    additionalRoots: {
+      "dist/logging/logger-file.worker.js":
+        "f1a637023f9baf6e4246997c09dcf7f0b6b9f9939c694a28871adef3ba3685e9",
+    },
     dynamic: {
       "dist/infra/sqlite-readonly-location.worker.js": {
-        sha256: "013df47d6de2bb67245683908c0dce57e9e994231a4db03591be42cf84673a04",
+        sha256: "cc5b8b1224664334efd99d859c6bfb23de3f3078f2a56764758d5a4a3591087c",
         imports: [
           [
-            98189,
-            98263,
-            "./sqlite-readonly-startup-metadata-live-read.worker-BXkSCZcS.mjs",
-            "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-BXkSCZcS.mjs",
+            137856,
+            137930,
+            "./sqlite-readonly-startup-metadata-live-read.worker-D_tjAxZV.mjs",
+            "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-D_tjAxZV.mjs",
           ],
           [
-            98331,
-            98418,
-            "./sqlite-readonly-deferred-plugin-session-transcript-read.worker-BLPfYPNr.mjs",
-            "dist/infra/sqlite-readonly-deferred-plugin-session-transcript-read.worker-BLPfYPNr.mjs",
+            137998,
+            138085,
+            "./sqlite-readonly-deferred-plugin-session-transcript-read.worker-BOfbbyPB.mjs",
+            "dist/infra/sqlite-readonly-deferred-plugin-session-transcript-read.worker-BOfbbyPB.mjs",
           ],
           [
-            98490,
-            98571,
-            "./sqlite-readonly-agent-delete-session-store-safety.kernel-BIuF2tjq.mjs",
-            "dist/infra/sqlite-readonly-agent-delete-session-store-safety.kernel-BIuF2tjq.mjs",
+            138157,
+            138238,
+            "./sqlite-readonly-agent-delete-session-store-safety.kernel-CO5iYTqQ.mjs",
+            "dist/infra/sqlite-readonly-agent-delete-session-store-safety.kernel-CO5iYTqQ.mjs",
           ],
           [
-            98643,
-            98708,
-            "./sqlite-readonly-sqlite-page-cache.worker-BNJonxVS.mjs",
-            "dist/infra/sqlite-readonly-sqlite-page-cache.worker-BNJonxVS.mjs",
+            138310,
+            138375,
+            "./sqlite-readonly-sqlite-page-cache.worker-CDAsVxE7.mjs",
+            "dist/infra/sqlite-readonly-sqlite-page-cache.worker-CDAsVxE7.mjs",
           ],
           [
-            98762,
-            98834,
-            "./sqlite-readonly-database-store-live-read.worker-CYgwPrVx.mjs",
-            "dist/infra/sqlite-readonly-database-store-live-read.worker-CYgwPrVx.mjs",
+            138429,
+            138501,
+            "./sqlite-readonly-database-store-live-read.worker-Cg9XN_43.mjs",
+            "dist/infra/sqlite-readonly-database-store-live-read.worker-Cg9XN_43.mjs",
           ],
           [
-            98899,
-            98975,
-            "./sqlite-readonly-package-update-activation-immutable-BiIV22I6.mjs",
-            "dist/infra/sqlite-readonly-package-update-activation-immutable-BiIV22I6.mjs",
+            138566,
+            138642,
+            "./sqlite-readonly-package-update-activation-immutable-ewJ8DHFI.mjs",
+            "dist/infra/sqlite-readonly-package-update-activation-immutable-ewJ8DHFI.mjs",
           ],
           [
-            104726,
-            104794,
-            "./sqlite-readonly-sqlite-snapshot-reclamation-B5-fJpSe.mjs",
-            "dist/infra/sqlite-readonly-sqlite-snapshot-reclamation-B5-fJpSe.mjs",
+            144393,
+            144461,
+            "./sqlite-readonly-sqlite-snapshot-reclamation-Cqr4hfvv.mjs",
+            "dist/infra/sqlite-readonly-sqlite-snapshot-reclamation-Cqr4hfvv.mjs",
           ],
           [
-            110172,
-            110224,
-            "./sqlite-readonly-sqlite-json-7sYjdljv.mjs",
-            "dist/infra/sqlite-readonly-sqlite-json-7sYjdljv.mjs",
+            149839,
+            149891,
+            "./sqlite-readonly-sqlite-json-CYwTmsWs.mjs",
+            "dist/infra/sqlite-readonly-sqlite-json-CYwTmsWs.mjs",
           ],
           [
-            110260,
-            110323,
-            "./sqlite-readonly-sqlite-snapshot-source-nHqKn6GV.mjs",
-            "dist/infra/sqlite-readonly-sqlite-snapshot-source-nHqKn6GV.mjs",
+            149927,
+            149990,
+            "./sqlite-readonly-sqlite-snapshot-source-FKqXN9o3.mjs",
+            "dist/infra/sqlite-readonly-sqlite-snapshot-source-FKqXN9o3.mjs",
           ],
         ],
       },
-      "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-BXkSCZcS.mjs": {
-        sha256: "6f8442f1080e1a48a900480c5569e620a7e3e31a7045fb888cacbe7f32268c9b",
+      "dist/infra/sqlite-readonly-startup-metadata-live-read.worker-D_tjAxZV.mjs": {
+        sha256: "1b97347f0587015ff24b3d6c4803470bbad112d962cde05763e8836253b115b5",
         imports: [
           [
-            2377,
-            2443,
-            "./sqlite-readonly-update-run-admission.read-_p4uJyg2.mjs",
-            "dist/infra/sqlite-readonly-update-run-admission.read-_p4uJyg2.mjs",
+            2440,
+            2506,
+            "./sqlite-readonly-update-run-admission.read-DGWV0qGs.mjs",
+            "dist/infra/sqlite-readonly-update-run-admission.read-DGWV0qGs.mjs",
+          ],
+        ],
+      },
+      "dist/infra/sqlite-readonly-subsystem-D-9DbeQg.mjs": {
+        sha256: "ff015a3190b04c1cdd73c2ad33f9dcf1f5bea3a630221d1e31cbe47ee5189dda",
+        imports: [
+          [
+            232222,
+            232281,
+            "./sqlite-readonly-logger-file-worker-BQjk1Ssp.mjs",
+            "dist/infra/sqlite-readonly-logger-file-worker-BQjk1Ssp.mjs",
           ],
         ],
       },
@@ -109,22 +126,34 @@ const applications = {
   },
   "finalizer-check": {
     entry: "dist/infra/update-migrated-finalize.worker.js",
-    entrySha256: "62a953c03a0abded3a4e761057b422b9e12c7b3d43e543dfe5e417fdc2ce4154",
-    sha256: "40dcf6d9f9a482e4556391a80830c45195e9e9c50c5a23dfcfa17a56760ad5a3",
+    entrySha256: "25d13c82700997a31b1186093a98f0043ecb0902fbcc1a4c42929d7f8e8aa06d",
+    sha256: "af8723b5463fc558765049d05f21159037033562c7587b187df7a6a60033c50c",
     dynamic: {
       "dist/infra/update-migrated-finalize.worker.js": {
-        sha256: "62a953c03a0abded3a4e761057b422b9e12c7b3d43e543dfe5e417fdc2ce4154",
+        sha256: "25d13c82700997a31b1186093a98f0043ecb0902fbcc1a4c42929d7f8e8aa06d",
         imports: [[10616, 10646, "../cli/daemon-cli.js", "dist/cli/daemon-cli.js"]],
       },
     },
   },
   "heartbeat-sqlite": {
     entry: "dist/state/openclaw-state-lease-heartbeat.worker.js",
-    entrySha256: "18dd5a48b59acae1b6a5a1bf054c3e5eea08629c3157dfd4ae272be0bb17bd7b",
-    sha256: "930edf89982b94b02d51fde8fe46c2e5fde4ce8f5fb144fa93425037ef5dc75b",
+    entrySha256: "24a9be9cf18a8fa6af02d232807ee27875cec56f71ea5732d66929b8765c7096",
+    sha256: "0cf27b8bbc7d4f0d514a36787a186a18c22da02890e72c4408664a213cb8a5c3",
     // The observed clone-safe SQLite selection excludes the PostgreSQL loader.
     // No nested Worker initiates the GC-profile request/response callback.
-    dynamic: {},
+    dynamic: {
+      "dist/state/openclaw-state-lease-heartbeat.worker-subsystem-Dxs6Z1mr.mjs": {
+        sha256: "c9f1ed85f809d136f1ef3c945892cbe2ecb4be3c7dd501e558e08586c3e692fa",
+        imports: [
+          [
+            141460,
+            141541,
+            "./openclaw-state-lease-heartbeat.worker-logger-file-worker-DzLlTSwW.mjs",
+            "dist/state/openclaw-state-lease-heartbeat.worker-logger-file-worker-DzLlTSwW.mjs",
+          ],
+        ],
+      },
+    },
   },
 };
 
@@ -142,6 +171,9 @@ export function assertInstalledTerminalApplication(identity, prepared) {
   for (const [role, contract] of Object.entries(applications)) {
     const files = prepared.roles[role].files;
     assert(Array.isArray(files) && files.length <= 4096);
+    for (const [file, sha256] of Object.entries(contract.additionalRoots ?? {})) {
+      assert.equal(identity.files[file]?.sha256, sha256, "Additional application root changed");
+    }
     assert.equal(digest(JSON.stringify(files)), contract.sha256, `Unreviewed ${role} closure`);
     assert.equal(identity.files[contract.entry]?.sha256, contract.entrySha256);
     for (const [file, size, sha256] of files) {
@@ -192,13 +224,14 @@ export function assertInstalledTerminalDependencyTree(root, expected) {
 export function readInstalledTerminalMetadata(root, identity) {
   const files = {};
   const contents = {};
-  // Exact VERSION and loaded-commit candidates in the three emitted root depths.
+  // Exact package scopes, VERSION and loaded-commit candidates for the admitted roots.
   // An earlier foreign candidate must not override the tarball's provenance.
   for (const relative of [
     "package.json",
     "dist/package.json",
     "dist/infra/package.json",
     "dist/state/package.json",
+    "dist/logging/package.json",
     "../package.json",
     "../../package.json",
     "dist/build-info.json",
@@ -270,7 +303,10 @@ export async function prepareInstalledTerminalApplication(root, identity) {
   const roles = {};
   for (const [role, contract] of Object.entries(applications)) {
     assert.equal(identity.files[contract.entry]?.sha256, contract.entrySha256);
-    const pending = [contract.entry];
+    const pending = [contract.entry, ...Object.keys(contract.additionalRoots ?? {})];
+    for (const [file, sha256] of Object.entries(contract.additionalRoots ?? {})) {
+      assert.equal(identity.files[file]?.sha256, sha256, "Additional application root changed");
+    }
     const selected = new Set();
     while (pending.length) {
       const file = pending.pop();

@@ -8,6 +8,7 @@ import { capturePackageTree } from "../../scripts/e2e/lib/upgrade-survivor/insta
 import {
   assertInstalledTerminalApplication,
   assertInstalledTerminalDependencyTree,
+  prepareInstalledTerminalApplication,
   readInstalledTerminalDependencyTree,
   readInstalledTerminalMetadata,
   readInstalledTerminalReference,
@@ -140,22 +141,63 @@ it("binds the fixed historical allowed closure independently of diagnostic overr
   );
 });
 
-it("rejects a freshly self-certified application closure", () => {
-  expect(() =>
-    assertInstalledTerminalApplication(
-      { version: "1.0.0", buildInfo: {}, files: {} },
-      {
-        roles: {
-          "sqlite-session": {
-            sha256: "80a396c17c1aee8e165e14c2c6e091a5405808f4642a8a872b881caa337419c5",
-            files: [],
-          },
+function applicationRootsFixture() {
+  const roots: Array<[string, number, string]> = [
+    [
+      "dist/infra/sqlite-readonly-location.worker.js",
+      153814,
+      "cc5b8b1224664334efd99d859c6bfb23de3f3078f2a56764758d5a4a3591087c",
+    ],
+    [
+      "dist/logging/logger-file.worker.js",
+      56642,
+      "f1a637023f9baf6e4246997c09dcf7f0b6b9f9939c694a28871adef3ba3685e9",
+    ],
+  ];
+  return {
+    identity: {
+      version: "1.0.0",
+      buildInfo: {},
+      files: Object.fromEntries(roots.map(([file, size, sha256]) => [file, { size, sha256 }])),
+    },
+    prepared: {
+      roles: {
+        "sqlite-session": {
+          sha256: "3aaba32291b3a62634df8d3ced331b77e80ea5db085226672b1010930aa44460",
+          files: roots,
         },
-        assets: [],
-        metadata: { version: "1.0.0", build: {}, files: {} },
       },
-    ),
-  ).toThrow("Unreviewed sqlite-session closure");
+      assets: [],
+      metadata: { version: "1.0.0", build: {}, files: {} },
+    },
+  };
+}
+
+it("rejects a freshly self-certified or omitted application closure", () => {
+  const fixture = applicationRootsFixture();
+  // Valid root identities do not let a caller certify an empty or partial closure.
+  for (const files of [[], fixture.prepared.roles["sqlite-session"].files.slice(0, 1)]) {
+    fixture.prepared.roles["sqlite-session"].files = files;
+    expect(() => assertInstalledTerminalApplication(fixture.identity, fixture.prepared)).toThrow(
+      "Unreviewed sqlite-session closure",
+    );
+  }
+});
+
+it.each(["missing", "changed"])("refuses a %s manifest-launched worker root", async (change) => {
+  const fixture = applicationRootsFixture();
+  const root = "dist/logging/logger-file.worker.js";
+  if (change === "missing") {
+    delete fixture.identity.files[root];
+  } else {
+    fixture.identity.files[root] = { size: 56642, sha256: "0".repeat(64) };
+  }
+  expect(() => assertInstalledTerminalApplication(fixture.identity, fixture.prepared)).toThrow(
+    "Additional application root changed",
+  );
+  await expect(
+    prepareInstalledTerminalApplication(dirs.make("installed-contract-roots-"), fixture.identity),
+  ).rejects.toThrow("Additional application root changed");
 });
 
 it("binds finite initialization metadata and refuses foreign, changed or oversized candidates", () => {
@@ -177,13 +219,14 @@ it("binds finite initialization metadata and refuses foreign, changed or oversiz
   expect(result.files["dist/infra/package.json"]).toBeNull();
   expect(result.files["dist/infra/build-info.json"]).toBeNull();
   fs.mkdirSync(path.join(root, "dist/state"));
-  for (const name of [
-    "package.json",
-    "build-info.json",
-    ".buildstamp",
-    ".runtime-postbuildstamp",
+  fs.mkdirSync(path.join(root, "dist/logging"));
+  for (const relative of [
+    "dist/state/package.json",
+    "dist/state/build-info.json",
+    "dist/state/.buildstamp",
+    "dist/state/.runtime-postbuildstamp",
+    "dist/logging/package.json",
   ]) {
-    const relative = `dist/state/${name}`;
     const file = path.join(root, relative);
     expect(result.files[relative], relative).toBeNull();
     const bytes = Buffer.from("{}\n");
