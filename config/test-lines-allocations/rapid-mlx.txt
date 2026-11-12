@@ -1,0 +1,3 @@
+# Rapid-MLX setup, discovery, chat auth, and embedding boundary coverage,
+# matching the existing oMLX provider's current suites.
+1050

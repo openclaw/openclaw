@@ -80,6 +80,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
 - [Radius](/providers/radius)
+- [Rapid-MLX (local Apple Silicon models)](/providers/rapid-mlx)
 - [Requesty (unified router)](/providers/requesty)
 - [Rerank (any /rerank endpoint as a Decision model)](/providers/rerank)
 - [Runway](/providers/runway)

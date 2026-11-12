@@ -2323,6 +2323,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/rapid-mlx:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/reef:
     dependencies:
       '@noble/ciphers':

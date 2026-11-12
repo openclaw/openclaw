@@ -68,7 +68,7 @@ explicitly:
 {
   memory: {
     search: {
-      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "omlx", "lmstudio", "github-copilot", "openai-compatible"
+      provider: "openai", // or "gemini", "voyage", "mistral", "bedrock", "local", "ollama", "omlx", "rapid-mlx", "lmstudio", "github-copilot", "openai-compatible"
     },
   },
 }
@@ -127,7 +127,10 @@ chunks. Set these with `queryInputType` and `documentInputType`; see
 | [oMLX](/providers/omlx) | `omlx`              | No            | Apple Silicon; explicit embedding model |
 | OpenAI                  | `openai`            | Depends       | API key or eligible Codex OAuth         |
 | OpenAI-compatible       | `openai-compatible` | Usually       | Generic `/v1/embeddings` endpoint       |
+| [Rapid-MLX][rapid-mlx]  | `rapid-mlx`         | No            | Apple Silicon; explicit embedding model |
 | Voyage                  | `voyage`            | Yes           | Default model `voyage-4-large`          |
+
+[rapid-mlx]: /providers/rapid-mlx
 
 To move off Ollama, [llmman](/providers/llmman#advanced-configuration) serves the same `/api/embed`, so `provider: "ollama"` only needs a new `remote.baseUrl`.
 
