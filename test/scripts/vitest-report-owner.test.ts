@@ -272,6 +272,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     { timeout: 60000 },
     async ({ expect, reports }) => {
       const result = await reports.run("file-backed-suites");
+      expect(result.stderr).not.toContain("[vitest-workers] prepared");
       expect(result.code, result.stderr).toBe(0);
       expect(inventory(json(result.output))).toEqual([
         ...expected,

@@ -425,6 +425,11 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
     if (options.report === false) {
       args.splice(0, args.length, configLoader);
     }
+    if (mode === "file-backed-suites") {
+      // Canonical-looking config names model replay identity, not the checkout
+      // worker inventory. Declare the synthetic root before runtime selection.
+      args.push("--root", root);
+    }
     args.push(...(options.nativeArgs ?? []));
     if (mode === "dotted") {
       args.push("--reporter", "json");
