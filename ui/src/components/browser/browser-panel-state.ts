@@ -19,6 +19,8 @@ export type BrowserPanelState = {
   inspected: BrowserInspectedNode | null;
   inspectPointer: { x: number; y: number } | null;
   evaluateUnavailable: boolean;
+  /** This panel's connection holds operator control; other browser input is paused. */
+  controlling: boolean;
   urlDraft: string;
   pendingNewTab: boolean;
   urlDraftEditing: boolean;

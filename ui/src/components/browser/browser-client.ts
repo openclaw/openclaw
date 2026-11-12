@@ -252,6 +252,21 @@ export async function listBrowserTabs(client: BrowserRequestClient) {
   };
 }
 
+export type BrowserOperatorControl = { controlled: boolean; byYou: boolean };
+
+/** Read, take or release operator control; while this connection holds it, other input waits. */
+export async function requestBrowserOperatorControl(
+  client: BrowserRequestClient,
+  action: "read" | "take" | "release",
+): Promise<BrowserOperatorControl> {
+  const method = action === "read" ? "GET" : action === "take" ? "POST" : "DELETE";
+  const result = asRecord(await browserRequest(client, { method, path: "/control" }));
+  if (typeof result?.controlled !== "boolean" || typeof result.byYou !== "boolean") {
+    throw new Error(t("browser.controlInvalidReply"));
+  }
+  return { controlled: result.controlled, byYou: result.byYou };
+}
+
 export async function startBrowser(client: BrowserRequestClient): Promise<void> {
   await browserRequest(client, { method: "POST", path: "/start", body: {} });
 }

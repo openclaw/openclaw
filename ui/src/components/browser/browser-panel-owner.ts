@@ -14,6 +14,7 @@ import {
   isBrowserNavigationBlockedError,
   navigateBrowser,
   openBrowserTab,
+  requestBrowserOperatorControl,
   startBrowser,
 } from "./browser-client.ts";
 import { createBrowserPanelDownload, type BrowserPanelDownload } from "./browser-panel-download.ts";
@@ -32,6 +33,8 @@ import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 registerBrowserEnglish();
+
+const CONTROL_CHECK_INTERVAL_MS = 30_000;
 
 export type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
@@ -55,10 +58,34 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
     inspected: null,
     inspectPointer: null,
     evaluateUnavailable: false,
+    controlling: false,
     urlDraft: "",
     pendingNewTab: false,
     urlDraftEditing: false,
     addressInput: undefined,
+  };
+  // The Gateway releases control after idle input or from another window; keep the button true.
+  const watchControl = (client: BrowserRequestClient, epoch: number): void => {
+    setTimeout(async () => {
+      const current = () => panel.controlling && operations.isLive(epoch, client);
+      if (!current()) {
+        return;
+      }
+      try {
+        const control = await requestBrowserOperatorControl(client, "read");
+        if (!current()) {
+          return;
+        }
+        if (!control.byYou) {
+          panel.setState("controlling", false);
+          panel.setState("noticeText", t("browser.controlReleased"));
+          return;
+        }
+      } catch {
+        // A transient read failure keeps the current state; the next check retries.
+      }
+      watchControl(client, epoch);
+    }, CONTROL_CHECK_INTERVAL_MS);
   };
   const panel = {
     ...initialState,
@@ -166,6 +193,8 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
       panel.setState("pendingNewTab", false);
       // Re-probe per connection: another gateway may have evaluate enabled.
       panel.setState("evaluateUnavailable", false);
+      // The Gateway releases control when the holding connection or route goes away.
+      panel.setState("controlling", false);
     },
 
     reportError(error: unknown, retry: (() => Promise<unknown>) | null = null): void {
@@ -431,6 +460,11 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         return;
       }
       if (route && browserRouteKey(operations.route) !== browserRouteKey(route)) {
+        const controlledClient = panel.controlling ? operations.captureClient() : null;
+        if (controlledClient) {
+          // Control belongs to the browser being left; hand it back to the agent there.
+          void requestBrowserOperatorControl(controlledClient, "release").catch(() => {});
+        }
         operations.resetRoute(route);
         panel.resetBrowserState();
       } else if (targetId === panel.activeTargetId && !route) {
@@ -557,6 +591,20 @@ export function createBrowserPanel(host: BrowserPanelHost, notify: () => void) {
         }
       }, false);
       await host.updateComplete;
+    },
+
+    /** Take control from the agent, or hand it back. */
+    toggleControl(): void {
+      const take = !panel.controlling;
+      panel.setState("noticeText", null);
+      const epoch = operations.epoch;
+      void panel.runAction(async (client) => {
+        const control = await requestBrowserOperatorControl(client, take ? "take" : "release");
+        panel.setState("controlling", control.byYou);
+        if (control.byYou) {
+          watchControl(client, epoch);
+        }
+      }, false);
     },
 
     /** Real page reload: re-navigate to the current URL, then re-capture. A bare

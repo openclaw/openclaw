@@ -1,4 +1,9 @@
 import { resolveBrowserEngine } from "../engines/registry.js";
+import {
+  admitBrowserInput,
+  BROWSER_OPERATOR_CONTROL_MESSAGE,
+  isBrowserInputRoute,
+} from "../operator-control.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { getProfileContext, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
@@ -13,13 +18,20 @@ const PROFILE_MANAGEMENT_ROUTES = new Set([
   "/system-profile-import/dismiss",
 ]);
 
-/** Enforce the selected engine at the shared HTTP/in-process route boundary. */
+/**
+ * Enforce the selected engine and operator take-over at the shared HTTP/in-process route
+ * boundary, so every caller (agent tools, CLI, node proxy, Control UI) meets the same checks.
+ */
 export function withBrowserProfileCapabilities(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ): BrowserRouteRegistrar {
   const wrap =
-    (path: string, handler: Parameters<BrowserRouteRegistrar["get"]>[1]) =>
+    (
+      method: "GET" | "POST" | "DELETE",
+      path: string,
+      handler: Parameters<BrowserRouteRegistrar["get"]>[1],
+    ) =>
     async (...args: Parameters<typeof handler>) => {
       const [req, res] = args;
       if (!PROFILE_MANAGEMENT_ROUTES.has(path)) {
@@ -56,12 +68,19 @@ export function withBrowserProfileCapabilities(
           });
           return;
         }
+        if (
+          path !== "/control" &&
+          isBrowserInputRoute(method, path) &&
+          !admitBrowserInput(ctx.state(), profileCtx.profile, req)
+        ) {
+          return jsonError(res, 409, BROWSER_OPERATOR_CONTROL_MESSAGE);
+        }
       }
       return await handler(...args);
     };
   return {
-    get: (path, handler) => app.get(path, wrap(path, handler)),
-    post: (path, handler) => app.post(path, wrap(path, handler)),
-    delete: (path, handler) => app.delete(path, wrap(path, handler)),
+    get: (path, handler) => app.get(path, wrap("GET", path, handler)),
+    post: (path, handler) => app.post(path, wrap("POST", path, handler)),
+    delete: (path, handler) => app.delete(path, wrap("DELETE", path, handler)),
   };
 }
