@@ -56,12 +56,16 @@ import {
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
 import { bindPostgresMemoryPublication } from "./manager-publication-postgres.js";
-import { MemoryPublicationStage } from "./manager-publication-stage.js";
+import {
+  readPublicationRows,
+  readStagedRows,
+  stagePublicationRows,
+  type StagedPublication,
+} from "./manager-publication-rows.js";
 import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheHeader,
   MemoryPublicationConnection,
-  MemoryPublicationFragment,
   MemoryPublicationOperations,
   MemoryPublicationResult,
 } from "./manager-publication-task.js";
@@ -223,14 +227,13 @@ function createPublicationBackend(
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
   }
   // Each agent run binds its own backend; shadow runs use the private writer queue.
-  // Staged sources avoid per-fragment SQLite I/O; past a budget they overflow to a TEMP table.
+  // Large sources stay in worker memory without per-fragment SQLite I/O.
   let staged:
-    | ({
-        stage: MemoryPublicationStage;
-      } & (
-        | { kind: "source"; header: MemorySourceIndexHeader }
-        | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
-      ))
+    | (StagedPublication &
+        (
+          | { kind: "source"; header: MemorySourceIndexHeader }
+          | { kind: "cache"; header: MemoryEmbeddingCacheHeader }
+        ))
     | undefined;
   const loadExtension = (extensionPath: string | undefined) => {
     if (extensionPath && extensionPath !== loadedExtensions.get(db)) {
@@ -239,7 +242,6 @@ function createPublicationBackend(
     }
   };
   const discard = () => {
-    staged?.stage.close();
     staged = undefined;
   };
   const finish = <T>(outcome: MemoryPublicationResult<T>): MemoryPublicationResult<T> => {
@@ -481,12 +483,10 @@ function createPublicationBackend(
         );
       }
       if (command.type === "stage.start" || command.type === "cache.stage.start") {
-        discard();
-        const stage = new MemoryPublicationStage(db);
         staged =
           command.type === "stage.start"
-            ? { ...command.input, kind: "source", stage }
-            : { ...command.input, kind: "cache", stage };
+            ? { ...command.input, kind: "source", rows: [], tail: [] }
+            : { ...command.input, kind: "cache", rows: [], tail: [] };
         return undefined;
       }
       if (command.type === "stage.discard") {
@@ -497,7 +497,7 @@ function createPublicationBackend(
         if (!staged) {
           throw new Error("Memory publication input was not started");
         }
-        staged.stage.append(command.input.fragments);
+        stagePublicationRows(staged, command.input.fragments);
         return undefined;
       }
       if (command.type === "cache.prune") {
@@ -533,8 +533,8 @@ function createPublicationBackend(
             throw new Error("Memory cache input was not started");
           }
           header = staged.header;
-          const stage = staged.stage;
-          readEntries = () => readPublicationRows<MemoryEmbeddingCacheEntry>(stage.read());
+          const stage = staged;
+          readEntries = () => readStagedRows<MemoryEmbeddingCacheEntry>(stage);
         }
         const outcome = writeCache((size) => {
           const eligible = new Map<string, boolean>();
@@ -670,7 +670,7 @@ function createPublicationBackend(
           throw new Error("Memory publication input was not started");
         }
         header = staged.header;
-        rows = readPublicationRows<MemorySourceIndexRow>(staged.stage.read());
+        rows = readStagedRows<MemorySourceIndexRow>(staged);
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
       const outcome = write(() => {
@@ -687,22 +687,4 @@ function createPublicationBackend(
       discard();
     },
   });
-}
-
-function* readPublicationRows<Row extends MemorySourceIndexRow | MemoryEmbeddingCacheEntry>(
-  fragments: Iterable<MemoryPublicationFragment>,
-): Generator<Row> {
-  // SAFETY: Only the paired source/cache producer writes these sealed records.
-  const parse = (parts: string[]) => JSON.parse(parts.join("")) as Row;
-  let parts: string[] = [];
-  for (const fragment of fragments) {
-    parts.push(fragment.json);
-    if (fragment.last) {
-      yield parse(parts);
-      parts = [];
-    }
-  }
-  if (parts.length) {
-    yield parse(parts);
-  }
 }
