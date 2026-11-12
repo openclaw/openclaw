@@ -1,2 +1,2 @@
-# Main-thread watcher isolation and asynchronous missing-root/replacement regression proof.
-42
+# Main-thread watcher isolation, asynchronous admission, and Windows native-handle lifecycle regression proof.
+80

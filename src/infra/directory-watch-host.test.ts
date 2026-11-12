@@ -18,6 +18,43 @@ afterEach(() => {
 });
 
 describe("directory watch host", () => {
+  it("releases retired Windows handles while other watches remain live", async () => {
+    const helper = spawn(
+      process.execPath,
+      [
+        "--import",
+        fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url)),
+        "--input-type=module",
+        "--eval",
+        `import fs from "node:fs";
+        import { EventEmitter } from "node:events";
+        Object.defineProperty(process, "platform", { value: "win32" });
+        process.argv[2] = String(process.ppid);
+        fs.watch = () => Object.assign(new EventEmitter(), {
+          close() { process.stdout.write("closed\\n"); }
+        });
+        await import(${JSON.stringify(new URL("./directory-watch-host.worker.ts", import.meta.url).href)});`,
+      ],
+      { stdio: ["pipe", "pipe", "inherit"] },
+    );
+    let output = "";
+    const processed = Promise.withResolvers<void>();
+    helper.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+      output += chunk;
+      if (output.includes('"id":2,"event":"change"')) {
+        processed.resolve();
+      }
+    });
+    try {
+      helper.stdin.write('{"id":1,"path":"first"}\n{"id":1}\n{"id":2,"path":"second"}\n');
+      await processed.promise;
+      expect(output).toContain("closed\n");
+    } finally {
+      helper.stdin.end();
+      await once(helper, "exit");
+    }
+  });
+
   it("keeps native directory watchers out of the caller while forwarding their events", async () => {
     const root = tempDirs.make("directory-watch-host-");
     const watched = path.join(root, "watched");
@@ -58,8 +95,7 @@ describe("directory watch host", () => {
     synchronousOpen.mockClear();
     await expect(created).resolves.toEqual(["rename", path.join("nested", "profiles")]);
 
-    // Closes only retire native watches; enough of them move the live watch to a
-    // fresh helper, which invalidates it once and keeps forwarding its events.
+    // macOS retires native watches; enough move the live watch to a fresh helper.
     const siblings = await Promise.all(
       Array.from({ length: 64 }, async (_, index) => {
         const sibling = path.join(root, `sibling-${index}`);
@@ -70,11 +106,13 @@ describe("directory watch host", () => {
         return siblingWatch;
       }),
     );
-    const handoff = nextEvent();
+    const handoff = process.platform === "darwin" ? nextEvent() : undefined;
     for (const sibling of siblings) {
       sibling.close();
     }
-    await expect(handoff).resolves.toEqual(["change", undefined]);
+    if (handoff) {
+      await expect(handoff).resolves.toEqual(["change", undefined]);
+    }
     const moved = nextEvent(path.join("nested", "moved"));
     fs.writeFileSync(path.join(watched, "nested", "moved"), "after");
     synchronousOpen.mockClear();

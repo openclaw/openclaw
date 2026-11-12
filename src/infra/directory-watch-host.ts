@@ -21,8 +21,8 @@ type Host = {
 // libuv on macOS rebuilds the loop's shared FSEventStream synchronously on every
 // directory-watch close, waiting on fseventsd; under load one close can block for
 // seconds, and Node's exit cleanup closes leftover watchers the same way. A helper
-// process owns those streams and never closes one: a close only retires its id, and
-// the helper exits without teardown once its input ends.
+// process owns those streams and never closes one on macOS: a close only retires
+// its id, and the helper exits without teardown once its input ends.
 
 let host: Host | undefined;
 let nextId = 0;
@@ -112,7 +112,10 @@ export function watchDirectory(
       if (!current?.watches.delete(id)) {
         return;
       }
-      if (current.watches.size && ++current.retired < MAX_RETIRED_WATCHES) {
+      if (
+        current.watches.size &&
+        (process.platform !== "darwin" || ++current.retired < MAX_RETIRED_WATCHES)
+      ) {
         current.child.stdin.write(`${JSON.stringify({ id })}\n`);
         return;
       }
