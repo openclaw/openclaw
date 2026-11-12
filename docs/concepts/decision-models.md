@@ -44,6 +44,10 @@ Explicit `decision_evaluate` remains independent of Labs.
 
 Configure the provider plugin before selecting its model:
 
+- [Google](/providers/google#decision-models) uses the bundled `google` plugin
+  and the Gemini Decisions API. Configure a Gemini API key. Text/JSON and inline
+  image evidence use the native endpoint; evaluations send the supplied evidence
+  to Google and incur Gemini API usage charges.
 - [Liquid AI](/providers/liquid-ai) connects directly to hosted d1 and d1 Ultra.
   Install the plugin candidate from a compatible development checkout and
   configure a Liquid AI API key. Text/JSON and inline image evidence use the
@@ -70,6 +74,7 @@ The current plugins declare these model references:
 
 | Model reference                      | Model                  | Preparation                                            |
 | ------------------------------------ | ---------------------- | ------------------------------------------------------ |
+| `google/gemini-decision-1`           | Gemini Decision 1      | Gemini API key                                         |
 | `onnx/deberta-v3-base-zeroshot-v2.0` | DeBERTa Zero-shot v2   | Download pinned ONNX artifacts                         |
 | `onnx/gliclass-base-v3.0`            | GLiClass Base v3       | Download pinned ONNX artifacts                         |
 | `onnx/gliclass-edge-v3.0`            | GLiClass Edge v3       | Download pinned ONNX artifacts                         |
