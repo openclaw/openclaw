@@ -205,7 +205,11 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
                   return new Map<string, number>();
                 })
             : undefined;
-        return pages.filter(isSelectableCdpBrowserTarget).map((p) => {
+        return pages
+          .filter((p) =>
+            isSelectableCdpBrowserTarget(p, { includeOperatorInternal: options?.operatorMode }),
+          )
+          .map((p) => {
           // Correlate only by the relay's exact CDP target id. The native Chrome
           // tab id is runtime-scoped and must not replace OpenClaw's stable tN alias.
           const webExtensionTabId = webExtensionTabIds?.get(p.targetId);
@@ -239,7 +243,10 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
       };
-      if (!tab.targetId || !isSelectableCdpBrowserTarget(tab)) {
+      if (
+        !tab.targetId ||
+        !isSelectableCdpBrowserTarget(tab, { includeOperatorInternal: options?.operatorMode })
+      ) {
         continue;
       }
       if (tab.wsUrl) {
@@ -373,7 +380,10 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
   const openTab: ProfileTabOps["openTab"] = async (url, opts) => {
     opts?.signal?.throwIfAborted();
     const normalizedLabel = opts?.label === undefined ? undefined : normalizeTabLabel(opts.label);
-    let ssrfPolicyOpts = getNavigationPolicy();
+    let ssrfPolicyOpts = {
+      ...getNavigationPolicy(),
+      ...(opts?.operatorMode ? { allowOperatorInternalUrls: true } : {}),
+    };
     const cdpPolicy = getCdpControlPolicy();
     // Runtime shutdown fences state() before draining this operation's cleanup.
     const cleanupTimeoutMs = state().resolved.remoteCdpTimeoutMs;
@@ -433,6 +443,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           // Raw CDP cannot carry the automatic grant's final-effect authority fence.
           ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy, {
             browserProxyMode: ssrfPolicyOpts.browserProxyMode,
+            allowOperatorInternalUrls: opts?.operatorMode,
           });
         }
       }
@@ -524,7 +535,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         throw new Error("Failed to open tab (missing id)");
       }
       const resolvedUrl = created.url ?? url;
-      if (!isSelectableCdpBrowserTarget({ url: resolvedUrl, type: created.type })) {
+      if (
+        !isSelectableCdpBrowserTarget(
+          { url: resolvedUrl, type: created.type },
+          { includeOperatorInternal: opts?.operatorMode },
+        )
+      ) {
         throw new Error("Failed to open tab (non-selectable target)");
       }
       await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });

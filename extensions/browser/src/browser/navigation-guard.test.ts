@@ -207,4 +207,37 @@ describe("browser navigation guard", () => {
       await expect(result).resolves.toBeUndefined();
     }
   });
+
+  it("allows chrome://settings only when operator internal URLs are allowed", async () => {
+    await expect(
+      assertBrowserNavigationAllowed({ url: "chrome://settings/payments" }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "chrome://settings/payments",
+        allowOperatorInternalUrls: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "chrome://flags",
+        allowOperatorInternalUrls: true,
+      }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("rejects chrome://settings in result guard when operator internal URLs are not allowed", async () => {
+    await expect(
+      assertBrowserNavigationResultAllowed({ url: "chrome://settings/payments" }),
+    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "chrome://settings/payments",
+        allowOperatorInternalUrls: true,
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

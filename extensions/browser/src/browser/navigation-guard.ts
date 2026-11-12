@@ -14,12 +14,21 @@ import {
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
+const OPERATOR_ALLOWED_CHROME_HOSTS = new Set(["settings"]);
 const BROWSER_NAVIGATION_CREDENTIALS_BLOCKED_MESSAGE =
   "Navigation blocked: URL-embedded credentials are not supported for page navigation. Set HTTP Basic auth with `openclaw browser set credentials <username> <password>` or use an authenticated browser profile.";
 
 function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
   // Keep non-network navigation explicit; about:blank is the only allowed bootstrap URL.
   return SAFE_NON_NETWORK_URLS.has(parsed.href);
+}
+
+export function isAllowedOperatorInternalUrl(parsed: URL): boolean {
+  if (parsed.protocol !== "chrome:") {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return OPERATOR_ALLOWED_CHROME_HOSTS.has(host);
 }
 
 export class InvalidBrowserNavigationUrlError extends Error {
@@ -53,6 +62,8 @@ export type BrowserNavigationPolicyOptions = {
   browserProxyMode?: BrowserNavigationProxyMode;
   /** Live authority for an invocation-scoped navigation exception. */
   assertNavigationCurrent?: () => void;
+  /** When true, permits operator-scoped access to specific internal pages (e.g. chrome://settings). */
+  allowOperatorInternalUrls?: boolean;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -67,12 +78,18 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: Pick<BrowserNavigationPolicyOptions, "browserProxyMode" | "assertNavigationCurrent">,
+  opts?: Pick<
+    BrowserNavigationPolicyOptions,
+    "browserProxyMode" | "assertNavigationCurrent" | "allowOperatorInternalUrls"
+  >,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
     ...(opts?.assertNavigationCurrent
       ? { assertNavigationCurrent: opts.assertNavigationCurrent }
+      : {}),
+    ...(opts?.allowOperatorInternalUrls
+      ? { allowOperatorInternalUrls: opts.allowOperatorInternalUrls }
       : {}),
     ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
       ? { browserProxyMode: opts.browserProxyMode }
@@ -115,6 +132,9 @@ export async function assertBrowserNavigationAllowed(
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
     if (isAllowedNonNetworkNavigationUrl(parsed)) {
+      return;
+    }
+    if (opts.allowOperatorInternalUrls && isAllowedOperatorInternalUrl(parsed)) {
       return;
     }
     throw new InvalidBrowserNavigationUrlError(
@@ -198,9 +218,14 @@ export async function assertBrowserNavigationResultAllowed(
   }
   if (
     NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol) ||
-    isAllowedNonNetworkNavigationUrl(parsed)
+    isAllowedNonNetworkNavigationUrl(parsed) ||
+    (opts.allowOperatorInternalUrls && isAllowedOperatorInternalUrl(parsed))
   ) {
     await assertBrowserNavigationAllowed(opts);
+  } else if (!opts.allowOperatorInternalUrls && isAllowedOperatorInternalUrl(parsed)) {
+    throw new InvalidBrowserNavigationUrlError(
+      `Navigation blocked: unsupported protocol "${parsed.protocol}"`,
+    );
   }
 }
 

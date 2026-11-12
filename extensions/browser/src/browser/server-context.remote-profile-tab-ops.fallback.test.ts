@@ -89,6 +89,7 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
       rawTab("OMNI", "chrome://omnibox-popup.top-chrome/"),
       rawTab("UNTRUSTED", "chrome-untrusted://foo/"),
       rawTab("WORKER", "https://example.com/worker.js", "worker"),
+      rawTab("SETTINGS", "chrome://settings/payments"),
       rawTab("T1", "https://example.com"),
     ]);
 
@@ -96,6 +97,9 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
     expect(tabs[0]?.wsLookup).toBeTypeOf("function");
     expect(JSON.stringify(tabs[0])).not.toContain("wsLookup");
+
+    const operatorTabs = await remote.listTabs({ operatorMode: true });
+    expect(operatorTabs.map((t) => t.targetId)).toEqual(["SETTINGS", "T1"]);
   });
 
   it("rejects policy-blocked discovered CDP websocket URLs from raw tab listings", async () => {

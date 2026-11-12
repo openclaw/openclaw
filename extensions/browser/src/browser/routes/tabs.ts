@@ -14,7 +14,7 @@ import {
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
-import { isManagedOnlyBrowserRequest } from "../request-policy.js";
+import { isManagedOnlyBrowserRequest, isOperatorBrowserRequest } from "../request-policy.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import { clearSnapshotKeysForTab } from "../snapshot-delta-cache.js";
 import { resolveBrowserTabOrThrow } from "../target-id.js";
@@ -161,13 +161,20 @@ async function runTabTargetMutation(params: {
 }
 
 export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
-  const listTabs = async (profileCtx: ProfileContext, signal: AbortSignal) => {
+  const listTabs = async (
+    profileCtx: ProfileContext,
+    signal: AbortSignal,
+    operatorMode = false,
+  ) => {
     const running = await checkTabReachability(ctx, profileCtx, signal);
     if (!running) {
       return { running: false, tabs: [] };
     }
-    let tabs = await profileCtx.listTabs({ signal });
-    const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+    let tabs = await profileCtx.listTabs({ signal, operatorMode });
+    const navigationPolicy = {
+      ...browserNavigationPolicyForProfile(ctx, profileCtx),
+      ...(operatorMode ? { allowOperatorInternalUrls: true } : {}),
+    };
     if (navigationPolicy.ssrfPolicy) {
       const { results } = await runTasksWithConcurrency<(typeof tabs)[number]>({
         limit: TAB_URL_CHECK_CONCURRENCY,
@@ -211,7 +218,11 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     tab: Awaited<ReturnType<ProfileContext["listTabs"]>>[number],
     signal: AbortSignal,
   ) => {
-    const policy = browserNavigationPolicyForProfile(ctx, profileCtx);
+    const operatorMode = isOperatorBrowserRequest(req);
+    const policy = {
+      ...browserNavigationPolicyForProfile(ctx, profileCtx),
+      ...(operatorMode ? { allowOperatorInternalUrls: true } : {}),
+    };
     if (policy.ssrfPolicy) {
       await assertBrowserNavigationResultAllowed({ url: tab.url, ...policy });
     }
@@ -228,11 +239,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   };
 
   app.get("/tabs", async (req, res) => {
+    const operatorMode = isOperatorBrowserRequest(req);
     await runTabsProfileRoute({
       req,
       res,
       ctx,
-      run: listTabs,
+      run: (profileCtx, signal) => listTabs(profileCtx, signal, operatorMode),
     });
   });
 
@@ -254,6 +266,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       return jsonError(res, 400, String(err instanceof Error ? err.message : err));
     }
 
+    const operatorMode = isOperatorBrowserRequest(req);
     await runTabsProfileRoute({
       req,
       res,
@@ -263,12 +276,14 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         await profileCtx.ensureBrowserAvailable({ signal });
         await assertBrowserNavigationAllowed({
           url,
+          allowOperatorInternalUrls: operatorMode,
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
         await req.assertCurrent?.(profileCtx.profile);
         const opened = await profileCtx.openTab(url, {
           label,
           signal,
+          operatorMode,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(isManagedOnlyBrowserRequest(req) ? { requireDurableOwnership: true } : {}),
         });
@@ -282,13 +297,14 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     if (!targetId) {
       return;
     }
+    const operatorMode = isOperatorBrowserRequest(req);
     await runTabTargetMutation({
       req,
       res,
       ctx,
       targetId,
       mutate: async (profileCtx, id, signal) => {
-        const tabs = await profileCtx.listTabs({ signal });
+        const tabs = await profileCtx.listTabs({ signal, operatorMode });
         const tab = resolveBrowserTabOrThrow(id, tabs);
         return await focusTab(req, profileCtx, tab, signal);
       },

@@ -17,6 +17,19 @@ export function isManagedOnlyBrowserRequest(params: BrowserRequestProfileParams)
   );
 }
 
+export function isOperatorBrowserRequest(params: {
+  query?: Record<string, unknown>;
+  body?: unknown;
+  requester?: { connId?: string; isOperator?: boolean };
+}): boolean {
+  return (
+    params.requester?.isOperator === true ||
+    params.query?.operatorMode === true ||
+    params.query?.operatorMode === "true" ||
+    asNullableRecord(params.body)?.operatorMode === true
+  );
+}
+
 /** Normalizes route paths so mutation-policy checks compare stable slash forms. */
 export function normalizeBrowserRequestPath(value: string): string {
   const trimmed = value.trim();

@@ -54,6 +54,8 @@ export type BrowserServerState = {
 export type BrowserOperationOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** When true, permits operator-scoped access to internal pages (e.g. chrome://settings). */
+  operatorMode?: boolean;
 };
 
 export type EnsureTabAvailableOptions = BrowserOperationOptions & {

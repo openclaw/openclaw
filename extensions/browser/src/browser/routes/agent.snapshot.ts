@@ -21,14 +21,17 @@ import {
 import { collectChromeMcpSnapshotUrls, withChromeMcpLabels } from "../chrome-mcp.snapshot-page.js";
 import { buildChromeMcpRouteSnapshot } from "../chrome-mcp.snapshot-result.js";
 import { flattenChromeMcpSnapshotToAriaResult } from "../chrome-mcp.snapshot.js";
+import { isBrowserInternalTargetUrl } from "../cdp-target-filter.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertChromeMcpNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  InvalidBrowserNavigationUrlError,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
+import { isOperatorBrowserRequest } from "../request-policy.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
 import {
@@ -143,8 +146,12 @@ export function registerBrowserAgentSnapshotRoutes(
       ctx,
       targetId,
       run: async ({ profileCtx, tab, cdpUrl, signal, assertCurrent }) => {
+        const isOperator = isOperatorBrowserRequest(req);
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+          const ssrfPolicyOpts = {
+            ...browserNavigationPolicyForProfile(ctx, profileCtx),
+            ...(isOperator ? { allowOperatorInternalUrls: true } : {}),
+          };
           await assertChromeMcpNavigationAllowed({ url, ...ssrfPolicyOpts });
           const result = await navigateChromeMcpPage({
             profileName: profileCtx.profile.name,
@@ -181,6 +188,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 }
               : {}),
             ...browserNavigationPolicyForProfile(ctx, profileCtx),
+            ...(isOperator ? { allowOperatorInternalUrls: true } : {}),
           });
           const currentTargetId = await resolveOperationTargetOutcome({
             actedOnTargetId: tab.targetId,
@@ -404,6 +412,11 @@ export function registerBrowserAgentSnapshotRoutes(
             signal,
             timeoutMs: plan.timeoutMs,
           });
+          if (isBrowserInternalTargetUrl(tab.url)) {
+            throw new InvalidBrowserNavigationUrlError(
+              'Navigation blocked: unsupported protocol "chrome:"',
+            );
+          }
           const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
           if (ssrfPolicyOpts.ssrfPolicy) {
             await assertBrowserNavigationResultAllowed({
