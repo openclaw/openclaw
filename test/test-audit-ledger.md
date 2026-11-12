@@ -592,10 +592,11 @@ Both mutations were restored byte for byte. The final 18 cases passed in 6.48
 seconds; these single runs do not establish a speedup. Actual routing uses
 unit-fast for the consumer and CLI for the helper.
 
-Independent preservation review found no lost contract. Targeted CLI-test
-typecheck, typed lint, formatting and diff checks passed. Full dead-code scans,
-local ClawSweeper review, hosted CI and landing remain pending. Production and
-support line counts are unchanged.
+Independent preservation review and full local ClawSweeper review of
+`86b364415dd872e4aca25f3ff3a31d46a5eec091` found no actionable issues. Targeted
+CLI-test typecheck, typed lint, formatting and diff checks passed. Production
+and support line counts are unchanged. Full dead-code scans and hosted/landing
+outcomes are tracked in [PR #197639](https://github.com/openclaw/openclaw/pull/197639).
 
 ## Pending qualification and proof repairs
 
