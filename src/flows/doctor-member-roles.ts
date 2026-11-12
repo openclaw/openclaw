@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { readStoredClaw } from "../gateway/openclaw-id/claw-store.js";
 import {
@@ -82,10 +83,10 @@ export const memberRolesCheck: HealthCheck = {
     const sandboxUsers: string[] = [];
     try {
       const claw = await readStoredClaw();
-      if (!claw) {
-        throw new Error("the local claw record is missing");
+      if (claw && claw.authority !== null && !isRecord(claw.authority.members)) {
+        throw new Error("Invalid OpenClaw ID member collection");
       }
-      for (const [accountId, member] of Object.entries(claw.authority?.members ?? {})) {
+      for (const [accountId, member] of Object.entries(claw?.authority?.members ?? {})) {
         const definition = Object.hasOwn(roles.definitions, member.role)
           ? roles.definitions[member.role]
           : undefined;
@@ -100,10 +101,10 @@ export const memberRolesCheck: HealthCheck = {
           sandboxUsers.push(`member "${accountId}" (role "${member.role}")`);
         }
       }
-    } catch (error) {
+    } catch {
       warn(
         "membership-unreadable",
-        `Doctor could not read OpenClaw ID membership from the local claw record: ${formatErrorMessage(error)}`,
+        "Doctor could not read OpenClaw ID membership from the local claw record.",
         "Check the local claw storage and linking status on Access, then rerun Doctor; membership was not verified.",
       );
     }
