@@ -396,7 +396,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       expect(deliveryCache.size).toBe(1);
 
       const execPayload = JSON.stringify({ content: served.content });
-      expect(execPayload).toContain('\\n');
+      expect(execPayload).toContain("\\n");
       expect(execPayload).not.toContain(skillInstructionText);
       const deliveredText = deliver(execPayload);
       installMiddleware(() => ({
