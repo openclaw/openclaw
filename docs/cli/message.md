@@ -30,6 +30,10 @@ validate config without running local state migrations. They require a reachable
 Gateway. Local actions, broadcasts, dry-runs, and commands that need local channel
 discovery retain local config and plugin preparation.
 
+When the Gateway delivers a `send` for the CLI, it also records the conversation's
+delivery route; the CLI returns once the Gateway answers and does not open the
+agent database again for that route.
+
 ## Agent ownership
 
 `openclaw message` uses the configured
