@@ -39,6 +39,7 @@ export type MessageToolOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  messageToolFinalByDefault?: boolean;
   inputProvenance?: import("../../sessions/input-provenance.js").InputProvenance;
   /** Process-local completion authority: send only to the current source route. */
   sourceReplyOnly?: boolean;
