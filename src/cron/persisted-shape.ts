@@ -110,7 +110,8 @@ export function getInvalidPersistedCronJobReason(
   if (
     candidate.cyberAccessProgram !== undefined &&
     (!Value.Check(CyberAccessProgramSchema, candidate.cyberAccessProgram) ||
-      asRecord(candidate.payload).kind !== "agentTurn")
+      (asRecord(candidate.payload).kind !== "agentTurn" &&
+        asRecord(candidate.payload).kind !== "accessAgentTurn"))
   ) {
     return "invalid-execution-policy";
   }
@@ -259,7 +260,10 @@ export function getInvalidPersistedCronJobReason(
     return "missing-payload";
   }
   const payloadRecord = payload as Record<string, unknown>;
-  const payloadKind = payloadRecord.kind;
+  if (payloadRecord.kind === "accessAgentTurn" && candidate.cyberAccessProgram === undefined) {
+    return "invalid-execution-policy";
+  }
+  const payloadKind = payloadRecord.kind === "accessAgentTurn" ? "agentTurn" : payloadRecord.kind;
   if (payloadKind === "pluginCommand" || candidate.pluginCommand !== undefined) {
     // Stored form `pluginCommand`; the decoded runtime form is the reserved agentTurn sentinel.
     const stored =

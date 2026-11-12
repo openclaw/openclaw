@@ -7,12 +7,14 @@ import {
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { cronJobReadView } from "./job-read-view.js";
 import { normalizeCronJobCreate } from "./normalize.js";
+import { getInvalidPersistedCronJobReason } from "./persisted-shape.js";
 import {
   createCronStoreHarness,
   createNoopLogger,
   withCronServiceForTest,
 } from "./service.test-harness.js";
 import { loadCronStore } from "./store.js";
+import { stripJobRuntimeFields } from "./store/job-config-codec.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-access-" });
 const input = () =>
@@ -42,6 +44,13 @@ it("round-trips Access changes beside an existing job without rewriting its sele
       const job = await cron.add({ ...input(), cyberAccessProgram: "standard" });
       expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
       expect(await cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
+      const encoded = stripJobRuntimeFields(cron.getJob(job.id)!);
+      expect(encoded.payload).toMatchObject({ kind: "accessAgentTurn", message: "Review" });
+      expect(getInvalidPersistedCronJobReason(encoded)).toBeNull();
+      expect(getInvalidPersistedCronJobReason({ ...encoded, cyberAccessProgram: undefined })).toBe(
+        "invalid-execution-policy",
+      );
+      expect(stripJobRuntimeFields(legacy).payload).toMatchObject({ kind: "agentTurn" });
       expect(cron.getJob(job.id)?.cyberAccessProgram).toBe("standard");
       const reload = async () => {
         const row = (await loadCronStore(state.deps.storePath)).jobs.find(
@@ -59,6 +68,9 @@ it("round-trips Access changes beside an existing job without rewriting its sele
       }
       await cron.update(job.id, { cyberAccessProgram: null });
       expect(await reload()).not.toHaveProperty("cyberAccessProgram");
+      expect(stripJobRuntimeFields(cron.getJob(job.id)!).payload).toMatchObject({
+        kind: "agentTurn",
+      });
       expect(
         (await loadCronStore(state.deps.storePath)).jobs.find((row) => row.id === legacy.id),
       ).toEqual(before);

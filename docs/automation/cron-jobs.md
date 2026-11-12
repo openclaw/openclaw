@@ -175,5 +175,13 @@ The choice is reported in full and compact job reads and does not change the
 conversation's saved Access. Current role, account, model, and runtime grants
 still apply when the job runs; saving a choice does not grant access.
 
-Older versions do not enforce this field. Before downgrading, disable jobs with
-an explicit Access selection or clear it after reviewing their inherited Access.
+Jobs with explicit Access persist with a private `accessAgentTurn` payload kind.
+Readers from before this feature reject that unknown kind and quarantine the job
+instead of silently inheriting a different Access selection. Clearing the override
+writes the ordinary `agentTurn` form again. Jobs without Access keep their stored
+shape. This follows the existing command-schedule envelope and adds no SQL migration.
+
+After a downgrade, restore a supporting version to recover quarantined definitions;
+older versions cannot run or edit them as ordinary agent turns. This guard covers
+stores written by this version. It cannot protect exported definitions manually
+rewritten as `agentTurn`, or copies written before this safeguard was introduced.

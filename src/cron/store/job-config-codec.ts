@@ -54,6 +54,19 @@ export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Recor
     ...(payload && storedToolsAllow
       ? { payload: { ...payload, toolsAllow: storedToolsAllow } }
       : {}),
+    // Follow the command-schedule envelope: older readers quarantine an unknown kind
+    // instead of silently running an Access-constrained job with inherited Access.
+    ...(rest.cyberAccessProgram !== undefined &&
+    payload?.kind === "agentTurn" &&
+    rest.pluginCommand === undefined
+      ? {
+          payload: {
+            ...payload,
+            ...(storedToolsAllow ? { toolsAllow: storedToolsAllow } : {}),
+            kind: "accessAgentTurn",
+          },
+        }
+      : {}),
     // Hosts without command schedules quarantine this unknown kind as invalid-payload. A
     // persisted agentTurn would instead run there as an unbounded ordinary model prompt.
     ...(rest.pluginCommand !== undefined
@@ -105,6 +118,9 @@ export function decodeStoredCronJobConfig(
     ...(ownerProfileId ? { ownerProfileId } : {}),
     ...(schedule?.kind === "sandbox-stream" && streamSandbox
       ? { schedule: { ...schedule, kind: "stream" }, streamSandbox }
+      : {}),
+    ...(payload?.kind === "accessAgentTurn" && jobJson.cyberAccessProgram !== undefined
+      ? { payload: { ...payload, kind: "agentTurn" } }
       : {}),
     // Only the private envelope selects the reserved runner; without it the row stays invalid.
     ...(payload?.kind === "pluginCommand" && isRecord(jobJson.pluginCommand)
