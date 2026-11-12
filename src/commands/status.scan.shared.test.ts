@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
@@ -273,6 +274,14 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.gatewayReachable).toBe(false);
+  });
+
+  it("stops an interrupted command instead of reporting its aborted probe", async () => {
+    mocks.probeGateway.mockResolvedValue(unreachableProbe());
+    const work = new AsyncWorkScope();
+    work.beginClose();
+    await expect(work.run(() => resolveGatewayProbeSnapshot())).rejects.toBe(work.signal.reason);
+    expect(readProbeCall().signal?.aborted).toBe(true);
   });
 });
 

@@ -1,0 +1,3 @@
+# Interrupted status scans: the Gateway probe takes the command signal and an
+# interrupted probe stops the scan instead of rendering "aborted" as Gateway state.
+9
