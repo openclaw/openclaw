@@ -140,6 +140,26 @@ it("focuses the atomic editor during a mobile tap and consumes a retargeted tool
   expect(props.onSend).not.toHaveBeenCalled();
 });
 
+it("rests a retained empty editor in the same one-line capsule as the textarea", async () => {
+  await page.viewport(390, 844);
+  const { props, container } = renderComposerFixture({
+    mobileComposer: true,
+    draft: "@Alex ",
+    mentions: [{ profileId: "alex-one", start: 0, end: 5 }],
+  });
+  document.body.append(container);
+  container.style.cssText = "position:fixed;bottom:0;left:16px;width:358px";
+  await expect.poll(() => container.querySelector(".cm-editor")).not.toBeNull();
+  // Sending clears the draft; the editor stays mounted for the next one.
+  renderComposerInto(container, { ...props, draft: "", mentions: [] });
+  await expect
+    .poll(() => container.querySelector("[data-composer-resting]")?.textContent)
+    .not.toContain("@Alex");
+  const editor = container.querySelector<HTMLElement>(".cm-editor")!;
+  await expect.poll(() => editor.getBoundingClientRect().height).toBe(24);
+  expect(getComputedStyle(editor).paddingTop).toBe("0px");
+});
+
 it("keeps attachment chips at the editing inset in the one-line mobile composer", async () => {
   await page.viewport(390, 844);
   const { container } = renderComposerFixture({

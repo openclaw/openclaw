@@ -37,8 +37,9 @@ export const composerEditorTheme = EditorView.theme({
     fontFamily: "inherit",
     lineHeight: "inherit",
     minHeight: "0",
+    // No scrollbar-width here: Chromium would then ignore the app's 8px
+    // ::-webkit-scrollbar, which the overflow padding above exchanges for.
     overflow: "auto",
-    scrollbarWidth: "thin",
   },
   ".cm-content": {
     padding: "0",
@@ -46,7 +47,9 @@ export const composerEditorTheme = EditorView.theme({
     font: "inherit",
   },
   ".cm-cursor": { borderLeftColor: "var(--text-strong)" },
-  "&.cm-focused .cm-selectionBackground": { backgroundColor: "var(--selection-bg)" },
+  // Match the specificity of CodeMirror's light-theme defaults, or they win.
+  ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
+    { backgroundColor: "var(--selection-bg)" },
   ".cm-line": { padding: "0" },
   ".cm-placeholder": { color: "var(--muted)" },
 });

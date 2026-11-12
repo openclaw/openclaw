@@ -153,6 +153,14 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     await userEvent.keyboard("{Backspace}");
     expect(f.raw()).toBe("Ask @Alex after");
     expect(f.mentions()).toHaveLength(1);
+    // The kept separator is stepped over, so a second Backspace is not a dead key.
+    expect(f.view.state.selection.main.head).toBe(3);
+    selectComposerInput(f.input, 10, 10);
+    await userEvent.keyboard("{Backspace}");
+    expect(f.view.state.selection.main.head).toBe(9);
+    await userEvent.keyboard("{Backspace}");
+    expect(f.raw()).toBe("Ask  after");
+    expect(f.mentions()).toEqual([]);
   });
 
   it("keeps a composition undo separate from earlier draft edits", async () => {
@@ -587,6 +595,17 @@ describe.each(["chat", "new-session"] as const)("%s document-aware composer", (k
     await layout();
     const caret = f.view.coordsAtPos(f.raw().length)!;
     expect(caret.bottom).toBeLessThanOrEqual(f.view.scrollDOM.getBoundingClientRect().bottom + 1);
+    selectComposerInput(f.input, 0, 3);
+    await layout();
+    const probe = document.createElement("i");
+    probe.style.backgroundColor = "var(--selection-bg)";
+    f.surface.append(probe);
+    const selected = () =>
+      getComputedStyle(f.view.dom.querySelector(".cm-selectionBackground")!).backgroundColor;
+    expect(selected()).toBe(getComputedStyle(probe).backgroundColor);
+    f.content.blur();
+    await layout();
+    expect(selected()).toBe(getComputedStyle(probe).backgroundColor);
     f.surface.style.width = "1000px";
     await layout();
     await expect.poll(() => f.view.dom.getBoundingClientRect().height).toBeLessThan(before);
@@ -617,6 +636,25 @@ it("wraps a name wider than the composer and keeps a short chip on the text line
   const inside = short.content.querySelector(".chat-composer-mention")!.lastChild!;
   expect(Math.abs(textBottom(inside) - textBottom(line.firstChild!))).toBeLessThan(1);
   expect(line.getBoundingClientRect().height).toBe(20);
+});
+
+it("does not seed undo with a native snapshot the selection did not replace", () => {
+  const alex = [{ profileId: "alex-one", start: 0, end: 5 }];
+  const mounted = (value: string) =>
+    fixture("chat", "@Alex ", 230, alex, (input, mentions) =>
+      mountMentionComposerEditor(input, mentions, undefined, {
+        value,
+        mentions: [],
+        selection: { start: value.length, end: value.length, direction: "none" },
+      }),
+    );
+  // The owner cleared a sent draft without an input event; undo must not restore it.
+  const stale = mounted("already sent");
+  expect(undo(stale.view)).toBe(false);
+  expect(stale.raw()).toBe("@Alex ");
+  const typed = mounted("@al");
+  expect(undo(typed.view)).toBe(true);
+  expect(typed.raw()).toBe("@al");
 });
 
 it("retains one mention theme across Chat and New editor lifetimes", async () => {

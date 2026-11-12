@@ -19,7 +19,9 @@ function editor(text: string, initial: readonly HumanMention[]) {
   input.value = text;
   let previous = text;
   let mentions = initial;
-  input.addEventListener("input", () => {
+  const inputTypes: string[] = [];
+  input.addEventListener("input", (event) => {
+    inputTypes.push((event as InputEvent).inputType);
     mentions = updateHumanMentions(previous, input.value, mentions);
     previous = input.value;
     queueMicrotask(() => syncComposerInput(input));
@@ -33,7 +35,7 @@ function editor(text: string, initial: readonly HumanMention[]) {
   });
   const content = wrapper.querySelector<HTMLElement>('[data-composer-editor="true"]')!;
   const view = EditorView.findFromDOM(content)!;
-  return { input, content, view, mentions: () => mentions };
+  return { input, content, view, mentions: () => mentions, inputTypes };
 }
 
 function drag(
@@ -71,6 +73,8 @@ it.each([false, true])(
     const f = editor("@Alex + @Alex done ", initial);
     drag(f, f, copy);
     expect(f.input.value).toBe(copy ? "@Alex + @Alex done @Alex" : " + @Alex done @Alex");
+    // Owners treat a move like any drop, never as typed text containing "@".
+    expect(f.inputTypes).toEqual(["insertFromDrop"]);
     const moved = copy
       ? [...initial, { profileId: "alex-one", start: 19, end: 24 }]
       : [
@@ -130,6 +134,24 @@ it("drags the grabbed selection when a fast first pointer move precedes dragstar
     { profileId: "alex-two", start: 1, end: 6 },
     { profileId: "alex-one", start: 12, end: 17 },
   ]);
+});
+
+it("forgets a grabbed selection once the press ends without a drag", () => {
+  const f = editor("@Alex + @Alex done ", initial);
+  focusComposerInput(f.input);
+  selectComposerInput(f.input, 0, 7);
+  const grab = f.view.coordsAtPos(6)!;
+  const pointer = { bubbles: true, cancelable: true, clientY: (grab.top + grab.bottom) / 2 };
+  f.content.dispatchEvent(
+    new MouseEvent("mousedown", { ...pointer, clientX: grab.left + 1, detail: 1 }),
+  );
+  document.dispatchEvent(new MouseEvent("mouseup", pointer));
+  // A touch drag has no mousedown of its own; it must move the current selection.
+  selectComposerInput(f.input, 8, 13);
+  const dataTransfer = new DataTransfer();
+  f.content.dispatchEvent(new DragEvent("dragstart", { ...pointer, dataTransfer }));
+  expect(dataTransfer.getData("text/plain")).toBe("@Alex");
+  expect(f.view.state.selection.main.from).toBe(8);
 });
 
 it("moves focus one stop when Tab leaves the rich editor", async () => {

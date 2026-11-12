@@ -17,6 +17,7 @@ import { composerEditorTheme } from "./composer-editor-theme.ts";
 const INPUT_TYPES: Partial<Record<string, string>> = {
   "input.paste": "insertFromPaste",
   "input.drop": "insertFromDrop",
+  "move.drop": "insertFromDrop",
   "delete.cut": "deleteByCut",
   "delete.backward": "deleteContentBackward",
   "delete.forward": "deleteContentForward",
@@ -168,7 +169,17 @@ export function mountComposerEditor(
   }
 
   // A pointer press inside the selection may become a drag of that selection.
+  // A press that ends without a drag forgets it, so a later drag that has no
+  // mousedown of its own (touch) never restores an old selection.
   let grabbed: SelectionRange | undefined;
+  const stopGrab = listen(
+    input.ownerDocument,
+    "mouseup",
+    () => {
+      grabbed = undefined;
+    },
+    true,
+  );
   const view = new EditorView({
     parent: input.parentElement!,
     state: EditorState.create({
@@ -402,7 +413,6 @@ export function mountComposerEditor(
         currentAttributes = nextAttributes;
         effects = [...effects, configuration.reconfigure(extensions())];
       }
-      view.dom.dataset.composerSingleLine = input.dataset.composerSingleLine ?? "";
       if (input.disabled && view.hasFocus) {
         view.contentDOM.blur();
       }
@@ -529,6 +539,7 @@ export function mountComposerEditor(
       destroyed = true;
       resizeObserver?.disconnect();
       stopResize?.();
+      stopGrab();
       if (resizeFrame !== undefined) {
         cancelAnimationFrame(resizeFrame);
       }

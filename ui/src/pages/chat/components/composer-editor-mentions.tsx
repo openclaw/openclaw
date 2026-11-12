@@ -196,13 +196,16 @@ const separateTypedTextFromMentions = EditorState.transactionFilter.of((transact
   const changes = separators.map(({ from }) => ({ from, insert: " " }));
   const caret = separators.find((separator) => separator.caret !== undefined)?.caret;
   const mapped = transaction.state.changes(changes);
+  // Backspace steps over the separator it may not remove, so the next press
+  // deletes what precedes it instead of repeating a no-op.
+  const side = transaction.isUserEvent("delete.backward") ? -1 : 1;
   return [
     transaction,
     {
       changes,
       sequential: true,
       selection: EditorSelection.cursor(
-        caret ?? mapped.mapPos(transaction.state.selection.main.head, 1),
+        caret ?? mapped.mapPos(transaction.state.selection.main.head, side),
       ),
     },
   ];
@@ -359,14 +362,39 @@ export type ComposerMentionSnapshot = ComposerEditorSnapshot & {
   mentions: readonly HumanMention[];
 };
 
+/** Whether the native snapshot is what this selection replaced: one @token, or
+ * nothing. The owner clears a sent draft without an input event, so an older
+ * snapshot may hold unrelated text that undo must never restore. Accepted edge:
+ * a sent draft ending in a plain "@word" still passes. */
+function precedesSelection(before: string, after: string) {
+  let start = 0;
+  while (start < before.length && before[start] === after[start]) {
+    start += 1;
+  }
+  let end = before.length;
+  for (
+    let other = after.length;
+    end > start && other > start && before[end - 1] === after[other - 1];
+    other -= 1
+  ) {
+    end -= 1;
+  }
+  const token = before.lastIndexOf("@", start);
+  return end === start || (token >= 0 && !before.slice(token, end).includes("\n"));
+}
+
 /** Person identity and its protocol rules are one feature of the shared editor. */
 export function mountMentionComposerEditor(
   input: HTMLTextAreaElement,
   mentions: () => readonly HumanMention[],
   application?: ApplicationContext,
-  initialHistory?: ComposerMentionSnapshot,
+  nativeHistory?: ComposerMentionSnapshot,
   avatarUrls?: ReadonlyMap<string, string>,
 ) {
+  const initialHistory =
+    nativeHistory && precedesSelection(nativeHistory.value, input.value)
+      ? nativeHistory
+      : undefined;
   const canEdit = () => !input.disabled && !input.readOnly;
   let compositionPadding: { value: string; removals: { from: number; to: number }[] } | undefined;
   function prepareComposition(view: EditorView) {
