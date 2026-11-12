@@ -37,6 +37,7 @@
  * the full source file count, alongside 250 old scratch files; the newest checkout
  * contains 256 fresh entries. Measures through scratch completion at GC entry with
  * virtualized pacing and hardlinked immutable fixture files, not storage throughput.
+ * Recurring minute-scale maintenance is parked in this scratch-only measurement.
  * Baseline overlays the custody owner. --reuse-scratch-order reuses only a completed
  * synthetic fixture between serial arms, rebuilding removed clones outside timing.
  * Acceptance: 0 -> 6 clone removals, 256 total entries, fresh scratch unchanged.
@@ -375,7 +376,7 @@ const scheduler = new GatewayScheduler({
         return () => clearTimeout(timer);
       }
       // Park the unrelated hourly recurrence; only cleanup continuation timers advance.
-      if (delayMs > 10 * 60_000) {
+      if (delayMs > 10 * 60_000 || (scratchOrder && delayMs >= 60_000)) {
         return () => {};
       }
       const timer = setTimeout(() => {
