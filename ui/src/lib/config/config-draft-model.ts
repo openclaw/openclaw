@@ -63,7 +63,8 @@ export function applyConfigSnapshot(
     state.configNeedsApply = currentRevisionHash !== snapshot.appliedConfigHash;
     if (
       !state.configNeedsApply &&
-      (state.configAutoSaveStatus === "deferred" || state.configAutoSaveStatus === "restarting")
+      (state.configAutoSaveStatus === "deferred" ||
+        state.configAutoSaveStatus === "restart-required")
     ) {
       state.configAutoSaveStatus = "idle";
       state.lastError = null;

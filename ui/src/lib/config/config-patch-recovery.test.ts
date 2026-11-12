@@ -113,7 +113,7 @@ describe("config patch recovery", () => {
     ["config.patch", "applied-restart-required"],
     ["config.patch", "restart-pending"],
   ] as const)(
-    "reports %s saved with %s as restarting instead of failed",
+    "reports %s saved with %s as restart-required instead of failed",
     async (method, status) => {
       const { request, store } = createPersistedFailureTransport({
         method,
@@ -127,7 +127,7 @@ describe("config patch recovery", () => {
       await expect(
         method === "config.set" ? runtimeConfig.save() : runtimeConfig.patch(disableFeature),
       ).resolves.toBe(true);
-      expectFeedback(state, "restarting");
+      expectFeedback(state, "restart-required");
       expect(state).toMatchObject({
         configSnapshot: { hash: "hash-2", config: { enabled: false } },
         configFormDirty: false,

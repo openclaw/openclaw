@@ -353,11 +353,11 @@ export type ConfigSubmission = ConfigSubmittedDraft & {
 export type ConfigSubmissionObserver = (submission: ConfigSubmission) => void;
 
 /**
- * How a saved write reached the running Gateway. A restart finishes the write on its own;
- * deferred and unapplied writes stay saved but inactive.
+ * How a saved write reached the running Gateway. A restart-required write is saved and needs
+ * a Gateway restart to finish; deferred and unapplied writes stay saved but inactive.
  */
 type PersistedConfigApplication =
-  | { kind: "restarting" }
+  | { kind: "restart-required" }
   | { kind: "deferred"; message: string | null }
   | { kind: "unapplied"; message: string };
 
@@ -367,7 +367,7 @@ function persistedConfigApplication(application: unknown): PersistedConfigApplic
   }
   const { status, reason, appliesWhen } = application;
   if (status === "applied-restart-required" || status === "restart-pending") {
-    return { kind: "restarting" };
+    return { kind: "restart-required" };
   }
   if (status === "deferred") {
     return {
@@ -400,10 +400,10 @@ function persistedConfigReceipt(
     : null;
 }
 
-/** A restart completes this saved write, so it reports as saved rather than failed. */
-function reportRestartingWrite(state: RuntimeConfigState): true {
+/** A restart finishes this saved write, so it reports as saved rather than failed. */
+function reportRestartRequiredWrite(state: RuntimeConfigState): true {
   state.lastError = null;
-  state.configAutoSaveStatus = "restarting";
+  state.configAutoSaveStatus = "restart-required";
   return true;
 }
 
@@ -413,7 +413,8 @@ function reportWriteFailure(
   application: PersistedConfigApplication | null | undefined,
   outcome: { status: ConfigAutoSaveStatus; message: string },
 ): void {
-  state.lastError = (application?.kind !== "restarting" && application?.message) || outcome.message;
+  state.lastError =
+    (application?.kind !== "restart-required" && application?.message) || outcome.message;
   state.configAutoSaveStatus = application ? "deferred" : outcome.status;
 }
 
@@ -514,8 +515,8 @@ export async function submitConfigDraft(
         if (adoptedStatus === "conflict") {
           return false;
         }
-        if (persisted.application?.kind === "restarting") {
-          return reportRestartingWrite(state);
+        if (persisted.application?.kind === "restart-required") {
+          return reportRestartRequiredWrite(state);
         }
       }
       const outcome = configMutationFailure(state, err, submittedFormRaw);
@@ -651,8 +652,8 @@ export async function patchConfig(
           return false;
         }
       }
-      if (persisted?.application?.kind === "restarting") {
-        return reportRestartingWrite(state);
+      if (persisted?.application?.kind === "restart-required") {
+        return reportRestartRequiredWrite(state);
       }
       reportWriteFailure(state, persisted?.application, configMutationFailure(state, err));
     }

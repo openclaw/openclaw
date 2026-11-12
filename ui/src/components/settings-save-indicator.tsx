@@ -145,9 +145,15 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
       return "saving";
     }
     if (
-      ["recovery", "rejected", "error", "deferred", "restarting", "paused", "conflict"].includes(
-        status(),
-      )
+      [
+        "recovery",
+        "rejected",
+        "error",
+        "deferred",
+        "restart-required",
+        "paused",
+        "conflict",
+      ].includes(status())
     ) {
       return status();
     }
@@ -270,9 +276,8 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
                 <span class="btn__spinner settings-save-indicator__spinner" aria-hidden="true" />
                 <span>{t("configView.applying")}</span>
               </Match>
-              <Match when={state() === "restarting"}>
-                <span>{t("configView.autoSaveRestarting")}</span>
-                {/* An accepted restart can still fail, so applying stays available. */}
+              <Match when={state() === "restart-required"}>
+                <span>{t("configView.autoSaveRestartRequired")}</span>
                 <Show when={props.needsApply}>
                   <IndicatorAction
                     label={t("configView.restartNow")}

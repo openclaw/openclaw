@@ -2055,7 +2055,8 @@ const enSettings = {
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
     autoSaveDeferred: registerSettingsSidebarEnglish.catalog.configView.autoSaveDeferred,
-    autoSaveRestarting: registerSettingsSidebarEnglish.catalog.configView.autoSaveRestarting,
+    autoSaveRestartRequired:
+      registerSettingsSidebarEnglish.catalog.configView.autoSaveRestartRequired,
     restartNow: registerSettingsSidebarEnglish.catalog.configView.restartNow,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     discardChanges: registerSettingsSidebarEnglish.catalog.configView.discardChanges,
