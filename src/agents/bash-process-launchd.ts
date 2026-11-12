@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolveStateDir } from "../config/paths.js";
@@ -16,7 +17,7 @@ import type { DurableLaunchOptions, DurableProcessObservation } from "./bash-pro
 
 type StopOptions = Pick<DurableControlOptions, "assertCurrent">;
 type WrapperStatus =
-  | { phase: "running"; pgid: number }
+  | { phase: "running"; pgid: number; startedAt: number }
   | {
       phase: "exited";
       exitCode: number | null;
@@ -106,8 +107,13 @@ async function listJob(label: string): Promise<{ pid?: number; status: number } 
   return undefined;
 }
 
-// EPERM means some process still holds the group; only ESRCH proves it empty.
-function groupAlive(pgid: number): boolean {
+// EPERM means some process still holds the group; only ESRCH proves it empty. A group
+// recorded before the last boot is never this job's (its id may belong to another program).
+// Accepted edge case: an id reused within one boot after the wrapper died reads as alive.
+function groupAlive({ pgid, startedAt }: { pgid: number; startedAt: number }): boolean {
+  if (Date.now() - os.uptime() * 1000 > startedAt) {
+    return false;
+  }
   try {
     process.kill(-pgid, 0);
     return true;
@@ -144,8 +150,8 @@ export async function readDurableProcess(label: string): Promise<DurableProcessO
   }
   if (status?.phase === "running") {
     // The wrapper is gone (for example SIGKILL), so check the group it recorded at start.
-    // Accepted edge case: a reused process-group id would read as still running.
-    return groupAlive(status.pgid)
+    // A wrapper first seen in this read may have finished between the reads; read again.
+    return before?.phase !== "running" || groupAlive(status)
       ? { state: "running" }
       : {
           state: "exited",
@@ -236,34 +242,32 @@ export async function launchDurableProcess(
 /** Ask the wrapper to stop its group, then wait for its recorded outcome. */
 export async function stopDurableProcess(label: string, options: StopOptions = {}): Promise<void> {
   assertLabel(label);
-  const job = await listJob(label);
-  const status = await readStatus(label);
-  if (status?.phase === "exited") {
-    return;
-  }
-  let orphan: number | undefined;
+  const deadline = Date.now() + KILL_GRACE_MS + 5_000;
+  let signalled = false,
+    orphanSince: number | undefined;
   const signalGroup = (pgid: number, signal: NodeJS.Signals) => {
     try {
       process.kill(-pgid, signal);
     } catch {}
   };
-  if (job?.pid) {
-    const reply = await command(["launchctl", "kill", "SIGTERM", `${domain()}/${label}`], options);
-    if (reply.exitCode !== 0 && (await readDurableProcess(label)).state === "running") {
-      throw failure();
-    }
-  } else if (status?.phase === "running" && groupAlive(status.pgid)) {
-    // No wrapper is left to escalate; signal the recorded group directly.
-    options.assertCurrent?.();
-    orphan = status.pgid;
-    signalGroup(orphan, "SIGTERM");
-  }
-  const deadline = Date.now() + KILL_GRACE_MS + 5_000;
-  let killed = false;
+  // A job still starting has nothing to signal yet; keep checking until it can be stopped.
   while ((await readDurableProcess(label)).state === "running") {
-    if (orphan !== undefined && !killed && Date.now() > deadline - 5_000) {
-      killed = true;
-      signalGroup(orphan, "SIGKILL");
+    const job = await listJob(label);
+    const status = await readStatus(label);
+    if (status?.phase === "exited") {
+      return;
+    }
+    if (job?.pid && !signalled) {
+      const reply = await command(
+        ["launchctl", "kill", "SIGTERM", `${domain()}/${label}`],
+        options,
+      );
+      signalled = reply.exitCode === 0;
+    } else if (!job?.pid && status?.phase === "running" && groupAlive(status)) {
+      // No wrapper is left to escalate; signal the recorded group directly.
+      options.assertCurrent?.();
+      orphanSince ??= Date.now();
+      signalGroup(status.pgid, Date.now() - orphanSince >= KILL_GRACE_MS ? "SIGKILL" : "SIGTERM");
     }
     if (Date.now() > deadline) {
       throw failure();

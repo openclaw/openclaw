@@ -59,6 +59,12 @@ const drain = () => {
     reason: timedOut ? "overall-timeout" : exit.signal ? "signal" : "exit",
   });
 };
+const failStart = (error) => {
+  try {
+    fs.appendFileSync(spec.logPath, "Durable process failed to start: " + error.message + "\n");
+  } catch {}
+  finish({ exitCode: null, exitSignal: null, reason: "spawn-error" });
+};
 let child;
 try {
   const log = fs.openSync(spec.logPath, "a");
@@ -72,15 +78,22 @@ try {
   } finally {
     fs.closeSync(log);
   }
-} catch {
-  finish({ exitCode: null, exitSignal: null, reason: "spawn-error" });
+} catch (error) {
+  failStart(error);
 }
-child.once("error", () => {
-  if (pgid === undefined) finish({ exitCode: null, exitSignal: null, reason: "spawn-error" });
+child.once("error", (error) => {
+  if (pgid === undefined) failStart(error);
 });
 if (child.pid !== undefined) {
   pgid = child.pid;
-  save({ phase: "running", pgid, wrapperPid: process.pid, startedAt });
+  try {
+    save({ phase: "running", pgid, wrapperPid: process.pid, startedAt });
+  } catch (error) {
+    // Without a recorded group nothing could find or stop the command later.
+    signalGroup("SIGKILL");
+    pgid = undefined;
+    failStart(error);
+  }
   child.once("exit", (code, signal) => {
     exit = { code, signal };
     drain();

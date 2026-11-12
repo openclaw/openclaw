@@ -119,20 +119,54 @@ it("maps launchd and wrapper facts to durable observations", async () => {
 
 it("checks the recorded process group after the wrapper is killed", async () => {
   const group = spawnChild("/bin/sleep", ["30"], { detached: true, stdio: "ignore" });
+  const running = (startedAt: number) =>
+    fs.writeFile(statusFile(), JSON.stringify({ phase: "running", pgid: group.pid, startedAt }));
   try {
-    await fs.writeFile(statusFile(), JSON.stringify({ phase: "running", pgid: group.pid }));
+    await running(Date.now());
     list(`-\t-9\t${label}`);
     await expect(readDurableProcess(label)).resolves.toEqual({ state: "running" });
+    // A group id recorded before the last boot belongs to some other program now.
+    await running(Date.now() - os.uptime() * 1000 - 60_000);
+    list(`-\t-9\t${label}`);
+    await expect(readDurableProcess(label)).resolves.toMatchObject({ result: "supervisor-lost" });
   } finally {
     process.kill(-group.pid!, "SIGKILL");
   }
   await once(group, "exit");
+  await running(Date.now());
   list(`-\t-9\t${label}`);
   await expect(readDurableProcess(label)).resolves.toMatchObject({
     state: "exited",
     reason: "spawn-error",
     result: "supervisor-lost",
   });
+});
+
+it("does not declare a wrapper lost when it first appears between the two reads", async () => {
+  spawn.mockImplementationOnce(async () => {
+    // launchd forks the wrapper and the command finishes before it records its exit.
+    await fs.writeFile(
+      statusFile(),
+      JSON.stringify({ phase: "running", pgid: 999_999, startedAt: Date.now() }),
+    );
+    return {
+      runId: "helper",
+      activity: { resultSettled: true, lastOutputAtMs: 0 },
+      startedAtMs: 0,
+      wait: async () => ({
+        reason: "exit",
+        stdout: `PID\tStatus\tLabel\n-\t0\t${label}\n`,
+        stderr: "",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel() {},
+    };
+  });
+  await expect(readDurableProcess(label)).resolves.toEqual({ state: "running" });
 });
 
 it("reports the wrapper's recorded duration and releases the job files", async () => {
@@ -209,4 +243,34 @@ it("wrapper enforces the timeout on the process group", async () => {
   expect(run.status).toMatchObject({ phase: "exited", reason: "overall-timeout" });
   expect(run.status.exitSignal).toMatch(/^SIG(TERM|KILL)$/);
   expect(run.status.durationMs).toBeLessThan(5000);
+});
+
+it("wrapper stops the command when it cannot record the process group", async () => {
+  const dir = path.join(stateDir, "unwritable");
+  await fs.mkdir(dir);
+  const wrapper = path.join(dir, "wrapper.cjs");
+  await fs.writeFile(wrapper, DURABLE_LAUNCHD_WRAPPER_SOURCE);
+  const spec = path.join(dir, "spec.json");
+  const logPath = path.join(dir, "out.log");
+  const marker = path.join(dir, "ran");
+  await fs.writeFile(
+    spec,
+    JSON.stringify({
+      argv: ["/bin/sh", "-c", `sleep 1; touch ${marker}`],
+      cwd: dir,
+      env: { PATH: "/usr/bin:/bin" },
+      logPath,
+      statusPath: path.join(dir, "missing-directory", "status.json"),
+      timeoutMs: 0,
+      killGraceMs: 500,
+    }),
+  );
+  const child = spawnChild(process.execPath, [wrapper, spec], { stdio: "ignore" });
+  const [code] = await once(child, "exit");
+  expect(code).not.toBe(0);
+  await new Promise((resolve) => {
+    setTimeout(resolve, 1500);
+  });
+  await expect(fs.stat(marker)).rejects.toThrow();
+  expect(await fs.readFile(logPath, "utf8")).toContain("Durable process failed to start");
 });
