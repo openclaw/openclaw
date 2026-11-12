@@ -23,7 +23,6 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   escape: { modifiers: [], key: "Escape" },
   sendMessage: { modifiers: [], key: "Enter" },
   modifiedEnter: { modifiers: ["mod"], key: "Enter" },
-  modifiedShiftEnter: { modifiers: ["mod", "shift"], key: "Enter" },
   newline: { modifiers: ["shift"], key: "Enter" },
   transcriptSearch: { modifiers: ["mod"], key: "f", platformSpecific: true },
   terminalPanel: { modifiers: ["ctrl"], key: "Backquote" },

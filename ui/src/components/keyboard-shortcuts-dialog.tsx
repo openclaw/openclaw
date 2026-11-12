@@ -130,7 +130,7 @@ function resolveKeyboardShortcutSections(
                 ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
                 : sendShortcut === "modifier-enter" && entry.id === "startNewSessionBackground"
                   ? // Send owns the modified chord, so Shift selects the background start.
-                    keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedShiftEnter)
+                    keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.approveAlways)
                   : entry,
         ),
     ),

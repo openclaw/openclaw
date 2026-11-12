@@ -384,6 +384,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.deferNext("agent.wait");
+      await gateway.deferNext("sessions.create");
       const composer = page.locator(".new-session-page__message");
       await composer.fill(`run this separately on ${label}`);
       await captureProof(page, `background-${label}-ready.png`);
@@ -396,15 +397,20 @@ suite.define(() => {
         params: { agentId: "main", message: `run this separately on ${label}` },
       });
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      // Admission must never replace the launcher with a fake transcript.
+      expect(await page.locator(".new-session-page__starting").count()).toBe(0);
+      await expectValue(composer, `run this separately on ${label}`);
+      await gateway.resolveDeferred("sessions.create");
       await expectValue(composer, "");
+      expect(await page.locator(".new-session-page__starting").count()).toBe(0);
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      // Start the next draft without a click; the completed submission cannot take it back.
+      await page.keyboard.type("Plan the next task");
+      await expectValue(composer, "Plan the next task");
       await captureProof(page, `background-${label}-running.png`);
-      await expect
-        .poll(() => page.locator(".new-session-page__starting").textContent())
-        .toContain(`run this separately on ${label}`);
-      await expect
-        .poll(() => page.locator(".new-session-page__starting").textContent())
-        .toContain("Session created");
-      await button(page, "Open session", true).waitFor();
+      await page.locator(".app-toast").getByText("Session started", { exact: true }).waitFor();
       if (label === "mobile") {
         expect(
           await page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
@@ -443,6 +449,8 @@ suite.define(() => {
       await toast
         .getByRole("link", { name: "Open session", exact: true })
         .waitFor({ timeout: 10_000 });
+      expect(await page.locator(".new-session-page__starting").count()).toBe(0);
+      await expectValue(composer, "Plan the next task");
       await captureProof(page, `background-${label}-complete.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(800);
