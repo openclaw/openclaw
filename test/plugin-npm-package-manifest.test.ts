@@ -1382,7 +1382,7 @@ it("installs bundled dependencies whose shared node npm reloads under another ov
   });
 });
 
-it("preserves npm JSON diagnostics when packing a patched dependency fails", () => {
+it("preserves npm JSON and verbose diagnostics when packing a patched dependency fails", () => {
   const { repoDir, packageDir, sourceManifest } = writePatchedRuntimeFixture();
   writeJsonFile(join(packageDir, "package.json"), {
     ...sourceManifest,
@@ -1398,6 +1398,7 @@ it("preserves npm JSON diagnostics when packing a patched dependency fails", () 
     "packing patched runtime dependency failed: local-runtime-dep@1.0.0",
   );
   expect(result.stderr).toContain('"code": "EBADDEVENGINES"');
+  expect(result.stderr).toContain("verbose stack");
 });
 
 it.each([

@@ -655,6 +655,7 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
             "pack",
             source,
             "--json",
+            "--loglevel=verbose",
             "--ignore-scripts",
             "--workspaces=false",
             "--pack-destination",
@@ -664,7 +665,7 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
             cwd: packageDir,
             env: process.env,
             encoding: "utf8",
-            stdio: ["ignore", "pipe", "inherit"],
+            stdio: ["ignore", "pipe", "pipe"],
           },
         );
         if (result.error) {
@@ -672,7 +673,7 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
         }
         if (result.status !== 0) {
           throw new Error(
-            `packing patched runtime dependency failed: ${name}@${version}\n${String(result.stdout ?? "")}`,
+            `packing patched runtime dependency failed: ${name}@${version}\n${String(result.stdout ?? "")}${String(result.stderr ?? "")}`,
           );
         }
         const output = JSON.parse(String(result.stdout));
