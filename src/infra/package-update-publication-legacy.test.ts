@@ -17,6 +17,11 @@ async function fixture(selected = "previous", linked = false) {
   const parent = dirs.make("publication-legacy-");
   const root = path.join(parent, "package");
   await writePackageRoot(root, "2026.9.8");
+  // This fixture represents public npm modes, independent of the caller's umask.
+  for (const relative of ["", "dist", "package.json", "dist/index.js"]) {
+    const file = path.join(root, relative);
+    fs.chmodSync(file, fs.statSync(file).isDirectory() ? 0o755 : 0o644);
+  }
   const file = path.join(root, "package.json");
   if (linked) {
     fs.mkdirSync(path.join(root, "node_modules"));
@@ -63,11 +68,7 @@ it.skipIf(process.platform === "win32").each(["previous", "candidate", "current"
       expect(warning).not.toHaveBeenCalled();
     } else {
       await expect(matches()).resolves.toBe(true);
-      expect(warning.mock.calls).toEqual(
-        selected === "previous"
-          ? [[legacyWarning]]
-          : [[expect.stringContaining("Repaired permissions on")]],
-      );
+      expect(warning.mock.calls).toEqual(selected === "previous" ? [[legacyWarning]] : []);
     }
   },
 );
