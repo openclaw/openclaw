@@ -243,6 +243,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-entry-patch-payload.ts|unicorn/require-post-message-target-origin|1",
         // The setup probe executes an expression from the same trusted source input it imports.
         "scripts/perf/session-history-reader-setup-measure.mjs|typescript/no-implied-eval|1",
+        // Setup observes the native work scope through a receiver-preserving Proxy and restores track before measurement.
+        "scripts/perf/session-pr-currency-measure.ts|typescript/unbound-method|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         // The admission-charge probe forwards runTask with the original pool receiver.
