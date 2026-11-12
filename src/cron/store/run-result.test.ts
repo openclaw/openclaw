@@ -1,19 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { CronJob } from "../types.js";
-import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
-
-vi.mock("../agent-id.js", () => ({ tryResolveCronJobEffectiveAgentId: vi.fn() }));
-vi.mock("../run-event-codec.js", () => ({ cronRunLogEntryFromEvent: vi.fn() }));
-vi.mock("../run-history-detail.js", () => ({
-  cronQuietTriggerDetail: vi.fn(),
-  cronRunLogEntryToDetail: vi.fn(),
-  cronRunStorageStatus: vi.fn(),
-}));
-vi.mock("../run-id.js", () => ({ createCronExecutionId: vi.fn() }));
-vi.mock("../service/failure-alerts.js", () => ({
-  failureNotificationDeliveryFromJobState: vi.fn(),
-}));
 import { cronRunResultEvent } from "./run-result.js";
+import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 
 describe("finished cron run identity", () => {
   it.each([
