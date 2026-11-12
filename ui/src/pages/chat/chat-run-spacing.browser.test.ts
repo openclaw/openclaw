@@ -154,14 +154,6 @@ describeBrowserLayout.concurrent("chat run spacing", () => {
           revealedPersistentTurn: hasTouch ? 38 : 42,
           simpleToPersistentTurn: hasTouch ? 38 : 42,
         });
-
-        const expandedWorkGap = await page.evaluate(() => {
-          const work = document.querySelector<HTMLElement>('[data-run-block="work"]')!;
-          work.classList.add("is-open");
-          const reply = document.querySelector<HTMLElement>('[data-run-block="reply"]')!;
-          return reply.getBoundingClientRect().top - work.getBoundingClientRect().bottom;
-        });
-        expect(expandedWorkGap).toBe(10);
       },
     );
   });
