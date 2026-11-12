@@ -1,0 +1,4 @@
+# Membership-owned sandbox provenance across creation, fork/checkpoint, spawn,
+# recovery/cron and standalone run admission, plus selected-engine liveness and
+# reactive invite warning. Reuses production owners and existing test fixtures.
+226

@@ -234,7 +234,10 @@ export function assembleScheduledAdmissionFacts(
     agentMainSessionKey: resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId }),
     agentSandboxMode: resolveSandboxConfigForAgent(params.cfg, params.agentId).mode,
     ...((params.creatorRoleSandbox ??
-      resolveCreatorSandbox(params.cfg, { actor: cronExecutionActor(params.job) })) === "required"
+      resolveCreatorSandbox(params.cfg, {
+        actor: cronExecutionActor(params.job),
+        openclawIdPrincipal: params.job.operatorSource?.source.snapshot.openclawIdPrincipal,
+      })) === "required"
       ? { creatorRoleSandbox: "required" as const }
       : {}),
     ...(params.toolsAllow ? { resolvedToolsAllow: params.toolsAllow } : {}),

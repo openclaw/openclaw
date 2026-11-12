@@ -211,7 +211,10 @@ export function buildSessionEventContext(params: {
     ctx.SessionCreation = {
       via: "cron",
       actor: automation.job.createdActor ?? { type: "system" },
-      sandbox: resolveCreatorSandbox(params.cfg, { actor: automation.job.createdActor }),
+      sandbox: resolveCreatorSandbox(params.cfg, {
+        actor: automation.job.createdActor,
+        openclawIdPrincipal: automation.job.operatorSource?.source.snapshot.openclawIdPrincipal,
+      }),
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }

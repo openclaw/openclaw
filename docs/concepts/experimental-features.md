@@ -403,9 +403,23 @@ The presets are:
 - `operator`: other people's sessions are writable, all agents are allowed, and
   scopes are `operator.read`, `operator.write`, `operator.approvals`,
   `operator.questions`, and `operator.talk`.
+- `guest`: other people's sessions are viewable, all agents are allowed, and
+  `operator.sessions.write` allows starting and continuing their own work.
+  `sandbox: "required"` isolates their exec and file tools per session creator.
 - `viewer`: other people's sessions are viewable, all agents are allowed, and the
   only scope is `operator.sessions.read`. Viewers can read visible conversations,
   but not logs, the private user directory, or Gateway-wide diagnostic catalogs.
+
+Operator remains the default invite role. A sandbox-required member's new sessions,
+forks, checkpoint branches, delegated children, and authorized scheduled or
+recovered work retain the sandbox requirement even without named-role enforcement.
+They cannot start a run in an existing host-execution session, even when invited.
+If the sandbox backend is unavailable, execution fails rather than falling back
+to the Gateway host or a node. The **Access** invite form warns when the selected
+role requires a sandbox and the configured Docker or Podman backend is unavailable.
+See [Sandboxing](/gateway/sandboxing) for setup and the
+[role sandbox boundaries](/gateway/operator-scopes#named-operator-roles) for paths
+that require additional configuration.
 
 Presets are ordinary editable definitions, not reserved names or a hardcoded
 permission ceiling. Custom definitions may include `operator.admin`. A member
